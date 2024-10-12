@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <header>
+        <div class="header-container">
+            <h1>Ticket-System</h1>
+            <nav>
+                <ul class="nav-links">
+                    <li><a href="index.html">Startseite</a></li>
+                    <li><a href="admin.html">Admin Login</a></li>
+                </ul>
+            </nav>
+            <button id="settingsButton" class="settings-button">&#9881;</button>
+        </div>
+    </header>
+    <div class="container">
+        <h2>Admin Login</h2>
+        <form id="loginForm">
+            <label for="username">Benutzername:</label>
+            <input type="text" id="username" name="username" required>
+            <label for="password">Passwort:</label>
+            <input type="password" id="password" name="password" required>
+            <button type="submit">Login</button>
+        </form>
+        <div id="loginError" class="hidden">Login fehlgeschlagen</div>
+    </div>
+    <!-- Modal für die Farbauswahl -->
+    <div id="colorPickerModal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <h2>Wählen Sie eine Farbe</h2>
+            <div id="colorPicker">
+                <input type="color" id="colorPickerInput" />
+                <button id="applyColorButton">Farbe anwenden</button>
+            </div>
+            <div class="color-circle" style="background-color: #ff4081;"></div>
+            <div class="color-circle" style="background-color: #e03772;"></div>
+            <div class="color-circle" style="background-color: #1e1e1e;"></div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+
+</html>

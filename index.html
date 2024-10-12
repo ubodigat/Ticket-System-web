@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ticket erstellen</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <header>
+        <div class="header-container">
+            <h1>Ticket-System</h1>
+            <nav>
+                <ul class="nav-links">
+                    <li><a href="index.html">Startseite</a></li>
+                    <li><a href="admin.html">Admin Login</a></li>
+                </ul>
+            </nav>
+            <button id="settingsButton" class="settings-button">&#9881;</button>
+        </div>
+    </header>
+    <div class="container">
+        <h2>Neues Ticket erstellen</h2>
+        <form id="ticketForm">
+            <label for="username">Name:</label>
+            <input type="text" id="username" name="username" required>
+            <label for="email">E-Mail-Adresse:</label>
+            <input type="email" id="email" name="email" required>
+            <label for="issue">Beschreibung des Problems:</label>
+            <textarea id="issue" name="issue" required></textarea>
+            <label for="priority">Priorität:</label>
+            <select id="priority" name="priority">
+                <option value="low">Niedrig</option>
+                <option value="medium">Mittel</option>
+                <option value="high">Hoch</option>
+            </select>
+            <label for="category">Kategorie:</label>
+            <select id="category" name="category">
+                <option value="technical">Technisch</option>
+                <option value="billing">Abrechnung</option>
+                <option value="general">Allgemein</option>
+            </select>
+            <button type="submit">Ticket erstellen</button>
+        </form>
+        <div id="successMessage" class="hidden"></div>
+    </div>
+    <!-- Modal für die Farbauswahl -->
+    <div id="colorPickerModal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <h2>Wählen Sie eine Farbe</h2>
+            <div id="colorPicker">
+                <input type="color" id="colorPickerInput" />
+                <button id="applyColorButton">Farbe anwenden</button>
+            </div>
+            <div class="color-circle" style="background-color: #ff4081;"></div>
+            <div class="color-circle" style="background-color: #e03772;"></div>
+            <div class="color-circle" style="background-color: #1e1e1e;"></div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+
+</html>
