@@ -4,62 +4,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ticket erstellen</title>
+    <title>Ticket-System - Startseite</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
-<body>
-    <header>
-        <div class="header-container">
-            <h1>Ticket-System</h1>
-            <nav>
-                <ul class="nav-links">
-                    <li><a href="index.html">Startseite</a></li>
-                    <li><a href="admin.html">Admin Login</a></li>
-                </ul>
-            </nav>
-            <button id="settingsButton" class="settings-button">&#9881;</button>
-        </div>
-    </header>
+<body class="light">
+    <!-- Das Standardthema ist 'light' -->
     <div class="container">
-        <h2>Neues Ticket erstellen</h2>
-        <form id="ticketForm">
-            <label for="username">Name:</label>
-            <input type="text" id="username" name="username" required>
-            <label for="email">E-Mail-Adresse:</label>
-            <input type="email" id="email" name="email" required>
-            <label for="issue">Beschreibung des Problems:</label>
-            <textarea id="issue" name="issue" required></textarea>
-            <label for="priority">Priorität:</label>
-            <select id="priority" name="priority">
-                <option value="low">Niedrig</option>
-                <option value="medium">Mittel</option>
-                <option value="high">Hoch</option>
-            </select>
-            <label for="category">Kategorie:</label>
-            <select id="category" name="category">
-                <option value="technical">Technisch</option>
-                <option value="billing">Abrechnung</option>
-                <option value="general">Allgemein</option>
-            </select>
-            <button type="submit">Ticket erstellen</button>
+        <h1 class="title">Willkommen im Ticket-System</h1>
+        <form id="ticketForm" class="form">
+            <label for="title" class="label">Ticket-Titel</label>
+            <input type="text" id="title" class="input" placeholder="Titel eingeben" required>
+            <label for="description" class="label">Beschreibung</label>
+            <textarea id="description" class="textarea" placeholder="Beschreibe dein Anliegen" required></textarea>
+            <button type="submit" class="button">Ticket erstellen</button>
         </form>
-        <div id="successMessage" class="hidden"></div>
-    </div>
-    <!-- Modal für die Farbauswahl -->
-    <div id="colorPickerModal" class="modal hidden">
-        <div class="modal-content">
-            <span class="close-button">&times;</span>
-            <h2>Wählen Sie eine Farbe</h2>
-            <div id="colorPicker">
-                <input type="color" id="colorPickerInput" />
-                <button id="applyColorButton">Farbe anwenden</button>
-            </div>
-            <div class="color-circle" style="background-color: #ff4081;"></div>
-            <div class="color-circle" style="background-color: #e03772;"></div>
-            <div class="color-circle" style="background-color: #1e1e1e;"></div>
+
+        <div class="links">
+            <a href="tickets.html" class="link">Meine Tickets ansehen</a>
+            <a href="login.html" class="link">Admin-Login</a>
+        </div>
+
+        <!-- Design-Umschalter -->
+        <div class="theme-switch-container">
+            <span class="theme-switch-label">Dunkles Design</span>
+            <label class="theme-switch">
+                <input type="checkbox" id="themeSwitch">
+            </label>
         </div>
     </div>
+
     <script src="script.js"></script>
 </body>
 

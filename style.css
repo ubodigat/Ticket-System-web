@@ -1,219 +1,127 @@
-:root {
-    --primary-color: #ff4081;
-    --hover-color: #e03772;
+/* Basis-Stile für Dunkel- und Hellmodus */
+
+body.light {
+    background-color: #f0f2f5;
+    color: #333;
 }
 
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    margin: 0;
-    padding: 0;
-    background-color: #1e1e1e;
+body.dark {
+    background-color: #181a1b;
     color: #e0e0e0;
 }
 
-header {
-    background-color: #333;
-    color: #e0e0e0;
-    padding: 10px 0;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-}
 
-.header-container {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 20px;
-}
-
-.header-container h1 {
-    margin: 0;
-    color: #f0f0f0;
-    flex-grow: 1;
-}
-
-.header-container nav {
-    display: flex;
-    align-items: center;
-    gap: 15px;
-}
-
-nav ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-}
-
-nav ul li {
-    margin-left: 20px;
-}
-
-nav ul li a {
-    color: #f0f0f0;
-    text-decoration: none;
-}
-
-nav ul li a:hover {
-    color: var(--primary-color);
-}
-
-
-/* Standard Button */
-
-button {
-    cursor: pointer;
-    background: var(--primary-color);
-    border: none;
-    color: #fff;
-    padding: 8px 16px;
-    border-radius: 4px;
-    transition: background 0.3s;
-}
-
-button:hover {
-    background: var(--hover-color);
-}
-
-button:disabled {
-    background: #ccc;
-    cursor: not-allowed;
-}
-
-
-/* Allgemeine Überschriftstile und Container */
+/* Container und Form-Elemente */
 
 .container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
-}
-
-.container h1,
-.container h2,
-.container h3 {
-    margin: 20px 0;
-    color: #f0f0f0;
-    padding-left: 20px;
-    text-align: left;
-}
-
-form {
-    max-width: 600px;
-    margin: 0 auto;
-    padding: 20px;
-    background-color: #333;
-    border-radius: 8px;
-}
-
-form input,
-form select,
-form textarea {
-    width: 100%;
-    padding: 8px;
-    margin: 10px 0;
-    border: 1px solid #555;
-    border-radius: 4px;
-    background-color: #1e1e1e;
-    color: #e0e0e0;
-}
-
-form button {
-    margin-top: 10px;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 20px 0;
-}
-
-table th,
-table td {
-    padding: 12px;
-    text-align: left;
-    border-bottom: 1px solid #555;
-}
-
-table th {
-    background-color: #444;
-}
-
-table td {
-    background-color: #333;
-}
-
-.status {
-    padding: 5px;
-    border-radius: 4px;
-    text-transform: capitalize;
-}
-
-.status.offen {
-    background-color: #ffcc00;
-    color: #000;
-}
-
-.status.in-progress {
-    background-color: #ff6600;
-    color: #fff;
-}
-
-.status.abgeschlossen {
-    background-color: #009900;
-    color: #fff;
-}
-
-.modal {
-    display: none;
-    position: fixed;
-    z-index: 1000;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-    background-color: rgba(0, 0, 0, 0.5);
-}
-
-.modal-content {
-    background-color: #1e1e1e;
-    margin: 15% auto;
-    padding: 20px;
-    border: 1px solid #333;
-    width: 300px;
+    max-width: 400px;
+    width: 90%;
+    padding: 30px;
     border-radius: 10px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
     text-align: center;
-    color: var(--primary-color);
-}
-
-.hidden {
-    display: none;
 }
 
 
-/* Zahnrad Icon ohne Button */
+/* Dunkelmodus spezifisch */
 
-#settingsButton {
-    background: none;
+body.dark .container {
+    background-color: #242526;
+    box-shadow: 0 8px 20px rgba(255, 255, 255, 0.1);
+}
+
+
+/* Hellmodus spezifisch */
+
+body.light .container {
+    background-color: #fff;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+}
+
+
+/* Formular-Eingabefelder */
+
+.input,
+.textarea {
+    width: 100%;
+    padding: 12px;
     border: none;
-    color: #f0f0f0;
+    border-radius: 8px;
+    font-size: 16px;
+    background-color: #f0f2f5;
+    color: #333;
+}
+
+
+/* Button */
+
+.button {
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    color: #fff;
+    background-color: #007bff;
     cursor: pointer;
-    font-size: 24px;
-    padding: 0;
-    margin-right: 20px;
+    transition: background-color 0.3s;
 }
 
-#settingsButton:hover {
-    color: var(--hover-color);
+.button:hover {
+    background-color: #0056b3;
 }
 
-.color-circle {
+body.dark .button {
+    background-color: #4287f5;
+}
+
+body.dark .button:hover {
+    background-color: #3572d5;
+}
+
+
+/* Switch für Dunkel-/Hellmodus */
+
+.theme-switch-container {
+    margin-top: 20px;
+    display: flex;
+    justify-content: center;
+}
+
+.theme-switch-label {
+    font-size: 14px;
+    margin-right: 10px;
+    color: inherit;
+}
+
+.theme-switch input[type="checkbox"] {
     width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    display: inline-block;
-    margin: 10px;
+    height: 20px;
+    -webkit-appearance: none;
+    appearance: none;
+    background-color: #c6c6c6;
+    outline: none;
+    border-radius: 20px;
+    position: relative;
     cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.theme-switch input[type="checkbox"]:checked {
+    background-color: #007bff;
+}
+
+.theme-switch input[type="checkbox"]::before {
+    content: "";
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: #fff;
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    transition: transform 0.3s;
+}
+
+.theme-switch input[type="checkbox"]:checked::before {
+    transform: translateX(20px);
 }
