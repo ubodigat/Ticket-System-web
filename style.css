@@ -1,127 +1,258 @@
-/* Basis-Stile für Dunkel- und Hellmodus */
-
-body.light {
-    background-color: #f0f2f5;
-    color: #333;
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
+body {
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    background: url('https://cdn.pixabay.com/photo/2018/01/14/23/12/space-3087704_1280.jpg') no-repeat center center fixed;
+    background-size: cover;
+    font-family: 'Poppins', sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transition: background 0.5s, color 0.5s;
+    overflow-x: hidden;
 }
 
-body.dark {
-    background-color: #181a1b;
-    color: #e0e0e0;
+.top-bar {
+    width: 100%;
+    height: 60px;
+    padding: 0 30px;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(10px);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    position: sticky;
+    top: 0;
+    z-index: 999;
 }
 
+.top-bar h1 {
+    font-size: 20px;
+    margin: 0;
+    font-weight: 600;
+    color: white;
+}
 
-/* Container und Form-Elemente */
+.actions {
+    display: flex;
+    gap: 10px;
+}
+
+.actions button {
+    padding: 8px 12px;
+    border: none;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    color: white;
+}
+
+.actions button:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
+}
 
 .container {
-    max-width: 400px;
+    margin-top: 50px;
     width: 90%;
+    max-width: 500px;
     padding: 30px;
-    border-radius: 10px;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
-    text-align: center;
-}
-
-
-/* Dunkelmodus spezifisch */
-
-body.dark .container {
-    background-color: #242526;
-    box-shadow: 0 8px 20px rgba(255, 255, 255, 0.1);
-}
-
-
-/* Hellmodus spezifisch */
-
-body.light .container {
-    background-color: #fff;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
-}
-
-
-/* Formular-Eingabefelder */
-
-.input,
-.textarea {
-    width: 100%;
-    padding: 12px;
-    border: none;
-    border-radius: 8px;
-    font-size: 16px;
-    background-color: #f0f2f5;
-    color: #333;
-}
-
-
-/* Button */
-
-.button {
-    padding: 12px;
-    border: none;
-    border-radius: 8px;
-    font-size: 16px;
-    color: #fff;
-    background-color: #007bff;
-    cursor: pointer;
-    transition: background-color 0.3s;
-}
-
-.button:hover {
-    background-color: #0056b3;
-}
-
-body.dark .button {
-    background-color: #4287f5;
-}
-
-body.dark .button:hover {
-    background-color: #3572d5;
-}
-
-
-/* Switch für Dunkel-/Hellmodus */
-
-.theme-switch-container {
-    margin-top: 20px;
-    display: flex;
-    justify-content: center;
-}
-
-.theme-switch-label {
-    font-size: 14px;
-    margin-right: 10px;
-    color: inherit;
-}
-
-.theme-switch input[type="checkbox"] {
-    width: 40px;
-    height: 20px;
-    -webkit-appearance: none;
-    appearance: none;
-    background-color: #c6c6c6;
-    outline: none;
     border-radius: 20px;
-    position: relative;
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+    backdrop-filter: blur(15px);
+    text-align: center;
+    animation: fadeIn 1s ease forwards;
+    color: white;
+}
+
+.container h2 {
+    margin-bottom: 20px;
+    font-weight: 600;
+    font-size: 22px;
+}
+
+input,
+textarea {
+    width: 90%;
+    padding: 12px;
+    margin: 10px 0;
+    border: none;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(6px);
+    color: white;
+    transition: 0.3s ease;
+}
+
+input:focus,
+textarea:focus {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+button {
+    width: 95%;
+    padding: 12px;
+    margin-top: 20px;
+    border: none;
+    border-radius: 15px;
+    background: linear-gradient(135deg, #8e2de2, #4a00e0);
+    color: white;
     cursor: pointer;
-    transition: background-color 0.3s;
+    font-weight: bold;
+    transition: all 0.3s ease;
+    font-size: 16px;
 }
 
-.theme-switch input[type="checkbox"]:checked {
-    background-color: #007bff;
+button:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
 }
 
-.theme-switch input[type="checkbox"]::before {
-    content: "";
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background-color: #fff;
-    position: absolute;
-    top: 1px;
-    left: 1px;
-    transition: transform 0.3s;
+.ticket {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 20px;
+    padding: 20px;
+    margin: 15px 0;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    transition: 0.3s ease;
+    text-align: left;
 }
 
-.theme-switch input[type="checkbox"]:checked::before {
-    transform: translateX(20px);
+.ticket:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-5px);
+}
+
+.ticket h3 {
+    margin: 0 0 10px;
+    font-size: 18px;
+}
+
+.ticket p {
+    margin: 5px 0;
+}
+
+a {
+    color: #ccc;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+
+/* Lightmode */
+
+body.lightmode {
+    background: url('https://cdn.pixabay.com/photo/2017/06/30/03/14/stars-2451565_1280.jpg') no-repeat center center fixed;
+    background-size: cover;
+    color: #111;
+}
+
+body.lightmode .top-bar {
+    background: rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(10px);
+    color: black;
+}
+
+body.lightmode .container {
+    background: rgba(255, 255, 255, 0.8);
+    color: black;
+}
+
+body.lightmode .ticket {
+    background: rgba(255, 255, 255, 0.6);
+}
+
+body.lightmode .actions button {
+    color: black;
+}
+
+input,
+textarea {
+    width: 90%;
+    padding: 12px;
+    margin: 15px 0;
+    border: none;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(6px);
+    color: black;
+    /* Schrift dunkler */
+    font-weight: 500;
+    transition: 0.3s ease;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: #555;
+    /* Platzhalter besser sichtbar */
+}
+
+input:focus,
+textarea:focus {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+.container {
+    margin-top: 80px;
+    width: 90%;
+    max-width: 450px;
+    padding: 40px 30px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.8);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(15px);
+    text-align: center;
+    animation: fadeIn 1s ease forwards;
+    color: #111;
+    /* Text dunkler */
+}
+
+.ticket {
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 20px;
+    padding: 20px;
+    margin: 20px 0;
+    /* Mehr Abstand zwischen Tickets */
+    backdrop-filter: blur(8px);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+    text-align: left;
+}
+
+.ticket h3,
+.ticket p {
+    color: #111;
+}
+
+.top-bar {
+    background: rgba(240, 240, 240, 0.8);
+    /* heller im Lightmode */
+    color: #111;
+}
+
+.actions button {
+    background: rgba(0, 0, 0, 0.05);
+    color: #111;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: #666;
+    opacity: 1;
 }

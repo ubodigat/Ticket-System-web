@@ -4,13 +4,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Panel</title>
+    <title>Dashboard</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
     <div class="top-bar">
-        <h1>Admin Bereich</h1>
+        <h1>Dashboard</h1>
         <div class="actions">
             <button onclick="toggleDarkMode()">🌙/☀️</button>
             <button onclick="logout()">Logout</button>
@@ -18,8 +18,9 @@
     </div>
 
     <div class="container glass">
-        <h2>Alle Tickets</h2>
-        <div id="admin-tickets-list"></div>
+        <h2>Deine Tickets</h2>
+        <div id="tickets-list"></div>
+        <button onclick="window.location.href='new_ticket.html'">Neues Ticket erstellen</button>
     </div>
 
     <script src="script.js"></script>

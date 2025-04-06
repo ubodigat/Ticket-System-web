@@ -4,34 +4,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ticket-System - Startseite</title>
+    <title>Ticket System - Login</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
-<body class="light">
-    <!-- Das Standardthema ist 'light' -->
-    <div class="container">
-        <h1 class="title">Willkommen im Ticket-System</h1>
-        <form id="ticketForm" class="form">
-            <label for="title" class="label">Ticket-Titel</label>
-            <input type="text" id="title" class="input" placeholder="Titel eingeben" required>
-            <label for="description" class="label">Beschreibung</label>
-            <textarea id="description" class="textarea" placeholder="Beschreibe dein Anliegen" required></textarea>
-            <button type="submit" class="button">Ticket erstellen</button>
-        </form>
+<body>
+    <div class="container glass">
+        <h1>Login</h1>
+        <input type="text" id="login-username" placeholder="Benutzername">
+        <input type="password" id="login-password" placeholder="Passwort">
+        <button onclick="login()">Login</button>
+        <p>Noch keinen Account? <a href="#" onclick="toggleRegister()">Registrieren</a></p>
+    </div>
 
-        <div class="links">
-            <a href="tickets.html" class="link">Meine Tickets ansehen</a>
-            <a href="login.html" class="link">Admin-Login</a>
-        </div>
-
-        <!-- Design-Umschalter -->
-        <div class="theme-switch-container">
-            <span class="theme-switch-label">Dunkles Design</span>
-            <label class="theme-switch">
-                <input type="checkbox" id="themeSwitch">
-            </label>
-        </div>
+    <div class="container glass" id="register-container" style="display:none;">
+        <h1>Registrieren</h1>
+        <input type="text" id="register-username" placeholder="Benutzername">
+        <input type="password" id="register-password" placeholder="Passwort">
+        <button onclick="register()">Registrieren</button>
+        <p>Bereits registriert? <a href="#" onclick="toggleRegister()">Login</a></p>
     </div>
 
     <script src="script.js"></script>
