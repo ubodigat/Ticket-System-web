@@ -3,27 +3,55 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ticket System - Login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Support | Start</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-    <div class="container glass">
-        <h1>Login</h1>
-        <input type="text" id="login-username" placeholder="Benutzername">
-        <input type="password" id="login-password" placeholder="Passwort">
-        <button onclick="login()">Login</button>
-        <p>Noch keinen Account? <a href="#" onclick="toggleRegister()">Registrieren</a></p>
-    </div>
+    <canvas id="stars"></canvas>
 
-    <div class="container glass" id="register-container" style="display:none;">
-        <h1>Registrieren</h1>
-        <input type="text" id="register-username" placeholder="Benutzername">
-        <input type="password" id="register-password" placeholder="Passwort">
-        <button onclick="register()">Registrieren</button>
-        <p>Bereits registriert? <a href="#" onclick="toggleRegister()">Login</a></p>
-    </div>
+    <header class="hero">
+        <div class="hero-inner">
+            <h1 class="brand">Support Portal</h1>
+            <p class="subtitle">Schnelle Hilfe. Klare Übersicht. Moderne Experience.</p>
+            <div class="hero-actions">
+                <button id="theme-toggle" class="btn-ghost">🌙</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container grid-2">
+        <section class="card glass">
+            <h2>Anmelden</h2>
+            <div class="field">
+                <label for="login-user">Benutzername</label>
+                <input id="login-user" type="text" autocomplete="username" placeholder="benutzername">
+            </div>
+            <div class="field">
+                <label for="login-pass">Passwort</label>
+                <input id="login-pass" type="password" autocomplete="current-password" placeholder="••••••••">
+            </div>
+            <button class="btn-primary" id="btn-login">Anmelden</button>
+            <div class="note">Kein Admin? Nutze die Kontoanfrage rechts.</div>
+        </section>
+
+        <section class="card glass">
+            <h2>Kein Account?</h2>
+            <p>Fordere einen Zugang an. Ein Admin schaltet dich frei.</p>
+            <div class="field">
+                <label for="req-name">Vollständiger Name</label>
+                <input id="req-name" type="text" placeholder="Max Mustermann">
+            </div>
+            <div class="field">
+                <label for="req-email">E‑Mail</label>
+                <input id="req-email" type="email" placeholder="max@example.com">
+            </div>
+            <button class="btn-secondary" id="btn-request">Account anfragen</button>
+            <div class="note">Du erhältst Zugangsdaten, sobald ein Admin dich freigibt.</div>
+        </section>
+    </main>
+    <div id="toast"></div>
 
     <script src="script.js"></script>
 </body>

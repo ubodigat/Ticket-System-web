@@ -1,28 +1,58 @@
 <!DOCTYPE html>
 <html lang="de">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Panel</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - Tickets</title>
+  <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
-    <div class="top-bar">
-        <h1>Admin Bereich</h1>
-        <div class="actions">
-            <button onclick="toggleDarkMode()">🌙/☀️</button>
-            <button onclick="logout()">Logout</button>
+  <header class="topbar">
+    <h1>Support Portal <span>Admin</span></h1>
+    <div class="actions">
+      <button id="themeToggle">🌙</button>
+      <button id="logout">Logout</button>
+    </div>
+  </header>
+
+  <main class="kanban">
+    <div class="kanban-column" id="neu">
+      <h2>🆕 Neu</h2>
+      <div class="kanban-cards">
+        <div class="kanban-card" draggable="true">
+          <h3>Ticket #101</h3>
+          <p><strong>Betreff:</strong> Login Problem</p>
+          <p><strong>Autor:</strong> Max Mustermann</p>
+          <span class="prio high">Hoch</span>
         </div>
+      </div>
     </div>
 
-    <div class="container glass">
-        <h2>Alle Tickets</h2>
-        <div id="admin-tickets-list"></div>
+    <div class="kanban-column" id="bearbeitung">
+      <h2>🔧 In Bearbeitung</h2>
+      <div class="kanban-cards">
+        <div class="kanban-card" draggable="true">
+          <h3>Ticket #102</h3>
+          <p><strong>Betreff:</strong> Passwort Reset</p>
+          <p><strong>Autor:</strong> Lisa Müller</p>
+          <span class="prio normal">Normal</span>
+        </div>
+      </div>
     </div>
 
-    <script src="script.js"></script>
+    <div class="kanban-column" id="geschlossen">
+      <h2>✅ Geschlossen</h2>
+      <div class="kanban-cards">
+        <div class="kanban-card" draggable="true">
+          <h3>Ticket #103</h3>
+          <p><strong>Betreff:</strong> Server Down</p>
+          <p><strong>Autor:</strong> Tim Schuster</p>
+          <span class="prio kritisch">Kritisch</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="script.js"></script>
 </body>
-
 </html>

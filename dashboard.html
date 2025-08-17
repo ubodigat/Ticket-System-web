@@ -3,26 +3,71 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Support | Dashboard</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
-<body>
-    <div class="top-bar">
-        <h1>Dashboard</h1>
-        <div class="actions">
-            <button onclick="toggleDarkMode()">🌙/☀️</button>
-            <button onclick="logout()">Logout</button>
+<body data-guard="user">
+    <canvas id="stars"></canvas>
+
+    <div class="topbar glass">
+        <div class="left">
+            <div class="brand-mini">Support Portal</div>
+            <div class="crumb">Dashboard</div>
+        </div>
+        <div class="right">
+            <button id="theme-toggle" class="btn-ghost">🌙</button>
+            <button id="btn-logout" class="btn-ghost">Logout</button>
         </div>
     </div>
 
-    <div class="container glass">
-        <h2>Deine Tickets</h2>
-        <div id="tickets-list"></div>
-        <button onclick="window.location.href='new_ticket.html'">Neues Ticket erstellen</button>
-    </div>
+    <main class="container grid-2">
+        <section class="card glass">
+            <h2>Neues Ticket</h2>
+            <div class="field">
+                <label for="t-title">Betreff</label>
+                <input id="t-title" type="text" placeholder="Kurzer Titel">
+            </div>
+            <div class="field">
+                <label for="t-desc">Beschreibung</label>
+                <textarea id="t-desc" rows="6" placeholder="Beschreibe dein Anliegen möglichst genau."></textarea>
+            </div>
+            <div class="grid-2 collapse-sm">
+                <div class="field">
+                    <label for="t-prio">Priorität</label>
+                    <select id="t-prio">
+            <option>Normal</option>
+            <option>Hoch</option>
+            <option>Kritisch</option>
+          </select>
+                </div>
+                <div class="field">
+                    <label for="t-cat">Kategorie</label>
+                    <select id="t-cat">
+            <option>Allgemein</option>
+            <option>Technik</option>
+            <option>Account</option>
+            <option>Abrechnung</option>
+          </select>
+                </div>
+            </div>
+            <button class="btn-primary" id="btn-create-ticket">Absenden</button>
+        </section>
 
+        <section class="card glass">
+            <h2>Deine Tickets</h2>
+            <div class="list-head">
+                <div>Status</div>
+                <div>Betreff</div>
+                <div>Datum</div>
+                <div>Prio</div>
+            </div>
+            <div id="user-tickets" class="list"></div>
+        </section>
+    </main>
+
+    <div id="toast"></div>
     <script src="script.js"></script>
 </body>
 
