@@ -11,7 +11,7 @@
 <body data-guard="user">
     <canvas id="stars"></canvas>
 
-    <div class="topbar glass">
+    <div class="topbar">
         <div class="left">
             <div class="brand-mini">Support Portal</div>
             <div class="crumb">Dashboard</div>
@@ -37,19 +37,19 @@
                 <div class="field">
                     <label for="t-prio">Priorität</label>
                     <select id="t-prio">
-            <option>Normal</option>
-            <option>Hoch</option>
-            <option>Kritisch</option>
-          </select>
+                        <option>Normal</option>
+                        <option>Hoch</option>
+                        <option>Kritisch</option>
+                    </select>
                 </div>
                 <div class="field">
                     <label for="t-cat">Kategorie</label>
                     <select id="t-cat">
-            <option>Allgemein</option>
-            <option>Technik</option>
-            <option>Account</option>
-            <option>Abrechnung</option>
-          </select>
+                        <option>Allgemein</option>
+                        <option>Technik</option>
+                        <option>Account</option>
+                        <option>Abrechnung</option>
+                    </select>
                 </div>
             </div>
             <button class="btn-primary" id="btn-create-ticket">Absenden</button>
@@ -57,8 +57,9 @@
 
         <section class="card glass">
             <h2>Deine Tickets</h2>
-            <div class="list-head">
-                <div>Status</div>
+            <div class="list-head"
+                style="display:grid; grid-template-columns: 40px 1fr 120px 100px; gap: 16px; padding: 10px 16px; font-size: 11px; text-transform: uppercase; color: var(--text-sec); border-bottom: 1px dashed var(--border);">
+                <div>St</div>
                 <div>Betreff</div>
                 <div>Datum</div>
                 <div>Prio</div>

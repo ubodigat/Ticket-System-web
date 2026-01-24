@@ -1,58 +1,95 @@
 <!DOCTYPE html>
 <html lang="de">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Dashboard - Tickets</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+
+<body data-guard="admin">
+  <canvas id="stars"></canvas>
   <header class="topbar">
-    <h1>Support Portal <span>Admin</span></h1>
-    <div class="actions">
-      <button id="themeToggle">🌙</button>
-      <button id="logout">Logout</button>
+    <div class="topbar-inner">
+      <h1 class="brand">Support <span>Admin</span></h1>
+      <div class="hero-actions">
+        <button id="theme-toggle" class="btn-ghost">🌙</button>
+        <button id="logout" class="btn-ghost">Logout</button>
+      </div>
     </div>
   </header>
 
-  <main class="kanban">
-    <div class="kanban-column" id="neu">
-      <h2>🆕 Neu</h2>
-      <div class="kanban-cards">
-        <div class="kanban-card" draggable="true">
-          <h3>Ticket #101</h3>
-          <p><strong>Betreff:</strong> Login Problem</p>
-          <p><strong>Autor:</strong> Max Mustermann</p>
-          <span class="prio high">Hoch</span>
-        </div>
-      </div>
+  <main class="container">
+    <!-- Requests Section -->
+    <div style="margin-bottom: 30px;" class="card glass">
+      <h3 style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:10px;">Konto-Anfragen</h3>
+      <div id="request-list"
+        style="display:grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap:15px;"></div>
     </div>
 
-    <div class="kanban-column" id="bearbeitung">
-      <h2>🔧 In Bearbeitung</h2>
-      <div class="kanban-cards">
-        <div class="kanban-card" draggable="true">
-          <h3>Ticket #102</h3>
-          <p><strong>Betreff:</strong> Passwort Reset</p>
-          <p><strong>Autor:</strong> Lisa Müller</p>
-          <span class="prio normal">Normal</span>
+    <div class="kanban-board">
+      <!-- New Column -->
+      <div class="column" id="col-new">
+        <div class="col-header">
+          <span>🆕 Neu</span>
+          <span class="count" id="count-new">0</span>
         </div>
+        <div class="ticket-list" data-status="Neu" id="list-new"></div>
       </div>
-    </div>
 
-    <div class="kanban-column" id="geschlossen">
-      <h2>✅ Geschlossen</h2>
-      <div class="kanban-cards">
-        <div class="kanban-card" draggable="true">
-          <h3>Ticket #103</h3>
-          <p><strong>Betreff:</strong> Server Down</p>
-          <p><strong>Autor:</strong> Tim Schuster</p>
-          <span class="prio kritisch">Kritisch</span>
+      <!-- In Progress Column -->
+      <div class="column" id="col-doing">
+        <div class="col-header">
+          <span>🔧 In Bearbeitung</span>
+          <span class="count" id="count-doing">0</span>
         </div>
+        <div class="ticket-list" data-status="In Bearbeitung" id="list-doing"></div>
+      </div>
+
+      <!-- Done Column -->
+      <div class="column" id="col-done">
+        <div class="col-header">
+          <span>✅ Geschlossen</span>
+          <span class="count" id="count-done">0</span>
+        </div>
+        <div class="ticket-list" data-status="Geschlossen" id="list-done"></div>
       </div>
     </div>
   </main>
 
+  <!-- Ticket Detail Modal -->
+  <div class="modal-overlay" id="ticket-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="m-title">Ticket Title</h3>
+        <button class="btn-ghost" id="m-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p id="m-desc">Beschreibung...</p>
+        <div class="field">
+          <label>Zugewiesen an:</label>
+          <select id="m-assignee">
+            <option value="">Niemand</option>
+          </select>
+        </div>
+        <!-- Comments -->
+        <div class="comments-section">
+          <h4>Kommentare</h4>
+          <div id="m-comments"></div>
+          <div class="field" style="margin-top: 10px;">
+            <textarea id="m-new-comment" rows="2" placeholder="Kommentar schreiben..."></textarea>
+            <button class="btn-primary" id="btn-add-comment" style="margin-top: 8px;">Senden</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="m-close-bt">Schließen</button>
+      </div>
+    </div>
+  </div>
+
   <script src="script.js"></script>
 </body>
+
 </html>
