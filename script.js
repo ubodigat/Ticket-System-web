@@ -193,10 +193,10 @@ const AdminBoard = {
         AdminBoard.setupDrag();
 
         // Setup Modal
-        q('#m-close').onclick = AdminBoard.closeModal;
-        q('#m-close-bt').onclick = AdminBoard.closeModal;
-        q('#ticket-modal').onclick = (e) => { if (e.target.id === 'ticket-modal') AdminBoard.closeModal(); };
-        q('#btn-add-comment').onclick = AdminBoard.postComment;
+        if (q('#m-close')) q('#m-close').onclick = AdminBoard.closeModal;
+        if (q('#m-close-bt')) q('#m-close-bt').onclick = AdminBoard.closeModal;
+        if (q('#ticket-modal')) q('#ticket-modal').onclick = (e) => { if (e.target.id === 'ticket-modal') AdminBoard.closeModal(); };
+        if (q('#btn-add-comment')) q('#btn-add-comment').onclick = AdminBoard.postComment;
     },
 
     render: () => {
@@ -208,7 +208,7 @@ const AdminBoard = {
         };
         const counts = { 'Neu': 0, 'In Bearbeitung': 0, 'Geschlossen': 0 };
 
-        Object.values(cols).forEach(c => c.innerHTML = '');
+        Object.values(cols).forEach(c => { if (c) c.innerHTML = ''; });
 
         tickets.forEach(t => {
             if (!cols[t.status]) {
@@ -219,11 +219,10 @@ const AdminBoard = {
             cols[t.status].appendChild(createCard(t));
         });
 
-        q('#count-new').textContent = counts['Neu'];
-        q('#count-doing').textContent = counts['In Bearbeitung'];
-        q('#count-done').textContent = counts['Geschlossen'];
+        if (q('#count-new')) q('#count-new').textContent = counts['Neu'];
+        if (q('#count-doing')) q('#count-doing').textContent = counts['In Bearbeitung'];
+        if (q('#count-done')) q('#count-done').textContent = counts['Geschlossen'];
 
-        // 2. Render Account Requests if present (checking for existence of container first)
         AdminBoard.renderRequests();
 
         function createCard(t) {
@@ -260,7 +259,7 @@ const AdminBoard = {
     },
 
     renderRequests: () => {
-        const list = q('#request-list'); // Need to add this to HTML
+        const list = q('#request-list');
         if (!list) return;
         const reqs = Utils.read('account_requests', []);
         list.innerHTML = '';
@@ -281,23 +280,7 @@ const AdminBoard = {
                 </div>
             `;
             // Accept Logic
-            el.querySelector('.btn-primary').onclick = () => {
-                const username = prompt('Benutzername für ' + r.name + ':');
-                if (!username) return;
-                const password = prompt('Passwort für ' + username + ':', '123');
-                if (!password) return;
-
-                const users = Store.getUsers();
-                if (users.find(u => u.username === username)) { alert('User existiert schon!'); return; }
-
-                users.push({ id: Utils.uid(), username, password, name: r.name, role: 'user' });
-                Store.saveUsers(users);
-
-                const rest = reqs.filter(x => x.id !== r.id);
-                Utils.write('account_requests', rest);
-                AdminBoard.renderRequests();
-                UI.toast('Benutzer erstellt!');
-            };
+            el.querySelector('.btn-primary').onclick = () => AdminBoard.openApproveModal(r);
             // Deny Logic
             el.querySelector('.btn-ghost').onclick = () => {
                 if (!confirm('Anfrage löschen?')) return;
@@ -416,6 +399,51 @@ const AdminBoard = {
         AdminBoard.renderComments(t);
         AdminBoard.render(); // Update List (comment count)
         UI.toast('Kommentar gesendet');
+    },
+
+    // Approve Modal Logic
+    currentReq: null,
+    openApproveModal: (req) => {
+        AdminBoard.currentReq = req;
+        q('#a-name-disp').textContent = req.name;
+        q('#a-username').value = req.name.toLowerCase().replace(/\s+/g, '');
+        q('#a-password').value = '123';
+        q('#approve-modal').classList.add('open');
+
+        q('#a-confirm').onclick = AdminBoard.confirmApprove;
+        q('#a-close').onclick = AdminBoard.closeApprove;
+        q('#a-cancel').onclick = AdminBoard.closeApprove;
+    },
+    closeApprove: () => {
+        q('#approve-modal').classList.remove('open');
+        AdminBoard.currentReq = null;
+    },
+    confirmApprove: () => {
+        if (!AdminBoard.currentReq) return;
+        const username = q('#a-username').value.trim();
+        const password = q('#a-password').value.trim();
+
+        if (!username || !password) { UI.toast('Bitte alle Felder füllen'); return; }
+
+        const users = Store.getUsers();
+        if (users.find(u => u.username === username)) { UI.toast('Benutzername existiert bereits'); return; }
+
+        users.push({
+            id: Utils.uid(),
+            username,
+            password,
+            name: AdminBoard.currentReq.name,
+            role: 'user'
+        });
+        Store.saveUsers(users);
+
+        const reqs = Utils.read('account_requests', []);
+        const rest = reqs.filter(x => x.id !== AdminBoard.currentReq.id);
+        Utils.write('account_requests', rest);
+
+        AdminBoard.closeApprove();
+        AdminBoard.renderRequests();
+        UI.toast('Benutzer erfolgreich erstellt!');
     }
 };
 
@@ -447,7 +475,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btns.forEach(b => b.onclick = Auth.logout);
     }
 
-    // Request Flow (Index)
+    // Request Flow
     if (q('#btn-request')) {
         q('#btn-request').onclick = () => {
             const name = q('#req-name').value.trim();

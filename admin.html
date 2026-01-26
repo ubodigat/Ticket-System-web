@@ -89,6 +89,31 @@
     </div>
   </div>
 
+  <!-- Approve User Modal (Moved outside) -->
+  <div class="modal-overlay" id="approve-modal">
+    <div class="modal" style="max-width: 400px;">
+      <div class="modal-header">
+        <h3>Benutzer erstellen</h3>
+        <button class="btn-ghost" id="a-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p>Erstelle einen Account für <strong id="a-name-disp"></strong>.</p>
+        <div class="field">
+          <label>Benutzername</label>
+          <input type="text" id="a-username" placeholder="z.b. maxm">
+        </div>
+        <div class="field">
+          <label>Passwort</label>
+          <input type="text" id="a-password" value="123">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-ghost" id="a-cancel">Abbrechen</button>
+        <button class="btn-primary" id="a-confirm">Erstellen</button>
+      </div>
+    </div>
+  </div>
+
   <script src="script.js"></script>
 </body>
 
