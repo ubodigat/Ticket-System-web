@@ -34,8 +34,15 @@ const Store = {
         if (adminIdx === -1) {
             users.push({
                 id: Utils.uid(), username: 'admin', password: '123',
-                name: 'Administrator', role: 'admin'
+                name: 'Administrator', role: 'superadmin', dept: 'All'
             });
+        } else {
+            // Force upgrade existing admin to superadmin
+            if (users[adminIdx].role !== 'superadmin') {
+                users[adminIdx].role = 'superadmin';
+                users[adminIdx].dept = 'All';
+                Store.saveUsers(users);
+            }
         }
 
         // 1. Add a default normal user
@@ -50,12 +57,51 @@ const Store = {
         Store.saveUsers(users);
         if (!Utils.read('tickets', null)) Utils.write('tickets', []);
         if (!Utils.read('account_requests', null)) Utils.write('account_requests', []);
+
+        // Migration: ensure 'comments', 'chat', 'archived' are set
+        const tickets = Store.getTickets();
+        let changed = false;
+        tickets.forEach(t => {
+            // Note: 'comments' used to store chat. We need to split them if we want separate logic?
+            // User requested: "comments should remain" (as internal notes) AND "chat".
+            // If I look at the previous step, I used 'comments' for chat. 
+            // Migration Strategy: Move existing 'comments' (if they look like chat) to 'chat'?
+            // Or just init 'internalComments' and keep 'comments' as 'chat'?
+            // Let's decide: 'comments' = Internal Notes. 'chat' = Chat.
+            // Since I recently wrote chat into 'comments', I should probably move them to 'chat'.
+            // But if I do that, the old comments (from before chat feature) also move to chat.
+            // That is probably acceptable as old comments were likely communication.
+
+            if (!t.chat) {
+                // If we have comments, move them to chat for continuity of history
+                if (t.comments && t.comments.length > 0) {
+                    t.chat = [...t.comments];
+                    t.comments = []; // Reset comments for internal notes
+                } else {
+                    t.chat = [];
+                }
+                changed = true;
+            }
+            if (!t.comments) { t.comments = []; changed = true; } // Internal notes
+
+            if (t.archived === undefined) { t.archived = false; changed = true; }
+        });
+        if (changed) Store.saveTickets(tickets);
     },
 
     currentUser: () => {
         const username = localStorage.getItem('currentUser');
         if (!username) return null;
         return Store.getUsers().find(u => u.username === username) || null;
+    },
+
+    readFile: (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
     }
 };
 
@@ -79,7 +125,8 @@ const Auth = {
         const guard = document.body.dataset.guard;
         if (!guard) return; // Public page
         if (!user) { window.location.href = 'index.html'; return; }
-        if (guard === 'admin' && user.role !== 'admin') window.location.href = 'dashboard.html';
+        // Admin page accessible by admin AND superadmin
+        if (guard === 'admin' && user.role !== 'admin' && user.role !== 'superadmin') window.location.href = 'dashboard.html';
     }
 };
 
@@ -131,41 +178,187 @@ const UI = {
 
 // --- User Dashboard Logic ---
 const UserDash = {
+    selectedFiles: [], // Staging for file uploads
+
     init: () => {
+        // Admin Button Injection if on dashboard (for superadmin/admin)
+        const user = Store.currentUser();
+        if (user && (user.role === 'admin' || user.role === 'superadmin')) {
+            const rightNav = q('.topbar .right');
+            if (rightNav && !q('#btn-to-admin')) {
+                const btn = document.createElement('button');
+                btn.id = 'btn-to-admin';
+                btn.className = 'btn-ghost';
+                btn.textContent = 'Admin Panel';
+                btn.style.marginRight = '10px';
+                btn.onclick = () => window.location.href = 'admin.html';
+                rightNav.insertBefore(btn, rightNav.firstChild);
+            }
+        }
+
         if (!q('#btn-create-ticket')) return;
         const btn = q('#btn-create-ticket');
-        btn.addEventListener('click', () => {
+        btn.onclick = () => {
             const title = q('#t-title').value.trim();
             const desc = q('#t-desc').value.trim();
             const prio = q('#t-prio').value;
+            const cat = q('#t-cat').value || 'Allgemein'; // Capture Category
+
             if (!title) { UI.toast('Bitte Titel angeben'); return; }
 
             const user = Store.currentUser();
             const tickets = Store.getTickets();
-            tickets.push({
+            const newTicket = {
                 id: Utils.uid(),
                 title, desc, prio,
+                category: cat, // Save Category
                 status: 'Neu',
                 author: user.username, authorName: user.name || user.username,
                 createdAt: Utils.nowISO(),
-                comments: []
-            });
+                comments: [],
+                chat: [],
+                archived: false
+            };
+            tickets.push(newTicket);
             Store.saveTickets(tickets);
             UI.toast('Ticket erstellt!');
             q('#t-title').value = ''; q('#t-desc').value = '';
             UserDash.renderList();
-        });
+        };
+
+        // ... Key listeners for Create Ticket ...
+        q('#t-title').onkeydown = (e) => {
+            if (e.key === 'Enter') q('#btn-create-ticket').click();
+        };
+
+        // Populate Categories dynamically
+        const catSel = q('#t-cat');
+        if (catSel) {
+            const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+            catSel.innerHTML = '';
+            settings.categories.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c; opt.textContent = c;
+                catSel.appendChild(opt);
+            });
+        }
+
+        // Modal Events
+        if (q('#u-m-close')) q('#u-m-close').onclick = UserDash.closeModal;
+        if (q('#u-ticket-modal')) q('#u-ticket-modal').onclick = (e) => { if (e.target.id === 'u-ticket-modal') UserDash.closeModal(); };
+
+        // User Chat Logic
+        const chatSend = q('#u-chat-send');
+        if (chatSend) {
+            chatSend.onclick = () => AdminBoard.postChat('user');
+            q('#u-chat-input').onkeydown = (e) => {
+                if (e.ctrlKey && e.key === 'Enter') AdminBoard.postChat('user');
+            };
+
+            // File Handling
+            const fileIn = q('#u-chat-file');
+            fileIn.onchange = () => {
+                Array.from(fileIn.files).forEach(f => UserDash.selectedFiles.push(f));
+                UserDash.renderFilePreview();
+                fileIn.value = ''; // Reset input to allow re-selecting same file
+            };
+        }
+
+        // Tabs
+        const modalBody = q('#u-ticket-modal .modal-body');
+        if (modalBody) {
+            const tabs = modalBody.querySelectorAll('.tab-btn');
+            tabs.forEach(btn => {
+                btn.onclick = () => {
+                    modalBody.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const target = btn.dataset.tab; // u-details or u-chat
+                    modalBody.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    const pane = q(`#u-tab-${target.replace('u-', '')}`) || q(`#${target}`);
+                    if (pane) {
+                        pane.classList.add('active');
+                        if (target.includes('chat')) {
+                            const box = q('#u-chat-msgs');
+                            if (box) box.scrollTop = box.scrollHeight;
+                        }
+                    }
+                };
+            });
+        }
         UserDash.renderList();
     },
+
+    renderFilePreview: () => {
+        const pan = q('#u-chat-file-preview');
+        pan.innerHTML = '';
+        if (UserDash.selectedFiles.length > 0) {
+            pan.style.display = 'flex';
+            UserDash.selectedFiles.forEach((f, idx) => {
+                const tag = document.createElement('div');
+                tag.style.background = 'rgba(0,0,0,0.3)';
+                tag.style.padding = '4px 8px';
+                tag.style.borderRadius = '4px';
+                tag.style.fontSize = '12px';
+                tag.innerHTML = `<span>${f.name}</span> <span style="cursor:pointer; color:var(--danger); margin-left:4px;">✕</span>`;
+                tag.querySelector('span:last-child').onclick = () => {
+                    UserDash.selectedFiles.splice(idx, 1);
+                    UserDash.renderFilePreview();
+                };
+                pan.appendChild(tag);
+            });
+        } else {
+            pan.style.display = 'none';
+        }
+    },
+
+    // ... renderList, openModal, closeModal ...
+    currentTicketId: null,
+
+    openModal: (id) => {
+        UserDash.currentTicketId = id;
+        const tickets = Store.getTickets();
+        const t = tickets.find(x => x.id === id);
+        if (!t) return;
+
+        q('#u-m-title').textContent = t.title;
+        q('#u-m-desc').textContent = t.desc || '-';
+
+        const statusEl = q('#u-m-status');
+        statusEl.textContent = t.status;
+        statusEl.style.color = getStatusColor(t.status);
+
+        // Reset Tabs
+        const btnDetails = q('.tab-btn[data-tab="u-details"]');
+        if (btnDetails) btnDetails.click();
+
+        // Reset Files
+        UserDash.selectedFiles = [];
+        UserDash.renderFilePreview();
+
+        AdminBoard.renderChat(t, '#u-chat-msgs');
+        q('#u-ticket-modal').classList.add('open');
+    },
+
+    closeModal: () => {
+        q('#u-ticket-modal').classList.remove('open');
+        UserDash.currentTicketId = null;
+    },
+
     renderList: () => {
         const list = q('#user-tickets');
         if (!list) return;
         const user = Store.currentUser();
         const tickets = Store.getTickets().filter(t => t.author === user.username);
         list.innerHTML = '';
+        if (tickets.length === 0) {
+            list.innerHTML = '<div style="opacity:0.5; padding:10px;">Keine Tickets</div>';
+            return;
+        }
+
         tickets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).forEach(t => {
             const el = document.createElement('div');
             el.className = 'ticket-row';
+            el.style.cursor = 'pointer';
             el.innerHTML = `
                 <div class="status-indicator" style="background:${getStatusColor(t.status)}; width:8px; height:8px; border-radius:50%;"></div>
                 <div style="font-weight:600">${t.title}</div>
@@ -173,6 +366,7 @@ const UserDash = {
                 <div class="date">${Utils.fmtDate(t.createdAt)}</div>
                 <div style="font-size:12px; color:var(--text-sec)">${t.prio}</div>
             `;
+            el.onclick = () => UserDash.openModal(t.id);
             list.appendChild(el);
         });
     }
@@ -189,18 +383,148 @@ function getStatusColor(s) {
 const AdminBoard = {
     init: () => {
         if (!q('.kanban-board')) return;
+
+        // Superadmin UI Injection
+        const user = Store.currentUser();
+        if (user && user.role === 'superadmin') {
+            const actions = q('.hero-actions');
+            if (actions && !q('#btn-manage-users')) {
+                const btn = document.createElement('button');
+                btn.id = 'btn-manage-users';
+                btn.className = 'btn-ghost';
+                btn.textContent = '👥 User Manager';
+                btn.onclick = AdminBoard.openUserManager;
+                actions.insertBefore(btn, actions.firstChild);
+            }
+        } else {
+            // Hide Request Board
+            const reqBoard = q('#request-list')?.parentElement;
+            if (reqBoard) reqBoard.style.display = 'none';
+        }
+
         AdminBoard.render();
         AdminBoard.setupDrag();
+
+        // Archive View Toggle
+        const btnArch = q('#btn-archive');
+        const btnBack = q('#btn-back-kanban');
+        const viewKanban = q('#kanban-view');
+        const viewArchive = q('#archive-view');
+
+        if (btnArch && viewKanban && viewArchive) {
+            btnArch.onclick = () => {
+                viewKanban.style.display = 'none';
+                viewArchive.style.display = 'block';
+                AdminBoard.renderArchive();
+            };
+            btnBack.onclick = () => {
+                viewArchive.style.display = 'none';
+                viewKanban.style.display = 'block';
+                AdminBoard.render();
+            };
+        }
 
         // Setup Modal
         if (q('#m-close')) q('#m-close').onclick = AdminBoard.closeModal;
         if (q('#m-close-bt')) q('#m-close-bt').onclick = AdminBoard.closeModal;
         if (q('#ticket-modal')) q('#ticket-modal').onclick = (e) => { if (e.target.id === 'ticket-modal') AdminBoard.closeModal(); };
-        if (q('#btn-add-comment')) q('#btn-add-comment').onclick = AdminBoard.postComment;
+
+        // Chat Send (Admin)
+        if (q('#btn-chat-send')) {
+            q('#btn-chat-send').onclick = () => AdminBoard.postChat('admin');
+            q('#m-chat-input').onkeydown = (e) => {
+                if (e.ctrlKey && e.key === 'Enter') AdminBoard.postChat('admin');
+            };
+        }
+
+        // Internal Comment Send (Admin)
+        if (q('#btn-add-comment')) {
+            q('#btn-add-comment').onclick = AdminBoard.postInternalComment;
+        }
+
+        // Date input (Admin) + Formatting
+        const fileAdmin = q('#m-chat-file-input');
+        if (fileAdmin) {
+            // Admin doesn't have multi-file preview requested, but fixing single file upload
+            // The previous bug was mismatching IDs or not attaching listener
+            // We just let it act as simple input for now, unless complex needed.
+        }
+
+        // Formatting Buttons
+        const boldBtn = q('#m-chat-bold');
+        const italicBtn = q('#m-chat-italic');
+        const inputArea = q('#m-chat-input');
+
+        if (boldBtn && inputArea) {
+            boldBtn.onclick = () => insertMarkdown(inputArea, '**');
+        }
+        if (italicBtn && inputArea) {
+            italicBtn.onclick = () => insertMarkdown(inputArea, '*');
+        }
+
+        function insertMarkdown(area, char) {
+            const start = area.selectionStart;
+            const end = area.selectionEnd;
+            const val = area.value;
+            const sel = val.substring(start, end);
+            const replace = char + sel + char;
+            area.value = val.substring(0, start) + replace + val.substring(end);
+            area.focus();
+            area.selectionStart = start + char.length;
+            area.selectionEnd = end + char.length;
+        }
+
+        // Archive Action
+        if (q('#btn-archive-ticket')) {
+            q('#btn-archive-ticket').onclick = AdminBoard.archiveCurrent;
+        }
+
+        // Tabs
+        qa('.tab-btn').forEach(btn => {
+            btn.onclick = () => {
+                const parent = btn.parentElement;
+                parent.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                const targetId = btn.getAttribute('data-tab');
+                const modalBody = parent.parentElement;
+                modalBody.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+                const target = modalBody.querySelector(`#tab-${targetId}`) || modalBody.querySelector(`#${targetId}`);
+                if (target) target.classList.add('active');
+
+                if (targetId.includes('chat')) {
+                    const box = modalBody.querySelector('.chat-messages');
+                    if (box) box.scrollTop = box.scrollHeight;
+                }
+            };
+        });
+
+        // Approve Modal role toggle
+        const roleSel = q('#a-role');
+        if (roleSel) {
+            roleSel.onchange = () => {
+                const dept = q('#a-dept-field');
+                if (dept) dept.style.display = roleSel.value === 'admin' ? 'block' : 'none';
+            };
+        }
+
+        if (q('#um-close')) q('#um-close').onclick = () => q('#user-man-modal').classList.remove('open');
     },
 
+    // ... render methods ...
     render: () => {
-        const tickets = Store.getTickets();
+        const user = Store.currentUser();
+        let tickets = Store.getTickets().filter(t => !t.archived);
+
+        // Filter by Department (if not Superadmin)
+        if (user.role === 'admin') {
+            // Support array or single string (legacy)
+            const depts = Array.isArray(user.dept) ? user.dept : [user.dept || 'Allgemein'];
+            tickets = tickets.filter(t => depts.includes(t.category) || depts.includes('All'));
+        }
+        // Superadmin sees all (no filter)
+
         const cols = {
             'Neu': q('#list-new'),
             'In Bearbeitung': q('#list-doing'),
@@ -236,7 +560,10 @@ const AdminBoard = {
                 `<span style="opacity:0.5; font-size:11px">Unzugewiesen</span>`;
 
             card.innerHTML = `
-                <span class="t-tag prio-${t.prio}">${t.prio}</span>
+                <div style="display:flex; justify-content:space-between;">
+                    <span class="t-tag prio-${t.prio}">${t.prio}</span>
+                    <span style="font-size:10px; background:rgba(255,255,255,0.1); padding:2px 4px; border-radius:4px;">${t.category || '-'}</span>
+                </div>
                 <div class="t-title">${t.title}</div>
                 <div class="t-meta">
                     <span>${t.authorName}</span>
@@ -244,10 +571,9 @@ const AdminBoard = {
                 </div>
                 <div class="t-meta" style="margin-top:8px; border-top:1px solid var(--border); padding-top:8px;">
                      ${assignee}
-                     <span style="font-size:10px">💬 ${t.comments?.length || 0}</span>
+                     <span style="font-size:10px">💬 ${(t.chat?.length || 0)}</span>
                 </div>
             `;
-
             card.addEventListener('dragstart', (e) => {
                 e.dataTransfer.setData('text/plain', t.id);
                 card.classList.add('dragging');
@@ -256,6 +582,351 @@ const AdminBoard = {
             card.addEventListener('click', () => AdminBoard.openModal(t.id));
             return card;
         }
+    },
+
+    // START OF MISSING FUNCTIONS
+    archiveCurrent: () => {
+        if (!confirm('Ticket ins Archiv verschieben? Es wird aus dem Board entfernt.')) return;
+        const id = AdminBoard.currentTicketId;
+        const tickets = Store.getTickets();
+        const t = tickets.find(x => x.id === id);
+        if (t) {
+            t.archived = true;
+            Store.saveTickets(tickets);
+            AdminBoard.closeModal();
+            AdminBoard.render();
+            UI.toast('Ticket archiviert');
+        }
+    },
+
+    // User Manager Logic
+    openUserManager: () => {
+        const modal = q('#user-man-modal');
+        modal.classList.add('open');
+        AdminBoard.renderUserManager('users'); // Default tab
+
+        // Setup UM Tabs
+        let tabs = modal.querySelector('.um-tabs');
+        if (tabs) tabs.remove();
+
+        tabs = document.createElement('div');
+        tabs.className = 'um-tabs tabs';
+        tabs.style.margin = '0 20px';
+        tabs.style.borderBottom = '1px solid var(--border)';
+
+        tabs.innerHTML = `
+            <div class="tab-btn active" data-view="users">Benutzer</div>
+            <div class="tab-btn" data-view="admins">Admins</div>
+            <div class="tab-btn" data-view="cats">Kategorien</div>
+        `;
+
+        const header = modal.querySelector('.modal-header');
+        header.insertAdjacentElement('afterend', tabs);
+
+        tabs.querySelectorAll('.tab-btn').forEach(b => {
+            b.onclick = () => {
+                tabs.querySelectorAll('.tab-btn').forEach(x => x.classList.remove('active'));
+                b.classList.add('active');
+                AdminBoard.renderUserManager(b.dataset.view);
+            };
+        });
+    },
+
+    renderUserManager: (view) => {
+        const list = q('#um-list');
+        list.className = 'user-list-container';
+        list.innerHTML = '';
+
+        const controls = document.createElement('div');
+        controls.style.marginBottom = '10px';
+        controls.style.display = 'flex';
+        controls.style.justifyContent = 'flex-end';
+
+        if (view === 'users' || view === 'admins') {
+            controls.innerHTML = `<button class="btn-primary" id="btn-add-user">Neu anlegen</button>`;
+            controls.querySelector('#btn-add-user').onclick = () => AdminBoard.openEditUserModal(null, view);
+        } else {
+            controls.innerHTML = `<button class="btn-primary" id="btn-add-cat">Neue Kategorie</button>`;
+            controls.querySelector('#btn-add-cat').onclick = () => AdminBoard.openEditCategoryModal(null);
+        }
+        list.appendChild(controls);
+
+        if (view === 'cats') {
+            const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+            settings.categories.forEach(c => {
+                const el = document.createElement('div');
+                el.className = 'ticket-row';
+                el.style.display = 'flex';
+                el.style.justifyContent = 'space-between';
+                el.innerHTML = `
+                    <div style="font-weight:600">${c}</div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn-ghost edit-c">✏️</button>
+                        <button class="btn-ghost del-c" style="color:var(--danger)">🗑️</button>
+                    </div>
+                 `;
+                el.querySelector('.edit-c').onclick = () => AdminBoard.openEditCategoryModal(c);
+                el.querySelector('.del-c').onclick = () => {
+                    if (!confirm(`Kategorie "${c}" löschen?`)) return;
+                    settings.categories = settings.categories.filter(x => x !== c);
+                    Utils.write('settings', settings);
+                    AdminBoard.renderUserManager('cats');
+                };
+                list.appendChild(el);
+            });
+            return;
+        }
+
+        const users = Store.getUsers();
+        const filtered = users.filter(u => {
+            if (view === 'users') return u.role === 'user';
+            if (view === 'admins') return u.role === 'admin' || u.role === 'superadmin';
+            return false;
+        });
+
+        filtered.forEach(u => {
+            const el = document.createElement('div');
+            el.className = 'ticket-row';
+            el.style.display = 'flex';
+            el.style.justifyContent = 'space-between';
+
+            let roleInfo = u.role.toUpperCase();
+            if (u.role === 'admin') {
+                const d = u.dept;
+                const dStr = Array.isArray(d) ? d.join(', ') : (d || 'Allgemein');
+                roleInfo += ` (${dStr})`;
+            }
+
+            el.innerHTML = `
+                <div style="display:flex; align-items:center;">
+                    <div>
+                        <strong>${u.username}</strong> <br>
+                        <span style="font-size:12px; opacity:0.8">${u.name || '-'} | ${u.email || 'Keine Email'}</span>
+                        <div style="font-size:10px; opacity:0.6; margin-top:2px;">${roleInfo}</div>
+                    </div>
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn-ghost edit-u" style="padding:4px;" title="Bearbeiten">✏️</button>
+                    ${u.role !== 'superadmin' && u.username !== 'admin' ? `<button class="btn-ghost del-u" style="padding:4px; color:var(--danger);" title="Löschen">🗑️</button>` : ''}
+                </div>
+            `;
+
+            const delBtn = el.querySelector('.del-u');
+            if (delBtn) delBtn.onclick = () => {
+                if (confirm('Nutzer unwiderruflich löschen?')) {
+                    const fresh = Store.getUsers().filter(x => x.id !== u.id);
+                    Store.saveUsers(fresh);
+                    AdminBoard.renderUserManager(view);
+                }
+            };
+
+            el.querySelector('.edit-u').onclick = () => AdminBoard.openEditUserModal(u, view);
+            list.appendChild(el);
+        });
+    },
+
+    openEditCategoryModal: (catName) => {
+        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        const title = modal.querySelector('h3');
+        const content = modal.querySelector('.modal-body');
+        const confirmBtn = modal.querySelector('.btn-primary');
+
+        title.textContent = catName ? 'Kategorie bearbeiten' : 'Neue Kategorie';
+        content.innerHTML = `
+            <div class="field">
+                <label>Name</label>
+                <input type="text" id="g-input" value="${catName || ''}">
+            </div>
+        `;
+
+        modal.classList.add('open');
+        confirmBtn.onclick = () => {
+            const val = q('#g-input').value.trim();
+            if (!val) return;
+            const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+
+            if (catName) {
+                const idx = settings.categories.indexOf(catName);
+                if (idx !== -1) settings.categories[idx] = val;
+            } else {
+                if (!settings.categories.includes(val)) settings.categories.push(val);
+            }
+            Utils.write('settings', settings);
+            modal.classList.remove('open');
+            AdminBoard.renderUserManager('cats');
+        };
+    },
+
+    openEditUserModal: (user, viewContext) => {
+        let editModal = q('#user-edit-modal');
+        if (!editModal) {
+            editModal = document.createElement('div');
+            editModal.id = 'user-edit-modal';
+            editModal.className = 'modal-overlay';
+            editModal.innerHTML = `
+                <div class="modal" style="max-width:500px">
+                    <div class="modal-header"><h3>Benutzer bearbeiten</h3><button class="btn-ghost close-m">✕</button></div>
+                    <div class="modal-body">
+                        <div class="field"><label>Benutzername</label><input id="ue-user" type="text"></div>
+                        <div class="field"><label>Name</label><input id="ue-name" type="text"></div>
+                        <div class="field"><label>Email</label><input id="ue-email" type="email"></div>
+                        <div class="field"><label>Passwort (leer lassen für keine Änderung)</label><input id="ue-pass" type="password"></div>
+                        <div class="field"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
+                         <div class="field" id="ue-dept-box" style="display:none">
+                            <label>Abteilungen</label>
+                            <div id="ue-dept-list" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto;"></div>
+                         </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn-ghost close-m">Abbrechen</button>
+                        <button class="btn-primary" id="ue-save">Speichern</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(editModal);
+            editModal.querySelectorAll('.close-m').forEach(b => b.onclick = () => editModal.classList.remove('open'));
+        }
+
+        // Fill Data
+        const isNew = !user;
+        q('#ue-user').value = isNew ? '' : user.username;
+        q('#ue-user').disabled = !isNew;
+        q('#ue-name').value = isNew ? '' : (user.name || '');
+        q('#ue-email').value = isNew ? '' : (user.email || '');
+        q('#ue-pass').value = '';
+        q('#ue-role').value = isNew ? (viewContext === 'admins' ? 'admin' : 'user') : user.role;
+
+        // Departments Checkboxes
+        const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+        const list = q('#ue-dept-list');
+        list.innerHTML = '';
+
+        // Normalize user.dept to array
+        let userDepts = [];
+        if (user && user.dept) {
+            userDepts = Array.isArray(user.dept) ? user.dept : [user.dept];
+        }
+
+        settings.categories.forEach(c => {
+            const div = document.createElement('div');
+            div.style.display = 'flex';
+            div.style.alignItems = 'center';
+            div.style.gap = '8px';
+
+            const chk = document.createElement('input');
+            chk.type = 'checkbox';
+            chk.value = c;
+            chk.checked = userDepts.includes(c);
+            // Styling checkbox not trivial, leaving default
+            chk.style.width = 'auto'; // override default full width input
+
+            const lbl = document.createElement('label');
+            lbl.textContent = c;
+            lbl.style.marginBottom = '0'; // reset label style
+            lbl.style.cursor = 'pointer';
+            lbl.onclick = () => chk.click(); // Label click toggles checkbox
+
+            div.appendChild(chk);
+            div.appendChild(lbl);
+            list.appendChild(div);
+        });
+
+        const toggleDept = () => {
+            const r = q('#ue-role').value;
+            q('#ue-dept-box').style.display = (r === 'admin') ? 'block' : 'none';
+        };
+        q('#ue-role').onchange = toggleDept;
+        toggleDept();
+
+        editModal.querySelector('h3').textContent = isNew ? 'Neuen Benutzer anlegen' : `Benutzer ${user.username} bearbeiten`;
+        editModal.classList.add('open');
+
+        q('#ue-save').onclick = () => {
+            const uVal = q('#ue-user').value.trim();
+            const nVal = q('#ue-name').value.trim();
+            const eVal = q('#ue-email').value.trim();
+            const pVal = q('#ue-pass').value.trim();
+            const rVal = q('#ue-role').value;
+
+            // Collect checked departments
+            const dVal = [];
+            list.querySelectorAll('input[type="checkbox"]:checked').forEach(c => dVal.push(c.value));
+
+            if (!uVal) { UI.toast('Benutzername fehlt'); return; }
+
+            const users = Store.getUsers();
+
+            if (isNew) {
+                if (users.find(x => x.username === uVal)) { UI.toast('Benutzer existiert schon'); return; }
+                if (!pVal) { UI.toast('Passwort fehlt'); return; }
+                const newUser = {
+                    id: Utils.uid(),
+                    username: uVal,
+                    name: nVal,
+                    email: eVal,
+                    password: pVal,
+                    role: rVal,
+                    dept: rVal === 'admin' ? dVal : undefined
+                };
+                users.push(newUser);
+            } else {
+                const target = users.find(x => x.id === user.id);
+                if (target) {
+                    target.name = nVal;
+                    target.email = eVal;
+                    if (pVal) target.password = pVal;
+                    target.role = rVal;
+                    target.dept = rVal === 'admin' ? dVal : undefined;
+                }
+            }
+            Store.saveUsers(users);
+            editModal.classList.remove('open');
+            AdminBoard.renderUserManager(viewContext);
+            UI.toast('Gespeichert');
+        };
+    },
+
+    createGenericModal: () => {
+        const modal = document.createElement('div');
+        modal.id = 'generic-modal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:400px">
+                <div class="modal-header"><h3></h3><button class="btn-ghost close-m">✕</button></div>
+                <div class="modal-body"></div>
+                <div class="modal-footer">
+                    <button class="btn-ghost close-m">Abbrechen</button>
+                    <button class="btn-primary">Speichern</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        modal.querySelectorAll('.close-m').forEach(b => b.onclick = () => modal.classList.remove('open'));
+        return modal;
+    },
+
+    // ... existing openApproveModal ...
+    renderArchive: () => {
+        const list = q('#archive-list');
+        if (!list) return;
+        const archived = Store.getTickets().filter(t => t.archived).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        list.innerHTML = '';
+        if (archived.length === 0) {
+            list.innerHTML = '<div style="opacity:0.5; padding:20px;">Keine archivierten Tickets</div>';
+            return;
+        }
+        archived.forEach(t => {
+            const el = document.createElement('div');
+            el.className = 'ticket-row';
+            el.style.borderColor = 'var(--border)';
+            el.innerHTML = `
+                <div class="status-indicator" style="background:${getStatusColor(t.status)}; width:8px; height:8px; border-radius:50%;"></div>
+                <div style="font-weight:600">${t.title}</div>
+                <div class="status-badge">${t.status}</div>
+                <div class="date">Erstellt: ${Utils.fmtDate(t.createdAt)}</div>
+                <div style="font-size:12px;">${t.authorName}</div>
+            `;
+            el.onclick = () => AdminBoard.openModal(t.id);
+            list.appendChild(el);
+        });
     },
 
     renderRequests: () => {
@@ -272,16 +943,14 @@ const AdminBoard = {
             el.className = 'ticket-card';
             el.style.borderColor = 'var(--warning)';
             el.innerHTML = `
-                <div style="font-weight:600">${r.name}</div>
-                <div style="font-size:12px; opacity:0.7">${r.email}</div>
-                <div style="margin-top:8px; display:flex; gap:8px;">
-                    <button class="btn-primary" style="padding:4px 8px; font-size:11px;">Annehmen</button>
-                    <button class="btn-ghost" style="padding:4px 8px; font-size:11px;">Ablehnen</button>
-                </div>
-            `;
-            // Accept Logic
+                 <div style="font-weight:600">${r.name}</div>
+                 <div style="font-size:12px; opacity:0.7">${r.email}</div>
+                 <div style="margin-top:8px; display:flex; gap:8px;">
+                     <button class="btn-primary" style="padding:4px 8px; font-size:11px;">Annehmen</button>
+                     <button class="btn-ghost" style="padding:4px 8px; font-size:11px;">Ablehnen</button>
+                 </div>
+             `;
             el.querySelector('.btn-primary').onclick = () => AdminBoard.openApproveModal(r);
-            // Deny Logic
             el.querySelector('.btn-ghost').onclick = () => {
                 if (!confirm('Anfrage löschen?')) return;
                 const rest = reqs.filter(x => x.id !== r.id);
@@ -294,19 +963,13 @@ const AdminBoard = {
 
     setupDrag: () => {
         qa('.ticket-list').forEach(zone => {
-            zone.addEventListener('dragover', e => {
-                e.preventDefault();
-                zone.style.background = 'var(--card-hover)';
-            });
-            zone.addEventListener('dragleave', e => {
-                zone.style.background = '';
-            });
+            zone.addEventListener('dragover', e => { e.preventDefault(); zone.style.background = 'var(--card-hover)'; });
+            zone.addEventListener('dragleave', e => { zone.style.background = ''; });
             zone.addEventListener('drop', e => {
                 e.preventDefault();
                 zone.style.background = '';
                 const id = e.dataTransfer.getData('text/plain');
                 const newStatus = zone.dataset.status;
-
                 const tickets = Store.getTickets();
                 const t = tickets.find(x => x.id === id);
                 if (t && t.status !== newStatus) {
@@ -331,6 +994,9 @@ const AdminBoard = {
         q('#m-title').textContent = t.title;
         q('#m-desc').textContent = t.desc || 'Keine Beschreibung';
 
+        // Reset Tabs
+        q('.tab-btn[data-tab="details"]').click();
+
         // Populate Assignee Select
         const sel = q('#m-assignee');
         sel.innerHTML = '<option value="">Unzugewiesen</option>';
@@ -353,7 +1019,15 @@ const AdminBoard = {
             UI.toast('Zuweisung gespeichert');
         };
 
-        AdminBoard.renderComments(t);
+        // Archive Button Visibility
+        const btnArch = q('#btn-archive-ticket');
+        if (btnArch) {
+            if (t.status === 'Geschlossen' && !t.archived) btnArch.style.display = 'inline-block';
+            else btnArch.style.display = 'none';
+        }
+
+        AdminBoard.renderInternalComments(t);
+        AdminBoard.renderChat(t, '#m-chat-msgs');
         q('#ticket-modal').classList.add('open');
     },
 
@@ -362,26 +1036,30 @@ const AdminBoard = {
         AdminBoard.currentTicketId = null;
     },
 
-    renderComments: (ticket) => {
+    renderInternalComments: (t) => {
         const box = q('#m-comments');
+        if (!box) return;
         box.innerHTML = '';
-        if (!ticket.comments || !ticket.comments.length) {
-            box.innerHTML = '<div style="font-style:italic; opacity:0.6; font-size:12px;">Keine Kommentare</div>';
+        if (!t.comments || t.comments.length === 0) {
+            box.innerHTML = '<div style="opacity:0.5; font-size:11px;">Keine Notizen</div>';
             return;
         }
-        ticket.comments.forEach(c => {
-            const el = document.createElement('div');
-            el.className = 'comment';
-            el.innerHTML = `
-                <div class="comment-head"><span>${c.author}</span><span>${Utils.fmtDate(c.date)}</span></div>
-                <div class="comment-body">${c.text}</div>
-            `;
-            box.appendChild(el);
+        t.comments.forEach(c => {
+            const div = document.createElement('div');
+            div.style.background = 'var(--card-hover)';
+            div.style.padding = '8px';
+            div.style.marginBottom = '6px';
+            div.style.borderRadius = '4px';
+            div.style.fontSize = '12px';
+            div.innerHTML = `<strong>${c.author}</strong> <span style="opacity:0.6">${Utils.fmtDate(c.date)}</span><br>${c.text}`;
+            box.appendChild(div);
         });
+        box.scrollTop = box.scrollHeight;
     },
 
-    postComment: () => {
-        const txt = q('#m-new-comment').value.trim();
+    postInternalComment: () => {
+        const input = q('#m-new-comment');
+        const txt = input.value.trim();
         if (!txt) return;
         const tickets = Store.getTickets();
         const t = tickets.find(x => x.id === AdminBoard.currentTicketId);
@@ -395,14 +1073,142 @@ const AdminBoard = {
             date: Utils.nowISO()
         });
         Store.saveTickets(tickets);
-        q('#m-new-comment').value = '';
-        AdminBoard.renderComments(t);
-        AdminBoard.render(); // Update List (comment count)
-        UI.toast('Kommentar gesendet');
+        input.value = '';
+        AdminBoard.renderInternalComments(t);
     },
 
-    // Approve Modal Logic
-    currentReq: null,
+    renderChat: (ticket, containerSelector) => {
+        const box = q(containerSelector);
+        if (!box) return;
+        box.innerHTML = '';
+
+        const msgs = ticket.chat || []; // Now using 'chat' field
+
+        if (msgs.length === 0) {
+            box.innerHTML = '<div style="text-align:center; opacity:0.5; margin-top:20px;">Keine Nachrichten</div>';
+            return;
+        }
+
+        const currentUser = Store.currentUser();
+
+        msgs.forEach(m => {
+            const el = document.createElement('div');
+            const isMe = (m.author === currentUser.name || m.author === currentUser.username);
+            el.className = `chat-bubble ${isMe ? 'me' : 'other'}`;
+
+            let fileHtml = '';
+            // Supports multiple files?
+            // If data structure changed to array of files:
+            if (m.files && Array.isArray(m.files)) {
+                m.files.forEach(f => {
+                    if (f.type.startsWith('image/')) {
+                        fileHtml += `<img src="${f.data}" class="msg-img" onclick="window.open(this.src)">`;
+                    } else {
+                        fileHtml += `<a href="${f.data}" download="${f.name}" class="msg-file">📎 ${f.name}</a>`;
+                    }
+                });
+            } else if (m.file) { // Legacy single file
+                if (m.file.type.startsWith('image/')) {
+                    fileHtml = `<img src="${m.file.data}" class="msg-img" onclick="window.open(this.src)">`;
+                } else {
+                    fileHtml = `<a href="${m.file.data}" download="${m.file.name}" class="msg-file">📎 ${f.name}</a>`;
+                }
+            }
+
+            // Format text: **bold**, *italic*
+            let htmlText = m.text
+                .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+                .replace(/\*(.*?)\*/g, '<i>$1</i>')
+                .replace(/\n/g, '<br>');
+
+            el.innerHTML = `
+                <div class="msg-meta">
+                    <span>${m.author}</span>
+                    <span>${Utils.fmtDate(m.date)}</span>
+                </div>
+                ${htmlText}
+                ${fileHtml}
+            `;
+            box.appendChild(el);
+        });
+        box.scrollTop = box.scrollHeight;
+    },
+
+    postChat: async (role) => {
+        const id = AdminBoard.currentTicketId || UserDash.currentTicketId;
+        const prefix = (role === 'admin') ? '#m' : '#u';
+        const txtInput = q(`${prefix}-chat-input`);
+
+        // File handling different for Admin/User?
+        // Admin: #m-chat-file-input (Single for now, unless complex needed)
+        // User: #u-chat-file (Multi via UserDash.selectedFiles)
+
+        let filesToUpload = [];
+
+        if (role === 'user') {
+            filesToUpload = [...UserDash.selectedFiles];
+        } else {
+            // Admin single file fallback or implement simple multi if wanted
+            const adminFileIn = q('#m-chat-file-input');
+            if (adminFileIn && adminFileIn.files[0]) filesToUpload.push(adminFileIn.files[0]);
+        }
+
+        const txt = txtInput.value.trim();
+
+        if (!txt && filesToUpload.length === 0) return;
+
+        const tickets = Store.getTickets();
+        const t = tickets.find(x => x.id === id);
+        if (!t) return;
+
+        const user = Store.currentUser();
+        if (!t.chat) t.chat = [];
+
+        const msg = {
+            text: txt,
+            author: user.name || user.username,
+            date: Utils.nowISO(),
+            role: user.role,
+            files: []
+        };
+
+        // Process files
+        if (filesToUpload.length > 0) {
+            try {
+                // Parallel read
+                const promises = filesToUpload.map(async f => {
+                    const data = await Store.readFile(f);
+                    return { name: f.name, type: f.type, data: data };
+                });
+                msg.files = await Promise.all(promises);
+            } catch (e) {
+                console.error(e);
+                UI.toast('Fehler beim Dateiladen');
+                return;
+            }
+        }
+
+        t.chat.push(msg);
+        Store.saveTickets(tickets);
+
+        txtInput.value = '';
+        if (role === 'user') {
+            UserDash.selectedFiles = [];
+            UserDash.renderFilePreview();
+            const fIn = q('#u-chat-file'); if (fIn) fIn.value = '';
+        } else {
+            const adminIn = q('#m-chat-file-input'); if (adminIn) adminIn.value = '';
+        }
+
+        if (role === 'admin') {
+            AdminBoard.renderChat(t, '#m-chat-msgs');
+            AdminBoard.render();
+        } else {
+            AdminBoard.renderChat(t, '#u-chat-msgs');
+        }
+        UI.toast('Nachricht gesendet');
+    },
+
     openApproveModal: (req) => {
         AdminBoard.currentReq = req;
         q('#a-name-disp').textContent = req.name;
@@ -410,9 +1216,21 @@ const AdminBoard = {
         q('#a-password').value = '123';
         q('#approve-modal').classList.add('open');
 
+        // Reset role/dept
+        q('#a-role').value = 'user';
+        q('#a-dept-field').style.display = 'none';
+
         q('#a-confirm').onclick = AdminBoard.confirmApprove;
         q('#a-close').onclick = AdminBoard.closeApprove;
         q('#a-cancel').onclick = AdminBoard.closeApprove;
+
+        // Listen for Enter key in inputs
+        const inputs = [q('#a-username'), q('#a-password')];
+        inputs.forEach(i => {
+            i.onkeydown = (e) => {
+                if (e.key === 'Enter') AdminBoard.confirmApprove();
+            };
+        });
     },
     closeApprove: () => {
         q('#approve-modal').classList.remove('open');
@@ -422,19 +1240,25 @@ const AdminBoard = {
         if (!AdminBoard.currentReq) return;
         const username = q('#a-username').value.trim();
         const password = q('#a-password').value.trim();
+        const role = q('#a-role').value;
+        const dept = q('#a-dept').value;
 
         if (!username || !password) { UI.toast('Bitte alle Felder füllen'); return; }
 
         const users = Store.getUsers();
         if (users.find(u => u.username === username)) { UI.toast('Benutzername existiert bereits'); return; }
 
-        users.push({
+        const newUser = {
             id: Utils.uid(),
             username,
             password,
             name: AdminBoard.currentReq.name,
-            role: 'user'
-        });
+            role: role
+        };
+
+        if (role === 'admin') newUser.dept = dept;
+
+        users.push(newUser);
         Store.saveUsers(users);
 
         const reqs = Utils.read('account_requests', []);
@@ -456,17 +1280,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Login Page
     if (q('#btn-login')) {
-        q('#btn-login').addEventListener('click', () => {
+        const handleLogin = () => {
             const u = q('#login-user').value.trim();
             const p = q('#login-pass').value;
             const user = Auth.login(u, p);
             if (user) {
                 UI.toast(`Willkommen ${user.name}`);
-                setTimeout(() => window.location.href = user.role === 'admin' ? 'admin.html' : 'dashboard.html', 500);
+                setTimeout(() => {
+                    if (user.role === 'admin' || user.role === 'superadmin') {
+                        window.location.href = 'admin.html';
+                    } else {
+                        window.location.href = 'dashboard.html';
+                    }
+                }, 500);
             } else {
                 UI.toast('Login fehlgeschlagen');
             }
-        });
+        };
+
+        q('#btn-login').addEventListener('click', handleLogin);
+        q('#login-user').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
+        q('#login-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
     }
 
     // Logout
@@ -477,7 +1311,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Request Flow
     if (q('#btn-request')) {
-        q('#btn-request').onclick = () => {
+        const handleRequest = () => {
             const name = q('#req-name').value.trim();
             const email = q('#req-email').value.trim();
             if (!name || !email) { UI.toast('Bitte Felder füllen'); return; }
@@ -489,8 +1323,38 @@ document.addEventListener('DOMContentLoaded', () => {
             q('#req-name').value = ''; q('#req-email').value = '';
             UI.toast('Anfrage gesendet! Ein Admin prüft das.');
         };
+        q('#btn-request').onclick = handleRequest;
+        q('#req-name').onkeydown = (e) => { if (e.key === 'Enter') handleRequest(); };
+        q('#req-email').onkeydown = (e) => { if (e.key === 'Enter') handleRequest(); };
     }
 
     if (q('#btn-create-ticket') || q('#user-tickets')) UserDash.init();
     if (q('.kanban-board')) AdminBoard.init();
+
+    // Auto-refresh across tabs
+    window.addEventListener('storage', (e) => {
+        if (e.key === 'tickets' || e.key === 'users' || e.key === 'account_requests') {
+            if (q('.kanban-board')) {
+                AdminBoard.render();
+                AdminBoard.renderArchive();
+                if (AdminBoard.currentTicketId && q('#ticket-modal.open')) {
+                    // Refetch ticket data
+                    const tickets = Store.getTickets();
+                    const t = tickets.find(t => t.id === AdminBoard.currentTicketId);
+                    if (t) AdminBoard.renderChat(t, '#m-chat-msgs');
+                }
+            }
+            if (q('#user-tickets')) {
+                UserDash.renderList();
+                if (UserDash.currentTicketId && q('#u-ticket-modal.open')) {
+                    const tickets = Store.getTickets();
+                    const t = tickets.find(t => t.id === UserDash.currentTicketId);
+                    if (t) AdminBoard.renderChat(t, '#u-chat-msgs');
+                }
+            }
+            if (q('#request-list')) AdminBoard.renderRequests();
+        }
+    });
+
+    // Enter key Global check for modals (optional safety)
 });

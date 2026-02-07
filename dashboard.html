@@ -68,6 +68,52 @@
         </section>
     </main>
 
+    <!-- User Ticket Modal -->
+    <div class="modal-overlay" id="u-ticket-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="u-m-title">Ticket Title</h3>
+                <button class="btn-ghost" id="u-m-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="tabs">
+                    <div class="tab-btn active" data-tab="u-details">Details</div>
+                    <div class="tab-btn" data-tab="u-chat">Chat</div>
+                </div>
+
+                <div id="u-tab-details" class="tab-content active">
+                    <p id="u-m-desc" style="white-space: pre-wrap;">Beschreibung...</p>
+                    <div style="margin-top:20px; font-size:12px; color:var(--text-sec);">
+                        Status: <span id="u-m-status" style="font-weight:bold; color:var(--text);">New</span>
+                    </div>
+                </div>
+
+                <div id="u-tab-chat" class="tab-content">
+                    <div class="chat-container">
+                        <div id="u-chat-msgs" class="chat-messages"></div>
+
+                        <!-- File Preview -->
+                        <div id="u-chat-file-preview"
+                            style="display:flex; flex-wrap:wrap; gap:8px; padding:10px; background:var(--card-bg); border-top:1px solid var(--border); display:none;">
+                        </div>
+
+                        <div class="chat-input-area">
+                            <div class="toolbar">
+                                <label class="tool-btn" title="Datei anhängen">
+                                    📎 <input type="file" id="u-chat-file" style="display:none" multiple>
+                                </label>
+                            </div>
+                            <div class="input-row">
+                                <textarea id="u-chat-input" placeholder="Nachricht schreiben..."></textarea>
+                                <button class="btn-primary" id="u-chat-send">➤</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="toast"></div>
     <script src="script.js"></script>
 </body>

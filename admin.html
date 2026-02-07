@@ -14,6 +14,7 @@
     <div class="topbar-inner">
       <h1 class="brand">Support <span>Admin</span></h1>
       <div class="hero-actions">
+        <button id="btn-archive" class="btn-ghost">🗄️ Archiv</button>
         <button id="theme-toggle" class="btn-ghost">🌙</button>
         <button id="logout" class="btn-ghost">Logout</button>
       </div>
@@ -21,39 +22,50 @@
   </header>
 
   <main class="container">
-    <!-- Requests Section -->
-    <div style="margin-bottom: 30px;" class="card glass">
-      <h3 style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:10px;">Konto-Anfragen</h3>
-      <div id="request-list"
-        style="display:grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap:15px;"></div>
+    <!-- Archive View -->
+    <div id="archive-view" class="archive-view">
+      <div class="archive-header">
+        <h3>🗄️ Archivierte Tickets</h3>
+        <button id="btn-back-kanban" class="btn-secondary">Zurück zur Übersicht</button>
+      </div>
+      <div id="archive-list" class="archived-list"></div>
     </div>
 
-    <div class="kanban-board">
-      <!-- New Column -->
-      <div class="column" id="col-new">
-        <div class="col-header">
-          <span>🆕 Neu</span>
-          <span class="count" id="count-new">0</span>
-        </div>
-        <div class="ticket-list" data-status="Neu" id="list-new"></div>
+    <div id="kanban-view">
+      <!-- Requests Section -->
+      <div style="margin-bottom: 30px;" class="card glass">
+        <h3 style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:10px;">Konto-Anfragen</h3>
+        <div id="request-list"
+          style="display:grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap:15px;"></div>
       </div>
 
-      <!-- In Progress Column -->
-      <div class="column" id="col-doing">
-        <div class="col-header">
-          <span>🔧 In Bearbeitung</span>
-          <span class="count" id="count-doing">0</span>
+      <div class="kanban-board">
+        <!-- New Column -->
+        <div class="column" id="col-new">
+          <div class="col-header">
+            <span>🆕 Neu</span>
+            <span class="count" id="count-new">0</span>
+          </div>
+          <div class="ticket-list" data-status="Neu" id="list-new"></div>
         </div>
-        <div class="ticket-list" data-status="In Bearbeitung" id="list-doing"></div>
-      </div>
 
-      <!-- Done Column -->
-      <div class="column" id="col-done">
-        <div class="col-header">
-          <span>✅ Geschlossen</span>
-          <span class="count" id="count-done">0</span>
+        <!-- In Progress Column -->
+        <div class="column" id="col-doing">
+          <div class="col-header">
+            <span>🔧 In Bearbeitung</span>
+            <span class="count" id="count-doing">0</span>
+          </div>
+          <div class="ticket-list" data-status="In Bearbeitung" id="list-doing"></div>
         </div>
-        <div class="ticket-list" data-status="Geschlossen" id="list-done"></div>
+
+        <!-- Done Column -->
+        <div class="column" id="col-done">
+          <div class="col-header">
+            <span>✅ Geschlossen</span>
+            <span class="count" id="count-done">0</span>
+          </div>
+          <div class="ticket-list" data-status="Geschlossen" id="list-done"></div>
+        </div>
       </div>
     </div>
   </main>
@@ -66,20 +78,58 @@
         <button class="btn-ghost" id="m-close">✕</button>
       </div>
       <div class="modal-body">
-        <p id="m-desc">Beschreibung...</p>
-        <div class="field">
-          <label>Zugewiesen an:</label>
-          <select id="m-assignee">
-            <option value="">Niemand</option>
-          </select>
+        <div class="tabs">
+          <div class="tab-btn active" data-tab="details">Details</div>
+          <div class="tab-btn" data-tab="chat">Chat</div>
         </div>
-        <!-- Comments -->
-        <div class="comments-section">
-          <h4>Kommentare</h4>
-          <div id="m-comments"></div>
-          <div class="field" style="margin-top: 10px;">
-            <textarea id="m-new-comment" rows="2" placeholder="Kommentar schreiben..."></textarea>
-            <button class="btn-primary" id="btn-add-comment" style="margin-top: 8px;">Senden</button>
+
+        <div id="tab-details" class="tab-content active">
+          <h3 id="m-title">Ticket Title</h3>
+          <p id="m-desc">Beschreibung...</p>
+          <div class="field">
+            <label>Zugewiesen an:</label>
+            <select id="m-assignee">
+              <option value="">Niemand</option>
+            </select>
+          </div>
+
+          <!-- Internal Comments Section (Restored) -->
+          <div class="comments-section"
+            style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 15px;">
+            <h4>Interne Notizen / Kommentare</h4>
+            <div id="m-comments" style="max-height: 150px; overflow-y: auto; margin-bottom: 10px;"></div>
+            <div class="field">
+              <textarea id="m-new-comment" rows="2" placeholder="Kommentar hinzufügen..."></textarea>
+              <button class="btn-primary" id="btn-add-comment"
+                style="margin-top: 5px; font-size: 12px; padding: 6px 12px;">Kommentieren</button>
+            </div>
+          </div>
+
+          <div style="margin-top:20px; text-align:right;">
+            <button id="btn-archive-ticket" class="btn-secondary" style="display:none; font-size:12px;">📥
+              Archivieren</button>
+          </div>
+        </div>
+
+        <div id="tab-chat" class="tab-content">
+          <div class="chat-container">
+            <div id="m-chat-msgs" class="chat-messages">
+              <!-- Chat Bubbles go here -->
+            </div>
+            <!-- Controls -->
+            <div class="chat-input-area">
+              <div class="toolbar">
+                <button class="tool-btn" title="Fett" id="m-chat-bold"><b>B</b></button>
+                <button class="tool-btn" title="Kursiv" id="m-chat-italic"><i>I</i></button>
+                <label class="tool-btn" title="Datei anhängen">
+                  📎 <input type="file" id="m-chat-file-input" style="display:none">
+                </label>
+              </div>
+              <div class="input-row">
+                <textarea id="m-chat-input" placeholder="Nachricht schreiben... Strg+Enter zum Senden"></textarea>
+                <button class="btn-primary" id="btn-chat-send">➤</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -89,7 +139,7 @@
     </div>
   </div>
 
-  <!-- Approve User Modal (Moved outside) -->
+  <!-- Approve User Modal -->
   <div class="modal-overlay" id="approve-modal">
     <div class="modal" style="max-width: 400px;">
       <div class="modal-header">
@@ -106,10 +156,39 @@
           <label>Passwort</label>
           <input type="text" id="a-password" value="123">
         </div>
+        <div class="field">
+          <label>Rolle</label>
+          <select id="a-role">
+            <option value="user">User</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="field" id="a-dept-field" style="display:none;">
+          <label>Abteilung (Nur für Admins)</label>
+          <select id="a-dept">
+            <option value="Allgemein">Allgemein</option>
+            <option value="Technik">Technik</option>
+            <option value="Account">Account</option>
+            <option value="Abrechnung">Abrechnung</option>
+          </select>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn-ghost" id="a-cancel">Abbrechen</button>
         <button class="btn-primary" id="a-confirm">Erstellen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Superadmin: User Manager Modal -->
+  <div class="modal-overlay" id="user-man-modal">
+    <div class="modal" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3>Benutzerverwaltung</h3>
+        <button class="btn-ghost" id="um-close">✕</button>
+      </div>
+      <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
+        <div id="um-list" class="user-list"></div>
       </div>
     </div>
   </div>
