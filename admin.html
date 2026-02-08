@@ -5,6 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Dashboard - Tickets</title>
+  <link rel="icon" type="image/png" href="picture/favicon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 
@@ -12,8 +13,12 @@
   <canvas id="stars"></canvas>
   <header class="topbar">
     <div class="topbar-inner">
-      <h1 class="brand">Support <span>Admin</span></h1>
+      <div>
+        <h1 class="brand" style="margin-bottom:0; line-height:1;">Support <span>Admin</span></h1>
+        <div id="user-display" style="font-size: 13px; opacity: 0.7; font-weight:normal;"></div>
+      </div>
       <div class="hero-actions">
+        <button id="btn-to-dash" class="btn-ghost" onclick="window.location.href='dashboard.html'">🏠 Dashboard</button>
         <button id="btn-archive" class="btn-ghost">🗄️ Archiv</button>
         <button id="theme-toggle" class="btn-ghost">🌙</button>
         <button id="logout" class="btn-ghost">Logout</button>
@@ -84,13 +89,22 @@
         </div>
 
         <div id="tab-details" class="tab-content active">
-          <h3 id="m-title">Ticket Title</h3>
-          <p id="m-desc">Beschreibung...</p>
+          <div class="ticket-meta-grid"
+            style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px; font-size:13px; color:var(--text-sec); background:var(--card-hover); padding:15px; border-radius:8px;">
+            <div><strong>Von:</strong> <span id="m-author" style="color:var(--text)">-</span></div>
+            <div><strong>Datum:</strong> <span id="m-date" style="color:var(--text)">-</span></div>
+            <div><strong>Prio:</strong> <span id="m-prio" style="color:var(--text)">-</span></div>
+            <div><strong>Kategorie:</strong> <span id="m-cat" style="color:var(--text)">-</span></div>
+          </div>
+
+          <h4 style="margin-bottom:8px; font-size:12px; text-transform:uppercase; opacity:0.7;">Beschreibung</h4>
+          <p id="m-desc" style="white-space:pre-wrap; margin-bottom:20px; line-height:1.5;"></p>
           <div class="field">
-            <label>Zugewiesen an:</label>
-            <select id="m-assignee">
-              <option value="">Niemand</option>
-            </select>
+            <label>Zuweisung (Mehrfachauswahl möglich):</label>
+            <div class="multi-select-container" id="assignee-multi">
+              <div class="multi-select-header" id="ms-header"><span class="ms-text">Niemand</span></div>
+              <div class="multi-select-dropdown" id="ms-dropdown"></div>
+            </div>
           </div>
 
           <!-- Internal Comments Section (Restored) -->
@@ -121,10 +135,14 @@
               <div class="toolbar">
                 <button class="tool-btn" title="Fett" id="m-chat-bold"><b>B</b></button>
                 <button class="tool-btn" title="Kursiv" id="m-chat-italic"><i>I</i></button>
-                <label class="tool-btn" title="Datei anhängen">
-                  📎 <input type="file" id="m-chat-file-input" style="display:none">
+                <label class="tool-btn" title="Datei anhängen" style="cursor:pointer;">
+                  📎 <input type="file" id="m-chat-file-input" style="display:none" multiple>
                 </label>
               </div>
+              <div id="m-chat-file-preview"
+                style="display:none; gap:5px; flex-wrap:wrap; padding-bottom:8px; border-bottom:1px solid var(--border); margin-bottom:8px;">
+              </div>
+
               <div class="input-row">
                 <textarea id="m-chat-input" placeholder="Nachricht schreiben... Strg+Enter zum Senden"></textarea>
                 <button class="btn-primary" id="btn-chat-send">➤</button>

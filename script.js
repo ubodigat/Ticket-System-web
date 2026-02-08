@@ -16,8 +16,21 @@ const Utils = {
     read: (key, fallback) => {
         try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
     },
-    write: (key, val) => localStorage.setItem(key, JSON.stringify(val))
+    write: (key, val) => localStorage.setItem(key, JSON.stringify(val)),
+    adjustColor: (color, amount) => {
+        return '#' + color.replace(/^#/, '').replace(/../g, color => ('0' + Math.min(255, Math.max(0, parseInt(color, 16) + amount)).toString(16)).substr(-2));
+    }
 };
+
+// ... Store ...
+// ... Auth ...
+// ... UI ...
+// ... Settings ...
+// ... UserDash ...
+// ... AdminBoard ...
+// ... getStatusColor ...
+
+
 
 // --- Store ---
 const Store = {
@@ -141,18 +154,41 @@ const UI = {
         el.classList.add('show');
         setTimeout(() => el.classList.remove('show'), 2500);
     },
-    themeInit: () => {
-        const theme = localStorage.getItem('theme') || 'dark';
-        if (theme === 'light') document.documentElement.classList.add('light');
-        const btn = q('#theme-toggle');
-        if (btn) {
-            btn.textContent = theme === 'light' ? '☀️' : '🌙';
-            btn.addEventListener('click', () => {
-                const isLight = document.documentElement.classList.toggle('light');
-                localStorage.setItem('theme', isLight ? 'light' : 'dark');
-                btn.textContent = isLight ? '☀️' : '🌙';
-            });
+    confirm: (msg, onYes) => {
+        let modal = q('#confirm-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'confirm-modal';
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal" style="max-width:400px; text-align:center;">
+                    <div class="modal-body" style="padding:30px 20px;">
+                        <h3 style="margin-bottom:10px;">Bestätigung</h3>
+                        <p id="cm-msg" style="margin-bottom:20px; color:var(--text-sec)"></p>
+                        <div style="display:flex; justify-content:center; gap:10px;">
+                            <button class="btn-ghost" id="cm-no">Abbrechen</button>
+                            <button class="btn-primary" id="cm-yes">Bestätigen</button>
+                        </div>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
         }
+        q('#cm-msg').textContent = msg;
+
+        const close = () => modal.classList.remove('open');
+        const yesBtn = q('#cm-yes');
+        const noBtn = q('#cm-no');
+
+        // Clone to clear listeners
+        const newYes = yesBtn.cloneNode(true);
+        const newNo = noBtn.cloneNode(true);
+        yesBtn.parentNode.replaceChild(newYes, yesBtn);
+        noBtn.parentNode.replaceChild(newNo, noBtn);
+
+        newYes.onclick = () => { close(); onYes(); };
+        newNo.onclick = () => close(); // Fix: close on No
+
+        modal.classList.add('open');
     },
     starfield: () => {
         const c = q('#stars');
@@ -173,6 +209,95 @@ const UI = {
         window.addEventListener('resize', resize);
         for (let i = 0; i < 150; i++) stars.push({ x: Math.random() * c.width, y: Math.random() * c.height, r: Math.random() * 1.5, v: Math.random() * 0.4 + 0.1 });
         loop();
+    }
+};
+
+const Settings = {
+    defaults: { theme: 'dark', accentColor: '#6366f1', lang: 'de' },
+    init: () => {
+        const s = Utils.read('app_settings', Settings.defaults);
+        Settings.apply(s);
+        const toggle = q('#theme-toggle');
+        if (toggle) {
+            toggle.innerHTML = '⚙️';
+            toggle.id = 'btn-settings';
+            toggle.onclick = Settings.openModal;
+        }
+    },
+    apply: (s) => {
+        if (s.theme === 'light') document.documentElement.className = 'light';
+        else document.documentElement.className = '';
+
+        document.documentElement.style.setProperty('--primary-solid', s.accentColor);
+        // Calculate gradient roughly
+        document.documentElement.style.setProperty('--primary-grad', `linear-gradient(135deg, ${s.accentColor}, ${Utils.adjustColor(s.accentColor, -20)})`);
+    },
+    openModal: () => {
+        let modal = q('#settings-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'settings-modal';
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal" style="max-width:500px">
+                    <div class="modal-header"><h3>Einstellungen</h3><button class="btn-ghost close-m">✕</button></div>
+                    <div class="modal-body">
+                        <div class="field">
+                            <label>Design Modus</label>
+                            <div class="input-row">
+                                <button class="btn-secondary s-theme-btn" data-val="dark" style="flex:1">Dunkel</button>
+                                <button class="btn-secondary s-theme-btn" data-val="light" style="flex:1">Hell</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label>Akzentfarbe</label>
+                            <input type="color" id="s-color" style="width:100%; height:40px; cursor:pointer; background:none; border:none; padding:0;">
+                        </div>
+                        <div class="field">
+                            <label>Sprache</label>
+                            <select id="s-lang"><option value="de">Deutsch</option><option value="en">English</option></select>
+                        </div>
+                    </div>
+                    <div class="modal-footer"><button class="btn-primary close-m">Fertig</button></div>
+                </div>`;
+            document.body.appendChild(modal);
+            modal.querySelectorAll('.close-m').forEach(x => x.onclick = () => modal.classList.remove('open'));
+
+            // Listeners
+            modal.querySelectorAll('.s-theme-btn').forEach(b => {
+                b.onclick = () => {
+                    const s = Utils.read('app_settings', Settings.defaults);
+                    s.theme = b.dataset.val;
+                    Settings.save(s);
+                    Settings.renderState(modal, s);
+                };
+            });
+            q('#s-color').onchange = (e) => {
+                const s = Utils.read('app_settings', Settings.defaults);
+                s.accentColor = e.target.value;
+                Settings.save(s);
+            };
+            q('#s-lang').onchange = (e) => {
+                const s = Utils.read('app_settings', Settings.defaults);
+                s.lang = e.target.value;
+                Settings.save(s);
+            };
+        }
+
+        const s = Utils.read('app_settings', Settings.defaults);
+        Settings.renderState(modal, s);
+        modal.classList.add('open');
+    },
+    renderState: (modal, s) => {
+        modal.querySelectorAll('.s-theme-btn').forEach(b => {
+            b.className = (b.dataset.val === s.theme) ? 'btn-primary s-theme-btn' : 'btn-secondary s-theme-btn';
+        });
+        q('#s-color').value = s.accentColor;
+        q('#s-lang').value = s.lang || 'de';
+    },
+    save: (s) => {
+        Utils.write('app_settings', s);
+        Settings.apply(s);
     }
 };
 
@@ -320,12 +445,44 @@ const UserDash = {
         const t = tickets.find(x => x.id === id);
         if (!t) return;
 
-        q('#u-m-title').textContent = t.title;
-        q('#u-m-desc').textContent = t.desc || '-';
+        if (q('#u-m-title')) q('#u-m-title').textContent = t.title;
+        if (q('#u-m-desc')) q('#u-m-desc').textContent = t.desc || 'Keine Beschreibung';
 
-        const statusEl = q('#u-m-status');
-        statusEl.textContent = t.status;
-        statusEl.style.color = getStatusColor(t.status);
+        // Metadata
+        if (q('#u-m-status')) {
+            const st = q('#u-m-status');
+            st.textContent = t.status;
+            st.style.color = getStatusColor(t.status);
+        }
+        if (q('#u-m-date')) q('#u-m-date').textContent = Utils.fmtDate(t.createdAt);
+
+        // Handle Archived Date Visibility
+        if (q('#u-m-archived')) {
+            const archEl = q('#u-m-archived');
+            if (t.archived && t.archivedAt) {
+                archEl.textContent = Utils.fmtDate(t.archivedAt);
+                archEl.parentElement.style.display = 'block';
+            } else {
+                archEl.parentElement.style.display = 'none';
+            }
+        }
+
+        if (q('#u-m-prio')) q('#u-m-prio').textContent = t.prio;
+        if (q('#u-m-cat')) q('#u-m-cat').textContent = t.category || '-';
+
+        // Support Multiple Assignees in User View
+        if (q('#u-m-assignee')) {
+            const allUsers = Store.getUsers();
+            if (t.assignees && t.assignees.length > 0) {
+                const names = t.assignees.map(u => {
+                    const found = allUsers.find(x => x.username === u);
+                    return found ? (found.name || found.username) : u;
+                });
+                q('#u-m-assignee').textContent = names.join(', ');
+            } else {
+                q('#u-m-assignee').textContent = t.assigneeName || 'Niemand';
+            }
+        }
 
         // Reset Tabs
         const btnDetails = q('.tab-btn[data-tab="u-details"]');
@@ -336,6 +493,23 @@ const UserDash = {
         UserDash.renderFilePreview();
 
         AdminBoard.renderChat(t, '#u-chat-msgs');
+
+        // Handle Archived State
+        const isArchived = t.archived === true;
+        const chatInput = q('#u-chat-input');
+        const chatSend = q('#u-chat-send');
+        const chatFile = q('#u-chat-file');
+
+        if (isArchived) {
+            if (chatInput) { chatInput.disabled = true; chatInput.placeholder = 'Ticket ist archiviert (Keine Antwort möglich)'; }
+            if (chatSend) { chatSend.disabled = true; chatSend.style.opacity = '0.5'; }
+            if (chatFile) chatFile.disabled = true;
+        } else {
+            if (chatInput) { chatInput.disabled = false; chatInput.placeholder = 'Nachricht schreiben...'; }
+            if (chatSend) { chatSend.disabled = false; chatSend.style.opacity = '1'; }
+            if (chatFile) chatFile.disabled = false;
+        }
+
         q('#u-ticket-modal').classList.add('open');
     },
 
@@ -348,6 +522,7 @@ const UserDash = {
         const list = q('#user-tickets');
         if (!list) return;
         const user = Store.currentUser();
+        // Show all tickets for user (including archived)
         const tickets = Store.getTickets().filter(t => t.author === user.username);
         list.innerHTML = '';
         if (tickets.length === 0) {
@@ -355,13 +530,24 @@ const UserDash = {
             return;
         }
 
-        tickets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).forEach(t => {
+        tickets.sort((a, b) => {
+            const pA = getPrioValue(a.prio);
+            const pB = getPrioValue(b.prio);
+            if (pA !== pB) return pB - pA;
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        }).forEach(t => {
             const el = document.createElement('div');
             el.className = 'ticket-row';
             el.style.cursor = 'pointer';
+
+            if (t.archived) {
+                el.style.opacity = '0.6';
+                el.style.filter = 'blur(0.5px)';
+            }
+
             el.innerHTML = `
                 <div class="status-indicator" style="background:${getStatusColor(t.status)}; width:8px; height:8px; border-radius:50%;"></div>
-                <div style="font-weight:600">${t.title}</div>
+                <div style="font-weight:600">${t.title} ${t.archived ? '(Archiviert)' : ''}</div>
                 <div class="status-badge">${t.status}</div>
                 <div class="date">${Utils.fmtDate(t.createdAt)}</div>
                 <div style="font-size:12px; color:var(--text-sec)">${t.prio}</div>
@@ -379,8 +565,41 @@ function getStatusColor(s) {
     return '#888';
 }
 
+function getPrioValue(p) {
+    if (p === 'Kritisch') return 3;
+    if (p === 'Hoch') return 2;
+    if (p === 'Normal') return 1;
+    return 0;
+}
+
 // --- Admin Kanban Logic ---
 const AdminBoard = {
+    selectedFiles: [],
+
+    renderFilePreview: () => {
+        const pan = q('#m-chat-file-preview');
+        if (!pan) return;
+        pan.innerHTML = '';
+        if (AdminBoard.selectedFiles.length > 0) {
+            pan.style.display = 'flex';
+            AdminBoard.selectedFiles.forEach((f, idx) => {
+                const tag = document.createElement('div');
+                tag.style.background = 'rgba(0,0,0,0.3)';
+                tag.style.padding = '4px 8px';
+                tag.style.borderRadius = '4px';
+                tag.style.fontSize = '12px';
+                tag.innerHTML = `<span>${f.name}</span> <span style="cursor:pointer; color:var(--danger); margin-left:4px;">✕</span>`;
+                tag.querySelector('span:last-child').onclick = () => {
+                    AdminBoard.selectedFiles.splice(idx, 1);
+                    AdminBoard.renderFilePreview();
+                };
+                pan.appendChild(tag);
+            });
+        } else {
+            pan.style.display = 'none';
+        }
+    },
+
     init: () => {
         if (!q('.kanban-board')) return;
 
@@ -445,9 +664,12 @@ const AdminBoard = {
         // Date input (Admin) + Formatting
         const fileAdmin = q('#m-chat-file-input');
         if (fileAdmin) {
-            // Admin doesn't have multi-file preview requested, but fixing single file upload
-            // The previous bug was mismatching IDs or not attaching listener
-            // We just let it act as simple input for now, unless complex needed.
+            fileAdmin.style.display = 'none'; // Ensure hidden
+            fileAdmin.onchange = () => {
+                Array.from(fileAdmin.files).forEach(f => AdminBoard.selectedFiles.push(f));
+                AdminBoard.renderFilePreview();
+                fileAdmin.value = '';
+            };
         }
 
         // Formatting Buttons
@@ -525,6 +747,14 @@ const AdminBoard = {
         }
         // Superadmin sees all (no filter)
 
+        // Sort by Priority then Date
+        tickets.sort((a, b) => {
+            const pA = getPrioValue(a.prio);
+            const pB = getPrioValue(b.prio);
+            if (pA !== pB) return pB - pA;
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        });
+
         const cols = {
             'Neu': q('#list-new'),
             'In Bearbeitung': q('#list-doing'),
@@ -555,14 +785,23 @@ const AdminBoard = {
             card.draggable = true;
             card.dataset.id = t.id;
 
-            const assignee = t.assigneeName ?
-                `<span class="assignee-badge">👤 ${t.assigneeName}</span>` :
-                `<span style="opacity:0.5; font-size:11px">Unzugewiesen</span>`;
+            const allUsers = Store.getUsers();
+            let assigneeHtml = `<span style="opacity:0.5; font-size:11px">Unzugewiesen</span>`;
+
+            if (t.assignees && t.assignees.length > 0) {
+                const names = t.assignees.map(u => {
+                    const found = allUsers.find(x => x.username === u);
+                    return found ? (found.name || found.username) : u;
+                });
+                assigneeHtml = `<span class="assignee-badge">👤 ${names.join(', ')}</span>`;
+            } else if (t.assigneeName) {
+                assigneeHtml = `<span class="assignee-badge">👤 ${t.assigneeName}</span>`;
+            }
 
             card.innerHTML = `
-                <div style="display:flex; justify-content:space-between;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                     <span class="t-tag prio-${t.prio}">${t.prio}</span>
-                    <span style="font-size:10px; background:rgba(255,255,255,0.1); padding:2px 4px; border-radius:4px;">${t.category || '-'}</span>
+                    <span style="font-size:10px; line-height:1; display:inline-flex; align-items:center; background:rgba(0, 0, 0, 1); padding:2px 6px; border-radius:4px;">${t.category || '-'}</span>
                 </div>
                 <div class="t-title">${t.title}</div>
                 <div class="t-meta">
@@ -570,7 +809,7 @@ const AdminBoard = {
                     <span>${Utils.fmtDate(t.createdAt).split(' ')[0]}</span>
                 </div>
                 <div class="t-meta" style="margin-top:8px; border-top:1px solid var(--border); padding-top:8px;">
-                     ${assignee}
+                     ${assigneeHtml}
                      <span style="font-size:10px">💬 ${(t.chat?.length || 0)}</span>
                 </div>
             `;
@@ -586,17 +825,19 @@ const AdminBoard = {
 
     // START OF MISSING FUNCTIONS
     archiveCurrent: () => {
-        if (!confirm('Ticket ins Archiv verschieben? Es wird aus dem Board entfernt.')) return;
-        const id = AdminBoard.currentTicketId;
-        const tickets = Store.getTickets();
-        const t = tickets.find(x => x.id === id);
-        if (t) {
-            t.archived = true;
-            Store.saveTickets(tickets);
-            AdminBoard.closeModal();
-            AdminBoard.render();
-            UI.toast('Ticket archiviert');
-        }
+        UI.confirm('Ticket ins Archiv verschieben? Es wird aus dem Board entfernt.', () => {
+            const id = AdminBoard.currentTicketId;
+            const tickets = Store.getTickets();
+            const t = tickets.find(x => x.id === id);
+            if (t) {
+                t.archived = true;
+                t.archivedAt = Utils.nowISO(); // Save archive timestamp
+                Store.saveTickets(tickets);
+                AdminBoard.closeModal();
+                AdminBoard.render();
+                UI.toast('Ticket archiviert');
+            }
+        });
     },
 
     // User Manager Logic
@@ -667,10 +908,11 @@ const AdminBoard = {
                  `;
                 el.querySelector('.edit-c').onclick = () => AdminBoard.openEditCategoryModal(c);
                 el.querySelector('.del-c').onclick = () => {
-                    if (!confirm(`Kategorie "${c}" löschen?`)) return;
-                    settings.categories = settings.categories.filter(x => x !== c);
-                    Utils.write('settings', settings);
-                    AdminBoard.renderUserManager('cats');
+                    UI.confirm(`Kategorie "${c}" löschen?`, () => {
+                        settings.categories = settings.categories.filter(x => x !== c);
+                        Utils.write('settings', settings);
+                        AdminBoard.renderUserManager('cats');
+                    });
                 };
                 list.appendChild(el);
             });
@@ -713,11 +955,11 @@ const AdminBoard = {
 
             const delBtn = el.querySelector('.del-u');
             if (delBtn) delBtn.onclick = () => {
-                if (confirm('Nutzer unwiderruflich löschen?')) {
+                UI.confirm('Nutzer unwiderruflich löschen?', () => {
                     const fresh = Store.getUsers().filter(x => x.id !== u.id);
                     Store.saveUsers(fresh);
                     AdminBoard.renderUserManager(view);
-                }
+                });
             };
 
             el.querySelector('.edit-u').onclick = () => AdminBoard.openEditUserModal(u, view);
@@ -773,7 +1015,7 @@ const AdminBoard = {
                         <div class="field"><label>Passwort (leer lassen für keine Änderung)</label><input id="ue-pass" type="password"></div>
                         <div class="field"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
                          <div class="field" id="ue-dept-box" style="display:none">
-                            <label>Abteilungen</label>
+                            <label>Kategorien</label>
                             <div id="ue-dept-list" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto;"></div>
                          </div>
                     </div>
@@ -917,13 +1159,28 @@ const AdminBoard = {
             const el = document.createElement('div');
             el.className = 'ticket-row';
             el.style.borderColor = 'var(--border)';
+            // Adjust grid for archive view if needed, or stick to standard
+            // Standard: 40px 1fr 100px 120px 80px
+
+            const archDate = t.archivedAt ? Utils.fmtDate(t.archivedAt) : '-';
+
             el.innerHTML = `
                 <div class="status-indicator" style="background:${getStatusColor(t.status)}; width:8px; height:8px; border-radius:50%;"></div>
                 <div style="font-weight:600">${t.title}</div>
                 <div class="status-badge">${t.status}</div>
-                <div class="date">Erstellt: ${Utils.fmtDate(t.createdAt)}</div>
+                <div class="date" style="font-size:11px;">
+                    <span style="opacity:0.7">Erstellt:</span><br>${Utils.fmtDate(t.createdAt)}
+                </div>
+                <div class="date" style="font-size:11px;">
+                    <span style="opacity:0.7">Archiviert:</span><br>${archDate}
+                </div>
                 <div style="font-size:12px;">${t.authorName}</div>
             `;
+            el.style.display = 'grid';
+            el.style.gridTemplateColumns = '40px 1fr 100px 120px 120px 120px';
+            el.style.gap = '10px';
+            el.style.alignItems = 'center';
+
             el.onclick = () => AdminBoard.openModal(t.id);
             list.appendChild(el);
         });
@@ -952,10 +1209,11 @@ const AdminBoard = {
              `;
             el.querySelector('.btn-primary').onclick = () => AdminBoard.openApproveModal(r);
             el.querySelector('.btn-ghost').onclick = () => {
-                if (!confirm('Anfrage löschen?')) return;
-                const rest = reqs.filter(x => x.id !== r.id);
-                Utils.write('account_requests', rest);
-                AdminBoard.renderRequests();
+                UI.confirm('Anfrage löschen?', () => {
+                    const rest = reqs.filter(x => x.id !== r.id);
+                    Utils.write('account_requests', rest);
+                    AdminBoard.renderRequests();
+                });
             };
             list.appendChild(el);
         });
@@ -994,30 +1252,72 @@ const AdminBoard = {
         q('#m-title').textContent = t.title;
         q('#m-desc').textContent = t.desc || 'Keine Beschreibung';
 
+        // Metadata
+        if (q('#m-author')) q('#m-author').textContent = t.authorName || t.author;
+        if (q('#m-date')) q('#m-date').textContent = Utils.fmtDate(t.createdAt);
+        if (q('#m-prio')) q('#m-prio').textContent = t.prio;
+        if (q('#m-cat')) q('#m-cat').textContent = t.category || '-';
+
         // Reset Tabs
         q('.tab-btn[data-tab="details"]').click();
 
-        // Populate Assignee Select
-        const sel = q('#m-assignee');
-        sel.innerHTML = '<option value="">Unzugewiesen</option>';
-        const admins = Store.getUsers().filter(u => u.role === 'admin');
-        admins.forEach(a => {
-            const opt = document.createElement('option');
-            opt.value = a.username;
-            opt.textContent = a.name || a.username;
-            if (t.assignee === a.username) opt.selected = true;
-            sel.appendChild(opt);
-        });
+        // --- Custom Multi-Select Logic ---
+        const msHeader = q('#ms-header');
+        const msDropdown = q('#ms-dropdown');
+        const admins = Store.getUsers().filter(u => u.role === 'admin' || u.role === 'superadmin');
 
-        sel.onchange = () => {
-            const val = sel.value;
-            const user = admins.find(a => a.username === val);
-            t.assignee = val;
-            t.assigneeName = user ? (user.name || user.username) : null;
-            Store.saveTickets(tickets);
-            AdminBoard.render();
-            UI.toast('Zuweisung gespeichert');
+        // Ensure t.assignees is an array
+        if (!t.assignees) {
+            t.assignees = t.assignee ? [t.assignee] : [];
+        }
+
+        const renderMS = () => {
+            msDropdown.innerHTML = '';
+            admins.forEach(a => {
+                const item = document.createElement('div');
+                item.className = 'select-item' + (t.assignees.includes(a.username) ? ' selected' : '');
+                item.textContent = a.name || a.username;
+                item.onclick = (e) => {
+                    e.stopPropagation();
+                    const idx = t.assignees.indexOf(a.username);
+                    if (idx > -1) {
+                        t.assignees.splice(idx, 1);
+                    } else {
+                        t.assignees.push(a.username);
+                    }
+                    delete t.assignee; // Clean up old field if it exists
+                    Store.saveTickets(tickets);
+                    renderMS();
+                    AdminBoard.render(); // Update Board (names on cards)
+                };
+                msDropdown.appendChild(item);
+            });
+
+            // Update Header Text
+            const msText = msHeader.querySelector('.ms-text');
+            if (t.assignees.length === 0) {
+                if (msText) msText.textContent = 'Niemand';
+                else msHeader.textContent = 'Niemand';
+            } else {
+                const names = t.assignees.map(u => {
+                    const adm = admins.find(x => x.username === u);
+                    return adm ? (adm.name || adm.username) : u;
+                });
+                if (msText) msText.textContent = names.join(', ');
+                else msHeader.textContent = names.join(', ');
+            }
         };
+
+        msHeader.onclick = (e) => {
+            e.stopPropagation();
+            msDropdown.classList.toggle('open');
+        };
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', () => msDropdown.classList.remove('open'), { once: true });
+
+        renderMS();
+        // --- End Multi-Select ---
 
         // Archive Button Visibility
         const btnArch = q('#btn-archive-ticket');
@@ -1148,9 +1448,7 @@ const AdminBoard = {
         if (role === 'user') {
             filesToUpload = [...UserDash.selectedFiles];
         } else {
-            // Admin single file fallback or implement simple multi if wanted
-            const adminFileIn = q('#m-chat-file-input');
-            if (adminFileIn && adminFileIn.files[0]) filesToUpload.push(adminFileIn.files[0]);
+            filesToUpload = [...AdminBoard.selectedFiles];
         }
 
         const txt = txtInput.value.trim();
@@ -1197,6 +1495,8 @@ const AdminBoard = {
             UserDash.renderFilePreview();
             const fIn = q('#u-chat-file'); if (fIn) fIn.value = '';
         } else {
+            AdminBoard.selectedFiles = [];
+            AdminBoard.renderFilePreview();
             const adminIn = q('#m-chat-file-input'); if (adminIn) adminIn.value = '';
         }
 
@@ -1272,11 +1572,18 @@ const AdminBoard = {
 };
 
 // --- Main Init ---
+// --- Main Init ---
 document.addEventListener('DOMContentLoaded', () => {
     Store.init();
     Auth.checkGuard();
-    UI.starfield();
-    UI.themeInit();
+    // Display Current User
+    const currentUser = Store.currentUser();
+    if (currentUser && q('#user-display')) {
+        q('#user-display').textContent = `Angemeldet als: ${currentUser.name || currentUser.username}`;
+    }
+    Settings.init(); // Initialize Settings with Theme logic
+    if (q('#stars')) UI.starfield();
+    // UI.themeInit(); // Removed in favor of Settings
 
     // Login Page
     if (q('#btn-login')) {
@@ -1286,18 +1593,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const user = Auth.login(u, p);
             if (user) {
                 UI.toast(`Willkommen ${user.name}`);
-                setTimeout(() => {
-                    if (user.role === 'admin' || user.role === 'superadmin') {
-                        window.location.href = 'admin.html';
-                    } else {
-                        window.location.href = 'dashboard.html';
-                    }
-                }, 500);
+                setTimeout(() => window.location.href = (user.role === 'admin' || user.role === 'superadmin') ? 'admin.html' : 'dashboard.html', 500);
             } else {
                 UI.toast('Login fehlgeschlagen');
             }
         };
-
         q('#btn-login').addEventListener('click', handleLogin);
         q('#login-user').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
         q('#login-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
@@ -1338,7 +1638,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 AdminBoard.render();
                 AdminBoard.renderArchive();
                 if (AdminBoard.currentTicketId && q('#ticket-modal.open')) {
-                    // Refetch ticket data
                     const tickets = Store.getTickets();
                     const t = tickets.find(t => t.id === AdminBoard.currentTicketId);
                     if (t) AdminBoard.renderChat(t, '#m-chat-msgs');
@@ -1355,6 +1654,4 @@ document.addEventListener('DOMContentLoaded', () => {
             if (q('#request-list')) AdminBoard.renderRequests();
         }
     });
-
-    // Enter key Global check for modals (optional safety)
 });
