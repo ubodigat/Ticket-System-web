@@ -10,11 +10,22 @@ const Utils = {
     fmtDate: (iso) => {
         if (!iso) return '-';
         const d = new Date(iso);
-        return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' }) +
-            ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+        return d.toLocaleDateString('de-DE', {
+                day: '2-digit',
+                month: '2-digit',
+                year: '2-digit'
+            }) +
+            ' ' + d.toLocaleTimeString('de-DE', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
     },
     read: (key, fallback) => {
-        try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+        try {
+            return JSON.parse(localStorage.getItem(key)) ?? fallback;
+        } catch {
+            return fallback;
+        }
     },
     write: (key, val) => localStorage.setItem(key, JSON.stringify(val)),
     adjustColor: (color, amount) => {
@@ -46,8 +57,12 @@ const Store = {
         const adminIdx = users.findIndex(u => u.username === 'admin');
         if (adminIdx === -1) {
             users.push({
-                id: Utils.uid(), username: 'admin', password: '123',
-                name: 'Administrator', role: 'superadmin', dept: 'All'
+                id: Utils.uid(),
+                username: 'admin',
+                password: '123',
+                name: 'Administrator',
+                role: 'superadmin',
+                dept: 'All'
             });
         } else {
             // Force upgrade existing admin to superadmin
@@ -62,8 +77,11 @@ const Store = {
         const userIdx = users.findIndex(u => u.username === 'user');
         if (userIdx === -1) {
             users.push({
-                id: Utils.uid(), username: 'user', password: '123',
-                name: 'Max Mustermann', role: 'user'
+                id: Utils.uid(),
+                username: 'user',
+                password: '123',
+                name: 'Max Mustermann',
+                role: 'user'
             });
         }
 
@@ -95,21 +113,40 @@ const Store = {
                 }
                 changed = true;
             }
-            if (!t.comments) { t.comments = []; changed = true; } // Internal notes
-            if (!t.logs) { t.logs = []; changed = true; }
-            if (t.archived === undefined) { t.archived = false; changed = true; }
+            if (!t.comments) {
+                t.comments = [];
+                changed = true;
+            } // Internal notes
+            if (!t.logs) {
+                t.logs = [];
+                changed = true;
+            }
+            if (t.archived === undefined) {
+                t.archived = false;
+                changed = true;
+            }
+            // Migration: Convert old single category to new multiple categories
+            if (!t.categories && t.category) {
+                t.categories = [t.category];
+                changed = true;
+            }
+            if (!t.categories) {
+                t.categories = [];
+                changed = true;
+            }
         });
         if (changed) Store.saveTickets(tickets);
     },
 
-    addLog: (ticket, msg) => {
+    addLog: (ticket, msg, details) => {
         if (!ticket.logs) ticket.logs = [];
         const user = Store.currentUser();
         ticket.logs.push({
             id: Utils.uid(),
             date: Utils.nowISO(),
             user: user ? (user.name || user.username) : 'System',
-            msg: msg
+            msg: msg,
+            details: details
         });
     },
 
@@ -148,7 +185,10 @@ const Auth = {
         const user = Store.currentUser();
         const guard = document.body.dataset.guard;
         if (!guard) return; // Public page
-        if (!user) { window.location.href = 'index.html'; return; }
+        if (!user) {
+            window.location.href = 'index.html';
+            return;
+        }
         // Admin page accessible by admin AND superadmin
         if (guard === 'admin' && user.role !== 'admin' && user.role !== 'superadmin') window.location.href = 'dashboard.html';
     }
@@ -159,7 +199,9 @@ const UI = {
     toast: (msg) => {
         let el = q('#toast');
         if (!el) {
-            el = document.createElement('div'); el.id = 'toast'; document.body.appendChild(el);
+            el = document.createElement('div');
+            el.id = 'toast';
+            document.body.appendChild(el);
         }
         el.textContent = msg;
         el.classList.add('show');
@@ -196,7 +238,10 @@ const UI = {
         yesBtn.parentNode.replaceChild(newYes, yesBtn);
         noBtn.parentNode.replaceChild(newNo, noBtn);
 
-        newYes.onclick = () => { close(); onYes(); };
+        newYes.onclick = () => {
+            close();
+            onYes();
+        };
         newNo.onclick = () => close(); // Fix: close on No
 
         modal.classList.add('open');
@@ -206,19 +251,30 @@ const UI = {
         if (!c) return;
         const ctx = c.getContext('2d');
         const stars = [];
-        const resize = () => { c.width = window.innerWidth; c.height = window.innerHeight; };
+        const resize = () => {
+            c.width = window.innerWidth;
+            c.height = window.innerHeight;
+        };
         const loop = () => {
             ctx.clearRect(0, 0, c.width, c.height);
             ctx.fillStyle = document.documentElement.classList.contains('light') ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.9)';
             stars.forEach(s => {
-                ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
-                s.y += s.v; if (s.y > c.height) s.y = -2;
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+                ctx.fill();
+                s.y += s.v;
+                if (s.y > c.height) s.y = -2;
             });
             requestAnimationFrame(loop);
         };
         resize();
         window.addEventListener('resize', resize);
-        for (let i = 0; i < 150; i++) stars.push({ x: Math.random() * c.width, y: Math.random() * c.height, r: Math.random() * 1.5, v: Math.random() * 0.4 + 0.1 });
+        for (let i = 0; i < 150; i++) stars.push({
+            x: Math.random() * c.width,
+            y: Math.random() * c.height,
+            r: Math.random() * 1.5,
+            v: Math.random() * 0.4 + 0.1
+        });
         loop();
     },
 
@@ -260,7 +316,10 @@ const UI = {
                         <span style="font-weight:600; color:var(--primary-solid)">${l.user}</span>
                         <span>${Utils.fmtDate(l.date)}</span>
                     </div>
-                    <div style="font-size:13px; line-height:1.4;">${l.msg}</div>
+                    <div style="font-size:13px; line-height:1.4; display:flex; align-items:center; gap:6px;">
+                        ${l.msg}
+                        ${l.details ? `<span class="info-icon" data-tooltip="${l.details.replace(/"/g, '&quot;')}">i</span>` : ''}
+                    </div>
                 `;
                 body.appendChild(item);
             });
@@ -270,7 +329,13 @@ const UI = {
 };
 
 const Settings = {
-    defaults: { theme: 'dark', accentColor: '#6366f1', lang: 'de' },
+    defaults: {
+        theme: 'dark',
+        accentColor: '#6366f1',
+        lang: 'de',
+        bgType: 'default',
+        bgValue: ''
+    },
     init: () => {
         const s = Utils.read('app_settings', Settings.defaults);
         Settings.apply(s);
@@ -281,13 +346,102 @@ const Settings = {
             toggle.onclick = Settings.openModal;
         }
     },
+
+    bgPresets: {
+        dark: [{
+                type: 'default',
+                val: '',
+                label: 'Standard',
+                icon: '🌌'
+            },
+            {
+                type: 'class',
+                val: 'bg-anim-space',
+                label: 'Deep Space (Anim)',
+                icon: '🚀'
+            },
+            {
+                type: 'class',
+                val: 'bg-anim-nebula',
+                label: 'Nebula (Anim)',
+                icon: '✨'
+            },
+            {
+                type: 'color',
+                val: 'linear-gradient(180deg, #0f172a, #1e293b)',
+                label: 'Deep Ocean',
+                icon: '🩶'
+            },
+            {
+                type: 'color',
+                val: 'linear-gradient(180deg, #064e3b, #065f46)',
+                label: 'Forest',
+                icon: '🌲'
+            }
+        ],
+        light: [{
+                type: 'default',
+                val: '',
+                label: 'Standard',
+                icon: '☀️'
+            },
+            {
+                type: 'class',
+                val: 'bg-anim-clouds',
+                label: 'Clouds (Anim)',
+                icon: '☁️'
+            },
+            {
+                type: 'class',
+                val: 'bg-anim-waves',
+                label: 'Soft Waves (Anim)',
+                icon: '🌊'
+            },
+            {
+                type: 'color',
+                val: 'linear-gradient(180deg, #f5f3ff, #ede9fe)',
+                label: 'Lavender',
+                icon: '🌈'
+            },
+            {
+                type: 'color',
+                val: 'linear-gradient(180deg, #f0fdf4, #dcfce7)',
+                label: 'Mint',
+                icon: '🍃'
+            }
+        ]
+    },
+
     apply: (s) => {
-        if (s.theme === 'light') document.documentElement.className = 'light';
+        const isLight = s.theme === 'light';
+        if (isLight) document.documentElement.className = 'light';
         else document.documentElement.className = '';
 
         document.documentElement.style.setProperty('--primary-solid', s.accentColor);
-        // Calculate gradient roughly
         document.documentElement.style.setProperty('--primary-grad', `linear-gradient(135deg, ${s.accentColor}, ${Utils.adjustColor(s.accentColor, -20)})`);
+
+        // Applied Background
+        const stars = q('#stars');
+        const overlay = 'rgba(0,0,0,0.4)';
+
+        // Clear body classes for animations
+        document.body.className = '';
+
+        if (s.bgType === 'default') {
+            document.body.style.background = isLight ? '#f6f7fb' : '';
+            if (stars) stars.style.display = isLight ? 'none' : 'block';
+        } else if (s.bgType === 'color') {
+            document.body.style.background = isLight ? s.bgValue : `linear-gradient(${overlay}, ${overlay}), ${s.bgValue}`;
+            if (stars) stars.style.display = 'none';
+        } else if (s.bgType === 'image') {
+            document.body.style.background = `linear-gradient(${overlay}, ${overlay}), url(${s.bgValue}) no-repeat center center fixed`;
+            document.body.style.backgroundSize = 'cover';
+            if (stars) stars.style.display = 'none';
+        } else if (s.bgType === 'class') {
+            document.body.className = s.bgValue;
+            document.body.style.background = '';
+            if (stars) stars.style.display = 'none';
+        }
     },
     openModal: () => {
         let modal = q('#settings-modal');
@@ -313,6 +467,13 @@ const Settings = {
                         <div class="field">
                             <label>Sprache</label>
                             <select id="s-lang"><option value="de">Deutsch</option><option value="en">English</option></select>
+                        </div>
+                        <div class="field">
+                            <label>Hintergrund</label>
+                            <div id="s-bg-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin-bottom:10px;">
+                                <!-- Rendered by renderBgGrid -->
+                            </div>
+                            <input type="file" id="s-bg-file" style="display:none" accept="image/*">
                         </div>
                     </div>
                     <div class="modal-footer"><button class="btn-primary close-m">Fertig</button></div>
@@ -349,8 +510,80 @@ const Settings = {
         modal.querySelectorAll('.s-theme-btn').forEach(b => {
             b.className = (b.dataset.val === s.theme) ? 'btn-primary s-theme-btn' : 'btn-secondary s-theme-btn';
         });
+
+        // Dynamic Background Grid
+        const currentTheme = modal.dataset.renderedTheme;
+        if (currentTheme !== s.theme) {
+            modal.dataset.renderedTheme = s.theme;
+            Settings.renderBgGrid(modal, s);
+        }
+
         q('#s-color').value = s.accentColor;
         q('#s-lang').value = s.lang || 'de';
+
+        modal.querySelectorAll('.s-bg-btn').forEach(b => {
+            let active = false;
+            if (b.dataset.type === 'image') {
+                active = (s.bgType === 'image'); // Pure type check for custom upload
+            } else {
+                active = (b.dataset.type === s.bgType && (b.dataset.val || '') === s.bgValue);
+            }
+            b.style.borderColor = active ? 'var(--primary-solid)' : 'transparent';
+            b.style.boxShadow = active ? '0 0 10px var(--primary-solid)' : 'none';
+        });
+    },
+
+    renderBgGrid: (modal, s) => {
+        const grid = modal.querySelector('#s-bg-grid');
+        if (!grid) return;
+
+        const presets = Settings.bgPresets[s.theme || 'dark'];
+        grid.innerHTML = '';
+
+        presets.forEach(p => {
+            const btn = document.createElement('button');
+            btn.className = 'btn-secondary s-bg-btn';
+            btn.dataset.type = p.type;
+            btn.dataset.val = p.val;
+            btn.title = p.label;
+            btn.textContent = p.icon;
+            btn.onclick = () => {
+                s.bgType = p.type;
+                s.bgValue = p.val;
+                Settings.save(s);
+                Settings.renderState(modal, s);
+            };
+            grid.appendChild(btn);
+        });
+
+        // Add upload button
+        const upBtn = document.createElement('button');
+        upBtn.className = 'btn-secondary s-bg-btn';
+        upBtn.id = 's-bg-upload';
+        upBtn.dataset.type = 'image';
+        upBtn.title = 'Eigenes Bild';
+        upBtn.textContent = '📁';
+        upBtn.onclick = () => q('#s-bg-file').click();
+        grid.appendChild(upBtn);
+
+        q('#s-bg-file').onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (file.size > 4 * 1024 * 1024) {
+                UI.toast('Bild zu groß (max 4MB)');
+                return;
+            }
+            try {
+                const data = await Store.readFile(file);
+                s.bgType = 'image';
+                s.bgValue = data;
+                Settings.save(s);
+                Settings.renderState(modal, s);
+                UI.toast('Hintergrund aktualisiert');
+            } catch (err) {
+                UI.toast('Fehler beim Upload');
+            }
+        };
     },
     save: (s) => {
         Utils.write('app_settings', s);
@@ -386,16 +619,23 @@ const UserDash = {
             const prio = q('#t-prio').value;
             const cat = q('#t-cat').value || 'Allgemein'; // Capture Category
 
-            if (!title) { UI.toast('Bitte Titel angeben'); return; }
+            if (!title) {
+                UI.toast('Bitte Titel angeben');
+                return;
+            }
 
             const user = Store.currentUser();
             const tickets = Store.getTickets();
             const newTicket = {
                 id: Utils.uid(),
-                title, desc, prio,
-                category: cat, // Save Category
+                title,
+                desc,
+                prio,
+                category: cat, // Keep for compatibility
+                categories: [cat], // New multi-category system
                 status: 'Neu',
-                author: user.username, authorName: user.name || user.username,
+                author: user.username,
+                authorName: user.name || user.username,
                 createdAt: Utils.nowISO(),
                 comments: [],
                 chat: [],
@@ -405,7 +645,8 @@ const UserDash = {
             Store.addLog(newTicket, 'Ticket erstellt');
             Store.saveTickets(tickets);
             UI.toast('Ticket erstellt!');
-            q('#t-title').value = ''; q('#t-desc').value = '';
+            q('#t-title').value = '';
+            q('#t-desc').value = '';
             UserDash.renderList();
         };
 
@@ -417,18 +658,22 @@ const UserDash = {
         // Populate Categories dynamically
         const catSel = q('#t-cat');
         if (catSel) {
-            const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+            const settings = Utils.read('settings', {});
+            const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
             catSel.innerHTML = '';
-            settings.categories.forEach(c => {
+            categories.forEach(c => {
                 const opt = document.createElement('option');
-                opt.value = c; opt.textContent = c;
+                opt.value = c;
+                opt.textContent = c;
                 catSel.appendChild(opt);
             });
         }
 
         // Modal Events
         if (q('#u-m-close')) q('#u-m-close').onclick = UserDash.closeModal;
-        if (q('#u-ticket-modal')) q('#u-ticket-modal').onclick = (e) => { if (e.target.id === 'u-ticket-modal') UserDash.closeModal(); };
+        if (q('#u-ticket-modal')) q('#u-ticket-modal').onclick = (e) => {
+            if (e.target.id === 'u-ticket-modal') UserDash.closeModal();
+        };
 
         // User Chat Logic
         const chatSend = q('#u-chat-send');
@@ -535,7 +780,10 @@ const UserDash = {
         }
 
         if (q('#u-m-prio')) q('#u-m-prio').textContent = t.prio;
-        if (q('#u-m-cat')) q('#u-m-cat').textContent = t.category || '-';
+        if (q('#u-m-cat')) {
+            const categories = t.categories && t.categories.length > 0 ? t.categories : (t.category ? [t.category] : []);
+            q('#u-m-cat').textContent = categories.length > 0 ? categories.join(', ') : '-';
+        }
 
         // Support Multiple Assignees in User View
         if (q('#u-m-assignee')) {
@@ -568,12 +816,24 @@ const UserDash = {
         const chatFile = q('#u-chat-file');
 
         if (isArchived) {
-            if (chatInput) { chatInput.disabled = true; chatInput.placeholder = 'Ticket ist archiviert (Keine Antwort möglich)'; }
-            if (chatSend) { chatSend.disabled = true; chatSend.style.opacity = '0.5'; }
+            if (chatInput) {
+                chatInput.disabled = true;
+                chatInput.placeholder = 'Ticket ist archiviert (Keine Antwort möglich)';
+            }
+            if (chatSend) {
+                chatSend.disabled = true;
+                chatSend.style.opacity = '0.5';
+            }
             if (chatFile) chatFile.disabled = true;
         } else {
-            if (chatInput) { chatInput.disabled = false; chatInput.placeholder = 'Nachricht schreiben...'; }
-            if (chatSend) { chatSend.disabled = false; chatSend.style.opacity = '1'; }
+            if (chatInput) {
+                chatInput.disabled = false;
+                chatInput.placeholder = 'Nachricht schreiben...';
+            }
+            if (chatSend) {
+                chatSend.disabled = false;
+                chatSend.style.opacity = '1';
+            }
             if (chatFile) chatFile.disabled = false;
         }
 
@@ -598,9 +858,6 @@ const UserDash = {
         }
 
         tickets.sort((a, b) => {
-            const pA = getPrioValue(a.prio);
-            const pB = getPrioValue(b.prio);
-            if (pA !== pB) return pB - pA;
             return new Date(b.createdAt) - new Date(a.createdAt);
         }).forEach(t => {
             const el = document.createElement('div');
@@ -827,7 +1084,10 @@ const AdminBoard = {
         if (user.role === 'admin') {
             // Support array or single string (legacy)
             const depts = Array.isArray(user.dept) ? user.dept : [user.dept || 'Allgemein'];
-            tickets = tickets.filter(t => depts.includes(t.category) || depts.includes('All'));
+            tickets = tickets.filter(t => {
+                const categories = t.categories && t.categories.length > 0 ? t.categories : (t.category ? [t.category] : []);
+                return depts.includes('All') || categories.some(cat => depts.includes(cat));
+            });
         }
         // Superadmin sees all (no filter)
 
@@ -844,9 +1104,15 @@ const AdminBoard = {
             'In Bearbeitung': q('#list-doing'),
             'Geschlossen': q('#list-done')
         };
-        const counts = { 'Neu': 0, 'In Bearbeitung': 0, 'Geschlossen': 0 };
+        const counts = {
+            'Neu': 0,
+            'In Bearbeitung': 0,
+            'Geschlossen': 0
+        };
 
-        Object.values(cols).forEach(c => { if (c) c.innerHTML = ''; });
+        Object.values(cols).forEach(c => {
+            if (c) c.innerHTML = '';
+        });
 
         tickets.forEach(t => {
             if (!cols[t.status]) {
@@ -882,10 +1148,14 @@ const AdminBoard = {
                 assigneeHtml = `<span class="assignee-badge">👤 ${t.assigneeName}</span>`;
             }
 
+            // Handle both old single category and new multiple categories
+            const categories = t.categories && t.categories.length > 0 ? t.categories : (t.category ? [t.category] : []);
+            const categoryDisplay = categories.length > 0 ? categories.join(', ') : '-';
+
             card.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                     <span class="t-tag prio-${t.prio}">${t.prio}</span>
-                    <span style="font-size:10px; line-height:1; display:inline-flex; align-items:center; background:rgba(0, 0, 0, 1); padding:2px 6px; border-radius:4px;">${t.category || '-'}</span>
+                    <span class="t-category">${categoryDisplay}</span>
                 </div>
                 <div class="t-title">${t.title}</div>
                 <div class="t-meta">
@@ -1000,7 +1270,9 @@ const AdminBoard = {
         }
 
         if (view === 'cats') {
-            const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+            const settings = Utils.read('settings', {
+                categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung']
+            });
             settings.categories.filter(c => c.toLowerCase().includes(searchTerm)).forEach(c => {
                 const el = document.createElement('div');
                 el.className = 'ticket-row';
@@ -1117,7 +1389,9 @@ const AdminBoard = {
             const val = q('#g-input').value.trim();
             if (!val) return;
 
-            const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+            const settings = Utils.read('settings', {
+                categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung']
+            });
             const allUsers = Store.getUsers();
             const checkedAdmins = Array.from(modal.querySelectorAll('.cat-admin-check:checked')).map(cb => cb.value);
 
@@ -1242,7 +1516,9 @@ const AdminBoard = {
         updateUI();
 
         // Departments Checkboxes
-        const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+        const settings = Utils.read('settings', {
+            categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung']
+        });
         const list = q('#ue-dept-list');
         list.innerHTML = '';
 
@@ -1297,13 +1573,22 @@ const AdminBoard = {
             const dVal = [];
             list.querySelectorAll('input[type="checkbox"]:checked').forEach(c => dVal.push(c.value));
 
-            if (!uVal) { UI.toast('Benutzername fehlt'); return; }
+            if (!uVal) {
+                UI.toast('Benutzername fehlt');
+                return;
+            }
 
             const users = Store.getUsers();
 
             if (isNew) {
-                if (users.find(x => x.username === uVal)) { UI.toast('Benutzer existiert schon'); return; }
-                if (!pVal) { UI.toast('Passwort fehlt'); return; }
+                if (users.find(x => x.username === uVal)) {
+                    UI.toast('Benutzer existiert schon');
+                    return;
+                }
+                if (!pVal) {
+                    UI.toast('Passwort fehlt');
+                    return;
+                }
                 const newUser = {
                     id: Utils.uid(),
                     username: uVal,
@@ -1382,29 +1667,22 @@ const AdminBoard = {
         }
         archived.forEach(t => {
             const el = document.createElement('div');
-            el.className = 'ticket-row';
-            el.style.borderColor = 'var(--border)';
-            // Adjust grid for archive view if needed, or stick to standard
-            // Standard: 40px 1fr 100px 120px 80px
+            el.className = 'ticket-row archive-ticket-row';
 
             const archDate = t.archivedAt ? Utils.fmtDate(t.archivedAt) : '-';
 
             el.innerHTML = `
-                <div class="status-indicator" style="background:${getStatusColor(t.status)}; width:8px; height:8px; border-radius:50%;"></div>
-                <div style="font-weight:600">${t.title}</div>
+                <div class="status-indicator" style="background:${getStatusColor(t.status)}; width:10px; height:10px; border-radius:50%;"></div>
+                <div style="font-weight:600; color:var(--text)"><span style="opacity:0.7">Titel:</span><br>${t.title}</div>
                 <div class="status-badge">${t.status}</div>
-                <div class="date" style="font-size:11px;">
+                <div class="date">
                     <span style="opacity:0.7">Erstellt:</span><br>${Utils.fmtDate(t.createdAt)}
                 </div>
-                <div class="date" style="font-size:11px;">
+                <div class="date">
                     <span style="opacity:0.7">Archiviert:</span><br>${archDate}
                 </div>
-                <div style="font-size:12px;">${t.authorName}</div>
+                <div style="font-size:12px; color:var(--text-sec)"><span style="opacity:0.7">Benutzer:</span><br>${t.authorName}</div>
             `;
-            el.style.display = 'grid';
-            el.style.gridTemplateColumns = '40px 1fr 100px 120px 120px 120px';
-            el.style.gap = '10px';
-            el.style.alignItems = 'center';
 
             el.onclick = () => AdminBoard.openModal(t.id);
             list.appendChild(el);
@@ -1446,8 +1724,13 @@ const AdminBoard = {
 
     setupDrag: () => {
         qa('.ticket-list').forEach(zone => {
-            zone.addEventListener('dragover', e => { e.preventDefault(); zone.style.background = 'var(--card-hover)'; });
-            zone.addEventListener('dragleave', e => { zone.style.background = ''; });
+            zone.addEventListener('dragover', e => {
+                e.preventDefault();
+                zone.style.background = 'var(--card-hover)';
+            });
+            zone.addEventListener('dragleave', e => {
+                zone.style.background = '';
+            });
             zone.addEventListener('drop', e => {
                 e.preventDefault();
                 zone.style.background = '';
@@ -1549,23 +1832,133 @@ const AdminBoard = {
             };
         }
 
-        // Populate Category
+        // Populate Category Multi-Select
         if (catSel) {
-            const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
-            catSel.innerHTML = '';
-            settings.categories.forEach(c => {
-                const opt = document.createElement('option');
-                opt.value = opt.textContent = c;
-                catSel.appendChild(opt);
+            const settings = Utils.read('settings', {});
+            const availableCategories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
+
+            // Initialize categories if not already an array
+            if (!t.categories) {
+                t.categories = t.category ? [t.category] : [];
+            }
+
+            const catContainer = catSel.parentElement;
+            catContainer.style.position = 'relative';
+            catSel.style.display = 'none';
+
+            // Create header that looks like select
+            const msHeader = document.createElement('div');
+            msHeader.className = 'inline-select';
+            msHeader.style.width = '100%';
+            msHeader.style.padding = '4px 8px';
+            msHeader.style.border = '1px solid var(--border)';
+            msHeader.style.borderRadius = '8px';
+            msHeader.style.background = 'var(--card-bg)';
+            msHeader.style.cursor = 'pointer';
+            msHeader.style.color = 'white';
+            msHeader.style.fontSize = '13px';
+            msHeader.style.display = 'flex';
+            msHeader.style.alignItems = 'center';
+            msHeader.style.justifyContent = 'space-between';
+            msHeader.style.userSelect = 'none';
+            msHeader.style.height = '32px';
+
+            const placeholderSpan = document.createElement('span');
+            placeholderSpan.textContent = t.categories.length > 0 ? t.categories.join(', ') : 'Keine ausgewählt';
+            placeholderSpan.style.color = 'white';
+            placeholderSpan.style.overflow = 'hidden';
+            placeholderSpan.style.textOverflow = 'ellipsis';
+            placeholderSpan.style.whiteSpace = 'nowrap';
+
+            const arrowSpan = document.createElement('span');
+            arrowSpan.textContent = '▼';
+            arrowSpan.style.fontSize = '10px';
+            arrowSpan.style.color = 'white';
+            arrowSpan.style.marginLeft = '4px';
+            arrowSpan.style.flexShrink = '0';
+
+            msHeader.appendChild(placeholderSpan);
+            msHeader.appendChild(arrowSpan);
+
+            const placeholderOpt = placeholderSpan;
+
+            // Create hidden dropdown
+            const msDropdown = document.createElement('div');
+            msDropdown.className = 'custom-dropdown';
+            msDropdown.style.position = 'absolute';
+            msDropdown.style.top = 'calc(100% + 2px)';
+            msDropdown.style.left = '0';
+            msDropdown.style.right = '0';
+            msDropdown.style.background = 'rgb(30, 35, 50)';
+            msDropdown.style.border = '1px solid var(--border)';
+            msDropdown.style.borderRadius = '8px';
+            msDropdown.style.maxHeight = '180px';
+            msDropdown.style.overflowY = 'auto';
+            msDropdown.style.display = 'none';
+            msDropdown.style.zIndex = '100';
+            msDropdown.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
+
+            availableCategories.forEach(c => {
+                const label = document.createElement('label');
+                label.style.display = 'flex';
+                label.style.alignItems = 'center';
+                label.style.padding = '8px 12px';
+                label.style.cursor = 'pointer';
+                label.style.borderBottom = '1px solid var(--border)';
+                label.style.color = 'var(--text)';
+                label.style.userSelect = 'none';
+                label.onmouseover = () => {
+                    label.style.background = 'var(--card-hover)';
+                };
+                label.onmouseout = () => {
+                    label.style.background = 'transparent';
+                };
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = c;
+                checkbox.checked = t.categories.includes(c);
+                checkbox.style.marginRight = '8px';
+                checkbox.style.cursor = 'pointer';
+                checkbox.onchange = (e) => {
+                    e.stopPropagation();
+                    if (checkbox.checked) {
+                        if (!t.categories.includes(c)) {
+                            t.categories.push(c);
+                        }
+                    } else {
+                        t.categories = t.categories.filter(cat => cat !== c);
+                    }
+                    placeholderSpan.textContent = t.categories.length > 0 ? t.categories.join(', ') : 'Keine ausgewählt';
+                    Store.addLog(t, `Kategorien geändert zu: ${t.categories.join(', ')}`);
+                    Store.saveTickets(tickets);
+                    AdminBoard.render();
+                };
+
+                const text = document.createElement('span');
+                text.textContent = c;
+
+                label.appendChild(checkbox);
+                label.appendChild(text);
+                msDropdown.appendChild(label);
             });
-            catSel.value = t.category || 'Allgemein';
-            catSel.onchange = () => {
-                const old = t.category || 'Allgemein';
-                t.category = catSel.value;
-                Store.addLog(t, `Kategorie geändert von ${old} zu ${t.category}`);
-                Store.saveTickets(tickets);
-                AdminBoard.render();
+
+            msHeader.onclick = (e) => {
+                e.stopPropagation();
+                const isOpen = msDropdown.style.display === 'block';
+                msDropdown.style.display = isOpen ? 'none' : 'block';
             };
+
+            // Close dropdown when clicking outside
+            const closeDropdown = (e) => {
+                if (!catContainer.contains(e.target)) {
+                    msDropdown.style.display = 'none';
+                }
+            };
+            document.addEventListener('click', closeDropdown);
+
+            catContainer.insertBefore(msHeader, catSel);
+            catContainer.insertBefore(msDropdown, catSel);
         }
 
         // Reset Tabs
@@ -1584,6 +1977,7 @@ const AdminBoard = {
         const renderMS = () => {
             const msText = msHeader ? msHeader.querySelector('.ms-text') : null;
             if (msText) {
+
                 if (t.assignees.length === 0) msText.textContent = 'Niemand';
                 else {
                     const names = t.assignees.map(u => {
@@ -1626,7 +2020,11 @@ const AdminBoard = {
             };
         }
 
-        document.addEventListener('click', () => { if (msDropdown) msDropdown.classList.remove('open'); }, { once: true });
+        document.addEventListener('click', () => {
+            if (msDropdown) msDropdown.classList.remove('open');
+        }, {
+            once: true
+        });
         renderMS();
 
         AdminBoard.renderInternalComments(t);
@@ -1675,18 +2073,55 @@ const AdminBoard = {
         if (!sidebar) return;
 
         sidebar.classList.add('open');
-        sidebar.innerHTML = `
-            <div class="sidebar-header">Ticket Historie</div>
-            <div class="sidebar-content"></div>
-        `;
+
+        // Initialize header if needed
+        let searchInput = q('#m-history-search');
+        if (!searchInput) {
+            sidebar.innerHTML = `
+                <div class="sidebar-header">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                        <div style="font-weight:700;">Ticket Historie</div>
+                        <button id="m-history-close" style="background:none; border:none; color:var(--text); cursor:pointer; font-size:20px; padding:0; width:24px; height:24px; display:flex; align-items:center; justify-content:center;">×</button>
+                    </div>
+                    <div class="history-search-wrap">
+                        <input type="text" id="m-history-search" class="history-search-input" placeholder="Historie durchsuchen...">
+                        <span class="history-search-icon">🔍</span>
+                    </div>
+                </div>
+                <div class="sidebar-content"></div>
+            `;
+            searchInput = q('#m-history-search');
+            searchInput.oninput = () => AdminBoard.renderHistory(username, currentId);
+
+            const closeBtn = q('#m-history-close');
+            if (closeBtn) {
+                closeBtn.onclick = () => sidebar.classList.remove('open');
+            }
+        }
+
         const content = sidebar.querySelector('.sidebar-content');
+        if (!content) return;
 
-        const tickets = Store.getTickets().filter(x => x.author === username);
+        const query = searchInput.value.toLowerCase();
+        content.innerHTML = '';
 
-        // Simple date sort (newest first)
-        tickets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const tickets = Store.getTickets()
+            .filter(x => x.author === username)
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-        tickets.forEach(ticket => {
+        const filtered = tickets.filter(t =>
+            t.title.toLowerCase().includes(query) ||
+            t.status.toLowerCase().includes(query)
+        );
+
+        if (filtered.length === 0) {
+            content.innerHTML = `<div style="opacity:0.5; padding:30px 20px; font-size:12px; text-align:center;">
+                ${query ? 'Keine Treffer' : 'Keine Historie vorhanden'}
+            </div>`;
+            return;
+        }
+
+        filtered.forEach(ticket => {
             const card = document.createElement('div');
             card.className = 'history-card' + (ticket.id === currentId ? ' active' : '') + (ticket.archived ? ' archived' : '');
 
@@ -1742,7 +2177,7 @@ const AdminBoard = {
             author: user.name || user.username,
             date: Utils.nowISO()
         });
-        Store.addLog(t, 'Interne Notiz hinzugefügt');
+        Store.addLog(t, 'Interne Notiz hinzugefügt', txt);
         Store.saveTickets(tickets);
         input.value = '';
         AdminBoard.renderInternalComments(t);
@@ -1847,7 +2282,11 @@ const AdminBoard = {
                 // Parallel read
                 const promises = filesToUpload.map(async f => {
                     const data = await Store.readFile(f);
-                    return { name: f.name, type: f.type, data: data };
+                    return {
+                        name: f.name,
+                        type: f.type,
+                        data: data
+                    };
                 });
                 msg.files = await Promise.all(promises);
             } catch (e) {
@@ -1858,18 +2297,20 @@ const AdminBoard = {
         }
 
         t.chat.push(msg);
-        Store.addLog(t, 'Nachricht gesendet');
+        Store.addLog(t, 'Nachricht gesendet', txt);
         Store.saveTickets(tickets);
 
         txtInput.value = '';
         if (role === 'user') {
             UserDash.selectedFiles = [];
             UserDash.renderFilePreview();
-            const fIn = q('#u-chat-file'); if (fIn) fIn.value = '';
+            const fIn = q('#u-chat-file');
+            if (fIn) fIn.value = '';
         } else {
             AdminBoard.selectedFiles = [];
             AdminBoard.renderFilePreview();
-            const adminIn = q('#m-chat-file-input'); if (adminIn) adminIn.value = '';
+            const adminIn = q('#m-chat-file-input');
+            if (adminIn) adminIn.value = '';
         }
 
         if (role === 'admin') {
@@ -1928,10 +2369,16 @@ const AdminBoard = {
         const role = isSuper ? q('#a-role').value : 'user'; // Enforce 'user' if not super
         const dept = q('#a-dept').value;
 
-        if (!username || !password) { UI.toast('Bitte alle Felder füllen'); return; }
+        if (!username || !password) {
+            UI.toast('Bitte alle Felder füllen');
+            return;
+        }
 
         const users = Store.getUsers();
-        if (users.find(u => u.username === username)) { UI.toast('Benutzername existiert bereits'); return; }
+        if (users.find(u => u.username === username)) {
+            UI.toast('Benutzername existiert bereits');
+            return;
+        }
 
         const newUser = {
             id: Utils.uid(),
@@ -1985,8 +2432,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         q('#btn-login').addEventListener('click', handleLogin);
-        q('#login-user').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
-        q('#login-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
+        q('#login-user').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') handleLogin();
+        });
+        q('#login-pass').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') handleLogin();
+        });
     }
 
     // Logout
@@ -2000,18 +2451,31 @@ document.addEventListener('DOMContentLoaded', () => {
         const handleRequest = () => {
             const name = q('#req-name').value.trim();
             const email = q('#req-email').value.trim();
-            if (!name || !email) { UI.toast('Bitte Felder füllen'); return; }
+            if (!name || !email) {
+                UI.toast('Bitte Felder füllen');
+                return;
+            }
 
             const reqs = Utils.read('account_requests', []);
-            reqs.push({ id: Utils.uid(), name, email, date: Utils.nowISO() });
+            reqs.push({
+                id: Utils.uid(),
+                name,
+                email,
+                date: Utils.nowISO()
+            });
             Utils.write('account_requests', reqs);
 
-            q('#req-name').value = ''; q('#req-email').value = '';
+            q('#req-name').value = '';
+            q('#req-email').value = '';
             UI.toast('Anfrage gesendet! Ein Admin prüft das.');
         };
         q('#btn-request').onclick = handleRequest;
-        q('#req-name').onkeydown = (e) => { if (e.key === 'Enter') handleRequest(); };
-        q('#req-email').onkeydown = (e) => { if (e.key === 'Enter') handleRequest(); };
+        q('#req-name').onkeydown = (e) => {
+            if (e.key === 'Enter') handleRequest();
+        };
+        q('#req-email').onkeydown = (e) => {
+            if (e.key === 'Enter') handleRequest();
+        };
     }
 
     if (q('#btn-create-ticket') || q('#user-tickets')) UserDash.init();
@@ -2041,3 +2505,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+// --- Scroll to Top Button ---
+const ScrollToTop = {
+    init: () => {
+        // Create scroll to top button
+        let btn = q('#scroll-to-top-btn');
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.id = 'scroll-to-top-btn';
+            btn.className = 'btn-scroll-to-top';
+            btn.innerHTML = '↑';
+            btn.title = 'Nach oben';
+            btn.onclick = () => window.scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+            document.body.appendChild(btn);
+        }
+
+        // Show/hide button on scroll
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 300) {
+                btn.classList.add('show');
+            } else {
+                btn.classList.remove('show');
+            }
+        });
+    }
+};
+
+// Initialize scroll to top button
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ScrollToTop.init);
+} else {
+    ScrollToTop.init();
+}
