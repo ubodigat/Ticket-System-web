@@ -125,15 +125,6 @@ const Store = {
                 t.archived = false;
                 changed = true;
             }
-            // Migration: Convert old single category to new multiple categories
-            if (!t.categories && t.category) {
-                t.categories = [t.category];
-                changed = true;
-            }
-            if (!t.categories) {
-                t.categories = [];
-                changed = true;
-            }
         });
         if (changed) Store.saveTickets(tickets);
     },
@@ -631,8 +622,7 @@ const UserDash = {
                 title,
                 desc,
                 prio,
-                category: cat, // Keep for compatibility
-                categories: [cat], // New multi-category system
+                category: cat, // Save Category
                 status: 'Neu',
                 author: user.username,
                 authorName: user.name || user.username,
@@ -780,10 +770,7 @@ const UserDash = {
         }
 
         if (q('#u-m-prio')) q('#u-m-prio').textContent = t.prio;
-        if (q('#u-m-cat')) {
-            const categories = t.categories && t.categories.length > 0 ? t.categories : (t.category ? [t.category] : []);
-            q('#u-m-cat').textContent = categories.length > 0 ? categories.join(', ') : '-';
-        }
+        if (q('#u-m-cat')) q('#u-m-cat').textContent = t.category || '-';
 
         // Support Multiple Assignees in User View
         if (q('#u-m-assignee')) {
@@ -1084,10 +1071,7 @@ const AdminBoard = {
         if (user.role === 'admin') {
             // Support array or single string (legacy)
             const depts = Array.isArray(user.dept) ? user.dept : [user.dept || 'Allgemein'];
-            tickets = tickets.filter(t => {
-                const categories = t.categories && t.categories.length > 0 ? t.categories : (t.category ? [t.category] : []);
-                return depts.includes('All') || categories.some(cat => depts.includes(cat));
-            });
+            tickets = tickets.filter(t => depts.includes(t.category) || depts.includes('All'));
         }
         // Superadmin sees all (no filter)
 
@@ -1148,14 +1132,10 @@ const AdminBoard = {
                 assigneeHtml = `<span class="assignee-badge">👤 ${t.assigneeName}</span>`;
             }
 
-            // Handle both old single category and new multiple categories
-            const categories = t.categories && t.categories.length > 0 ? t.categories : (t.category ? [t.category] : []);
-            const categoryDisplay = categories.length > 0 ? categories.join(', ') : '-';
-
             card.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                     <span class="t-tag prio-${t.prio}">${t.prio}</span>
-                    <span class="t-category">${categoryDisplay}</span>
+                    <span class="t-category">${t.category || '-'}</span>
                 </div>
                 <div class="t-title">${t.title}</div>
                 <div class="t-meta">
@@ -1832,133 +1812,24 @@ const AdminBoard = {
             };
         }
 
-        // Populate Category Multi-Select
+        // Populate Category
         if (catSel) {
             const settings = Utils.read('settings', {});
-            const availableCategories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
-
-            // Initialize categories if not already an array
-            if (!t.categories) {
-                t.categories = t.category ? [t.category] : [];
-            }
-
-            const catContainer = catSel.parentElement;
-            catContainer.style.position = 'relative';
-            catSel.style.display = 'none';
-
-            // Create header that looks like select
-            const msHeader = document.createElement('div');
-            msHeader.className = 'inline-select';
-            msHeader.style.width = '100%';
-            msHeader.style.padding = '4px 8px';
-            msHeader.style.border = '1px solid var(--border)';
-            msHeader.style.borderRadius = '8px';
-            msHeader.style.background = 'var(--card-bg)';
-            msHeader.style.cursor = 'pointer';
-            msHeader.style.color = 'white';
-            msHeader.style.fontSize = '13px';
-            msHeader.style.display = 'flex';
-            msHeader.style.alignItems = 'center';
-            msHeader.style.justifyContent = 'space-between';
-            msHeader.style.userSelect = 'none';
-            msHeader.style.height = '32px';
-
-            const placeholderSpan = document.createElement('span');
-            placeholderSpan.textContent = t.categories.length > 0 ? t.categories.join(', ') : 'Keine ausgewählt';
-            placeholderSpan.style.color = 'white';
-            placeholderSpan.style.overflow = 'hidden';
-            placeholderSpan.style.textOverflow = 'ellipsis';
-            placeholderSpan.style.whiteSpace = 'nowrap';
-
-            const arrowSpan = document.createElement('span');
-            arrowSpan.textContent = '▼';
-            arrowSpan.style.fontSize = '10px';
-            arrowSpan.style.color = 'white';
-            arrowSpan.style.marginLeft = '4px';
-            arrowSpan.style.flexShrink = '0';
-
-            msHeader.appendChild(placeholderSpan);
-            msHeader.appendChild(arrowSpan);
-
-            const placeholderOpt = placeholderSpan;
-
-            // Create hidden dropdown
-            const msDropdown = document.createElement('div');
-            msDropdown.className = 'custom-dropdown';
-            msDropdown.style.position = 'absolute';
-            msDropdown.style.top = 'calc(100% + 2px)';
-            msDropdown.style.left = '0';
-            msDropdown.style.right = '0';
-            msDropdown.style.background = 'rgb(30, 35, 50)';
-            msDropdown.style.border = '1px solid var(--border)';
-            msDropdown.style.borderRadius = '8px';
-            msDropdown.style.maxHeight = '180px';
-            msDropdown.style.overflowY = 'auto';
-            msDropdown.style.display = 'none';
-            msDropdown.style.zIndex = '100';
-            msDropdown.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
-
-            availableCategories.forEach(c => {
-                const label = document.createElement('label');
-                label.style.display = 'flex';
-                label.style.alignItems = 'center';
-                label.style.padding = '8px 12px';
-                label.style.cursor = 'pointer';
-                label.style.borderBottom = '1px solid var(--border)';
-                label.style.color = 'var(--text)';
-                label.style.userSelect = 'none';
-                label.onmouseover = () => {
-                    label.style.background = 'var(--card-hover)';
-                };
-                label.onmouseout = () => {
-                    label.style.background = 'transparent';
-                };
-
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.value = c;
-                checkbox.checked = t.categories.includes(c);
-                checkbox.style.marginRight = '8px';
-                checkbox.style.cursor = 'pointer';
-                checkbox.onchange = (e) => {
-                    e.stopPropagation();
-                    if (checkbox.checked) {
-                        if (!t.categories.includes(c)) {
-                            t.categories.push(c);
-                        }
-                    } else {
-                        t.categories = t.categories.filter(cat => cat !== c);
-                    }
-                    placeholderSpan.textContent = t.categories.length > 0 ? t.categories.join(', ') : 'Keine ausgewählt';
-                    Store.addLog(t, `Kategorien geändert zu: ${t.categories.join(', ')}`);
-                    Store.saveTickets(tickets);
-                    AdminBoard.render();
-                };
-
-                const text = document.createElement('span');
-                text.textContent = c;
-
-                label.appendChild(checkbox);
-                label.appendChild(text);
-                msDropdown.appendChild(label);
+            const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
+            catSel.innerHTML = '';
+            categories.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = opt.textContent = c;
+                catSel.appendChild(opt);
             });
-
-            msHeader.onclick = (e) => {
-                e.stopPropagation();
-                const isOpen = msDropdown.style.display === 'block';
-                msDropdown.style.display = isOpen ? 'none' : 'block';
+            catSel.value = t.category || 'Allgemein';
+            catSel.onchange = () => {
+                const old = t.category || 'Allgemein';
+                t.category = catSel.value;
+                Store.addLog(t, `Kategorie geändert von ${old} zu ${t.category}`);
+                Store.saveTickets(tickets);
+                AdminBoard.render();
             };
-
-            // Close dropdown when clicking outside
-            const closeDropdown = (e) => {
-                if (!catContainer.contains(e.target)) {
-                    msDropdown.style.display = 'none';
-                }
-            };
-            document.addEventListener('click', closeDropdown);
-
-            catContainer.insertBefore(msHeader, catSel);
-            catContainer.insertBefore(msDropdown, catSel);
         }
 
         // Reset Tabs
@@ -2081,7 +1952,7 @@ const AdminBoard = {
                 <div class="sidebar-header">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                         <div style="font-weight:700;">Ticket Historie</div>
-                        <button id="m-history-close" style="background:none; border:none; color:var(--text); cursor:pointer; font-size:20px; padding:0; width:24px; height:24px; display:flex; align-items:center; justify-content:center;">×</button>
+                        <button class="btn-ghost" id="m-history-close" style="padding:0; width:30px; height:30px;">✕</button>
                     </div>
                     <div class="history-search-wrap">
                         <input type="text" id="m-history-search" class="history-search-input" placeholder="Historie durchsuchen...">
@@ -2094,9 +1965,9 @@ const AdminBoard = {
             searchInput.oninput = () => AdminBoard.renderHistory(username, currentId);
 
             const closeBtn = q('#m-history-close');
-            if (closeBtn) {
-                closeBtn.onclick = () => sidebar.classList.remove('open');
-            }
+            closeBtn.onclick = () => {
+                sidebar.classList.remove('open');
+            };
         }
 
         const content = sidebar.querySelector('.sidebar-content');
