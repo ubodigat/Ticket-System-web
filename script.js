@@ -671,8 +671,13 @@ const AdminBoard = {
         if (!q('.kanban-board')) return;
 
         // Superadmin UI Injection
+        // Admin UI Visibility
         const user = Store.currentUser();
-        if (user && user.role === 'superadmin') {
+        const isSuper = user && user.role === 'superadmin';
+        const canUsers = isSuper || (user && user.canManageUsers);
+        const canReqs = isSuper || (user && user.canManageRequests);
+
+        if (canUsers) {
             const actions = q('.hero-actions');
             if (actions && !q('#btn-manage-users')) {
                 const btn = document.createElement('button');
@@ -682,10 +687,11 @@ const AdminBoard = {
                 btn.onclick = AdminBoard.openUserManager;
                 actions.insertBefore(btn, actions.firstChild);
             }
-        } else {
-            // Hide Request Board
-            const reqBoard = q('#request-list')?.parentElement;
-            if (reqBoard) reqBoard.style.display = 'none';
+        }
+
+        const reqBoard = q('#request-list')?.parentElement;
+        if (reqBoard) {
+            reqBoard.style.display = canReqs ? 'block' : 'none';
         }
 
         AdminBoard.render();
@@ -708,6 +714,11 @@ const AdminBoard = {
                 viewKanban.style.display = 'block';
                 AdminBoard.render();
             };
+        }
+
+        const archSearch = q('#archive-search');
+        if (archSearch) {
+            archSearch.oninput = () => AdminBoard.renderArchive();
         }
 
         // Setup Modal
@@ -921,6 +932,9 @@ const AdminBoard = {
         AdminBoard.renderUserManager('users'); // Default tab
 
         // Setup UM Tabs
+        const user = Store.currentUser();
+        const isSuper = user && user.role === 'superadmin';
+
         let tabs = modal.querySelector('.um-tabs');
         if (tabs) tabs.remove();
 
@@ -931,8 +945,8 @@ const AdminBoard = {
 
         tabs.innerHTML = `
             <div class="tab-btn active" data-view="users">Benutzer</div>
-            <div class="tab-btn" data-view="admins">Admins</div>
-            <div class="tab-btn" data-view="cats">Kategorien</div>
+            ${isSuper ? `<div class="tab-btn" data-view="admins">Admins</div>` : ''}
+            ${isSuper ? `<div class="tab-btn" data-view="cats">Kategorien</div>` : ''}
         `;
 
         const header = modal.querySelector('.modal-header');
@@ -948,6 +962,11 @@ const AdminBoard = {
     },
 
     renderUserManager: (view) => {
+        const currentUser = Store.currentUser();
+        const isSuper = currentUser && currentUser.role === 'superadmin';
+        // Non-supers can ONLY see 'users'
+        if (!isSuper) view = 'users';
+
         const listContainer = q('#um-list');
         listContainer.className = 'user-list-container';
 
@@ -1066,29 +1085,89 @@ const AdminBoard = {
         const content = modal.querySelector('.modal-body');
         const confirmBtn = modal.querySelector('.btn-primary');
 
+        const admins = Store.getUsers().filter(u => u.role === 'admin' || u.role === 'superadmin');
+
+        let adminListHtml = `
+            <div class="field" style="margin-top:15px;">
+                <label>Admins dieser Kategorie zuweisen:</label>
+                <div id="cat-admin-list" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto; margin-top:5px;">
+        `;
+
+        admins.forEach(a => {
+            const hasCat = catName && Array.isArray(a.dept) && a.dept.includes(catName);
+            adminListHtml += `
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
+                    <input type="checkbox" value="${a.username}" ${hasCat ? 'checked' : ''} class="cat-admin-check"> ${a.name || a.username}
+                </label>
+            `;
+        });
+        adminListHtml += '</div></div>';
+
         title.textContent = catName ? 'Kategorie bearbeiten' : 'Neue Kategorie';
         content.innerHTML = `
             <div class="field">
                 <label>Name</label>
                 <input type="text" id="g-input" value="${catName || ''}">
             </div>
+            ${adminListHtml}
         `;
 
         modal.classList.add('open');
         confirmBtn.onclick = () => {
             const val = q('#g-input').value.trim();
             if (!val) return;
+
             const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+            const allUsers = Store.getUsers();
+            const checkedAdmins = Array.from(modal.querySelectorAll('.cat-admin-check:checked')).map(cb => cb.value);
 
             if (catName) {
+                // Rename logic
                 const idx = settings.categories.indexOf(catName);
                 if (idx !== -1) settings.categories[idx] = val;
+
+                // Update all admins (even those not checked now might need the rename, 
+                // but user wants assignment sync)
+                allUsers.forEach(u => {
+                    if (u.role === 'admin' || u.role === 'superadmin') {
+                        if (!u.dept) u.dept = [];
+                        if (!Array.isArray(u.dept)) u.dept = [u.dept];
+
+                        const hadOld = u.dept.indexOf(catName);
+                        const isChecked = checkedAdmins.includes(u.username);
+
+                        if (hadOld !== -1) {
+                            if (isChecked) {
+                                u.dept[hadOld] = val; // Rename
+                            } else {
+                                u.dept.splice(hadOld, 1); // Remove
+                            }
+                        } else if (isChecked) {
+                            u.dept.push(val); // Add new
+                        }
+                    }
+                });
             } else {
-                if (!settings.categories.includes(val)) settings.categories.push(val);
+                // New category logic
+                if (!settings.categories.includes(val)) {
+                    settings.categories.push(val);
+                }
+
+                // Assign to checked admins
+                allUsers.forEach(u => {
+                    if (checkedAdmins.includes(u.username)) {
+                        if (!u.dept) u.dept = [];
+                        if (!Array.isArray(u.dept)) u.dept = [u.dept];
+                        if (!u.dept.includes(val)) u.dept.push(val);
+                    }
+                });
             }
+
             Utils.write('settings', settings);
+            Store.saveUsers(allUsers);
             modal.classList.remove('open');
             AdminBoard.renderUserManager('cats');
+            UI.toast(catName ? 'Kategorie bearbeitet' : 'Kategorie erstellt');
         };
     },
 
@@ -1106,10 +1185,18 @@ const AdminBoard = {
                         <div class="field"><label>Name</label><input id="ue-name" type="text"></div>
                         <div class="field"><label>Email</label><input id="ue-email" type="email"></div>
                         <div class="field"><label>Passwort (leer lassen für keine Änderung)</label><input id="ue-pass" type="password"></div>
-                        <div class="field"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
+                        <div class="field" id="ue-role-box"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
                          <div class="field" id="ue-dept-box" style="display:none">
                             <label>Kategorien</label>
                             <div id="ue-dept-list" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto;"></div>
+                         </div>
+                         <div class="field" id="ue-man-box" style="display:none">
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:5px;">
+                                <input type="checkbox" id="ue-can-manage-req"> Kontoanfragen verwalten
+                            </label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                                <input type="checkbox" id="ue-can-manage-users"> Benutzerverwaltung (nur User)
+                            </label>
                          </div>
                     </div>
                     <div class="modal-footer">
@@ -1123,12 +1210,36 @@ const AdminBoard = {
 
         // Fill Data
         const isNew = !user;
+        const currentUser = Store.currentUser();
+        const isSuper = currentUser && currentUser.role === 'superadmin';
+
         q('#ue-user').value = isNew ? '' : user.username;
         q('#ue-user').disabled = !isNew;
         q('#ue-name').value = isNew ? '' : (user.name || '');
         q('#ue-email').value = isNew ? '' : (user.email || '');
         q('#ue-pass').value = '';
-        q('#ue-role').value = isNew ? (viewContext === 'admins' ? 'admin' : 'user') : user.role;
+
+        const roleSel = q('#ue-role');
+        roleSel.value = isNew ? (viewContext === 'admins' ? 'admin' : 'user') : user.role;
+
+        // Permissions check for roles
+        if (!isSuper) {
+            q('#ue-role-box').style.display = 'none'; // Admins cannot change roles
+        }
+
+        const manBox = q('#ue-man-box');
+        const manReqCheck = q('#ue-can-manage-req');
+        const manUsersCheck = q('#ue-can-manage-users');
+        if (manReqCheck) manReqCheck.checked = user ? !!user.canManageRequests : false;
+        if (manUsersCheck) manUsersCheck.checked = user ? !!user.canManageUsers : false;
+
+        const updateUI = () => {
+            const r = roleSel.value;
+            q('#ue-dept-box').style.display = r === 'admin' ? 'block' : 'none';
+            if (manBox) manBox.style.display = (r === 'admin' && isSuper) ? 'block' : 'none';
+        };
+        roleSel.onchange = updateUI;
+        updateUI();
 
         // Departments Checkboxes
         const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
@@ -1200,7 +1311,9 @@ const AdminBoard = {
                     email: eVal,
                     password: pVal,
                     role: rVal,
-                    dept: rVal === 'admin' ? dVal : undefined
+                    dept: rVal === 'admin' ? dVal : undefined,
+                    canManageRequests: rVal === 'admin' ? q('#ue-can-manage-req').checked : false,
+                    canManageUsers: rVal === 'admin' ? q('#ue-can-manage-users').checked : false
                 };
                 users.push(newUser);
             } else {
@@ -1209,8 +1322,13 @@ const AdminBoard = {
                     target.name = nVal;
                     target.email = eVal;
                     if (pVal) target.password = pVal;
-                    target.role = rVal;
-                    target.dept = rVal === 'admin' ? dVal : undefined;
+                    // Only superadmins can change these
+                    if (isSuper) {
+                        target.role = rVal;
+                        target.canManageRequests = rVal === 'admin' ? q('#ue-can-manage-req').checked : false;
+                        target.canManageUsers = rVal === 'admin' ? q('#ue-can-manage-users').checked : false;
+                    }
+                    target.dept = target.role === 'admin' ? dVal : undefined;
                 }
             }
             Store.saveUsers(users);
@@ -1242,10 +1360,24 @@ const AdminBoard = {
     renderArchive: () => {
         const list = q('#archive-list');
         if (!list) return;
-        const archived = Store.getTickets().filter(t => t.archived).sort((a, b) => new Date(b.archivedAt || 0) - new Date(a.archivedAt || 0));
+
+        const query = (q('#archive-search')?.value || '').toLowerCase().trim();
+        let archived = Store.getTickets().filter(t => t.archived);
+
+        if (query) {
+            archived = archived.filter(t =>
+                (t.title || '').toLowerCase().includes(query) ||
+                (t.authorName || '').toLowerCase().includes(query) ||
+                (t.author || '').toLowerCase().includes(query) ||
+                (t.desc || '').toLowerCase().includes(query)
+            );
+        }
+
+        archived.sort((a, b) => new Date(b.archivedAt || 0) - new Date(a.archivedAt || 0));
+
         list.innerHTML = '';
         if (archived.length === 0) {
-            list.innerHTML = '<div style="opacity:0.5; padding:20px;">Keine archivierten Tickets</div>';
+            list.innerHTML = `<div style="opacity:0.5; padding:20px;">${query ? 'Keine Treffer im Archiv' : 'Keine archivierten Tickets'}</div>`;
             return;
         }
         archived.forEach(t => {
@@ -1750,15 +1882,25 @@ const AdminBoard = {
     },
 
     openApproveModal: (req) => {
+        const currentUser = Store.currentUser();
+        const isSuper = currentUser && currentUser.role === 'superadmin';
+
         AdminBoard.currentReq = req;
         q('#a-name-disp').textContent = req.name;
         q('#a-username').value = req.name.toLowerCase().replace(/\s+/g, '');
         q('#a-password').value = '123';
         q('#approve-modal').classList.add('open');
 
-        // Reset role/dept
+        // Permissions check: only superadmins can set role/dept
+        const roleField = q('#a-role')?.parentElement;
+        const deptField = q('#a-dept-field');
+
         q('#a-role').value = 'user';
-        q('#a-dept-field').style.display = 'none';
+        if (deptField) deptField.style.display = 'none';
+
+        if (roleField) roleField.style.display = isSuper ? 'block' : 'none';
+        // deptField display is handled by onchange in ApproveModal listeners usually, 
+        // but here we just hide the whole capability for non-supers
 
         q('#a-confirm').onclick = AdminBoard.confirmApprove;
         q('#a-close').onclick = AdminBoard.closeApprove;
@@ -1778,9 +1920,12 @@ const AdminBoard = {
     },
     confirmApprove: () => {
         if (!AdminBoard.currentReq) return;
+        const currentUser = Store.currentUser();
+        const isSuper = currentUser && currentUser.role === 'superadmin';
+
         const username = q('#a-username').value.trim();
         const password = q('#a-password').value.trim();
-        const role = q('#a-role').value;
+        const role = isSuper ? q('#a-role').value : 'user'; // Enforce 'user' if not super
         const dept = q('#a-dept').value;
 
         if (!username || !password) { UI.toast('Bitte alle Felder füllen'); return; }
@@ -1793,10 +1938,11 @@ const AdminBoard = {
             username,
             password,
             name: AdminBoard.currentReq.name,
+            email: AdminBoard.currentReq.email,
             role: role
         };
 
-        if (role === 'admin') newUser.dept = dept;
+        if (isSuper && role === 'admin') newUser.dept = dept;
 
         users.push(newUser);
         Store.saveUsers(users);
