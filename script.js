@@ -96,10 +96,21 @@ const Store = {
                 changed = true;
             }
             if (!t.comments) { t.comments = []; changed = true; } // Internal notes
-
+            if (!t.logs) { t.logs = []; changed = true; }
             if (t.archived === undefined) { t.archived = false; changed = true; }
         });
         if (changed) Store.saveTickets(tickets);
+    },
+
+    addLog: (ticket, msg) => {
+        if (!ticket.logs) ticket.logs = [];
+        const user = Store.currentUser();
+        ticket.logs.push({
+            id: Utils.uid(),
+            date: Utils.nowISO(),
+            user: user ? (user.name || user.username) : 'System',
+            msg: msg
+        });
     },
 
     currentUser: () => {
@@ -209,6 +220,52 @@ const UI = {
         window.addEventListener('resize', resize);
         for (let i = 0; i < 150; i++) stars.push({ x: Math.random() * c.width, y: Math.random() * c.height, r: Math.random() * 1.5, v: Math.random() * 0.4 + 0.1 });
         loop();
+    },
+
+    showLogs: (id) => {
+        const ticket = Store.getTickets().find(t => t.id === id);
+        if (!ticket) return;
+
+        let modal = q('#logs-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'logs-modal';
+            modal.className = 'modal-overlay';
+            modal.style.zIndex = '200'; // Above detail modal
+            modal.innerHTML = `
+                <div class="modal" style="max-width:500px;">
+                    <div class="modal-header">
+                        <h3>📜 Ticket Protokoll</h3>
+                        <button class="btn-ghost" onclick="q('#logs-modal').classList.remove('open')">✕</button>
+                    </div>
+                    <div class="modal-body" id="logs-body" style="background:rgba(0,0,0,0.2); border-radius:8px; padding:15px; max-height: 60vh;"></div>
+                    <div class="modal-footer">
+                        <button class="btn-secondary" onclick="q('#logs-modal').classList.remove('open')">Schließen</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+        }
+
+        const body = q('#logs-body');
+        body.innerHTML = '';
+        if (!ticket.logs || ticket.logs.length === 0) {
+            body.innerHTML = '<p style="opacity:0.5; text-align:center; padding:20px;">Keine Einträge vorhanden.</p>';
+        } else {
+            ticket.logs.slice().reverse().forEach(l => {
+                const item = document.createElement('div');
+                item.style.borderBottom = '1px solid var(--border)';
+                item.style.padding = '12px 0';
+                item.innerHTML = `
+                    <div style="font-size:11px; margin-bottom:4px; display:flex; justify-content:space-between; color:var(--text-sec);">
+                        <span style="font-weight:600; color:var(--primary-solid)">${l.user}</span>
+                        <span>${Utils.fmtDate(l.date)}</span>
+                    </div>
+                    <div style="font-size:13px; line-height:1.4;">${l.msg}</div>
+                `;
+                body.appendChild(item);
+            });
+        }
+        modal.classList.add('open');
     }
 };
 
@@ -345,6 +402,7 @@ const UserDash = {
                 archived: false
             };
             tickets.push(newTicket);
+            Store.addLog(newTicket, 'Ticket erstellt');
             Store.saveTickets(tickets);
             UI.toast('Ticket erstellt!');
             q('#t-title').value = ''; q('#t-desc').value = '';
@@ -832,6 +890,7 @@ const AdminBoard = {
             if (t) {
                 t.archived = true;
                 t.archivedAt = Utils.nowISO(); // Save archive timestamp
+                Store.addLog(t, 'Ticket archiviert');
                 Store.saveTickets(tickets);
                 AdminBoard.closeModal();
                 AdminBoard.render();
@@ -874,27 +933,41 @@ const AdminBoard = {
     },
 
     renderUserManager: (view) => {
-        const list = q('#um-list');
-        list.className = 'user-list-container';
+        const listContainer = q('#um-list');
+        listContainer.className = 'user-list-container';
+
+        // Skeleton for search and actions if not present
+        if (!q('#um-search')) {
+            listContainer.innerHTML = `
+                <div class="um-controls" style="display:flex; gap:10px; margin-bottom:15px; position:sticky; top:0; background:var(--bg2); z-index:10; padding:5px 0 10px;">
+                    <input type="text" id="um-search" placeholder="Suchen..." style="flex:1">
+                    <div id="um-actions"></div>
+                </div>
+                <div id="um-results"></div>
+            `;
+            q('#um-search').oninput = () => AdminBoard.renderUserManager(view);
+        } else {
+            // Update input listener for current view
+            q('#um-search').oninput = () => AdminBoard.renderUserManager(view);
+        }
+
+        const searchTerm = q('#um-search').value.toLowerCase();
+        const actions = q('#um-actions');
+        const list = q('#um-results');
+        list.className = 'user-list';
         list.innerHTML = '';
 
-        const controls = document.createElement('div');
-        controls.style.marginBottom = '10px';
-        controls.style.display = 'flex';
-        controls.style.justifyContent = 'flex-end';
-
         if (view === 'users' || view === 'admins') {
-            controls.innerHTML = `<button class="btn-primary" id="btn-add-user">Neu anlegen</button>`;
-            controls.querySelector('#btn-add-user').onclick = () => AdminBoard.openEditUserModal(null, view);
+            actions.innerHTML = `<button class="btn-primary" id="btn-add-user">Neu anlegen</button>`;
+            actions.querySelector('#btn-add-user').onclick = () => AdminBoard.openEditUserModal(null, view);
         } else {
-            controls.innerHTML = `<button class="btn-primary" id="btn-add-cat">Neue Kategorie</button>`;
-            controls.querySelector('#btn-add-cat').onclick = () => AdminBoard.openEditCategoryModal(null);
+            actions.innerHTML = `<button class="btn-primary" id="btn-add-cat">Neu anlegen</button>`;
+            actions.querySelector('#btn-add-cat').onclick = () => AdminBoard.openEditCategoryModal(null);
         }
-        list.appendChild(controls);
 
         if (view === 'cats') {
             const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
-            settings.categories.forEach(c => {
+            settings.categories.filter(c => c.toLowerCase().includes(searchTerm)).forEach(c => {
                 const el = document.createElement('div');
                 el.className = 'ticket-row';
                 el.style.display = 'flex';
@@ -921,9 +994,14 @@ const AdminBoard = {
 
         const users = Store.getUsers();
         const filtered = users.filter(u => {
-            if (view === 'users') return u.role === 'user';
-            if (view === 'admins') return u.role === 'admin' || u.role === 'superadmin';
-            return false;
+            const matchesView = (view === 'users' && u.role === 'user') ||
+                (view === 'admins' && (u.role === 'admin' || u.role === 'superadmin'));
+            if (!matchesView) return false;
+
+            if (!searchTerm) return true;
+            return u.username.toLowerCase().includes(searchTerm) ||
+                (u.name && u.name.toLowerCase().includes(searchTerm)) ||
+                (u.email && u.email.toLowerCase().includes(searchTerm));
         });
 
         filtered.forEach(u => {
@@ -1231,6 +1309,7 @@ const AdminBoard = {
                 const tickets = Store.getTickets();
                 const t = tickets.find(x => x.id === id);
                 if (t && t.status !== newStatus) {
+                    Store.addLog(t, `Status geändert von ${t.status} zu ${newStatus}`);
                     t.status = newStatus;
                     Store.saveTickets(tickets);
                     AdminBoard.render();
@@ -1285,6 +1364,8 @@ const AdminBoard = {
                     } else {
                         t.assignees.push(a.username);
                     }
+                    const action = idx > -1 ? 'entfernt' : 'hinzugefügt';
+                    Store.addLog(t, `Admin ${a.name || a.username} ${action}`);
                     delete t.assignee; // Clean up old field if it exists
                     Store.saveTickets(tickets);
                     renderMS();
@@ -1328,6 +1409,10 @@ const AdminBoard = {
 
         AdminBoard.renderInternalComments(t);
         AdminBoard.renderChat(t, '#m-chat-msgs');
+
+        const btnLogs = q('#m-logs');
+        if (btnLogs) btnLogs.onclick = () => UI.showLogs(t.id);
+
         q('#ticket-modal').classList.add('open');
     },
 
@@ -1372,6 +1457,7 @@ const AdminBoard = {
             author: user.name || user.username,
             date: Utils.nowISO()
         });
+        Store.addLog(t, 'Interne Notiz hinzugefügt');
         Store.saveTickets(tickets);
         input.value = '';
         AdminBoard.renderInternalComments(t);
@@ -1487,6 +1573,7 @@ const AdminBoard = {
         }
 
         t.chat.push(msg);
+        Store.addLog(t, 'Nachricht gesendet');
         Store.saveTickets(tickets);
 
         txtInput.value = '';

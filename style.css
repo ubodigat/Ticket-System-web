@@ -46,8 +46,9 @@ body {
         linear-gradient(180deg, var(--bg1), var(--bg2));
     background-attachment: fixed;
     color: var(--text);
-    height: 100vh;
-    overflow-y: auto;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
     font-size: 14px;
 }
 
@@ -307,7 +308,7 @@ button {
     padding: 0 20px 40px;
     overflow-x: auto;
     align-items: flex-start;
-    height: calc(100vh - 100px);
+    flex: 1;
 }
 
 .column {
@@ -320,7 +321,7 @@ button {
     padding: 16px;
     display: flex;
     flex-direction: column;
-    max-height: 100%;
+    height: fit-content;
 }
 
 .col-header {
@@ -335,13 +336,11 @@ button {
 }
 
 .ticket-list {
-    flex: 1;
-    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 12px;
     padding-right: 4px;
-    min-height: 100px;
+    min-height: 50px;
 }
 
 .ticket-card {
