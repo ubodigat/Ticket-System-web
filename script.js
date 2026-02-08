@@ -1242,7 +1242,7 @@ const AdminBoard = {
     renderArchive: () => {
         const list = q('#archive-list');
         if (!list) return;
-        const archived = Store.getTickets().filter(t => t.archived).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const archived = Store.getTickets().filter(t => t.archived).sort((a, b) => new Date(b.archivedAt || 0) - new Date(a.archivedAt || 0));
         list.innerHTML = '';
         if (archived.length === 0) {
             list.innerHTML = '<div style="opacity:0.5; padding:20px;">Keine archivierten Tickets</div>';
@@ -1450,6 +1450,18 @@ const AdminBoard = {
         if (!t.assignees) t.assignees = t.assignee ? [t.assignee] : [];
 
         const renderMS = () => {
+            const msText = msHeader ? msHeader.querySelector('.ms-text') : null;
+            if (msText) {
+                if (t.assignees.length === 0) msText.textContent = 'Niemand';
+                else {
+                    const names = t.assignees.map(u => {
+                        const adm = admins.find(x => x.username === u);
+                        return adm ? (adm.name || adm.username) : u;
+                    });
+                    msText.textContent = names.join(', ');
+                }
+            }
+
             if (!msDropdown || t.archived) return;
             msDropdown.innerHTML = '';
             admins.forEach(a => {
@@ -1472,17 +1484,7 @@ const AdminBoard = {
                 msDropdown.appendChild(item);
             });
 
-            const msText = msHeader ? msHeader.querySelector('.ms-text') : null;
-            if (msText) {
-                if (t.assignees.length === 0) msText.textContent = 'Niemand';
-                else {
-                    const names = t.assignees.map(u => {
-                        const adm = admins.find(x => x.username === u);
-                        return adm ? (adm.name || adm.username) : u;
-                    });
-                    msText.textContent = names.join(', ');
-                }
-            }
+
         };
 
         if (msHeader) {
@@ -1554,7 +1556,7 @@ const AdminBoard = {
 
         tickets.forEach(ticket => {
             const card = document.createElement('div');
-            card.className = 'history-card' + (ticket.id === currentId ? ' active' : '');
+            card.className = 'history-card' + (ticket.id === currentId ? ' active' : '') + (ticket.archived ? ' archived' : '');
 
             const isActive = !ticket.archived && ticket.status !== 'Geschlossen';
 
