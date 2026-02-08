@@ -503,8 +503,17 @@ const UserDash = {
         const t = tickets.find(x => x.id === id);
         if (!t) return;
 
-        if (q('#u-m-title')) q('#u-m-title').textContent = t.title;
+        if (q('#u-m-title')) q('#u-m-title').textContent = t.title + (t.archived ? ' (Archiviert)' : '');
         if (q('#u-m-desc')) q('#u-m-desc').textContent = t.desc || 'Keine Beschreibung';
+
+        // Read-only check for archived
+        const uChatInput = q('#u-chat-input');
+        const uChatSend = q('#u-chat-send');
+        if (uChatInput) uChatInput.disabled = t.archived;
+        if (uChatSend) {
+            uChatSend.disabled = t.archived;
+            uChatSend.style.opacity = t.archived ? '0.5' : '1';
+        }
 
         // Metadata
         if (q('#u-m-status')) {
@@ -704,7 +713,13 @@ const AdminBoard = {
         // Setup Modal
         if (q('#m-close')) q('#m-close').onclick = AdminBoard.closeModal;
         if (q('#m-close-bt')) q('#m-close-bt').onclick = AdminBoard.closeModal;
-        if (q('#ticket-modal')) q('#ticket-modal').onclick = (e) => { if (e.target.id === 'ticket-modal') AdminBoard.closeModal(); };
+        if (q('#ticket-modal')) {
+            q('#ticket-modal').onclick = (e) => {
+                if (e.target.id === 'ticket-modal' || e.target.classList.contains('modal-container')) {
+                    AdminBoard.closeModal();
+                }
+            };
+        }
 
         // Chat Send (Admin)
         if (q('#btn-chat-send')) {
@@ -1328,29 +1343,114 @@ const AdminBoard = {
         const t = tickets.find(x => x.id === id);
         if (!t) return;
 
-        q('#m-title').textContent = t.title;
+        const user = Store.currentUser();
+        const isSuper = user && user.role === 'superadmin';
+
+        q('#m-title').textContent = t.title + (t.archived ? ' [ARCHIVIERT]' : '');
         q('#m-desc').textContent = t.desc || 'Keine Beschreibung';
+
+        // Elements
+        const prioSel = q('#m-prio-edit');
+        const catSel = q('#m-cat-edit');
+        const msHeader = q('#ms-header');
+        const msDropdown = q('#ms-dropdown');
+        const commentInput = q('#m-new-comment');
+        const commentBtn = q('#btn-add-comment');
+        const chatInput = q('#m-chat-input');
+        const chatSend = q('#btn-chat-send');
+        const btnArch = q('#btn-archive-ticket');
+        const btnLogs = q('#m-logs');
+
+        // Archive/Re-activate logic integration
+        let btnReact = q('#btn-reactivate-ticket');
+        if (!btnReact && btnArch) {
+            btnReact = document.createElement('button');
+            btnReact.id = 'btn-reactivate-ticket';
+            btnReact.className = 'btn-primary';
+            btnReact.style.fontSize = '12px';
+            btnReact.innerHTML = '⚡ Reaktivieren';
+            btnArch.parentElement.appendChild(btnReact);
+        }
+
+        if (t.archived) {
+            if (btnArch) btnArch.style.display = 'none';
+            if (btnReact) {
+                btnReact.style.display = isSuper ? 'inline-block' : 'none';
+                btnReact.onclick = () => AdminBoard.reactivateTicket(t.id);
+            }
+        } else {
+            if (btnReact) btnReact.style.display = 'none';
+            if (btnArch) {
+                btnArch.style.display = (t.status === 'Geschlossen') ? 'inline-block' : 'none';
+                btnArch.onclick = () => AdminBoard.archiveCurrent();
+            }
+        }
+
+        // Disable edits if archived
+        if (prioSel) prioSel.disabled = t.archived;
+        if (catSel) catSel.disabled = t.archived;
+        if (msHeader) msHeader.style.pointerEvents = t.archived ? 'none' : 'auto';
+        if (commentInput) commentInput.disabled = t.archived;
+        if (commentBtn) {
+            commentBtn.disabled = t.archived;
+            commentBtn.style.opacity = t.archived ? '0.5' : '1';
+        }
+        if (chatInput) chatInput.disabled = t.archived;
+        if (chatSend) {
+            chatSend.disabled = t.archived;
+            chatSend.style.opacity = t.archived ? '0.5' : '1';
+        }
 
         // Metadata
         if (q('#m-author')) q('#m-author').textContent = t.authorName || t.author;
         if (q('#m-date')) q('#m-date').textContent = Utils.fmtDate(t.createdAt);
-        if (q('#m-prio')) q('#m-prio').textContent = t.prio;
-        if (q('#m-cat')) q('#m-cat').textContent = t.category || '-';
+
+        // Populate Priority
+        if (prioSel) {
+            prioSel.value = t.prio;
+            prioSel.onchange = () => {
+                const old = t.prio;
+                t.prio = prioSel.value;
+                Store.addLog(t, `Priorität geändert von ${old} zu ${t.prio}`);
+                Store.saveTickets(tickets);
+                AdminBoard.render();
+            };
+        }
+
+        // Populate Category
+        if (catSel) {
+            const settings = Utils.read('settings', { categories: ['Allgemein', 'Technik', 'Account', 'Abrechnung'] });
+            catSel.innerHTML = '';
+            settings.categories.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = opt.textContent = c;
+                catSel.appendChild(opt);
+            });
+            catSel.value = t.category || 'Allgemein';
+            catSel.onchange = () => {
+                const old = t.category || 'Allgemein';
+                t.category = catSel.value;
+                Store.addLog(t, `Kategorie geändert von ${old} zu ${t.category}`);
+                Store.saveTickets(tickets);
+                AdminBoard.render();
+            };
+        }
 
         // Reset Tabs
         q('.tab-btn[data-tab="details"]').click();
 
-        // --- Custom Multi-Select Logic ---
-        const msHeader = q('#ms-header');
-        const msDropdown = q('#ms-dropdown');
-        const admins = Store.getUsers().filter(u => u.role === 'admin' || u.role === 'superadmin');
-
-        // Ensure t.assignees is an array
-        if (!t.assignees) {
-            t.assignees = t.assignee ? [t.assignee] : [];
+        // History Sidebar refresh if already open
+        const sidebar = q('#m-history-sidebar');
+        if (sidebar && sidebar.classList.contains('open')) {
+            AdminBoard.renderHistory(t.author, id);
         }
 
+        // --- Multi-Select Assignment ---
+        const admins = Store.getUsers().filter(u => u.role === 'admin' || u.role === 'superadmin');
+        if (!t.assignees) t.assignees = t.assignee ? [t.assignee] : [];
+
         const renderMS = () => {
+            if (!msDropdown || t.archived) return;
             msDropdown.innerHTML = '';
             admins.forEach(a => {
                 const item = document.createElement('div');
@@ -1359,66 +1459,117 @@ const AdminBoard = {
                 item.onclick = (e) => {
                     e.stopPropagation();
                     const idx = t.assignees.indexOf(a.username);
-                    if (idx > -1) {
-                        t.assignees.splice(idx, 1);
-                    } else {
-                        t.assignees.push(a.username);
-                    }
+                    if (idx > -1) t.assignees.splice(idx, 1);
+                    else t.assignees.push(a.username);
+
                     const action = idx > -1 ? 'entfernt' : 'hinzugefügt';
                     Store.addLog(t, `Admin ${a.name || a.username} ${action}`);
-                    delete t.assignee; // Clean up old field if it exists
+                    delete t.assignee;
                     Store.saveTickets(tickets);
                     renderMS();
-                    AdminBoard.render(); // Update Board (names on cards)
+                    AdminBoard.render();
                 };
                 msDropdown.appendChild(item);
             });
 
-            // Update Header Text
-            const msText = msHeader.querySelector('.ms-text');
-            if (t.assignees.length === 0) {
-                if (msText) msText.textContent = 'Niemand';
-                else msHeader.textContent = 'Niemand';
-            } else {
-                const names = t.assignees.map(u => {
-                    const adm = admins.find(x => x.username === u);
-                    return adm ? (adm.name || adm.username) : u;
-                });
-                if (msText) msText.textContent = names.join(', ');
-                else msHeader.textContent = names.join(', ');
+            const msText = msHeader ? msHeader.querySelector('.ms-text') : null;
+            if (msText) {
+                if (t.assignees.length === 0) msText.textContent = 'Niemand';
+                else {
+                    const names = t.assignees.map(u => {
+                        const adm = admins.find(x => x.username === u);
+                        return adm ? (adm.name || adm.username) : u;
+                    });
+                    msText.textContent = names.join(', ');
+                }
             }
         };
 
-        msHeader.onclick = (e) => {
-            e.stopPropagation();
-            msDropdown.classList.toggle('open');
-        };
-
-        // Close dropdown when clicking outside
-        document.addEventListener('click', () => msDropdown.classList.remove('open'), { once: true });
-
-        renderMS();
-        // --- End Multi-Select ---
-
-        // Archive Button Visibility
-        const btnArch = q('#btn-archive-ticket');
-        if (btnArch) {
-            if (t.status === 'Geschlossen' && !t.archived) btnArch.style.display = 'inline-block';
-            else btnArch.style.display = 'none';
+        if (msHeader) {
+            msHeader.onclick = (e) => {
+                e.stopPropagation();
+                if (msDropdown) msDropdown.classList.toggle('open');
+            };
         }
+
+        document.addEventListener('click', () => { if (msDropdown) msDropdown.classList.remove('open'); }, { once: true });
+        renderMS();
 
         AdminBoard.renderInternalComments(t);
         AdminBoard.renderChat(t, '#m-chat-msgs');
 
-        const btnLogs = q('#m-logs');
         if (btnLogs) btnLogs.onclick = () => UI.showLogs(t.id);
+
+        // History Toggle
+        const authorEl = q('#m-author');
+        if (authorEl) {
+            authorEl.style.cursor = 'pointer';
+            authorEl.style.textDecoration = 'underline';
+            authorEl.title = 'Historie anzeigen';
+            authorEl.onclick = () => AdminBoard.renderHistory(t.author, t.id);
+        }
 
         q('#ticket-modal').classList.add('open');
     },
 
+    reactivateTicket: (id) => {
+        UI.confirm('Möchtest du dieses Ticket reaktivieren?', () => {
+            const tickets = Store.getTickets();
+            const t = tickets.find(x => x.id === id);
+            if (t) {
+                t.archived = false;
+                delete t.archivedAt;
+                t.status = 'In Bearbeitung'; // Default back to active status
+                Store.addLog(t, 'Ticket aus dem Archiv reaktiviert');
+                Store.saveTickets(tickets);
+                AdminBoard.openModal(id);
+                AdminBoard.render();
+                UI.toast('Ticket reaktiviert');
+            }
+        });
+    },
+
     closeModal: () => {
         q('#ticket-modal').classList.remove('open');
+        const sidebar = q('#m-history-sidebar');
+        if (sidebar) sidebar.classList.remove('open');
         AdminBoard.currentTicketId = null;
+    },
+
+    renderHistory: (username, currentId) => {
+        const sidebar = q('#m-history-sidebar');
+        if (!sidebar) return;
+
+        sidebar.classList.add('open');
+        sidebar.innerHTML = `
+            <div class="sidebar-header">Ticket Historie</div>
+            <div class="sidebar-content"></div>
+        `;
+        const content = sidebar.querySelector('.sidebar-content');
+
+        const tickets = Store.getTickets().filter(x => x.author === username);
+
+        // Simple date sort (newest first)
+        tickets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        tickets.forEach(ticket => {
+            const card = document.createElement('div');
+            card.className = 'history-card' + (ticket.id === currentId ? ' active' : '');
+
+            const isActive = !ticket.archived && ticket.status !== 'Geschlossen';
+
+            card.innerHTML = `
+                <div class="history-title">${ticket.title}</div>
+                <div class="history-meta">
+                    <span>${Utils.fmtDate(ticket.createdAt).split(' ')[0]}</span>
+                    <span>${ticket.status}</span>
+                </div>
+                ${isActive ? `<span class="history-badge">Aktiv</span>` : ''}
+            `;
+
+            card.onclick = () => AdminBoard.openModal(ticket.id);
+            content.appendChild(card);
+        });
     },
 
     renderInternalComments: (t) => {
