@@ -182,6 +182,7 @@ body.light {
     margin-bottom: 10px;
     background: var(--primary-grad);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -194,6 +195,7 @@ body.light {
 .brand span {
     background: var(--primary-grad);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -584,12 +586,7 @@ button {
     margin-right: 10px;
 }
 
-.multi-select-header:after {
-    content: '▼';
-    font-size: 10px;
-    opacity: 0.5;
-    flex-shrink: 0;
-}
+/* Multi-select arrow added in JS */
 
 .multi-select-dropdown {
     position: absolute;
@@ -841,7 +838,7 @@ button {
     opacity: 0;
     pointer-events: none;
     transition: 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28);
-    z-index: 1000;
+    z-index: 20000;
     border: 1px solid var(--border);
 }
 

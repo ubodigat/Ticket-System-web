@@ -18,20 +18,25 @@
                 <div id="user-display" style="font-size: 13px; opacity: 0.7; font-weight:normal;"></div>
             </div>
             <div class="hero-actions">
-                <button id="btn-to-dash" class="btn-ghost" onclick="window.location.href='dashboard.html'">🏠 Dashboard</button>
+                <button id="btn-to-dash" class="btn-ghost" onclick="window.location.href='dashboard.html'">🏠
+                    Dashboard</button>
+                <button id="btn-global-logs" class="btn-ghost" style="color:var(--warning); display:none;">🔔
+                    System-Logs</button>
                 <button id="btn-archive" class="btn-ghost">🗄️ Archiv</button>
                 <button id="theme-toggle" class="btn-ghost">🌙</button>
                 <button id="logout" class="btn-ghost">Logout</button>
             </div>
         </div>
     </header>
+    <script src="https://cdn.jsdelivr.net/npm/otpauth/dist/otpauth.umd.min.js"></script>
 
     <main class="container">
         <!-- Archive View -->
         <div id="archive-view" class="archive-view">
             <div class="archive-header">
                 <h3>🗄️ Archivierte Tickets</h3>
-                <input type="text" id="archive-search" placeholder="Suche im Archiv (Titel, Autor, Inhalt)..." style="flex:1; max-width: 400px; margin: 0 20px;">
+                <input type="text" id="archive-search" placeholder="Suche im Archiv (Titel, Autor, Inhalt)..."
+                    style="flex:1; max-width: 400px; margin: 0 20px;">
                 <button id="btn-back-kanban" class="btn-secondary">Zurück zur Übersicht</button>
             </div>
             <div id="archive-list" class="archived-list"></div>
@@ -40,8 +45,10 @@
         <div id="kanban-view">
             <!-- Requests Section -->
             <div class="requests-board" style="margin-bottom: 30px;">
-                <h3 style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:10px;">Konto-Anfragen</h3>
-                <div id="request-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap:15px;"></div>
+                <h3 style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:10px;">
+                    Konto-Anfragen</h3>
+                <div id="request-list"
+                    style="display:grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap:15px;"></div>
             </div>
 
             <div class="kanban-board">
@@ -94,7 +101,8 @@
                     </div>
 
                     <div id="tab-details" class="tab-content active">
-                        <div class="ticket-meta-grid" style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px; font-size:13px; color:var(--text-sec); background:var(--card-hover); padding:15px; border-radius:8px;">
+                        <div class="ticket-meta-grid"
+                            style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px; font-size:13px; color:var(--text-sec); background:var(--card-hover); padding:15px; border-radius:8px;">
                             <div><strong>Von:</strong> <span id="m-author" style="color:var(--text)">-</span></div>
                             <div><strong>Datum:</strong> <span id="m-date" style="color:var(--text)">-</span></div>
                             <div>
@@ -108,32 +116,38 @@
                             </div>
                             <div>
                                 <strong>Kategorie:</strong>
-                                <select id="m-cat-edit" class="inline-select"></select>
+                                <div id="m-cat-container"></div>
                             </div>
                         </div>
 
-                        <h4 style="margin-bottom:8px; font-size:12px; text-transform:uppercase; opacity:0.7;">Beschreibung</h4>
+                        <h4 style="margin-bottom:8px; font-size:12px; text-transform:uppercase; opacity:0.7;">
+                            Beschreibung</h4>
                         <p id="m-desc" style="white-space:pre-wrap; margin-bottom:20px; line-height:1.5;"></p>
                         <div class="field">
                             <label>Zuweisung (Mehrfachauswahl möglich):</label>
                             <div class="multi-select-container" id="assignee-multi">
-                                <div class="multi-select-header" id="ms-header"><span class="ms-text">Niemand</span></div>
+                                <div class="multi-select-header" id="ms-header"><span class="ms-text">Niemand</span>
+                                </div>
                                 <div class="multi-select-dropdown" id="ms-dropdown"></div>
                             </div>
                         </div>
 
                         <!-- Internal Comments Section (Restored) -->
-                        <div class="comments-section" style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 15px;">
+                        <div class="comments-section"
+                            style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 15px;">
                             <h4>Interne Notizen / Kommentare</h4>
-                            <div id="m-comments" style="max-height: 150px; overflow-y: auto; margin-bottom: 10px;"></div>
+                            <div id="m-comments" style="max-height: 150px; overflow-y: auto; margin-bottom: 10px;">
+                            </div>
                             <div class="field">
                                 <textarea id="m-new-comment" rows="2" placeholder="Kommentar hinzufügen..."></textarea>
-                                <button class="btn-primary" id="btn-add-comment" style="margin-top: 10px; width: 100%;">Kommentieren</button>
+                                <button class="btn-primary" id="btn-add-comment"
+                                    style="margin-top: 10px; width: 100%;">Kommentieren</button>
                             </div>
                         </div>
 
                         <div style="margin-top:20px; text-align:right;">
-                            <button id="btn-archive-ticket" class="btn-secondary" style="display:none; margin-top: 5px;">📥
+                            <button id="btn-archive-ticket" class="btn-secondary"
+                                style="display:none; margin-top: 5px;">📥
                                 Archivieren</button>
                         </div>
                     </div>
@@ -152,11 +166,13 @@
                                         📎 <input type="file" id="m-chat-file-input" style="display:none" multiple>
                                     </label>
                                 </div>
-                                <div id="m-chat-file-preview" style="display:none; gap:5px; flex-wrap:wrap; padding-bottom:8px; border-bottom:1px solid var(--border); margin-bottom:8px;">
+                                <div id="m-chat-file-preview"
+                                    style="display:none; gap:5px; flex-wrap:wrap; padding-bottom:8px; border-bottom:1px solid var(--border); margin-bottom:8px;">
                                 </div>
 
                                 <div class="input-row">
-                                    <textarea id="m-chat-input" placeholder="Nachricht schreiben... Strg+Enter zum Senden"></textarea>
+                                    <textarea id="m-chat-input"
+                                        placeholder="Nachricht schreiben... Strg+Enter zum Senden"></textarea>
                                     <button class="btn-primary" id="btn-chat-send">➤</button>
                                 </div>
                             </div>
