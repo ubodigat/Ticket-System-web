@@ -7,123 +7,121 @@
     <title>Support | Dashboard</title>
     <link rel="icon" type="image/png" href="picture/favicon.png">
     <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 
 <body data-guard="user">
     <canvas id="stars"></canvas>
 
-    <div class="topbar">
-        <div class="left">
+    <header class="topbar">
+        <div class="topbar-left">
             <div class="brand-mini">Support Portal</div>
-            <div id="user-display" style="font-size: 12px; opacity: 0.7; margin-top: 2px;"></div>
             <div class="crumb">Dashboard</div>
+            <div id="user-display" class="topbar-user"></div>
         </div>
-        <div class="right">
-            <button id="theme-toggle" class="btn-ghost">🌙</button>
-            <button id="btn-logout" class="btn-ghost">Logout</button>
-        </div>
-    </div>
+        <nav class="topbar-right">
+            <button id="theme-toggle" class="btn-ghost btn-icon" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
+            <button id="btn-logout" class="btn-ghost"><i data-lucide="log-out"></i><span data-i18n="logout">Abmelden</span></button>
+        </nav>
+    </header>
 
-    <main class="container grid-2">
-        <section class="card glass">
-            <h2>Neues Ticket</h2>
+    <main class="container grid-2 dashboard-grid">
+        <section class="card">
+            <h2 data-i18n="newTicket">Neues Ticket</h2>
             <div class="field">
-                <label for="t-title">Betreff</label>
+                <label for="t-title" data-i18n="subject">Betreff</label>
                 <input id="t-title" type="text" placeholder="Kurzer Titel">
             </div>
             <div class="field">
-                <label for="t-desc">Beschreibung</label>
+                <label for="t-desc" data-i18n="description">Beschreibung</label>
                 <textarea id="t-desc" rows="6" placeholder="Beschreibe dein Anliegen möglichst genau."></textarea>
             </div>
-            <div class="grid-2 collapse-sm">
+            <div class="form-grid">
                 <div class="field">
-                    <label for="t-prio">Priorität</label>
+                    <label for="t-prio" data-i18n="priority">Priorität</label>
                     <select id="t-prio">
-                        <option>Normal</option>
-                        <option>Hoch</option>
-                        <option>Kritisch</option>
+                        <option value="Normal">Normal</option>
+                        <option value="Hoch">Hoch</option>
+                        <option value="Kritisch">Kritisch</option>
                     </select>
                 </div>
                 <div class="field">
-                    <label for="t-cat">Kategorie</label>
-                    <select id="t-cat" multiple style="height: 100px;">
-                        <option>Allgemein</option>
-                        <option>Technik</option>
-                        <option>Account</option>
-                        <option>Abrechnung</option>
-                    </select>
-                    <div style="font-size:10px; opacity:0.6; margin-top:2px;">Strg+Klick für Mehrfachauswahl</div>
+                    <label data-i18n="category">Kategorie</label>
+                    <div id="u-cat-container"></div>
                 </div>
             </div>
-            <button class="btn-primary" id="btn-create-ticket">Absenden</button>
+            <button class="btn-primary btn-block" id="btn-create-ticket" data-i18n="submit">Absenden</button>
         </section>
 
-        <section class="card glass">
-            <h2>Deine Tickets</h2>
-            <div class="list-head"
-                style="display:grid; grid-template-columns: 40px 1fr 100px 120px 80px; gap: 16px; padding: 10px 16px; font-size: 11px; text-transform: uppercase; color: var(--text-sec); border-bottom: 1px dashed var(--border);">
-                <div>St</div>
-                <div>Betreff</div>
-                <div>Status</div>
-                <div>Datum</div>
-                <div>Prio</div>
+        <section class="card ticket-list-card">
+            <div class="section-head">
+                <h2 data-i18n="myTickets">Deine Tickets</h2>
+                <input type="text" id="u-search" class="section-search" placeholder="Suchen...">
             </div>
-            <div id="user-tickets" class="list"></div>
+            <label class="filter-toggle">
+                <input type="checkbox" id="dash-filter-archive">
+                <span data-i18n="showClosedArchived">Geschlossene/archivierte einblenden</span>
+            </label>
+            <div class="table-head ticket-list-head">
+                <div></div>
+                <div data-i18n="subject">Betreff</div>
+                <div data-i18n="status">Status</div>
+                <div data-i18n="date">Datum</div>
+                <div data-i18n="prio">Prio</div>
+            </div>
+            <div id="user-tickets"></div>
         </section>
     </main>
 
-    <!-- User Ticket Modal -->
+    <!-- Ticket-Ansicht für Benutzer -->
     <div class="modal-overlay" id="u-ticket-modal">
-        <div class="modal">
+        <div class="modal modal-md">
             <div class="modal-header">
-                <h3 id="u-m-title">Ticket Title</h3>
-                <button class="btn-ghost" id="u-m-close">✕</button>
+                <h3 id="u-m-title">Ticket</h3>
+                <div class="modal-actions">
+                    <button class="btn-ghost btn-icon" id="u-m-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                </div>
             </div>
             <div class="modal-body">
                 <div class="tabs">
-                    <div class="tab-btn active" data-tab="u-details">Details</div>
-                    <div class="tab-btn" data-tab="u-chat">Chat</div>
+                    <div class="tab-btn active" data-tab="u-details" data-i18n="details">Details</div>
+                    <div class="tab-btn" data-tab="u-chat" data-i18n="chat">Chat</div>
                 </div>
 
                 <div id="u-tab-details" class="tab-content active">
-                    <div class="ticket-meta-grid"
-                        style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px; font-size:13px; color:var(--text-sec); background:var(--card-hover); padding:15px; border-radius:8px;">
-                        <div><strong>Status:</strong> <span id="u-m-status"
-                                style="font-weight:bold; color:var(--text)">-</span></div>
-                        <div><strong>Datum:</strong> <span id="u-m-date" style="color:var(--text)">-</span></div>
-                        <div><strong>Prio:</strong> <span id="u-m-prio" style="color:var(--text)">-</span></div>
-                        <div><strong>Archiviert:</strong> <span id="u-m-archived" style="color:var(--text)">-</span>
-                        </div>
-                        <div><strong>Kategorie:</strong> <span id="u-m-cat" style="color:var(--text)">-</span></div>
-                        <div><strong>Bearbeiter:</strong> <span id="u-m-assignee" style="color:var(--text)">-</span>
-                        </div>
+                    <div class="meta-grid">
+                        <div class="meta-item"><strong>Status</strong><span id="u-m-status" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong>Datum</strong><span id="u-m-date" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong>Prio</strong><span id="u-m-prio" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong>Kategorie</strong><span id="u-m-cat" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong>Bearbeiter</strong><span id="u-m-assignee" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong>Archiviert</strong><span id="u-m-archived" class="meta-value">-</span></div>
                     </div>
-                    <h4 style="margin-bottom:8px; font-size:12px; text-transform:uppercase; opacity:0.7;">Beschreibung
-                    </h4>
-                    <p id="u-m-desc" style="white-space: pre-wrap; margin-bottom:20px; line-height:1.5;"></p>
+                    <h4 class="section-title">Beschreibung</h4>
+                    <p id="u-m-desc" class="desc-text"></p>
                 </div>
 
                 <div id="u-tab-chat" class="tab-content">
                     <div class="chat-container">
                         <div id="u-chat-msgs" class="chat-messages"></div>
-
-                        <div id="u-chat-file-preview"
-                            style="display:flex; flex-wrap:wrap; gap:8px; padding:10px; background:var(--card-bg); border-top:1px solid var(--border); display:none;">
-                        </div>
-
                         <div class="chat-input-area">
                             <div class="toolbar">
-                                <label class="tool-btn" title="Datei anhängen">
-                                    📎 <input type="file" id="u-chat-file" style="display:none" multiple>
+                                <label class="btn btn-ghost btn-icon btn-sm" title="Datei anhängen" aria-label="Datei anhängen">
+                                    <i data-lucide="paperclip"></i>
+                                    <input type="file" id="u-chat-file" multiple>
                                 </label>
                             </div>
+                            <div id="u-chat-file-preview" class="file-preview"></div>
                             <div class="input-row">
                                 <textarea id="u-chat-input" placeholder="Nachricht schreiben..."></textarea>
-                                <button class="btn-primary" id="u-chat-send">➤</button>
+                                <button class="btn-primary btn-icon" id="u-chat-send" title="Senden" aria-label="Senden"><i data-lucide="send"></i></button>
                             </div>
                         </div>
                     </div>
                 </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="u-m-close-bt" data-i18n="close">Schließen</button>
             </div>
         </div>
     </div>

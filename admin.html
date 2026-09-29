@@ -4,76 +4,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - Tickets</title>
+    <title>Support | Admin</title>
     <link rel="icon" type="image/png" href="picture/favicon.png">
     <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/otpauth/dist/otpauth.umd.min.js"></script>
 </head>
 
 <body data-guard="admin">
     <canvas id="stars"></canvas>
+
     <header class="topbar">
-        <div class="topbar-inner">
-            <div>
-                <h1 class="brand" style="margin-bottom:0; line-height:1;">Support <span>Admin</span></h1>
-                <div id="user-display" style="font-size: 13px; opacity: 0.7; font-weight:normal;"></div>
-            </div>
-            <div class="hero-actions">
-                <button id="btn-to-dash" class="btn-ghost" onclick="window.location.href='dashboard.html'">🏠
-                    Dashboard</button>
-                <button id="btn-global-logs" class="btn-ghost" style="color:var(--warning); display:none;">🔔
-                    System-Logs</button>
-                <button id="btn-archive" class="btn-ghost">🗄️ Archiv</button>
-                <button id="theme-toggle" class="btn-ghost">🌙</button>
-                <button id="logout" class="btn-ghost">Logout</button>
-            </div>
+        <div class="topbar-left">
+            <div class="brand-mini">Support Portal</div>
+            <div class="crumb">Admin</div>
+            <div id="user-display" class="topbar-user"></div>
         </div>
+        <nav class="topbar-right">
+            <button id="btn-to-dash" class="btn-ghost" onclick="window.location.href='dashboard.html'"><i data-lucide="layout-dashboard"></i>Dashboard</button>
+            <button id="btn-global-logs" class="btn-ghost" style="display:none;"><i data-lucide="bell"></i>System-Logs</button>
+            <button id="btn-archive" class="btn-ghost"><i data-lucide="archive"></i>Archiv</button>
+            <button id="theme-toggle" class="btn-ghost btn-icon" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
+            <button id="logout" class="btn-ghost"><i data-lucide="log-out"></i><span data-i18n="logout">Abmelden</span></button>
+        </nav>
     </header>
-    <script src="https://cdn.jsdelivr.net/npm/otpauth/dist/otpauth.umd.min.js"></script>
 
     <main class="container">
-        <!-- Archive View -->
+        <!-- Archiv -->
         <div id="archive-view" class="archive-view">
             <div class="archive-header">
-                <h3>🗄️ Archivierte Tickets</h3>
-                <input type="text" id="archive-search" placeholder="Suche im Archiv (Titel, Autor, Inhalt)..."
-                    style="flex:1; max-width: 400px; margin: 0 20px;">
-                <button id="btn-back-kanban" class="btn-secondary">Zurück zur Übersicht</button>
+                <h3><i data-lucide="archive"></i>Archivierte Tickets</h3>
+                <input type="text" id="archive-search" class="section-search" placeholder="Suche im Archiv (Titel, Autor, Inhalt)...">
+                <button id="btn-back-kanban" class="btn-secondary"><i data-lucide="arrow-left"></i>Zurück zur Übersicht</button>
             </div>
             <div id="archive-list" class="archived-list"></div>
         </div>
 
         <div id="kanban-view">
-            <!-- Requests Section -->
-            <div class="requests-board" style="margin-bottom: 30px;">
-                <h3 style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:10px;">
-                    Konto-Anfragen</h3>
-                <div id="request-list"
-                    style="display:grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap:15px;"></div>
-            </div>
+            <!-- Kontoanfragen -->
+            <section class="requests-board">
+                <div class="panel-head">
+                    <h3 class="panel-title">Konto-Anfragen</h3>
+                </div>
+                <div id="request-list" class="request-grid"></div>
+            </section>
 
             <div class="kanban-board">
-                <!-- New Column -->
                 <div class="column" id="col-new">
                     <div class="col-header">
-                        <span>🆕 Neu</span>
+                        <span><i data-lucide="inbox"></i>Neu</span>
                         <span class="count" id="count-new">0</span>
                     </div>
                     <div class="ticket-list" data-status="Neu" id="list-new"></div>
                 </div>
 
-                <!-- In Progress Column -->
                 <div class="column" id="col-doing">
                     <div class="col-header">
-                        <span>🔧 In Bearbeitung</span>
+                        <span><i data-lucide="loader"></i>In Bearbeitung</span>
                         <span class="count" id="count-doing">0</span>
                     </div>
                     <div class="ticket-list" data-status="In Bearbeitung" id="list-doing"></div>
                 </div>
 
-                <!-- Done Column -->
                 <div class="column" id="col-done">
                     <div class="col-header">
-                        <span>✅ Geschlossen</span>
+                        <span><i data-lucide="check-circle"></i>Geschlossen</span>
                         <span class="count" id="count-done">0</span>
                     </div>
                     <div class="ticket-list" data-status="Geschlossen" id="list-done"></div>
@@ -82,16 +77,16 @@
         </div>
     </main>
 
-    <!-- Ticket Detail Modal -->
+    <!-- Ticket-Detail -->
     <div class="modal-overlay" id="ticket-modal">
         <div class="modal-container">
             <div id="m-history-sidebar" class="modal-sidebar"></div>
-            <div class="modal">
+            <div class="modal modal-md">
                 <div class="modal-header">
-                    <h3 id="m-title">Ticket Title</h3>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <button class="btn-ghost" id="m-logs" title="Protokoll anzeigen">📜</button>
-                        <button class="btn-ghost" id="m-close">✕</button>
+                    <h3 id="m-title">Ticket</h3>
+                    <div class="modal-actions">
+                        <button class="btn-ghost btn-icon" id="m-logs" title="Protokoll anzeigen" aria-label="Protokoll anzeigen"><i data-lucide="scroll-text"></i></button>
+                        <button class="btn-ghost btn-icon" id="m-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
                     </div>
                 </div>
                 <div class="modal-body">
@@ -101,118 +96,102 @@
                     </div>
 
                     <div id="tab-details" class="tab-content active">
-                        <div class="ticket-meta-grid"
-                            style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px; font-size:13px; color:var(--text-sec); background:var(--card-hover); padding:15px; border-radius:8px;">
-                            <div><strong>Von:</strong> <span id="m-author" style="color:var(--text)">-</span></div>
-                            <div><strong>Datum:</strong> <span id="m-date" style="color:var(--text)">-</span></div>
-                            <div>
-                                <strong>Prio:</strong>
-                                <select id="m-prio-edit" class="inline-select">
+                        <div class="meta-grid ticket-meta-grid">
+                            <div class="meta-item"><strong>Von</strong><span id="m-author" class="meta-value">-</span></div>
+                            <div class="meta-item"><strong>Datum</strong><span id="m-date" class="meta-value">-</span></div>
+                            <div class="meta-item">
+                                <strong>Prio</strong>
+                                <select id="m-prio-edit">
                                     <option value="Niedrig">Niedrig</option>
                                     <option value="Normal">Normal</option>
                                     <option value="Hoch">Hoch</option>
                                     <option value="Kritisch">Kritisch</option>
                                 </select>
                             </div>
-                            <div>
-                                <strong>Kategorie:</strong>
+                            <div class="meta-item">
+                                <strong>Kategorie</strong>
                                 <div id="m-cat-container"></div>
                             </div>
                         </div>
 
-                        <h4 style="margin-bottom:8px; font-size:12px; text-transform:uppercase; opacity:0.7;">
-                            Beschreibung</h4>
-                        <p id="m-desc" style="white-space:pre-wrap; margin-bottom:20px; line-height:1.5;"></p>
+                        <h4 class="section-title">Beschreibung</h4>
+                        <p id="m-desc" class="desc-text"></p>
+
                         <div class="field">
-                            <label>Zuweisung (Mehrfachauswahl möglich):</label>
-                            <div class="multi-select-container" id="assignee-multi">
-                                <div class="multi-select-header" id="ms-header"><span class="ms-text">Niemand</span>
-                                </div>
-                                <div class="multi-select-dropdown" id="ms-dropdown"></div>
-                            </div>
+                            <label>Zuweisung (Mehrfachauswahl möglich)</label>
+                            <div class="multi-select-container" id="assignee-multi"></div>
                         </div>
 
-                        <!-- Internal Comments Section (Restored) -->
-                        <div class="comments-section"
-                            style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 15px;">
-                            <h4>Interne Notizen / Kommentare</h4>
-                            <div id="m-comments" style="max-height: 150px; overflow-y: auto; margin-bottom: 10px;">
-                            </div>
+                        <div class="comments-section">
+                            <h4 class="section-title">Interne Notizen</h4>
+                            <div id="m-comments" class="note-list"></div>
                             <div class="field">
                                 <textarea id="m-new-comment" rows="2" placeholder="Kommentar hinzufügen..."></textarea>
-                                <button class="btn-primary" id="btn-add-comment"
-                                    style="margin-top: 10px; width: 100%;">Kommentieren</button>
                             </div>
+                            <button class="btn-primary btn-block" id="btn-add-comment">Kommentieren</button>
                         </div>
 
-                        <div style="margin-top:20px; text-align:right;">
-                            <button id="btn-archive-ticket" class="btn-secondary"
-                                style="display:none; margin-top: 5px;">📥
-                                Archivieren</button>
+                        <div class="actions-row">
+                            <button id="btn-archive-ticket" class="btn-secondary" style="display:none;"><i data-lucide="archive"></i>Archivieren</button>
                         </div>
                     </div>
 
                     <div id="tab-chat" class="tab-content">
                         <div class="chat-container">
-                            <div id="m-chat-msgs" class="chat-messages">
-                                <!-- Chat Bubbles go here -->
-                            </div>
-                            <!-- Controls -->
+                            <div id="m-chat-msgs" class="chat-messages"></div>
                             <div class="chat-input-area">
                                 <div class="toolbar">
-                                    <button class="tool-btn" title="Fett" id="m-chat-bold"><b>B</b></button>
-                                    <button class="tool-btn" title="Kursiv" id="m-chat-italic"><i>I</i></button>
-                                    <label class="tool-btn" title="Datei anhängen" style="cursor:pointer;">
-                                        📎 <input type="file" id="m-chat-file-input" style="display:none" multiple>
+                                    <button class="btn-ghost btn-icon btn-sm" title="Fett" aria-label="Fett" id="m-chat-bold"><i data-lucide="bold"></i></button>
+                                    <button class="btn-ghost btn-icon btn-sm" title="Kursiv" aria-label="Kursiv" id="m-chat-italic"><i data-lucide="italic"></i></button>
+                                    <label class="btn btn-ghost btn-icon btn-sm" title="Datei anhängen" aria-label="Datei anhängen">
+                                        <i data-lucide="paperclip"></i>
+                                        <input type="file" id="m-chat-file-input" multiple>
                                     </label>
                                 </div>
-                                <div id="m-chat-file-preview"
-                                    style="display:none; gap:5px; flex-wrap:wrap; padding-bottom:8px; border-bottom:1px solid var(--border); margin-bottom:8px;">
-                                </div>
-
+                                <div id="m-chat-file-preview" class="file-preview"></div>
                                 <div class="input-row">
-                                    <textarea id="m-chat-input"
-                                        placeholder="Nachricht schreiben... Strg+Enter zum Senden"></textarea>
-                                    <button class="btn-primary" id="btn-chat-send">➤</button>
+                                    <textarea id="m-chat-input" placeholder="Nachricht schreiben... Strg+Enter zum Senden"></textarea>
+                                    <button class="btn-primary btn-icon" id="btn-chat-send" title="Senden" aria-label="Senden"><i data-lucide="send"></i></button>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button class="btn-ghost" id="m-close-bt">Schließen</button>
+                    <button class="btn-secondary" id="m-close-bt">Schließen</button>
                 </div>
             </div>
         </div>
     </div>
-    </div>
 
-    <!-- Approve User Modal -->
+    <!-- Kontoanfrage annehmen -->
     <div class="modal-overlay" id="approve-modal">
-        <div class="modal" style="max-width: 400px;">
+        <div class="modal modal-sm">
             <div class="modal-header">
-                <h3>Benutzer erstellen</h3>
-                <button class="btn-ghost" id="a-close">✕</button>
+                <h3><i data-lucide="user-plus"></i>Benutzer erstellen</h3>
+                <div class="modal-actions">
+                    <button class="btn-ghost btn-icon" id="a-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                </div>
             </div>
             <div class="modal-body">
                 <p>Erstelle einen Account für <strong id="a-name-disp"></strong>.</p>
                 <div class="field">
-                    <label>Benutzername</label>
-                    <input type="text" id="a-username" placeholder="z.b. maxm">
+                    <label for="a-username">Benutzername</label>
+                    <input type="text" id="a-username" placeholder="z.B. maxm">
                 </div>
                 <div class="field">
-                    <label>Passwort</label>
+                    <label for="a-password">Passwort</label>
                     <input type="text" id="a-password" value="123">
                 </div>
                 <div class="field">
-                    <label>Rolle</label>
+                    <label for="a-role">Rolle</label>
                     <select id="a-role">
                         <option value="user">User</option>
                         <option value="admin">Admin</option>
                     </select>
                 </div>
                 <div class="field" id="a-dept-field" style="display:none;">
-                    <label>Abteilung (Nur für Admins)</label>
+                    <label for="a-dept">Abteilung (nur für Admins)</label>
                     <select id="a-dept">
                         <option value="Allgemein">Allgemein</option>
                         <option value="Technik">Technik</option>
@@ -222,25 +201,28 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn-ghost" id="a-cancel">Abbrechen</button>
+                <button class="btn-secondary" id="a-cancel">Abbrechen</button>
                 <button class="btn-primary" id="a-confirm">Erstellen</button>
             </div>
         </div>
     </div>
 
-    <!-- Superadmin: User Manager Modal -->
+    <!-- Benutzerverwaltung -->
     <div class="modal-overlay" id="user-man-modal">
-        <div class="modal" style="max-width: 600px;">
+        <div class="modal modal-md">
             <div class="modal-header">
-                <h3>Benutzerverwaltung</h3>
-                <button class="btn-ghost" id="um-close">✕</button>
+                <h3><i data-lucide="users"></i>Benutzerverwaltung</h3>
+                <div class="modal-actions">
+                    <button class="btn-ghost btn-icon" id="um-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                </div>
             </div>
-            <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
-                <div id="um-list" class="user-list"></div>
+            <div class="modal-body">
+                <div id="um-list"></div>
             </div>
         </div>
     </div>
 
+    <div id="toast"></div>
     <script src="script.js"></script>
 </body>
 

@@ -7,6 +7,7 @@
     <title>Support | Start</title>
     <link rel="icon" type="image/png" href="picture/favicon.png">
     <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/otpauth/dist/otpauth.umd.min.js"></script>
 </head>
 
@@ -18,27 +19,27 @@
             <h1 class="brand">Support Portal</h1>
             <p class="subtitle">Schnelle Hilfe. Klare Übersicht. Moderne Experience.</p>
             <div class="hero-actions">
-                <button id="theme-toggle" class="btn-ghost">⚙️</button>
+                <button id="theme-toggle" class="btn-ghost btn-icon" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
             </div>
         </div>
     </header>
 
     <main class="container grid-2">
-        <section class="card glass">
-            <h2>Anmelden</h2>
+        <section class="card">
+            <h2 data-i18n="login">Anmelden</h2>
             <div class="field">
                 <label for="login-user">Benutzername</label>
                 <input id="login-user" type="text" autocomplete="username" placeholder="benutzername">
             </div>
             <div class="field">
                 <label for="login-pass">Passwort</label>
-                <input id="login-pass" type="password" autocomplete="current-password" placeholder="••••••••">
+                <input id="login-pass" type="password" autocomplete="current-password" placeholder="********">
             </div>
-            <button class="btn-primary" id="btn-login">Anmelden</button>
-            <div class="note">Kein Admin? Nutze die Kontoanfrage rechts -></div>
+            <button class="btn-primary btn-block" id="btn-login" data-i18n="login">Anmelden</button>
+            <div class="note">Noch kein Zugang? Nutze die Kontoanfrage.</div>
         </section>
 
-        <section class="card glass">
+        <section class="card">
             <h2>Kein Account?</h2>
             <p>Fordere einen Zugang an. Ein Admin schaltet dich frei.</p>
             <div class="field">
@@ -46,10 +47,10 @@
                 <input id="req-name" type="text" placeholder="Max Mustermann">
             </div>
             <div class="field">
-                <label for="req-email">E‑Mail</label>
+                <label for="req-email">E-Mail</label>
                 <input id="req-email" type="email" placeholder="max@example.com">
             </div>
-            <button class="btn-secondary" id="btn-request">Account anfragen</button>
+            <button class="btn-secondary btn-block" id="btn-request">Account anfragen</button>
             <div class="note">Du erhältst Zugangsdaten, sobald ein Admin dich freigibt.</div>
         </section>
     </main>

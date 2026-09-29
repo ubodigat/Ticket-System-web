@@ -3,22 +3,21 @@
 const q = (s) => document.querySelector(s);
 const qa = (s) => Array.from(document.querySelectorAll(s));
 
+// Icons: Größe per Parameter; Abstände kommen immer vom Container (gap), nie vom Icon
+const Icon = (name, size = 16) =>
+    `<i data-lucide="${name}" style="width:${size}px;height:${size}px;"></i>`;
+
 // --- Utils ---
 const Utils = {
     uid: () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4),
     nowISO: () => new Date().toISOString(),
+    esc: (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
     fmtDate: (iso) => {
         if (!iso) return '-';
         const d = new Date(iso);
-        return d.toLocaleDateString('de-DE', {
-            day: '2-digit',
-            month: '2-digit',
-            year: '2-digit'
-        }) +
-            ' ' + d.toLocaleTimeString('de-DE', {
-                hour: '2-digit',
-                minute: '2-digit'
-            });
+        const locale = (typeof Lang !== 'undefined' && Lang.current === 'en') ? 'en-GB' : 'de-DE';
+        return d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: '2-digit' }) +
+            ' ' + d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
     },
     read: (key, fallback) => {
         try {
@@ -30,8 +29,366 @@ const Utils = {
     write: (key, val) => localStorage.setItem(key, JSON.stringify(val)),
     adjustColor: (color, amount) => {
         return '#' + color.replace(/^#/, '').replace(/../g, color => ('0' + Math.min(255, Math.max(0, parseInt(color, 16) + amount)).toString(16)).substr(-2));
+    },
+    normalizeHex: (value) => {
+        let v = String(value || '').trim().replace(/^#/, '').toLowerCase();
+        if (/^[0-9a-f]{3}$/.test(v)) v = v.split('').map(c => c + c).join('');
+        return /^[0-9a-f]{6}$/.test(v) ? '#' + v : null;
+    },
+    hexToHsv: (hex) => {
+        const n = parseInt((Utils.normalizeHex(hex) || '#6366f1').slice(1), 16);
+        const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+        let h = 0;
+        if (d) {
+            if (max === r) h = ((g - b) / d) % 6;
+            else if (max === g) h = (b - r) / d + 2;
+            else h = (r - g) / d + 4;
+            h *= 60;
+            if (h < 0) h += 360;
+        }
+        return { h, s: max ? d / max : 0, v: max };
+    },
+    hsvToHex: ({ h, s, v }) => {
+        const f = (k) => {
+            const x = (k + h / 60) % 6;
+            return v - v * s * Math.max(0, Math.min(x, 4 - x, 1));
+        };
+        return '#' + [f(5), f(3), f(1)].map(c => Math.round(c * 255).toString(16).padStart(2, '0')).join('');
+    },
+    hexToRgb: (hex) => {
+        const clean = String(hex || '').replace('#', '');
+        if (clean.length !== 6) return '99, 102, 241';
+        const n = parseInt(clean, 16);
+        return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
     }
 };
+
+// --- i18n ---
+const Lang = {
+    translations: {
+        de: {
+            login: 'Einloggen', logout: 'Abmelden', dashboard: 'Dashboard',
+            newTicket: 'Neues Ticket', myTickets: 'Meine Tickets',
+            subject: 'Betreff', description: 'Beschreibung', priority: 'Priorität',
+            category: 'Kategorie', submit: 'Absenden', status: 'Status',
+            date: 'Datum', prio: 'Prio', archived: 'Archiviert',
+            assignee: 'Bearbeiter', close: 'Schließen', save: 'Speichern',
+            cancel: 'Abbrechen', delete: 'Löschen', edit: 'Bearbeiten',
+            search: 'Suchen...', noTickets: 'Keine Tickets gefunden',
+            ticketCreated: 'Ticket erstellt!', titleRequired: 'Bitte Titel angeben',
+            loadMore: 'Weitere laden', showArchived: 'Archiviert einblenden',
+            normal: 'Normal', high: 'Hoch', critical: 'Kritisch', low: 'Niedrig',
+            statusNew: 'Neu', statusDoing: 'In Bearbeitung', statusClosed: 'Geschlossen',
+            systemLogs: 'System-Logs', archive: 'Archiv', settings: 'Einstellungen',
+            userMgmt: 'Benutzerverwaltung',
+            confirm: 'Bestätigung', yes: 'Bestätigen', no: 'Abbrechen',
+        },
+        en: {
+            login: 'Login', logout: 'Logout', dashboard: 'Dashboard',
+            newTicket: 'New Ticket', myTickets: 'My Tickets',
+            subject: 'Subject', description: 'Description', priority: 'Priority',
+            category: 'Category', submit: 'Submit', status: 'Status',
+            date: 'Date', prio: 'Priority', archived: 'Archived',
+            assignee: 'Assigned To', close: 'Close', save: 'Save',
+            cancel: 'Cancel', delete: 'Delete', edit: 'Edit',
+            search: 'Search...', noTickets: 'No tickets found',
+            ticketCreated: 'Ticket created!', titleRequired: 'Please enter a title',
+            loadMore: 'Load more', showArchived: 'Show archived',
+            normal: 'Normal', high: 'High', critical: 'Critical', low: 'Low',
+            statusNew: 'New', statusDoing: 'In Progress', statusClosed: 'Closed',
+            systemLogs: 'System Logs', archive: 'Archive', settings: 'Settings',
+            userMgmt: 'User Management',
+            confirm: 'Confirmation', yes: 'Confirm', no: 'Cancel',
+        }
+    },
+    current: 'de',
+    t: (key) => {
+        const trans = Lang.translations[Lang.current] || Lang.translations['de'];
+        return trans[key] || key;
+    },
+    init: async () => {
+        const s = await Store.getSettings();
+        Lang.current = s.lang || 'de';
+        Lang.applyToDOM();
+    },
+    applyToDOM: () => {
+        document.documentElement.lang = Lang.current;
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+            const key = el.dataset.i18n;
+            el.textContent = Lang.t(key);
+        });
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+            el.placeholder = Lang.t(el.dataset.i18nPlaceholder);
+        });
+        Lang.applyAdminDOM();
+    },
+    applyAdminDOM: () => {
+        const setHTML = (selector, html) => {
+            const el = q(selector);
+            if (el) el.innerHTML = html;
+        };
+        const setText = (selector, text) => {
+            const el = q(selector);
+            if (el) el.textContent = text;
+        };
+        setHTML('#btn-to-dash', `${Icon('layout-dashboard', 16)}${Lang.t('dashboard')}`);
+        setHTML('#btn-global-logs', `${Icon('bell', 16)}${Lang.t('systemLogs')}`);
+        setHTML('#btn-archive', `${Icon('archive', 16)}${Lang.t('archive')}`);
+        setHTML('#archive-view .archive-header h3', `${Icon('archive', 18)}${Lang.t('archivedTickets')}`);
+        setHTML('#btn-back-kanban', `${Icon('arrow-left', 16)}${Lang.t('backToOverview')}`);
+        const archiveSearch = q('#archive-search');
+        if (archiveSearch) archiveSearch.placeholder = Lang.current === 'en' ? 'Search archive (title, author, content)...' : 'Suche im Archiv (Titel, Autor, Inhalt)...';
+        setText('.requests-board h3', Lang.t('requests'));
+        setHTML('#col-new .col-header span:first-child', `${Icon('inbox', 16)}${Lang.t('statusNew')}`);
+        setHTML('#col-doing .col-header span:first-child', `${Icon('loader', 16)}${Lang.t('statusDoing')}`);
+        setHTML('#col-done .col-header span:first-child', `${Icon('check-circle', 16)}${Lang.t('statusClosed')}`);
+        setText('#ticket-modal .tab-btn[data-tab="details"]', Lang.t('details'));
+        setText('#ticket-modal .tab-btn[data-tab="chat"]', Lang.t('chat'));
+        setText('#m-close-bt', Lang.t('close'));
+        const metaGrid = q('#ticket-modal .ticket-meta-grid');
+        if (metaGrid) {
+            const labels = metaGrid.querySelectorAll('strong');
+            if (labels[0]) labels[0].textContent = Lang.t('from');
+            if (labels[1]) labels[1].textContent = Lang.t('date');
+            if (labels[2]) labels[2].textContent = Lang.t('prio');
+            if (labels[3]) labels[3].textContent = Lang.t('category');
+        }
+        const descHead = q('#tab-details h4');
+        if (descHead) descHead.textContent = Lang.t('description');
+        const assignLabel = q('#assignee-multi')?.closest('.field')?.querySelector('label');
+        if (assignLabel) assignLabel.textContent = `${Lang.t('assignTo')} (${Lang.t('multipleSelection')})`;
+        const notesHead = q('.comments-section h4');
+        if (notesHead) notesHead.textContent = Lang.t('internalNotes');
+        const commentInput = q('#m-new-comment');
+        if (commentInput) commentInput.placeholder = Lang.t('addComment');
+        setText('#btn-add-comment', Lang.t('comment'));
+        const archiveBtn = q('#btn-archive-ticket');
+        if (archiveBtn) archiveBtn.innerHTML = `${Icon('archive', 16)}${Lang.t('archive')}`;
+        setHTML('#approve-modal h3', `${Icon('user-plus', 18)}${Lang.t('createUser')}`);
+        setHTML('#user-man-modal h3', `${Icon('users', 18)}${Lang.t('userManagement')}`);
+        q('#m-prio-edit option[value="Niedrig"]') && (q('#m-prio-edit option[value="Niedrig"]').textContent = Lang.t('low'));
+        q('#m-prio-edit option[value="Normal"]') && (q('#m-prio-edit option[value="Normal"]').textContent = Lang.t('normal'));
+        q('#m-prio-edit option[value="Hoch"]') && (q('#m-prio-edit option[value="Hoch"]').textContent = Lang.t('high'));
+        q('#m-prio-edit option[value="Kritisch"]') && (q('#m-prio-edit option[value="Kritisch"]').textContent = Lang.t('critical'));
+        if (window.lucide) lucide.createIcons();
+    }
+};
+
+Object.assign(Lang.translations.de, {
+    priority: 'Priorität',
+    close: 'Schließen',
+    delete: 'Löschen',
+    confirm: 'Bestätigung',
+    yes: 'Bestätigen',
+    openTickets: 'Offene Tickets',
+    allTickets: 'Alle Tickets',
+    ticketCount: 'Tickets',
+    loadAll: 'Alle laden',
+    showing: 'Angezeigt',
+    details: 'Details',
+    chat: 'Chat',
+    from: 'Von',
+    nobody: 'Niemand',
+    noDescription: 'Keine Beschreibung',
+    archivedReadonly: 'Ticket ist archiviert (keine Antwort möglich)',
+    writeMessage: 'Nachricht schreiben...',
+    attachFile: 'Datei anhängen',
+    createdAt: 'Erstellt',
+    unassigned: 'Unzugewiesen',
+    emailSent: 'E-Mail an {to} gesendet (simuliert)',
+    emailLogged: 'E-Mail ohne SMTP gespeichert',
+    portalSettings: 'Portaleinstellungen',
+    themeMode: 'Designmodus',
+    dark: 'Dunkel',
+    light: 'Hell',
+    accentColor: 'Akzentfarbe',
+    language: 'Sprache',
+    background: 'Hintergrund',
+    security: 'Sicherheit',
+    done: 'Fertig',
+    adminPanel: 'Adminbereich',
+    system: 'System',
+    accountRequests: 'Konto-Anfragen',
+    systemSettings: 'Systemeinstellungen',
+    notifications: 'Benachrichtigungen',
+    general: 'Allgemein',
+    emailIntegration: 'E-Mail-Integration',
+    emailHint: 'Konfiguriert SMTP-Ausgang und Benachrichtigungsregeln. Für echten Versand ist ein Backend oder Outlook/Graph Connector erforderlich.',
+    smtpHost: 'SMTP Host',
+    smtpPort: 'SMTP Port',
+    smtpUser: 'SMTP Benutzer',
+    smtpPassword: 'SMTP Passwort',
+    smtpFrom: 'Absender-Adresse',
+    smtpFromName: 'Absender-Name',
+    testEmail: 'Test-E-Mail senden',
+    smtpEncryption: 'Verschlüsselung',
+    replyTo: 'Antwort-an Adresse',
+    emailTemplate: 'E-Mail Vorlage',
+    notifyRules: 'Lege fest, wann automatisch E-Mails versendet werden.',
+    notifyNewTicket: 'Neues Ticket',
+    notifyNewTicketDesc: 'Admins werden per E-Mail über neue Tickets benachrichtigt.',
+    notifyStatusChange: 'Statusänderung',
+    notifyStatusChangeDesc: 'Benutzer erhalten eine E-Mail, wenn sich der Ticket-Status ändert.',
+    notifyNewMessage: 'Neue Nachricht im Chat',
+    notifyNewMessageDesc: 'Beteiligte erhalten eine E-Mail bei neuer Nachricht.',
+    notifyTicketClosed: 'Ticket geschlossen',
+    notifyTicketClosedDesc: 'Benutzer erhalten eine Abschluss-E-Mail wenn ihr Ticket geschlossen wird.',
+    notifyAccountApproved: 'Konto genehmigt',
+    notifyAccountApprovedDesc: 'Antragsteller erhalten eine E-Mail wenn ihr Konto genehmigt wurde.',
+    force2fa: '2FA erzwingen',
+    sessionTimeout: 'Session-Timeout (Minuten, 0 = kein Timeout)',
+    maxLoginAttempts: 'Max. Fehlversuche beim Login (0 = kein Limit)',
+    ldapHint: 'LDAP-Integration ermöglicht Single Sign-On. Benötigt Backend-Anbindung.',
+    portalName: 'Portal-Name',
+    autoArchiveDays: 'Auto-Archivierung nach (Tage, 0 = deaktiviert)',
+    defaultPriority: 'Standard-Priorität für neue Tickets',
+    defaultCategories: 'Standard-Kategorien (kommagetrennt)',
+    outlookIntegration: 'Outlook-Integration',
+    outlookHint: 'Outlook ist möglich über Microsoft Graph: eingehende Mails als Tickets, Statusmails, Kalender-/Aufgaben-Links und optional ein Outlook Add-in.',
+    graphTenant: 'Microsoft Tenant ID',
+    graphClient: 'Graph Client ID',
+    graphMailbox: 'Support-Postfach',
+    enableOutlook: 'Outlook/Graph Integration vorbereiten',
+    showClosedArchived: 'Geschlossene/archivierte einblenden',
+    archivedTickets: 'Archivierte Tickets',
+    backToOverview: 'Zurück zur Übersicht',
+    requests: 'Konto-Anfragen',
+    internalNotes: 'Interne Notizen / Kommentare',
+    comment: 'Kommentieren',
+    assignTo: 'Zuweisung',
+    multipleSelection: 'Mehrfachauswahl möglich',
+    addComment: 'Kommentar hinzufügen...',
+    createUser: 'Benutzer erstellen',
+    username: 'Benutzername',
+    password: 'Passwort',
+    role: 'Rolle',
+    department: 'Abteilung',
+    userManagement: 'Benutzerverwaltung',
+    saveSettings: 'Einstellungen speichern',
+    closeSystemSettings: 'Schließen',
+    securityHint: 'Benutzer werden beim Login aufgefordert, 2FA einzurichten, wenn sie betroffen sind.',
+    notForced: 'Nicht erzwingen (optional)',
+    allUsers: 'Alle Nutzer',
+    onlyAdmins: 'Nur Admins',
+    onlyUsers: 'Nur User',
+    loggedInAs: 'Angemeldet als',
+    notes: 'Notizen',
+    possible: 'möglich'
+});
+
+Object.assign(Lang.translations.en, {
+    openTickets: 'Open Tickets',
+    allTickets: 'All Tickets',
+    ticketCount: 'Tickets',
+    loadAll: 'Load all',
+    showing: 'Showing',
+    details: 'Details',
+    chat: 'Chat',
+    from: 'From',
+    nobody: 'Nobody',
+    noDescription: 'No description',
+    archivedReadonly: 'Ticket is archived (replies are disabled)',
+    writeMessage: 'Write a message...',
+    attachFile: 'Attach file',
+    createdAt: 'Created',
+    unassigned: 'Unassigned',
+    emailSent: 'Email to {to} sent (simulated)',
+    emailLogged: 'Email logged without SMTP',
+    portalSettings: 'Portal Settings',
+    themeMode: 'Theme mode',
+    dark: 'Dark',
+    light: 'Light',
+    accentColor: 'Accent color',
+    language: 'Language',
+    background: 'Background',
+    security: 'Security',
+    done: 'Done',
+    adminPanel: 'Admin Panel',
+    system: 'System',
+    accountRequests: 'Account Requests',
+    systemSettings: 'System Settings',
+    notifications: 'Notifications',
+    general: 'General',
+    emailIntegration: 'Email Integration',
+    emailHint: 'Configure SMTP delivery and notification rules. Real delivery requires a backend or Outlook/Graph connector.',
+    smtpHost: 'SMTP Host',
+    smtpPort: 'SMTP Port',
+    smtpUser: 'SMTP User',
+    smtpPassword: 'SMTP Password',
+    smtpFrom: 'From address',
+    smtpFromName: 'From name',
+    testEmail: 'Send test email',
+    smtpEncryption: 'Encryption',
+    replyTo: 'Reply-to address',
+    emailTemplate: 'Email template',
+    notifyRules: 'Choose when automatic emails should be sent.',
+    notifyNewTicket: 'New Ticket',
+    notifyNewTicketDesc: 'Admins receive an email when a new ticket is created.',
+    notifyStatusChange: 'Status change',
+    notifyStatusChangeDesc: 'Users receive an email when their ticket status changes.',
+    notifyNewMessage: 'New chat message',
+    notifyNewMessageDesc: 'Participants receive an email when a new message is posted.',
+    notifyTicketClosed: 'Ticket closed',
+    notifyTicketClosedDesc: 'Users receive a closing email when their ticket is closed.',
+    notifyAccountApproved: 'Account approved',
+    notifyAccountApprovedDesc: 'Requesters receive an email when their account is approved.',
+    force2fa: 'Enforce 2FA',
+    sessionTimeout: 'Session timeout (minutes, 0 = no timeout)',
+    maxLoginAttempts: 'Max. failed login attempts (0 = no limit)',
+    ldapHint: 'LDAP integration enables single sign-on. Requires backend connection.',
+    portalName: 'Portal name',
+    autoArchiveDays: 'Auto-archive after (days, 0 = disabled)',
+    defaultPriority: 'Default priority for new tickets',
+    defaultCategories: 'Default categories (comma-separated)',
+    outlookIntegration: 'Outlook Integration',
+    outlookHint: 'Outlook integration is possible via Microsoft Graph: incoming mails as tickets, status emails, calendar/task links and optionally an Outlook add-in.',
+    graphTenant: 'Microsoft Tenant ID',
+    graphClient: 'Graph Client ID',
+    graphMailbox: 'Support mailbox',
+    enableOutlook: 'Prepare Outlook/Graph integration',
+    showClosedArchived: 'Show closed/archived',
+    archivedTickets: 'Archived Tickets',
+    backToOverview: 'Back to Overview',
+    requests: 'Account Requests',
+    internalNotes: 'Internal Notes / Comments',
+    comment: 'Comment',
+    assignTo: 'Assignment',
+    multipleSelection: 'multiple selection available',
+    addComment: 'Add comment...',
+    createUser: 'Create User',
+    username: 'Username',
+    password: 'Password',
+    role: 'Role',
+    department: 'Department',
+    userManagement: 'User Management',
+    saveSettings: 'Save Settings',
+    closeSystemSettings: 'Close',
+    securityHint: 'Users are prompted to set up 2FA during login when the rule applies.',
+    notForced: 'Do not enforce (optional)',
+    allUsers: 'All users',
+    onlyAdmins: 'Admins only',
+    onlyUsers: 'Users only',
+    loggedInAs: 'Logged in as',
+    notes: 'Notes',
+    possible: 'available'
+});
+
+Lang.format = (key, values = {}) =>
+    Object.entries(values).reduce((txt, [k, v]) => txt.replace(`{${k}}`, v), Lang.t(key));
+
+Lang.status = (status) => ({
+    'Neu': Lang.t('statusNew'),
+    'In Bearbeitung': Lang.t('statusDoing'),
+    'Geschlossen': Lang.t('statusClosed')
+}[status] || status || '-');
+
+Lang.prio = (prio) => ({
+    'Niedrig': Lang.t('low'),
+    'Normal': Lang.t('normal'),
+    'Hoch': Lang.t('high'),
+    'Kritisch': Lang.t('critical')
+}[prio] || prio || '-');
 
 // --- TOTP Helper ---
 const TOTP = {
@@ -82,6 +439,8 @@ const TOTP = {
 const Store = {
     getUsers: async () => Promise.resolve(Utils.read('users', [])),
     saveUsers: async (users) => Promise.resolve(Utils.write('users', users)),
+    getGroups: async () => Promise.resolve(Utils.read('user_groups', [])),
+    saveGroups: async (groups) => Promise.resolve(Utils.write('user_groups', groups)),
     getTickets: async () => Promise.resolve(Utils.read('tickets', [])),
     saveTickets: async (tickets) => Promise.resolve(Utils.write('tickets', tickets)),
     getRequests: async () => Promise.resolve(Utils.read('account_requests', [])),
@@ -122,7 +481,7 @@ const Store = {
             subject,
             body
         });
-        UI.toast(`📧 Email an ${to} gesendet (Simuliert)`);
+        UI.toast(Lang.format('emailSent', { to }));
     },
 
     // Seed default data if empty
@@ -161,6 +520,13 @@ const Store = {
         }
 
         await Store.saveUsers(users);
+        if (!Utils.read('user_groups', null)) {
+            Utils.write('user_groups', [
+                { id: Utils.uid(), name: 'Admins', description: 'Administrative Benutzer', members: ['admin'] },
+                { id: Utils.uid(), name: 'Verwaltung', description: 'Interne Verwaltung', members: [] },
+                { id: Utils.uid(), name: 'Support', description: 'Support Team', members: [] }
+            ]);
+        }
         if (!Utils.read('tickets', null)) Utils.write('tickets', []);
         if (!Utils.read('account_requests', null)) Utils.write('account_requests', []);
 
@@ -192,6 +558,18 @@ const Store = {
             }
             if (t.category && !Array.isArray(t.category)) {
                 t.category = [t.category];
+                changed = true;
+            }
+            if (!Array.isArray(t.participants)) {
+                t.participants = Array.isArray(t.assignees) ? [...t.assignees] : (t.assignee ? [t.assignee] : []);
+                changed = true;
+            }
+            if (!t.owner && t.participants.length) {
+                t.owner = t.participants[0];
+                changed = true;
+            }
+            if (!Array.isArray(t.todos)) {
+                t.todos = [];
                 changed = true;
             }
         });
@@ -325,26 +703,27 @@ const Auth = {
 
         modal = document.createElement('div');
         modal.id = 'modal-two-fa';
-        modal.className = 'modal-overlay';
-        modal.style.zIndex = '9999';
+        modal.className = 'modal-overlay modal-top';
 
         const qrData = `otpauth://totp/TicketSystem:${user.username}?secret=${user.twoFactorSecret}&issuer=TicketSystem`;
         const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrData)}`;
 
         modal.innerHTML = `
-            <div class="modal" style="max-width:350px; text-align:center;">
-                <button class="btn-ghost" style="position:absolute; right:10px; top:10px;" onclick="q('#modal-two-fa').classList.remove('open')">✕</button>
-                <div class="modal-header"><h3>🔐 2FA Einrichtung</h3></div>
-                <div class="modal-body">
-                    <p style="margin-bottom:15px; font-size:13px; opacity:0.8;">Scannen Sie den QR-Code mit einer App (z.B. Google Authenticator).</p>
-                    <div style="background:white; padding:10px; display:inline-block; margin-bottom:15px; border-radius:4px;">
-                        <img src="${qrUrl}" alt="QR Code" style="display:block; width:150px; height:150px;">
+            <div class="modal modal-sm">
+                <div class="modal-header">
+                    <h3>${Icon('shield-check', 18)} 2FA einrichten</h3>
+                    <div class="modal-actions">
+                        <button class="btn-ghost btn-icon" title="Schließen" aria-label="Schließen" onclick="q('#modal-two-fa').classList.remove('open')">${Icon('x', 16)}</button>
                     </div>
-                    <p style="font-size:11px; margin-bottom:10px; opacity:0.6;">Secret: ${user.twoFactorSecret}</p>
-                    <input type="text" id="code-2fa-input" placeholder="123 456" style="text-align:center; letter-spacing:4px; font-size:18px; width:100%;">
+                </div>
+                <div class="modal-body text-center">
+                    <p>Scanne den QR-Code mit einer Authenticator-App (z. B. Google Authenticator).</p>
+                    <div class="qr-box"><img src="${qrUrl}" alt="QR-Code"></div>
+                    <p class="hint">Secret: ${user.twoFactorSecret}</p>
+                    <input type="text" id="code-2fa-input" class="code-input" placeholder="123 456">
                 </div>
                 <div class="modal-footer">
-                    <button class="btn-primary" id="btn-verify-2fa" style="width:100%">Einrichtung abschließen</button>
+                    <button class="btn-primary btn-block" id="btn-verify-2fa">Einrichtung abschließen</button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
@@ -371,6 +750,7 @@ const Auth = {
             }
         };
         modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
     },
 
     open2FAVerify: (user, onSuccess) => {
@@ -378,18 +758,21 @@ const Auth = {
         if (!modal) {
             modal = document.createElement('div');
             modal.id = 'modal-2fa-verify';
-            modal.className = 'modal-overlay';
-            modal.style.zIndex = '9999';
+            modal.className = 'modal-overlay modal-top';
             modal.innerHTML = `
-                <div class="modal" style="max-width:350px; text-align:center;">
-                    <button class="btn-ghost" style="position:absolute; right:10px; top:10px;" onclick="q('#modal-2fa-verify').classList.remove('open')">✕</button>
-                    <div class="modal-header"><h3>🔐 2FA Überprüfung</h3></div>
-                    <div class="modal-body">
-                        <p style="margin-bottom:15px; font-size:13px;">Bitte geben Sie Ihren 2FA-Code ein:</p>
-                        <input type="text" id="verify-2fa-input" placeholder="123 456" style="text-align:center; letter-spacing:4px; font-size:18px; width:100%;">
+                <div class="modal modal-sm">
+                    <div class="modal-header">
+                        <h3>${Icon('shield-check', 18)} 2FA-Überprüfung</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon" title="Schließen" aria-label="Schließen" onclick="q('#modal-2fa-verify').classList.remove('open')">${Icon('x', 16)}</button>
+                        </div>
+                    </div>
+                    <div class="modal-body text-center">
+                        <p>Bitte gib deinen 2FA-Code ein.</p>
+                        <input type="text" id="verify-2fa-input" class="code-input" placeholder="123 456">
                     </div>
                     <div class="modal-footer">
-                        <button class="btn-primary" id="btn-check-2fa" style="width:100%">Bestätigen</button>
+                        <button class="btn-primary btn-block" id="btn-check-2fa">Bestätigen</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -415,6 +798,7 @@ const Auth = {
             if (e.key === 'Enter') btn.click();
         };
         modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
     }
 
 };
@@ -437,17 +821,18 @@ const UI = {
         if (!modal) {
             modal = document.createElement('div');
             modal.id = 'confirm-modal';
-            modal.className = 'modal-overlay';
-            modal.style.zIndex = '11000';
+            modal.className = 'modal-overlay modal-top';
             modal.innerHTML = `
-                <div class="modal" style="max-width:400px; text-align:center;">
-                    <div class="modal-body" style="padding:30px 20px;">
-                        <h3 style="margin-bottom:10px;">Bestätigung</h3>
-                        <p id="cm-msg" style="margin-bottom:20px; color:var(--text-sec)"></p>
-                        <div style="display:flex; justify-content:center; gap:10px;">
-                            <button class="btn-ghost" id="cm-no">Abbrechen</button>
-                            <button class="btn-primary" id="cm-yes">Bestätigen</button>
-                        </div>
+                <div class="modal modal-sm">
+                    <div class="modal-header">
+                        <h3>${Icon('circle-help', 18)} ${Lang.t('confirm')}</h3>
+                    </div>
+                    <div class="modal-body">
+                        <p id="cm-msg"></p>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn-secondary" id="cm-no">${Lang.t('cancel')}</button>
+                        <button class="btn-primary" id="cm-yes">${Lang.t('yes')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -471,6 +856,7 @@ const UI = {
         newNo.onclick = () => close(); // Fix: close on No
 
         modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
     },
     starfield: () => {
         const c = q('#stars');
@@ -514,121 +900,261 @@ const UI = {
         if (!modal) {
             modal = document.createElement('div');
             modal.id = 'logs-modal';
-            modal.className = 'modal-overlay';
-            modal.style.zIndex = '200';
+            modal.className = 'modal-overlay modal-top';
             modal.innerHTML = `
-                <div class="modal" style="max-width:500px;">
+                <div class="modal modal-md">
                     <div class="modal-header">
-                        <h3>📜 Ticket Protokoll</h3>
-                        <button class="btn-ghost" onclick="q('#logs-modal').classList.remove('open')">✕</button>
+                        <h3>${Icon('scroll-text', 18)} Ticket-Protokoll</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon" title="${Lang.t('close')}" aria-label="${Lang.t('close')}" onclick="q('#logs-modal').classList.remove('open')">${Icon('x', 16)}</button>
+                        </div>
                     </div>
-                    <div class="modal-body" id="logs-body" style="background:rgba(0,0,0,0.2); border-radius:8px; padding:15px; max-height: 60vh;"></div>
+                    <div class="modal-body flush" id="logs-body"></div>
                     <div class="modal-footer">
-                        <button class="btn-secondary" onclick="q('#logs-modal').classList.remove('open')">Schließen</button>
+                        <button class="btn-secondary" onclick="q('#logs-modal').classList.remove('open')">${Lang.t('close')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
         }
 
+        const iconForLog = (msg = '') => {
+            const text = msg.toLowerCase();
+            if (text.includes('status')) return 'refresh-cw';
+            if (text.includes('priorit') || text.includes('prio')) return 'flag';
+            if (text.includes('kategorie')) return 'tags';
+            if (text.includes('zuweisung') || text.includes('verantwortlich') || text.includes('beteilig')) return 'users';
+            if (text.includes('todo') || text.includes('teilaufgabe')) return 'check-square';
+            if (text.includes('kommentar') || text.includes('notiz')) return 'message-square';
+            if (text.includes('archiv')) return 'archive';
+            return 'activity';
+        };
+
         const body = q('#logs-body');
         body.innerHTML = '';
         if (!ticket.logs || ticket.logs.length === 0) {
-            body.innerHTML = '<p style="opacity:0.5; text-align:center; padding:20px;">Keine Einträge vorhanden.</p>';
+            body.innerHTML = '<div class="empty-state">Keine Einträge vorhanden.</div>';
         } else {
-            ticket.logs.slice().reverse().forEach(l => {
-                const item = document.createElement('div');
-                item.style.borderBottom = '1px solid var(--border)';
-                item.style.padding = '12px 0';
-                item.innerHTML = `
-                    <div style="font-size:11px; margin-bottom:4px; display:flex; justify-content:space-between; color:var(--text-sec);">
-                        <span style="font-weight:600; color:var(--primary-solid)">${l.user}</span>
-                        <span>${Utils.fmtDate(l.date)}</span>
-                    </div>
-                    <div style="font-size:13px; line-height:1.4; display:flex; align-items:center; gap:6px;">
-                        ${l.msg}
-                        ${l.details ? `<span class="info-icon" data-tooltip="${l.details.replace(/"/g, '&quot;')}">i</span>` : ''}
-                    </div>
-                `;
-                body.appendChild(item);
-            });
+            body.innerHTML = ticket.logs.slice().reverse().map(l => UI.logRow({
+                icon: iconForLog(l.msg),
+                user: l.user || 'System',
+                date: l.date,
+                action: l.msg,
+                details: l.details
+            })).join('');
         }
         modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
+    // Farbwähler: runder Farbfeld-Button, Popover mit Farbfläche, Farbton, Pipette, HEX und RGB
+    colorPickerMarkup: (id, label) => `
+        <div class="color-field">
+            <button type="button" class="color-swatch-btn" id="${id}" popovertarget="${id}-pop" title="${label}" aria-label="${label}" aria-haspopup="dialog" aria-expanded="false"></button>
+            <div class="color-popover" id="${id}-pop" popover role="dialog" aria-label="${label}">
+                <div class="cp-area" tabindex="0" aria-label="Sättigung und Helligkeit"><span class="cp-thumb"></span></div>
+                <div class="cp-row">
+                    <button type="button" class="btn-ghost btn-icon btn-sm cp-eyedrop" title="Farbe vom Bildschirm aufnehmen" aria-label="Farbe vom Bildschirm aufnehmen">${Icon('pipette', 15)}</button>
+                    <span class="cp-preview"></span>
+                    <input type="range" class="cp-hue" min="0" max="359" step="1" aria-label="Farbton">
+                </div>
+                <div class="cp-inputs">
+                    <label class="cp-input cp-hex"><input type="text" maxlength="7" spellcheck="false"><span>HEX</span></label>
+                    <label class="cp-input"><input type="number" min="0" max="255" data-ch="0"><span>R</span></label>
+                    <label class="cp-input"><input type="number" min="0" max="255" data-ch="1"><span>G</span></label>
+                    <label class="cp-input"><input type="number" min="0" max="255" data-ch="2"><span>B</span></label>
+                </div>
+            </div>
+        </div>`,
+
+    createColorPicker: (root, { value, onInput, onCommit }) => {
+        const btn = root.querySelector('.color-swatch-btn');
+        const pop = root.querySelector('.color-popover');
+        const area = pop.querySelector('.cp-area');
+        const thumb = pop.querySelector('.cp-thumb');
+        const hue = pop.querySelector('.cp-hue');
+        const hexIn = pop.querySelector('.cp-hex input');
+        const rgbIn = [...pop.querySelectorAll('[data-ch]')];
+        const drop = pop.querySelector('.cp-eyedrop');
+        const clamp = (n, min = 0, max = 1) => Math.min(max, Math.max(min, n));
+        let hsv = Utils.hexToHsv(value);
+        let committed = Utils.hsvToHex(hsv);
+
+        const render = (skip) => {
+            const hex = Utils.hsvToHex(hsv);
+            root.style.setProperty('--cp-hue', hsv.h);
+            root.style.setProperty('--cp-color', hex);
+            thumb.style.left = `${hsv.s * 100}%`;
+            thumb.style.top = `${(1 - hsv.v) * 100}%`;
+            if (skip !== 'hue') hue.value = hsv.h;
+            if (skip !== 'hex') hexIn.value = hex.toUpperCase();
+            if (skip !== 'rgb') {
+                const n = parseInt(hex.slice(1), 16);
+                [(n >> 16) & 255, (n >> 8) & 255, n & 255].forEach((c, i) => { rgbIn[i].value = c; });
+            }
+            return hex;
+        };
+        const change = (skip) => { const hex = render(skip); if (onInput) onInput(hex); };
+        const commit = () => {
+            const hex = Utils.hsvToHex(hsv);
+            if (hex !== committed && onCommit) onCommit(hex);
+            committed = hex;
+        };
+
+        // Farbfläche: ziehen und Pfeiltasten
+        const fromPointer = (e) => {
+            const r = area.getBoundingClientRect();
+            hsv.s = clamp((e.clientX - r.left) / r.width);
+            hsv.v = 1 - clamp((e.clientY - r.top) / r.height);
+            change();
+        };
+        area.onpointerdown = (e) => {
+            area.setPointerCapture(e.pointerId);
+            fromPointer(e);
+            area.onpointermove = fromPointer;
+        };
+        area.onpointerup = area.onpointercancel = () => { area.onpointermove = null; commit(); };
+        area.onkeydown = (e) => {
+            const step = e.shiftKey ? 0.1 : 0.02;
+            const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+            if (!moves[e.key]) return;
+            e.preventDefault();
+            hsv.s = clamp(hsv.s + moves[e.key][0]);
+            hsv.v = clamp(hsv.v + moves[e.key][1]);
+            change();
+            commit();
+        };
+
+        hue.oninput = () => { hsv.h = Number(hue.value); change('hue'); };
+        hue.onchange = commit;
+        hexIn.onchange = () => {
+            const hex = Utils.normalizeHex(hexIn.value);
+            if (hex) hsv = Utils.hexToHsv(hex);
+            change();
+            commit();
+        };
+        rgbIn.forEach(inp => {
+            inp.onchange = () => {
+                const hex = '#' + rgbIn.map(x => clamp(Math.round(Number(x.value) || 0), 0, 255).toString(16).padStart(2, '0')).join('');
+                hsv = Utils.hexToHsv(hex);
+                change();
+                commit();
+            };
+        });
+        [hexIn, ...rgbIn].forEach(inp => inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); }));
+
+        if (window.EyeDropper) {
+            drop.onclick = async () => {
+                try {
+                    const res = await new window.EyeDropper().open();
+                    hsv = Utils.hexToHsv(res.sRGBHex);
+                    change();
+                    commit();
+                } catch { }
+            };
+        } else {
+            drop.hidden = true;
+        }
+
+        // Popover unter dem Farbfeld – gleiche Regel wie bei Auswahllisten: immer nach unten
+        const place = () => {
+            const r = btn.getBoundingClientRect();
+            const w = pop.offsetWidth;
+            pop.style.left = `${clamp(r.left + r.width / 2 - w / 2, 8, window.innerWidth - w - 8)}px`;
+            pop.style.top = `${r.bottom + 10}px`;
+        };
+        pop.addEventListener('beforetoggle', (e) => {
+            if (e.newState === 'open') UI.ensureSpaceBelow(btn, 330);
+        });
+        pop.addEventListener('toggle', (e) => {
+            const open = e.newState === 'open';
+            btn.setAttribute('aria-expanded', open);
+            if (open) {
+                place();
+                window.addEventListener('scroll', place, true);
+                window.addEventListener('resize', place);
+            } else {
+                window.removeEventListener('scroll', place, true);
+                window.removeEventListener('resize', place);
+                commit();
+            }
+        });
+
+        render();
+        if (window.lucide) lucide.createIcons();
+        return {
+            setValue: (hex) => {
+                const norm = Utils.normalizeHex(hex);
+                if (!norm) return;
+                hsv = Utils.hexToHsv(norm);
+                committed = norm;
+                render();
+            }
+        };
+    },
+
+    // Eine Protokollzeile – gleich für Ticket- und System-Protokoll
+    logRow: ({ icon, user, date, action, details }) => `
+        <div class="log-row">
+            <div class="log-icon">${Icon(icon, 16)}</div>
+            <div class="log-main">
+                <div class="log-meta"><span>${Utils.esc(user)}</span><span>${Utils.fmtDate(date)}</span></div>
+                <div class="log-action">${Utils.esc(action)}</div>
+                ${details ? `<div class="log-details">${Utils.esc(details)}</div>` : ''}
+            </div>
+        </div>`,
+
+    // Aufklappende Listen öffnen immer nach unten; die Höhe richtet sich nach dem Platz im Fenster
+    dropdownMaxHeight: (anchor) => {
+        const below = window.innerHeight - anchor.getBoundingClientRect().bottom - 18;
+        return Math.max(120, Math.min(260, Math.floor(below)));
+    },
+
+    // Reicht der Platz unter dem Feld nicht, wird der nächste scrollbare Bereich (oder die Seite) nachgezogen
+    ensureSpaceBelow: (anchor, needed) => {
+        const missing = needed - (window.innerHeight - anchor.getBoundingClientRect().bottom);
+        if (missing <= 0) return;
+        let el = anchor.parentElement;
+        while (el && el !== document.body) {
+            const oy = getComputedStyle(el).overflowY;
+            if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
+                const room = el.scrollHeight - el.clientHeight - el.scrollTop;
+                const step = Math.min(missing, room);
+                if (step > 0) el.scrollTop += step;
+                if (step >= missing) return;
+                break;
+            }
+            el = el.parentElement;
+        }
+        window.scrollBy(0, missing);
     },
 
     createMultiSelect: (container, options, initialValues = [], onChange = null) => {
-        // Clear container
+        // Mehrfachauswahl im selben Look wie <select> (Stile in style.css, Abschnitt "Auswahllisten")
         container.innerHTML = '';
         container.classList.add('multi-select-container');
+        container.classList.remove('open');
 
-        // Header (The box looking like a select)
         const header = document.createElement('div');
         header.className = 'multi-select-header';
-        // Style to match standard select inputs
-        // Style to match standard select inputs
-        header.style.cssText = `
-            border: 1px solid var(--border);
-            background: var(--bg2);
-            color: var(--text);
-            padding: 8px 15px;
-            border-radius: 8px;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            min-height: 42px;
-            font-size: 14px;
-            position: relative;
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);
-        `;
-        const updateHeader = () => {
-            const count = inputs.filter(i => i.checked).length;
-            const selected = inputs.filter(i => i.checked);
-            const arrow = '<span style="font-size:10px; opacity:0.5; margin-left:10px;">▼</span>';
+        header.tabIndex = 0;
+        header.setAttribute('role', 'button');
+        header.setAttribute('aria-haspopup', 'listbox');
+        header.setAttribute('aria-expanded', 'false');
 
-            if (count === 0) header.innerHTML = `<span>Bitte wählen...</span> ${arrow}`;
-            else if (count <= 2) {
-                const labels = selected.map(i => i.dataset.label || i.value);
-                header.innerHTML = `<span>${labels.join(', ')}</span> ${arrow}`;
-            } else {
-                header.innerHTML = `<span>${count} ausgewählt</span> ${arrow}`;
-            }
-        };
-        container.appendChild(header);
-
-        // Dropdown List
         const dropdown = document.createElement('div');
         dropdown.className = 'multi-select-dropdown';
-        dropdown.style.cssText = `
-            display: none;
-            position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
-            background: var(--bg2);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            z-index: 11000;
-            max-height: 250px;
-            overflow-y: auto;
-            box-shadow: 0 8px 16px var(--shadow);
-            margin-top: 4px;
-            padding: 5px 0;
-        `;
-        // Ensure style tag for 'open' exists once
-        if (!document.getElementById('ms-style-sheet')) {
-            const st = document.createElement('style');
-            st.id = 'ms-style-sheet';
-            st.textContent = `
-                .multi-select-dropdown.open { display: block !important; }
-                .ms-row { color: var(--text) !important; transition: all 0.2s; }
-                .ms-row:hover { background: var(--primary) !important; color: white !important; }
-                .ms-row span { color: inherit !important; font-weight: 500; }
-                .ms-row input[type="checkbox"] { cursor: pointer; width: 16px; height: 16px; }
-            `;
-            document.head.appendChild(st);
-        }
+        dropdown.setAttribute('role', 'listbox');
+        dropdown.setAttribute('aria-multiselectable', 'true');
 
         const inputs = [];
+
+        const updateHeader = () => {
+            const selected = inputs.filter(i => i.checked);
+            let text = 'Bitte wählen...';
+            if (selected.length > 2) text = `${selected.length} ausgewählt`;
+            else if (selected.length) text = selected.map(i => i.dataset.label || i.value).join(', ');
+            header.innerHTML = `<span class="ms-text${selected.length ? '' : ' is-placeholder'}">${Utils.esc(text)}</span><span class="ms-arrow" aria-hidden="true"></span>`;
+        };
 
         options.forEach(opt => {
             const isObj = typeof opt === 'object';
@@ -637,55 +1163,71 @@ const UI = {
 
             const row = document.createElement('label');
             row.className = 'ms-row';
-            row.style.cssText = `
-                display: flex;
-                align-items: center;
-                padding: 10px 16px;
-                cursor: pointer;
-                gap: 12px;
-                font-size: 14px;
-                width: 100%;
-                text-transform: none;
-                user-select: none;
-            `;
 
             const box = document.createElement('input');
             box.type = 'checkbox';
             box.value = val;
             box.dataset.label = label;
             box.checked = initialValues.includes(val);
-            box.onchange = (e) => {
+            box.onchange = () => {
                 updateHeader();
                 if (onChange) onChange(inputs.filter(i => i.checked).map(i => i.value));
             };
-
             inputs.push(box);
 
-            row.appendChild(box);
             const textSpan = document.createElement('span');
             textSpan.textContent = label;
+
+            row.appendChild(box);
             row.appendChild(textSpan);
             dropdown.appendChild(row);
         });
 
+        container.appendChild(header);
         container.appendChild(dropdown);
         updateHeader();
 
-        // Toggle visibility
-        header.onclick = (e) => {
-            e.stopPropagation();
-            dropdown.classList.toggle('open');
+        const close = () => {
+            container.classList.remove('open');
+            header.setAttribute('aria-expanded', 'false');
         };
 
-        // Close on click outside
-        window.addEventListener('click', (e) => {
-            if (!container.contains(e.target)) {
-                dropdown.classList.remove('open');
+        // Wie <select>: immer nach unten, Höhe passt sich dem Platz an
+        const open = () => {
+            document.querySelectorAll('.multi-select-container.open').forEach(c => {
+                if (c !== container) c.classList.remove('open');
+            });
+            UI.ensureSpaceBelow(header, Math.min(dropdown.scrollHeight, 260) + 18);
+            dropdown.style.maxHeight = `${UI.dropdownMaxHeight(header)}px`;
+            container.classList.add('open');
+            header.setAttribute('aria-expanded', 'true');
+        };
+
+        const toggle = () => container.classList.contains('open') ? close() : open();
+
+        header.onclick = (e) => {
+            e.stopPropagation();
+            toggle();
+        };
+        header.onkeydown = (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            } else if (e.key === 'Escape') {
+                close();
             }
-        });
+        };
+
+        // Klick außerhalb schließt – Listener nur einmal pro Container
+        if (container._msOutside) window.removeEventListener('click', container._msOutside);
+        container._msOutside = (e) => {
+            if (!container.contains(e.target)) close();
+        };
+        window.addEventListener('click', container._msOutside);
 
         return {
             getValue: () => inputs.filter(i => i.checked).map(i => i.value),
+            setDisabled: (off) => container.classList.toggle('is-disabled', !!off),
             setValue: (vals) => {
                 inputs.forEach(i => i.checked = vals.includes(i.value));
                 updateHeader();
@@ -707,86 +1249,59 @@ const Settings = {
         Settings.apply(s);
         const toggle = q('#theme-toggle');
         if (toggle) {
-            toggle.innerHTML = '⚙️';
+            toggle.innerHTML = Icon('settings', 16);
+            toggle.title = Lang.t('settings');
             toggle.id = 'btn-settings';
             toggle.onclick = Settings.openModal;
+            if (window.lucide) lucide.createIcons();
         }
     },
 
-    bgPresets: {
-        dark: [{
-            type: 'default',
-            val: '',
-            label: 'Standard',
-            icon: '🌌'
-        },
-        {
-            type: 'class',
-            val: 'bg-anim-space',
-            label: 'Deep Space (Anim)',
-            icon: '🚀'
-        },
-        {
-            type: 'class',
-            val: 'bg-anim-nebula',
-            label: 'Nebula (Anim)',
-            icon: '✨'
-        },
-        {
-            type: 'color',
-            val: 'linear-gradient(180deg, #0f172a, #1e293b)',
-            label: 'Deep Ocean',
-            icon: '🩶'
-        },
-        {
-            type: 'color',
-            val: 'linear-gradient(180deg, #064e3b, #065f46)',
-            label: 'Forest',
-            icon: '🌲'
-        }
-        ],
-        light: [{
-            type: 'default',
-            val: '',
-            label: 'Standard',
-            icon: '☀️'
-        },
-        {
-            type: 'class',
-            val: 'bg-anim-clouds',
-            label: 'Clouds (Anim)',
-            icon: '☁️'
-        },
-        {
-            type: 'class',
-            val: 'bg-anim-waves',
-            label: 'Soft Waves (Anim)',
-            icon: '🌊'
-        },
-        {
-            type: 'color',
-            val: 'linear-gradient(180deg, #f5f3ff, #ede9fe)',
-            label: 'Lavender',
-            icon: '🌈'
-        },
-        {
-            type: 'color',
-            val: 'linear-gradient(180deg, #f0fdf4, #dcfce7)',
-            label: 'Mint',
-            icon: '🍃'
-        }
-        ]
-    },
+    // Jeder Hintergrund hat eine helle und eine dunkle Variante (siehe --bgp-* in style.css)
+    bgPresets: [
+        { type: 'default', val: '', preset: 'bg-default', label: 'Standard', icon: 'moon-star' },
+        { type: 'class', val: 'bg-aurora', preset: 'bg-aurora', label: 'Aurora', icon: 'sparkles' },
+        { type: 'class', val: 'bg-nebula', preset: 'bg-nebula', label: 'Nebel', icon: 'orbit' },
+        { type: 'class', val: 'bg-ocean', preset: 'bg-ocean', label: 'Ozean', icon: 'waves' },
+        { type: 'class', val: 'bg-forest', preset: 'bg-forest', label: 'Wald', icon: 'trees' },
+        { type: 'class', val: 'bg-ember', preset: 'bg-ember', label: 'Glut', icon: 'flame' },
+        { type: 'class', val: 'bg-sand', preset: 'bg-sand', label: 'Sand', icon: 'mountain' },
+        { type: 'class', val: 'bg-graphite', preset: 'bg-graphite', label: 'Graphit', icon: 'grid-3x3' }
+    ],
 
+    // Alte Hintergrund-Werte auf die neuen Vorlagen abbilden
+    normalizeBg: (s) => {
+        const legacy = {
+            'bg-anim-space': 'bg-aurora',
+            'bg-anim-nebula': 'bg-nebula',
+            'bg-anim-clouds': 'bg-aurora',
+            'bg-anim-waves': 'bg-ocean',
+            'linear-gradient(180deg, #0f172a, #1e293b)': 'bg-ocean',
+            'linear-gradient(180deg, #064e3b, #065f46)': 'bg-forest',
+            'linear-gradient(180deg, #f5f3ff, #ede9fe)': 'bg-nebula',
+            'linear-gradient(180deg, #f0fdf4, #dcfce7)': 'bg-forest'
+        };
+        if ((s.bgType === 'class' || s.bgType === 'color') && legacy[s.bgValue]) {
+            s.bgType = 'class';
+            s.bgValue = legacy[s.bgValue];
+        }
+        return s;
+    },
+    applyAccent: (hex) => {
+        const root = document.documentElement.style;
+        root.setProperty('--primary-solid', hex);
+        root.setProperty('--primary-rgb', Utils.hexToRgb(hex));
+        root.setProperty('--primary-grad', `linear-gradient(135deg, ${hex}, ${Utils.adjustColor(hex, -20)})`);
+    },
     apply: (s) => {
         const isLight = s.theme === 'light';
         if (isLight) document.documentElement.className = 'light';
         else document.documentElement.className = '';
 
-        document.documentElement.style.setProperty('--primary-solid', s.accentColor);
-        document.documentElement.style.setProperty('--primary-grad', `linear-gradient(135deg, ${s.accentColor}, ${Utils.adjustColor(s.accentColor, -20)})`);
+        Settings.applyAccent(s.accentColor);
 
         // Applied Background
+        Settings.normalizeBg(s);
         const stars = q('#stars');
         const overlay = 'rgba(0,0,0,0.4)';
 
@@ -794,7 +1309,7 @@ const Settings = {
         document.body.className = '';
 
         if (s.bgType === 'default') {
-            document.body.style.background = isLight ? '#f6f7fb' : '';
+            document.body.style.background = '';
             if (stars) stars.style.display = isLight ? 'none' : 'block';
         } else if (s.bgType === 'color') {
             document.body.style.background = isLight ? s.bgValue : `linear-gradient(${overlay}, ${overlay}), ${s.bgValue}`;
@@ -816,39 +1331,55 @@ const Settings = {
             modal.id = 'settings-modal';
             modal.className = 'modal-overlay';
             modal.innerHTML = `
-                <div class="modal" style="max-width:500px">
-                    <div class="modal-header"><h3>Einstellungen</h3><button class="btn-ghost close-m">✕</button></div>
-                    <div class="modal-body">
+                <div class="modal modal-lg">
+                    <div class="modal-header">
+                        <h3>${Icon('settings', 18)} ${Lang.t('portalSettings')}</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
+                        </div>
+                    </div>
+                    <div class="modal-body form-grid">
                         <div class="field">
-                            <label>Design Modus</label>
-                            <div class="input-row">
-                                <button class="btn-secondary s-theme-btn" data-val="dark" style="flex:1">Dunkel</button>
-                                <button class="btn-secondary s-theme-btn" data-val="light" style="flex:1">Hell</button>
+                            <label>${Lang.t('themeMode')}</label>
+                            <div class="tabs segmented">
+                                <button type="button" class="tab-btn s-theme-btn" data-val="dark">${Icon('moon', 16)}${Lang.t('dark')}</button>
+                                <button type="button" class="tab-btn s-theme-btn" data-val="light">${Icon('sun', 16)}${Lang.t('light')}</button>
                             </div>
                         </div>
                         <div class="field">
-                            <label>Akzentfarbe</label>
-                            <input type="color" id="s-color" style="width:100%; height:40px; cursor:pointer; background:none; border:none; padding:0;">
-                        </div>
-                        <div class="field">
-                            <label>Sprache</label>
+                            <label>${Lang.t('language')}</label>
                             <select id="s-lang"><option value="de">Deutsch</option><option value="en">English</option></select>
                         </div>
-                        <div class="field">
-                            <label>Hintergrund</label>
-                            <div id="s-bg-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin-bottom:10px;">
+                        <div class="field field-wide">
+                            <label>${Lang.t('accentColor')}</label>
+                            <div class="accent-picker">
+                                <div class="accent-presets" role="group" aria-label="${Lang.t('accentColor')}">
+                                    <button type="button" class="accent-preset" data-color="#6366f1" style="--preset:#6366f1" title="Indigo" aria-label="Indigo"></button>
+                                    <button type="button" class="accent-preset" data-color="#63bce8" style="--preset:#63bce8" title="Himmelblau" aria-label="Himmelblau"></button>
+                                    <button type="button" class="accent-preset" data-color="#10b981" style="--preset:#10b981" title="Grün" aria-label="Grün"></button>
+                                    <button type="button" class="accent-preset" data-color="#f59e0b" style="--preset:#f59e0b" title="Orange" aria-label="Orange"></button>
+                                    <button type="button" class="accent-preset" data-color="#ef4444" style="--preset:#ef4444" title="Rot" aria-label="Rot"></button>
+                                </div>
+                                <span class="accent-picker-divider"></span>
+                                ${UI.colorPickerMarkup('s-color', 'Eigene Farbe')}
+                                <span class="accent-picker-label" id="s-color-label"></span>
+                            </div>
+                        </div>
+                        <div class="field field-wide">
+                            <label>${Lang.t('background')}</label>
+                            <div id="s-bg-grid" class="bg-grid">
                                 <!-- Rendered by renderBgGrid -->
                             </div>
-                            <input type="file" id="s-bg-file" style="display:none" accept="image/*">
+                            <input type="file" id="s-bg-file" accept="image/*">
                         </div>
-                        <div class="field">
-                            <label>Sicherheit</label>
+                        <div class="field field-wide">
+                            <label>${Lang.t('security')}</label>
                             <div id="s-sec-area">
                                 <!-- Rendered dynamically -->
                             </div>
                         </div>
                     </div>
-                    <div class="modal-footer"><button class="btn-primary close-m">Fertig</button></div>
+                    <div class="modal-footer"><button class="btn-primary close-m">${Lang.t('done')}</button></div>
                 </div>`;
             document.body.appendChild(modal);
             modal.querySelectorAll('.close-m').forEach(x => x.onclick = () => modal.classList.remove('open'));
@@ -863,17 +1394,44 @@ const Settings = {
                     Settings.renderState(modal, s);
                 };
             });
-            q('#s-color').onchange = async (e) => {
-                const s = await Store.getSettings();
-                s.accentColor = e.target.value;
-                await Store.saveSettings(s);
-                Settings.apply(s);
-            };
+            Settings.colorPicker = UI.createColorPicker(modal.querySelector('.color-field'), {
+                value: (await Store.getSettings()).accentColor,
+                onInput: (hex) => {
+                    Settings.applyAccent(hex);
+                    q('#s-color-label').textContent = hex;
+                },
+                onCommit: async (hex) => {
+                    const s = await Store.getSettings();
+                    s.accentColor = hex;
+                    await Store.saveSettings(s);
+                    Settings.apply(s);
+                    Settings.renderState(modal, s);
+                }
+            });
+            modal.querySelectorAll('.accent-preset').forEach(b => {
+                b.onclick = async () => {
+                    const s = await Store.getSettings();
+                    s.accentColor = b.dataset.color;
+                    await Store.saveSettings(s);
+                    Settings.apply(s);
+                    Settings.renderState(modal, s);
+                };
+            });
             q('#s-lang').onchange = async (e) => {
                 const s = await Store.getSettings();
                 s.lang = e.target.value;
                 await Store.saveSettings(s);
                 Settings.apply(s);
+                Lang.current = e.target.value;
+                Lang.applyToDOM();
+                if (q('.kanban-board')) {
+                    AdminBoard.render();
+                    AdminBoard.renderArchive();
+                }
+                if (q('#user-tickets')) UserDash.renderList();
+                q('#sys-settings-modal')?.remove();
+                modal.remove();
+                Settings.openModal();
             };
         }
 
@@ -886,13 +1444,13 @@ const Settings = {
         if (user && secArea) {
             const isEnabled = user.twoFactorEnabled;
             secArea.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.1); padding:10px; border-radius:6px;">
-                    <div>
-                        <div style="font-weight:600; font-size:13px;">2-Faktor-Authentifizierung</div>
-                        <div style="font-size:11px; opacity:0.7;">${isEnabled ? 'Aktiviert' : 'Deaktiviert'}</div>
+                <div class="setting-row">
+                    <div class="check-text">
+                        <strong>2-Faktor-Authentifizierung</strong>
+                        <span>${isEnabled ? 'Aktiviert' : 'Deaktiviert'}</span>
                     </div>
-                    <button class="btn-${isEnabled ? 'ghost' : 'primary'}" id="btn-toggle-2fa" style="font-size:12px;">
-                        ${isEnabled ? 'Deaktivieren' : 'Einrichten'}
+                    <button class="${isEnabled ? 'btn-secondary' : 'btn-primary'} btn-sm" id="btn-toggle-2fa">
+                        ${Icon(isEnabled ? 'shield-off' : 'shield-check', 15)}${isEnabled ? 'Deaktivieren' : 'Einrichten'}
                     </button>
                 </div>
             `;
@@ -918,10 +1476,11 @@ const Settings = {
         }
 
         modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
     },
     renderState: (modal, s) => {
         modal.querySelectorAll('.s-theme-btn').forEach(b => {
-            b.className = (b.dataset.val === s.theme) ? 'btn-primary s-theme-btn' : 'btn-secondary s-theme-btn';
+            b.classList.toggle('active', b.dataset.val === (s.theme || 'dark'));
         });
 
         // Dynamic Background Grid
@@ -931,9 +1490,20 @@ const Settings = {
             Settings.renderBgGrid(modal, s);
         }
 
-        q('#s-color').value = s.accentColor;
+        Settings.colorPicker?.setValue(s.accentColor);
+        const accent = (s.accentColor || '').toLowerCase();
+        let isPreset = false;
+        modal.querySelectorAll('.accent-preset').forEach(b => {
+            const active = b.dataset.color.toLowerCase() === accent;
+            if (active) isPreset = true;
+            b.classList.toggle('active', active);
+            b.setAttribute('aria-pressed', active);
+        });
+        q('#s-color').classList.toggle('active', !isPreset);
+        q('#s-color-label').textContent = s.accentColor;
         q('#s-lang').value = s.lang || 'de';
 
+        Settings.normalizeBg(s);
         modal.querySelectorAll('.s-bg-btn').forEach(b => {
             let active = false;
             if (b.dataset.type === 'image') {
@@ -941,8 +1511,11 @@ const Settings = {
             } else {
                 active = (b.dataset.type === s.bgType && (b.dataset.val || '') === s.bgValue);
             }
-            b.style.borderColor = active ? 'var(--primary-solid)' : 'transparent';
-            b.style.boxShadow = active ? '0 0 10px var(--primary-solid)' : 'none';
+            b.classList.toggle('active', active);
+            b.setAttribute('aria-pressed', active);
+            if (b.dataset.type === 'image') {
+                b.style.backgroundImage = (s.bgType === 'image' && s.bgValue) ? `url(${s.bgValue})` : '';
+            }
         });
     },
 
@@ -950,16 +1523,18 @@ const Settings = {
         const grid = modal.querySelector('#s-bg-grid');
         if (!grid) return;
 
-        const presets = Settings.bgPresets[s.theme || 'dark'];
+        const presets = Settings.bgPresets;
         grid.innerHTML = '';
 
         presets.forEach(p => {
             const btn = document.createElement('button');
+            btn.type = 'button';
             btn.className = 'btn-secondary s-bg-btn';
             btn.dataset.type = p.type;
             btn.dataset.val = p.val;
+            btn.dataset.preset = p.preset;
             btn.title = p.label;
-            btn.textContent = p.icon;
+            btn.innerHTML = `${Icon(p.icon, 16)}<span>${p.label}</span>`;
             btn.onclick = async () => {
                 s.bgType = p.type;
                 s.bgValue = p.val;
@@ -972,13 +1547,16 @@ const Settings = {
 
         // Add upload button
         const upBtn = document.createElement('button');
+        upBtn.type = 'button';
         upBtn.className = 'btn-secondary s-bg-btn';
         upBtn.id = 's-bg-upload';
         upBtn.dataset.type = 'image';
+        upBtn.dataset.preset = 'upload';
         upBtn.title = 'Eigenes Bild';
-        upBtn.textContent = '📁';
+        upBtn.innerHTML = `${Icon('image-plus', 16)}<span>Eigenes Bild</span>`;
         upBtn.onclick = () => q('#s-bg-file').click();
         grid.appendChild(upBtn);
+        if (window.lucide) lucide.createIcons();
 
         q('#s-bg-file').onchange = async (e) => {
             const file = e.target.files[0];
@@ -1014,13 +1592,12 @@ const UserDash = {
         // Admin Button Injection if on dashboard (for superadmin/admin)
         const user = await Store.currentUser();
         if (user && (user.role === 'admin' || user.role === 'superadmin')) {
-            const rightNav = q('.topbar .right');
+            const rightNav = q('.topbar-right');
             if (rightNav && !q('#btn-to-admin')) {
                 const btn = document.createElement('button');
                 btn.id = 'btn-to-admin';
                 btn.className = 'btn-ghost';
-                btn.textContent = 'Admin Panel';
-                btn.style.marginRight = '10px';
+                btn.innerHTML = `${Icon('shield', 16)}${Lang.t('adminPanel')}`;
                 btn.onclick = () => window.location.href = 'admin.html';
                 rightNav.insertBefore(btn, rightNav.firstChild);
             }
@@ -1083,24 +1660,17 @@ const UserDash = {
         };
 
         // Populate Categories dynamically with Custom Multi-Select
-        const catContainer = q('#t-cat').parentElement;
+        const catContainer = q('#u-cat-container');
         if (catContainer) {
             const settings = await Store.getSettings();
             const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
-
-            // Clear old label/select if present (re-run safety)
-            catContainer.innerHTML = '<label>Kategorie</label>';
-
-            // Create container for multi-select
-            const msContainer = document.createElement('div');
-            msContainer.id = 't-cat-ms';
-            catContainer.appendChild(msContainer);
-
-            UserDash.categoryInstance = UI.createMultiSelect(msContainer, categories, ['Allgemein']);
+            const initial = categories.includes('Allgemein') ? ['Allgemein'] : categories.slice(0, 1);
+            UserDash.categoryInstance = UI.createMultiSelect(catContainer, categories, initial);
         }
 
         // Modal Events
         if (q('#u-m-close')) q('#u-m-close').onclick = UserDash.closeModal;
+        if (q('#u-m-close-bt')) q('#u-m-close-bt').onclick = UserDash.closeModal;
         if (q('#u-ticket-modal')) q('#u-ticket-modal').onclick = (e) => {
             if (e.target.id === 'u-ticket-modal') UserDash.closeModal();
         };
@@ -1144,37 +1714,24 @@ const UserDash = {
             });
         }
 
-        // Search Bar Injection - Target the H2 directly
-        const ticketSection = qa('section.card').find(s => s.querySelector('h2') && s.querySelector('h2').textContent.includes('Deine Tickets'));
-        if (ticketSection) {
-            const h2 = ticketSection.querySelector('h2');
-            if (h2 && !q('#u-search')) {
-                // Convert H2 to Flex container
-                h2.style.display = 'flex';
-                h2.style.justifyContent = 'space-between';
-                h2.style.alignItems = 'center';
-                h2.style.flexWrap = 'wrap';
+        // Suche in der Ticketliste
+        const search = q('#u-search');
+        if (search) {
+            search.placeholder = Lang.t('search');
+            search.oninput = () => UserDash.renderList();
+        }
 
-                // Create Search Input
-                const search = document.createElement('input');
-                search.id = 'u-search';
-                search.type = 'text';
-                search.placeholder = '🔍 Suchen...';
-                search.style.fontSize = '13px';
-                search.style.padding = '6px 10px';
-                search.style.width = '200px';
-                search.style.border = '1px solid var(--border)';
-                search.style.borderRadius = '4px';
-                search.style.background = 'var(--bg)';
-                search.style.color = 'var(--text)';
-                search.style.fontWeight = 'normal';
-
-                // Prevent click propagation
-                search.onclick = (e) => e.stopPropagation();
-                search.oninput = () => UserDash.renderList();
-
-                h2.appendChild(search);
+        const archiveFilter = q('#dash-filter-archive');
+        if (archiveFilter) {
+            const label = archiveFilter.closest('label')?.querySelector('[data-i18n]');
+            if (label) {
+                label.dataset.i18n = 'showClosedArchived';
+                label.textContent = Lang.t('showClosedArchived');
             }
+            archiveFilter.onchange = () => {
+                UserDash.displayLimit = UserDash.pageSize;
+                UserDash.renderList();
+            };
         }
 
         await UserDash.renderList();
@@ -1187,17 +1744,15 @@ const UserDash = {
             pan.style.display = 'flex';
             UserDash.selectedFiles.forEach((f, idx) => {
                 const tag = document.createElement('div');
-                tag.style.background = 'rgba(0,0,0,0.3)';
-                tag.style.padding = '4px 8px';
-                tag.style.borderRadius = '4px';
-                tag.style.fontSize = '12px';
-                tag.innerHTML = `<span>${f.name}</span> <span style="cursor:pointer; color:var(--danger); margin-left:4px;">✕</span>`;
-                tag.querySelector('span:last-child').onclick = () => {
+                tag.className = 'file-chip';
+                tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
+                tag.querySelector('.remove-file').onclick = () => {
                     UserDash.selectedFiles.splice(idx, 1);
                     UserDash.renderFilePreview();
                 };
                 pan.appendChild(tag);
             });
+            if (window.lucide) lucide.createIcons();
         } else {
             pan.style.display = 'none';
         }
@@ -1212,23 +1767,18 @@ const UserDash = {
         const t = tickets.find(x => x.id === id);
         if (!t) return;
 
-        if (q('#u-m-title')) q('#u-m-title').textContent = t.title + (t.archived ? ' (Archiviert)' : '');
-        if (q('#u-m-desc')) q('#u-m-desc').textContent = t.desc || 'Keine Beschreibung';
+        if (q('#u-m-title')) q('#u-m-title').textContent = t.title + (t.archived ? ` (${Lang.t('archived')})` : '');
+        if (q('#u-m-desc')) q('#u-m-desc').textContent = t.desc || Lang.t('noDescription');
 
         // Read-only check for archived
         const uChatInput = q('#u-chat-input');
         const uChatSend = q('#u-chat-send');
         if (uChatInput) uChatInput.disabled = t.archived;
-        if (uChatSend) {
-            uChatSend.disabled = t.archived;
-            uChatSend.style.opacity = t.archived ? '0.5' : '1';
-        }
+        if (uChatSend) uChatSend.disabled = t.archived;
 
         // Metadata
         if (q('#u-m-status')) {
-            const st = q('#u-m-status');
-            st.textContent = t.status;
-            st.style.color = getStatusColor(t.status);
+            q('#u-m-status').innerHTML = `<span class="status-badge"><span class="status-dot" style="--dot:${getStatusColor(t.status)}"></span>${Lang.status(t.status)}</span>`;
         }
         if (q('#u-m-date')) q('#u-m-date').textContent = Utils.fmtDate(t.createdAt);
 
@@ -1237,14 +1787,14 @@ const UserDash = {
             const archEl = q('#u-m-archived');
             if (t.archived && t.archivedAt) {
                 archEl.textContent = Utils.fmtDate(t.archivedAt);
-                archEl.parentElement.style.display = 'block';
+                archEl.parentElement.style.display = '';
             } else {
                 archEl.parentElement.style.display = 'none';
             }
         }
 
-        if (q('#u-m-prio')) q('#u-m-prio').textContent = t.prio;
-        if (q('#u-m-cat')) q('#u-m-cat').textContent = t.category || '-';
+        if (q('#u-m-prio')) q('#u-m-prio').innerHTML = `<span class="prio-pill prio-${t.prio}">${Lang.prio(t.prio)}</span>`;
+        if (q('#u-m-cat')) q('#u-m-cat').textContent = (Array.isArray(t.category) ? t.category.join(', ') : t.category) || '-';
 
         // Support Multiple Assignees in User View
         if (q('#u-m-assignee')) {
@@ -1256,7 +1806,7 @@ const UserDash = {
                 });
                 q('#u-m-assignee').textContent = names.join(', ');
             } else {
-                q('#u-m-assignee').textContent = t.assigneeName || 'Niemand';
+                q('#u-m-assignee').textContent = t.assigneeName || Lang.t('nobody');
             }
         }
 
@@ -1279,22 +1829,16 @@ const UserDash = {
         if (isArchived) {
             if (chatInput) {
                 chatInput.disabled = true;
-                chatInput.placeholder = 'Ticket ist archiviert (Keine Antwort möglich)';
+                chatInput.placeholder = Lang.t('archivedReadonly');
             }
-            if (chatSend) {
-                chatSend.disabled = true;
-                chatSend.style.opacity = '0.5';
-            }
+            if (chatSend) chatSend.disabled = true;
             if (chatFile) chatFile.disabled = true;
         } else {
             if (chatInput) {
                 chatInput.disabled = false;
-                chatInput.placeholder = 'Nachricht schreiben...';
+                chatInput.placeholder = Lang.t('writeMessage');
             }
-            if (chatSend) {
-                chatSend.disabled = false;
-                chatSend.style.opacity = '1';
-            }
+            if (chatSend) chatSend.disabled = false;
             if (chatFile) chatFile.disabled = false;
         }
 
@@ -1306,12 +1850,44 @@ const UserDash = {
         UserDash.currentTicketId = null;
     },
 
+    pageSize: 5,
+    displayLimit: 5,
+
     renderList: async () => {
         const list = q('#user-tickets');
         if (!list) return;
         const user = await Store.currentUser();
-        // Show all tickets for user (including archived)
-        let tickets = (await Store.getTickets()).filter(t => t.author === user.username);
+        const userKeys = [
+            user.username,
+            user.name,
+            user.email,
+            user.id
+        ].filter(Boolean).map(v => String(v).toLowerCase());
+
+        const belongsToCurrentUser = (t) => {
+            const ticketKeys = [
+                t.author,
+                t.authorName,
+                t.requester,
+                t.requesterName,
+                t.createdBy,
+                t.user,
+                t.username,
+                t.email,
+                t.authorEmail
+            ].filter(Boolean).map(v => String(v).toLowerCase());
+            return ticketKeys.some(v => userKeys.includes(v));
+        };
+
+        let tickets = (await Store.getTickets()).filter(belongsToCurrentUser);
+
+        // Default: show every still-open ticket this user created. Toggle adds closed and archived history.
+        const showClosedArchived = q('#dash-filter-archive') && q('#dash-filter-archive').checked;
+        tickets = tickets.filter(t => {
+            const isOpen = t.status !== 'Geschlossen' && !t.archived;
+            if (showClosedArchived) return true;
+            return isOpen;
+        });
 
         // Search Filter
         const query = (q('#u-search')?.value || '').toLowerCase().trim();
@@ -1324,48 +1900,53 @@ const UserDash = {
             );
         }
 
+        // Sorting
+        tickets.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        const total = tickets.length;
+        const toDisplay = tickets;
+
         list.innerHTML = '';
-        if (tickets.length === 0) {
-            list.innerHTML = '<div style="opacity:0.5; padding:10px;">Keine Tickets gefunden</div>';
-            return;
+        if (toDisplay.length === 0) {
+            list.innerHTML = `<div class="empty-state">${Lang.t('noTickets')}</div>`;
+        } else {
+            toDisplay.forEach(t => {
+                const el = document.createElement('div');
+                el.className = `table-row user-ticket-row${t.archived ? ' is-archived' : ''}`;
+
+                const cats = Array.isArray(t.category) ? t.category : [t.category || '-'];
+                const catBadges = cats.map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('');
+                const archivedBadge = t.archived ? `<span class="archive-badge">${Icon('archive', 12)}${Lang.t('archived')}</span>` : '';
+
+                el.innerHTML = `
+                    <span class="status-dot" style="--dot:${getStatusColor(t.status)}" title="${Utils.esc(Lang.status(t.status))}"></span>
+                    <div class="ticket-row-main">
+                        <div class="row-title" title="${Utils.esc(t.title)}">${Utils.esc(t.title)}</div>
+                        <div class="ticket-row-cats">${catBadges}${archivedBadge}</div>
+                    </div>
+                    <div class="ticket-row-status"><span class="status-badge">${Lang.status(t.status)}</span></div>
+                    <div class="ticket-row-date date">${Utils.fmtDate(t.createdAt)}</div>
+                    <div class="ticket-row-prio"><span class="prio-pill prio-${t.prio}">${Lang.prio(t.prio)}</span></div>
+                `;
+                el.onclick = () => UserDash.openModal(t.id);
+                list.appendChild(el);
+            });
+            if (window.lucide) lucide.createIcons();
         }
 
-        tickets.sort((a, b) => {
-            return new Date(b.createdAt) - new Date(a.createdAt);
-        }).forEach(t => {
-            const el = document.createElement('div');
-            el.className = 'ticket-row';
-            el.style.cursor = 'pointer';
-
-            if (t.archived) {
-                el.style.opacity = '0.6';
-                el.style.filter = 'blur(0.5px)';
-            }
-
-            const cats = Array.isArray(t.category) ? t.category : [t.category || '-'];
-            const catBadges = cats.map(c => `<span style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px; font-size:10px; margin-right:4px;">${c}</span>`).join('');
-
-            el.innerHTML = `
-                <div class="status-indicator" style="background:${getStatusColor(t.status)}; width:8px; height:8px; border-radius:50%;"></div>
-                <div style="font-weight:600; display:flex; flex-direction:column; gap:2px;">
-                    <span>${t.title} ${t.archived ? '(Archiviert)' : ''}</span>
-                    <div style="display:flex; flex-wrap:wrap;">${catBadges}</div>
-                </div>
-                <div class="status-badge">${t.status}</div>
-                <div class="date">${Utils.fmtDate(t.createdAt)}</div>
-                <div style="font-size:12px; color:var(--text-sec)">${t.prio}</div>
-            `;
-            el.onclick = () => UserDash.openModal(t.id);
-            list.appendChild(el);
-        });
+        // Handle Load More
+        const loadContainer = q('#dash-load-more-container');
+        if (loadContainer) {
+            loadContainer.style.display = 'none';
+        }
     }
 };
 
 function getStatusColor(s) {
-    if (s === 'Neu') return '#3b82f6';
-    if (s === 'In Bearbeitung') return '#f59e0b';
-    if (s === 'Geschlossen') return '#10b981';
-    return '#888';
+    if (s === 'Neu') return 'var(--info)';
+    if (s === 'In Bearbeitung') return 'var(--warning)';
+    if (s === 'Geschlossen') return 'var(--success)';
+    return 'var(--text-sec)';
 }
 
 function getPrioValue(p) {
@@ -1387,17 +1968,15 @@ const AdminBoard = {
             pan.style.display = 'flex';
             AdminBoard.selectedFiles.forEach((f, idx) => {
                 const tag = document.createElement('div');
-                tag.style.background = 'rgba(0,0,0,0.3)';
-                tag.style.padding = '4px 8px';
-                tag.style.borderRadius = '4px';
-                tag.style.fontSize = '12px';
-                tag.innerHTML = `<span>${f.name}</span> <span style="cursor:pointer; color:var(--danger); margin-left:4px;">✕</span>`;
-                tag.querySelector('span:last-child').onclick = () => {
+                tag.className = 'file-chip';
+                tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
+                tag.querySelector('.remove-file').onclick = () => {
                     AdminBoard.selectedFiles.splice(idx, 1);
                     AdminBoard.renderFilePreview();
                 };
                 pan.appendChild(tag);
             });
+            if (window.lucide) lucide.createIcons();
         } else {
             pan.style.display = 'none';
         }
@@ -1414,13 +1993,13 @@ const AdminBoard = {
         const canReqs = isSuper || (user && user.canManageRequests);
 
         if (canUsers) {
-            const actions = q('.hero-actions');
+            const actions = q('.topbar-right');
             if (actions) {
                 if (!q('#btn-manage-users')) {
                     const btn = document.createElement('button');
                     btn.id = 'btn-manage-users';
                     btn.className = 'btn-ghost';
-                    btn.textContent = '👥 User Manager';
+                    btn.innerHTML = `${Icon('users', 16)}${Lang.t('userMgmt')}`;
                     btn.onclick = AdminBoard.openUserManager;
                     actions.insertBefore(btn, actions.firstChild);
                 }
@@ -1428,23 +2007,24 @@ const AdminBoard = {
                     const btn = document.createElement('button');
                     btn.id = 'btn-sys-settings';
                     btn.className = 'btn-ghost';
-                    btn.textContent = '⚙️ System';
+                    btn.innerHTML = `${Icon('sliders', 16)}${Lang.t('system')}`;
                     btn.onclick = AdminBoard.openSystemSettings;
                     actions.insertBefore(btn, actions.firstChild);
                 }
             }
         }
-        if (isSuper) {
+        if (isSuper || user?.canViewLogs) {
             const btnLogs = q('#btn-global-logs');
             if (btnLogs) {
                 btnLogs.style.display = 'inline-flex';
                 btnLogs.onclick = AdminBoard.openGlobalLogsModal;
             }
         }
+        if (window.lucide) lucide.createIcons();
 
         const reqBoard = q('#request-list')?.parentElement;
         if (reqBoard) {
-            reqBoard.style.display = canReqs ? 'block' : 'none';
+            reqBoard.style.display = canReqs ? '' : 'none';
         }
 
         await AdminBoard.render();
@@ -1564,7 +2144,7 @@ const AdminBoard = {
         if (roleSel) {
             roleSel.onchange = () => {
                 const dept = q('#a-dept-field');
-                if (dept) dept.style.display = roleSel.value === 'admin' ? 'block' : 'none';
+                if (dept) dept.style.display = roleSel.value === 'admin' ? '' : 'none';
             };
         }
 
@@ -1629,6 +2209,7 @@ const AdminBoard = {
         if (q('#count-new')) q('#count-new').textContent = counts['Neu'];
         if (q('#count-doing')) q('#count-doing').textContent = counts['In Bearbeitung'];
         if (q('#count-done')) q('#count-done').textContent = counts['Geschlossen'];
+        if (window.lucide) lucide.createIcons();
 
         AdminBoard.renderRequests();
 
@@ -1638,33 +2219,33 @@ const AdminBoard = {
             card.draggable = true;
             card.dataset.id = t.id;
 
-            let assigneeHtml = `<span style="opacity:0.5; font-size:11px">Unzugewiesen</span>`;
+            let assigneeHtml = `<span class="muted">${Lang.t('unassigned')}</span>`;
 
             if (t.assignees && t.assignees.length > 0) {
                 const names = t.assignees.map(u => {
                     const found = usersList.find(x => x.username === u);
                     return found ? (found.name || found.username) : u;
                 });
-                assigneeHtml = `<span class="assignee-badge">👤 ${names.join(', ')}</span>`;
+                assigneeHtml = `<span class="assignee-badge">${Icon('user-round', 12)}${Utils.esc(names.join(', '))}</span>`;
             } else if (t.assigneeName) {
-                assigneeHtml = `<span class="assignee-badge">👤 ${t.assigneeName}</span>`;
+                assigneeHtml = `<span class="assignee-badge">${Icon('user-round', 12)}${Utils.esc(t.assigneeName)}</span>`;
             }
 
             card.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                    <span class="t-tag prio-${t.prio}">${t.prio}</span>
-                    <div style="display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; max-width:60%;">
-                        ${(Array.isArray(t.category) ? t.category : [t.category || '-']).map(c => `<span class="t-category">${c}</span>`).join('')}
+                <div class="t-head">
+                    <span class="t-tag prio-${t.prio}">${Lang.prio(t.prio)}</span>
+                    <div class="t-cats">
+                        ${(Array.isArray(t.category) ? t.category : [t.category || '-']).map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('')}
                     </div>
                 </div>
-                <div class="t-title">${t.title}</div>
+                <div class="t-title">${Utils.esc(t.title)}</div>
                 <div class="t-meta">
-                    <span>${t.authorName}</span>
+                    <span>${Utils.esc(t.authorName)}</span>
                     <span>${Utils.fmtDate(t.createdAt).split(' ')[0]}</span>
                 </div>
-                <div class="t-meta" style="margin-top:8px; border-top:1px solid var(--border); padding-top:8px;">
-                     ${assigneeHtml}
-                     <span style="font-size:10px">💬 ${(t.chat?.length || 0)}</span>
+                <div class="t-meta t-foot">
+                    ${assigneeHtml}
+                    <span class="chat-count">${Icon('message-square', 12)}${(t.chat?.length || 0)}</span>
                 </div>
             `;
             card.addEventListener('dragstart', (e) => {
@@ -1702,20 +2283,19 @@ const AdminBoard = {
             modal = document.createElement('div');
             modal.id = 'global-logs-modal';
             modal.className = 'modal-overlay';
-            modal.style.zIndex = '10000';
             modal.innerHTML = `
-                <div class="modal" style="max-width:800px; width:95%;">
+                <div class="modal modal-xl">
                     <div class="modal-header">
-                        <h3>🔔 System Protokoll</h3>
-                        <div style="display:flex; gap:10px; align-items:center;">
-                            <input type="text" id="gl-search" placeholder="Durchsuchen..." style="padding:10px 14px; font-size:13px; border-radius:8px; border:1px solid var(--border); background:var(--card-bg); width:250px;">
-                            <button class="btn-ghost" id="btn-gl-clear" style="color:var(--danger); font-size:20px; padding:0 10px;" title="Protokoll leeren">🗑️</button>
-                            <button class="btn-ghost" onclick="q('#global-logs-modal').classList.remove('open')">✕</button>
+                        <h3>${Icon('bell', 18)} System-Protokoll</h3>
+                        <div class="modal-actions">
+                            <input type="text" id="gl-search" placeholder="Durchsuchen...">
+                            <button class="btn-ghost btn-icon btn-danger" id="btn-gl-clear" title="Protokoll leeren" aria-label="Protokoll leeren">${Icon('trash-2', 16)}</button>
+                            <button class="btn-ghost btn-icon" title="${Lang.t('close')}" aria-label="${Lang.t('close')}" onclick="q('#global-logs-modal').classList.remove('open')">${Icon('x', 16)}</button>
                         </div>
                     </div>
-                    <div class="modal-body" id="gl-body" style="padding:0; overflow-y:auto; max-height:70vh; background:rgba(0,0,0,0.1);"></div>
+                    <div class="modal-body flush" id="gl-body"></div>
                     <div class="modal-footer">
-                        <button class="btn-secondary" onclick="q('#global-logs-modal').classList.remove('open')">Schließen</button>
+                        <button class="btn-secondary" onclick="q('#global-logs-modal').classList.remove('open')">${Lang.t('close')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -1732,6 +2312,7 @@ const AdminBoard = {
 
         AdminBoard.renderGlobalLogs();
         modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
     },
 
     renderGlobalLogs: async () => {
@@ -1747,16 +2328,23 @@ const AdminBoard = {
             l.details.toLowerCase().includes(search)
         );
 
-        body.innerHTML = filtered.slice().reverse().map(l => `
-            <div style="padding:12px 20px; border-bottom:1px solid var(--border); transition:background 0.2s;">
-                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px;">
-                    <span style="font-weight:700; color:var(--primary-solid)">${l.user}</span>
-                    <span style="opacity:0.6">${Utils.fmtDate(l.date)}</span>
-                </div>
-                <div style="font-weight:600; font-size:13px; margin-bottom:2px;">${l.action}</div>
-                <div style="font-size:11px; opacity:0.8; font-style:italic;">${l.details || ''}</div>
-            </div>
-        `).join('') || '<p style="text-align:center; padding:40px; opacity:0.5;">Keine Einträge gefunden.</p>';
+        const visibleLogs = filtered.slice().reverse();
+        const iconForLog = (action = '') => {
+            const text = action.toLowerCase();
+            if (text.includes('geloescht') || text.includes('geaendert')) return text.includes('geloescht') ? 'trash-2' : 'refresh-cw';
+            if (text.includes('gelöscht') || text.includes('geleert')) return 'trash-2';
+            if (text.includes('erstellt') || text.includes('genehmigt')) return 'plus-circle';
+            if (text.includes('status') || text.includes('geändert') || text.includes('bearbeitet')) return 'refresh-cw';
+            if (text.includes('anmeldung')) return 'log-in';
+            if (text.includes('abmeldung')) return 'log-out';
+            if (text.includes('ticket')) return 'ticket';
+            if (text.includes('benutzer')) return 'user-round';
+            return 'activity';
+        };
+        body.innerHTML = visibleLogs.length
+            ? visibleLogs.map(l => UI.logRow({ icon: iconForLog(l.action), user: l.user, date: l.date, action: l.action, details: l.details })).join('')
+            : '<div class="empty-state">Keine Einträge gefunden.</div>';
+        if (window.lucide) lucide.createIcons();
     },
 
     // User Manager Logic
@@ -1774,12 +2362,11 @@ const AdminBoard = {
 
         tabs = document.createElement('div');
         tabs.className = 'um-tabs tabs';
-        tabs.style.margin = '0 20px';
-        tabs.style.borderBottom = '1px solid var(--border)';
 
         tabs.innerHTML = `
             <div class="tab-btn active" data-view="users">Benutzer</div>
             ${isSuper ? `<div class="tab-btn" data-view="admins">Admins</div>` : ''}
+            ${isSuper ? `<div class="tab-btn" data-view="groups">Gruppen</div>` : ''}
             ${isSuper ? `<div class="tab-btn" data-view="cats">Kategorien</div>` : ''}
         `;
 
@@ -1807,9 +2394,9 @@ const AdminBoard = {
         // Skeleton for search and actions
         if (!q('#um-search')) {
             listContainer.innerHTML = `
-                <div class="um-controls" style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:15px; position:sticky; top:-20px; background:var(--bg2); z-index:100; padding:20px 0 15px; align-items:center; border-bottom:1px solid var(--border); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);">
-                    <input type="text" id="um-search" placeholder="Durchsuchen..." style="flex:1; min-width:200px; background:var(--card-bg); border-radius:10px;">
-                    <div id="um-actions" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+                <div class="um-controls">
+                    <input type="text" id="um-search" class="um-search" placeholder="Durchsuchen...">
+                    <div id="um-actions" class="um-actions"></div>
                 </div>
                 <div id="um-results"></div>
             `;
@@ -1827,10 +2414,10 @@ const AdminBoard = {
 
         if (view === 'users' || view === 'admins') {
             actions.innerHTML = `
-                <button class="btn-primary" id="btn-add-user" style="white-space:nowrap;">+ Neu</button>
-                <button class="btn-ghost" id="btn-csv-export" title="CSV Export">⬇️</button>
-                ${isSuper ? '<button class="btn-ghost" id="btn-csv-import" title="CSV Import">⬆️</button>' : ''}
-                ${isSuper ? '<button class="btn-ghost" id="btn-ldap-sync" title="LDAP Sync">🔄</button>' : ''}
+                <button class="btn-secondary btn-icon" id="btn-csv-export" title="CSV-Export" aria-label="CSV-Export">${Icon('download', 16)}</button>
+                ${isSuper ? `<button class="btn-secondary btn-icon" id="btn-csv-import" title="CSV-Import" aria-label="CSV-Import">${Icon('upload', 16)}</button>` : ''}
+                ${isSuper ? `<button class="btn-secondary btn-icon" id="btn-ldap-sync" title="LDAP-Sync" aria-label="LDAP-Sync">${Icon('refresh-cw', 16)}</button>` : ''}
+                <button class="btn-primary" id="btn-add-user">${Icon('plus', 16)}Neu</button>
             `;
             actions.querySelector('#btn-add-user').onclick = () => AdminBoard.openEditUserModal(null, view);
             actions.querySelector('#btn-csv-export').onclick = () => AdminBoard.exportUsersCSV();
@@ -1841,9 +2428,53 @@ const AdminBoard = {
                     setTimeout(() => UI.toast('LDAP Sync erfolgreich (Simuliert)'), 1500);
                 };
             }
+        } else if (view === 'groups') {
+            actions.innerHTML = `<button class="btn-primary" id="btn-add-group">${Icon('plus', 16)}Neue Gruppe</button>`;
+            actions.querySelector('#btn-add-group').onclick = () => AdminBoard.openEditGroupModal(null);
         } else {
-            actions.innerHTML = `<button class="btn-primary" id="btn-add-cat">Neu anlegen</button>`;
+            actions.innerHTML = `<button class="btn-primary" id="btn-add-cat">${Icon('plus', 16)}Neue Kategorie</button>`;
             actions.querySelector('#btn-add-cat').onclick = () => AdminBoard.openEditCategoryModal(null);
+        }
+
+        if (view === 'groups') {
+            const groups = await Store.getGroups();
+            const filteredGroups = groups.filter(g =>
+                !searchTerm ||
+                g.name.toLowerCase().includes(searchTerm) ||
+                (g.description || '').toLowerCase().includes(searchTerm)
+            );
+
+            filteredGroups.forEach(g => {
+                const el = document.createElement('div');
+                el.className = 'table-row user-manager-row';
+                el.innerHTML = `
+                    <div class="user-manager-text">
+                        <span class="user-manager-name">${Icon('users-round', 15)}${Utils.esc(g.name)}</span>
+                        <span class="row-sub">${Utils.esc(g.description || '-')}</span>
+                        <span class="badge">${(g.members || []).length} ${(g.members || []).length === 1 ? 'Mitglied' : 'Mitglieder'}</span>
+                    </div>
+                    <div class="user-manager-actions">
+                        <button class="btn-ghost btn-icon edit-g" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>
+                        <button class="btn-ghost btn-icon btn-danger del-g" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
+                    </div>
+                `;
+                el.querySelector('.edit-g').onclick = () => AdminBoard.openEditGroupModal(g);
+                el.querySelector('.del-g').onclick = () => {
+                    UI.confirm(`Gruppe "${g.name}" löschen?`, async () => {
+                        const groups = (await Store.getGroups()).filter(x => x.id !== g.id);
+                        await Store.saveGroups(groups);
+                        const users = await Store.getUsers();
+                        users.forEach(u => {
+                            if (Array.isArray(u.groups)) u.groups = u.groups.filter(id => id !== g.id);
+                        });
+                        await Store.saveUsers(users);
+                        AdminBoard.renderUserManager('groups');
+                    });
+                };
+                list.appendChild(el);
+            });
+            if (window.lucide) lucide.createIcons();
+            return;
         }
 
         if (view === 'cats') {
@@ -1851,16 +2482,16 @@ const AdminBoard = {
             const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
             categories.filter(c => c.toLowerCase().includes(searchTerm)).forEach(c => {
                 const el = document.createElement('div');
-                el.className = 'ticket-row';
-                el.style.display = 'flex';
-                el.style.justifyContent = 'space-between';
+                el.className = 'table-row user-manager-row';
                 el.innerHTML = `
-                    <div style="font-weight:600">${c}</div>
-                    <div style="display:flex; gap:8px;">
-                        <button class="btn-ghost edit-c">✏️</button>
-                        <button class="btn-ghost del-c" style="color:var(--danger)">🗑️</button>
+                    <div class="user-manager-text">
+                        <span class="user-manager-name">${Icon('tag', 15)}${Utils.esc(c)}</span>
                     </div>
-                 `;
+                    <div class="user-manager-actions">
+                        <button class="btn-ghost btn-icon edit-c" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>
+                        <button class="btn-ghost btn-icon btn-danger del-c" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
+                    </div>
+                `;
                 el.querySelector('.edit-c').onclick = () => AdminBoard.openEditCategoryModal(c);
                 el.querySelector('.del-c').onclick = () => {
                     UI.confirm(`Kategorie "${c}" löschen?`, async () => {
@@ -1875,10 +2506,12 @@ const AdminBoard = {
                 };
                 list.appendChild(el);
             });
+            if (window.lucide) lucide.createIcons();
             return;
         }
 
         const users = await Store.getUsers();
+        const groups = await Store.getGroups();
         const filtered = users.filter(u => {
             const matchesView = (view === 'users' && u.role === 'user') ||
                 (view === 'admins' && (u.role === 'admin' || u.role === 'superadmin'));
@@ -1892,9 +2525,7 @@ const AdminBoard = {
 
         filtered.forEach(u => {
             const el = document.createElement('div');
-            el.className = 'ticket-row';
-            el.style.display = 'flex';
-            el.style.justifyContent = 'space-between';
+            el.className = 'table-row user-manager-row';
 
             let roleInfo = u.role.toUpperCase();
             if (u.role === 'admin') {
@@ -1902,19 +2533,23 @@ const AdminBoard = {
                 const dStr = Array.isArray(d) ? d.join(', ') : (d || 'Allgemein');
                 roleInfo += ` (${dStr})`;
             }
+            const userGroups = groups
+                .filter(g => (g.members || []).includes(u.username) || (u.groups || []).includes(g.id))
+                .map(g => g.name);
 
             el.innerHTML = `
-                <div style="display:flex; align-items:center;">
-                    <div>
-                        <strong>${u.username}</strong> ${u.twoFactorEnabled ? ' <span title="2FA Aktiv" style="font-size:10px; cursor:help;">🔐</span>' : ''} <br>
-                        <span style="font-size:12px; opacity:0.8">${u.name || '-'} | ${u.email || 'Keine Email'}</span>
-                        <div style="font-size:10px; opacity:0.6; margin-top:2px;">${roleInfo}</div>
+                <div class="user-manager-text">
+                    <span class="user-manager-name">${Utils.esc(u.username)}${u.twoFactorEnabled ? `<span class="badge badge-accent" title="2FA aktiv">${Icon('shield-check', 12)}2FA</span>` : ''}</span>
+                    <span class="row-sub">${Utils.esc(u.name || '-')} · ${Utils.esc(u.email || 'Keine E-Mail')}</span>
+                    <div class="group-chip-row">
+                        <span class="badge">${Utils.esc(roleInfo)}</span>
+                        ${userGroups.map(name => `<span class="group-chip">${Icon('users-round', 12)}${Utils.esc(name)}</span>`).join('')}
                     </div>
                 </div>
-                <div style="display:flex; gap:8px; align-items:center;">
-                    ${isSuper && u.twoFactorEnabled ? `<button class="btn-ghost reset-2fa" style="padding:4px; font-size:10px; color:var(--warning)" title="2FA zurücksetzen">🔓 2FA</button>` : ''}
-                    <button class="btn-ghost edit-u" style="padding:4px;" title="Bearbeiten">✏️</button>
-                    ${u.role !== 'superadmin' && u.username !== 'admin' ? `<button class="btn-ghost del-u" style="padding:4px; color:var(--danger);" title="Löschen">🗑️</button>` : ''}
+                <div class="user-manager-actions">
+                    ${isSuper && u.twoFactorEnabled ? `<button class="btn-ghost btn-sm reset-2fa" title="2FA zurücksetzen">${Icon('unlock-keyhole', 15)}2FA</button>` : ''}
+                    <button class="btn-ghost btn-icon edit-u" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>
+                    ${u.role !== 'superadmin' && u.username !== 'admin' ? `<button class="btn-ghost btn-icon btn-danger del-u" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>` : ''}
                 </div>
             `;
 
@@ -1936,29 +2571,29 @@ const AdminBoard = {
 
             const delBtn = el.querySelector('.del-u');
             if (delBtn) delBtn.onclick = () => {
+                q('#user-delete-modal')?.remove();
                 const confirmModal = AdminBoard.createGenericModal();
+                confirmModal.id = 'user-delete-modal';
                 const title = confirmModal.querySelector('h3');
                 const content = confirmModal.querySelector('.modal-body');
                 const footer = confirmModal.querySelector('.modal-footer');
 
                 title.textContent = 'Benutzer löschen';
                 content.innerHTML = `
-                    <p>Möchtest du <strong>${u.username}</strong> wirklich löschen?</p>
-                    <p style="margin-top:10px; font-size:13px; color:var(--text-sec)">
-                        Dieser Benutzer hat Tickets erstellt. Was soll damit geschehen?
-                    </p>
-                    <div style="margin-top:15px; display:flex; flex-direction:column; gap:8px;">
-                        <label style="cursor:pointer"><input type="radio" name="del-opt" value="archive" checked> Tickets archivieren (Empfohlen)</label>
-                        <label style="cursor:pointer"><input type="radio" name="del-opt" value="delete"> Tickets unwiderruflich löschen</label>
+                    <p>Möchtest du <strong>${Utils.esc(u.username)}</strong> wirklich löschen? Was soll mit den Tickets dieses Benutzers geschehen?</p>
+                    <div class="checkbox-list">
+                        <label class="check-row"><input type="radio" name="del-opt" value="archive" checked><span>Tickets archivieren (empfohlen)</span></label>
+                        <label class="check-row"><input type="radio" name="del-opt" value="delete"><span>Tickets unwiderruflich löschen</span></label>
                     </div>
                 `;
 
                 footer.innerHTML = `
-                    <button class="btn-ghost close-m">Abbrechen</button>
-                    <button class="btn-danger" id="btn-perform-del">Löschen</button>
+                    <button class="btn-secondary close-m">Abbrechen</button>
+                    <button class="btn-danger" id="btn-perform-del">${Icon('trash-2', 16)}Löschen</button>
                 `;
 
                 confirmModal.querySelectorAll('.close-m').forEach(b => b.onclick = () => confirmModal.classList.remove('open'));
+                if (window.lucide) lucide.createIcons();
 
                 confirmModal.querySelector('#btn-perform-del').onclick = async () => {
                     const opt = confirmModal.querySelector('input[name="del-opt"]:checked').value;
@@ -1996,6 +2631,7 @@ const AdminBoard = {
             el.querySelector('.edit-u').onclick = () => AdminBoard.openEditUserModal(u, view);
             list.appendChild(el);
         });
+        if (window.lucide) lucide.createIcons();
     },
 
     openEditCategoryModal: async (catName) => {
@@ -2007,16 +2643,17 @@ const AdminBoard = {
         const admins = (await Store.getUsers()).filter(u => u.role === 'admin' || u.role === 'superadmin');
 
         let adminListHtml = `
-            <div class="field" style="margin-top:15px;">
-                <label>Admins dieser Kategorie zuweisen:</label>
-                <div id="cat-admin-list" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto; margin-top:5px;">
+            <div class="field">
+                <label>Admins dieser Kategorie</label>
+                <div id="cat-admin-list" class="checkbox-list">
         `;
 
         admins.forEach(a => {
             const hasCat = catName && Array.isArray(a.dept) && a.dept.includes(catName);
             adminListHtml += `
-                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px;">
-                    <input type="checkbox" value="${a.username}" ${hasCat ? 'checked' : ''} class="cat-admin-check"> ${a.name || a.username}
+                <label class="check-row">
+                    <input type="checkbox" value="${a.username}" ${hasCat ? 'checked' : ''} class="cat-admin-check">
+                    <span>${Utils.esc(a.name || a.username)}</span>
                 </label>
             `;
         });
@@ -2026,11 +2663,12 @@ const AdminBoard = {
         content.innerHTML = `
             <div class="field">
                 <label>Name</label>
-                <input type="text" id="g-input" value="${catName || ''}">
+                <input type="text" id="g-input" value="${Utils.esc(catName || '')}" placeholder="z. B. Technik">
             </div>
             ${adminListHtml}
         `;
 
+        confirmBtn.textContent = Lang.t('save');
         modal.classList.add('open');
         confirmBtn.onclick = async () => {
             const val = q('#g-input').value.trim();
@@ -2092,6 +2730,63 @@ const AdminBoard = {
         };
     },
 
+    openEditGroupModal: async (group) => {
+        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        const title = modal.querySelector('h3');
+        const content = modal.querySelector('.modal-body');
+        const confirmBtn = modal.querySelector('.btn-primary');
+        const users = await Store.getUsers();
+        const members = group?.members || [];
+
+        title.textContent = group ? `Gruppe ${group.name} bearbeiten` : 'Neue Gruppe';
+        content.innerHTML = `
+            <div class="field"><label>Name</label><input id="ge-name" type="text" value="${group?.name || ''}" placeholder="z.B. Verwaltung"></div>
+            <div class="field"><label>Beschreibung</label><input id="ge-desc" type="text" value="${group?.description || ''}" placeholder="Aufgabe oder Bereich"></div>
+            <div class="field">
+                <label>Mitglieder</label>
+                <div class="checkbox-list">
+                    ${users.map(u => `
+                        <label class="check-row">
+                            <input type="checkbox" value="${u.username}" ${members.includes(u.username) ? 'checked' : ''}>
+                            <span>${Utils.esc(u.name || u.username)} <small>(${Utils.esc(u.username)})</small></span>
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+        confirmBtn.textContent = Lang.t('save');
+        confirmBtn.onclick = async () => {
+            const name = q('#ge-name').value.trim();
+            if (!name) { UI.toast('Bitte Gruppennamen angeben'); return; }
+            const description = q('#ge-desc').value.trim();
+            const selectedMembers = qa('#generic-modal .checkbox-list input:checked').map(x => x.value);
+            const groups = await Store.getGroups();
+            if (group) {
+                const target = groups.find(g => g.id === group.id);
+                if (target) {
+                    target.name = name;
+                    target.description = description;
+                    target.members = selectedMembers;
+                }
+            } else {
+                groups.push({ id: Utils.uid(), name, description, members: selectedMembers });
+            }
+            await Store.saveGroups(groups);
+
+            const users = await Store.getUsers();
+            users.forEach(u => {
+                const assignedGroupIds = groups.filter(g => (g.members || []).includes(u.username)).map(g => g.id);
+                u.groups = assignedGroupIds;
+            });
+            await Store.saveUsers(users);
+            modal.classList.remove('open');
+            AdminBoard.renderUserManager('groups');
+            UI.toast(group ? 'Gruppe gespeichert' : 'Gruppe erstellt');
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
     openEditUserModal: async (user, viewContext) => {
         let editModal = q('#user-edit-modal');
         if (!editModal) {
@@ -2099,34 +2794,44 @@ const AdminBoard = {
             editModal.id = 'user-edit-modal';
             editModal.className = 'modal-overlay';
             editModal.innerHTML = `
-                <div class="modal" style="max-width:500px">
-                    <div class="modal-header"><h3>Benutzer bearbeiten</h3><button class="btn-ghost close-m">✕</button></div>
-                    <div class="modal-body">
+                <div class="modal modal-lg">
+                    <div class="modal-header">
+                        <h3>Benutzer bearbeiten</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
+                        </div>
+                    </div>
+                    <div class="modal-body form-grid">
                         <div class="field"><label>Benutzername</label><input id="ue-user" type="text"></div>
                         <div class="field"><label>Name</label><input id="ue-name" type="text"></div>
-                        <div class="field"><label>Email</label><input id="ue-email" type="email"></div>
-                        <div class="field"><label>Passwort (leer lassen für keine Änderung)</label><input id="ue-pass" type="password"></div>
-                        <div class="field" id="ue-role-box"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
-                         <div class="field" id="ue-dept-box" style="display:none">
+                        <div class="field"><label>E-Mail</label><input id="ue-email" type="email"></div>
+                        <div class="field"><label>Passwort (leer = unverändert)</label><input id="ue-pass" type="password"></div>
+                        <div class="field field-wide" id="ue-role-box"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
+                        <div class="field field-wide" id="ue-dept-box" style="display:none">
                             <label>Kategorien</label>
-                            <div id="ue-dept-list" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; display:flex; flex-direction:column; gap:6px; max-height:150px; overflow-y:auto;"></div>
-                         </div>
-                         <div class="field" id="ue-man-box" style="display:none">
-                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:5px;">
-                                <input type="checkbox" id="ue-can-manage-req"> Kontoanfragen verwalten
-                            </label>
-                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                                <input type="checkbox" id="ue-can-manage-users"> Benutzerverwaltung (nur User)
-                            </label>
+                            <div id="ue-dept-list" class="checkbox-list"></div>
+                        </div>
+                        <div class="field field-wide" id="ue-groups-box">
+                            <label>Benutzergruppen</label>
+                            <div id="ue-groups-list" class="checkbox-list"></div>
+                        </div>
+                        <div class="field field-wide" id="ue-man-box" style="display:none">
+                            <label>Berechtigungen</label>
+                            <div class="checkbox-list">
+                                <label class="check-row"><input type="checkbox" id="ue-can-manage-req"><span>Kontoanfragen verwalten</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-manage-users"><span>Benutzerverwaltung (nur User)</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-view-logs"><span>Systemlogs anzeigen</span></label>
+                            </div>
                          </div>
                     </div>
                     <div class="modal-footer">
-                        <button class="btn-ghost close-m">Abbrechen</button>
+                        <button class="btn-secondary close-m">Abbrechen</button>
                         <button class="btn-primary" id="ue-save">Speichern</button>
                     </div>
                 </div>`;
             document.body.appendChild(editModal);
             editModal.querySelectorAll('.close-m').forEach(b => b.onclick = () => editModal.classList.remove('open'));
+            if (window.lucide) lucide.createIcons();
         }
 
         // Fill Data
@@ -2151,13 +2856,15 @@ const AdminBoard = {
         const manBox = q('#ue-man-box');
         const manReqCheck = q('#ue-can-manage-req');
         const manUsersCheck = q('#ue-can-manage-users');
+        const viewLogsCheck = q('#ue-can-view-logs');
         if (manReqCheck) manReqCheck.checked = user ? !!user.canManageRequests : false;
         if (manUsersCheck) manUsersCheck.checked = user ? !!user.canManageUsers : false;
+        if (viewLogsCheck) viewLogsCheck.checked = user ? !!user.canViewLogs : false;
 
         const updateUI = () => {
             const r = roleSel.value;
-            q('#ue-dept-box').style.display = r === 'admin' ? 'block' : 'none';
-            if (manBox) manBox.style.display = (r === 'admin' && isSuper) ? 'block' : 'none';
+            q('#ue-dept-box').style.display = r === 'admin' ? '' : 'none';
+            if (manBox) manBox.style.display = (r === 'admin' && isSuper) ? '' : 'none';
         };
         roleSel.onchange = updateUI;
         updateUI();
@@ -2176,35 +2883,40 @@ const AdminBoard = {
         }
 
         settings.categories.forEach(c => {
-            const div = document.createElement('div');
-            div.style.display = 'flex';
-            div.style.alignItems = 'center';
-            div.style.gap = '8px';
+            const row = document.createElement('label');
+            row.className = 'check-row';
 
             const chk = document.createElement('input');
             chk.type = 'checkbox';
             chk.value = c;
             chk.checked = userDepts.includes(c);
-            // Styling checkbox not trivial, leaving default
-            chk.style.width = 'auto'; // override default full width input
 
-            const lbl = document.createElement('label');
-            lbl.textContent = c;
-            lbl.style.marginBottom = '0'; // reset label style
-            lbl.style.cursor = 'pointer';
-            lbl.onclick = () => chk.click(); // Label click toggles checkbox
+            const txt = document.createElement('span');
+            txt.textContent = c;
 
-            div.appendChild(chk);
-            div.appendChild(lbl);
-            list.appendChild(div);
+            row.appendChild(chk);
+            row.appendChild(txt);
+            list.appendChild(row);
         });
+
+        const groupList = q('#ue-groups-list');
+        if (groupList) {
+            const groups = await Store.getGroups();
+            const userGroupIds = user?.groups || groups.filter(g => (g.members || []).includes(user?.username)).map(g => g.id);
+            groupList.innerHTML = groups.map(g => `
+                <label class="check-row">
+                    <input type="checkbox" value="${g.id}" ${userGroupIds.includes(g.id) ? 'checked' : ''}>
+                    <span>${Utils.esc(g.name)}</span>
+                </label>
+            `).join('') || '<div class="empty-state compact">Keine Gruppen vorhanden</div>';
+        }
 
         const toggleDept = () => {
             const r = q('#ue-role').value;
-            q('#ue-dept-box').style.display = (r === 'admin') ? 'block' : 'none';
+            q('#ue-dept-box').style.display = (r === 'admin') ? '' : 'none';
         };
-        q('#ue-role').onchange = toggleDept;
-        toggleDept();
+        q('#ue-role').onchange = updateUI;
+        updateUI();
 
         editModal.querySelector('h3').textContent = isNew ? 'Neuen Benutzer anlegen' : `Benutzer ${user.username} bearbeiten`;
         editModal.classList.add('open');
@@ -2215,6 +2927,7 @@ const AdminBoard = {
             const eVal = q('#ue-email').value.trim();
             const pVal = q('#ue-pass').value.trim();
             const rVal = q('#ue-role').value;
+            const gVal = qa('#ue-groups-list input:checked').map(x => x.value);
 
             // Collect checked departments
             const dVal = [];
@@ -2244,8 +2957,10 @@ const AdminBoard = {
                     password: pVal,
                     role: rVal,
                     dept: rVal === 'admin' ? dVal : undefined,
+                    groups: gVal,
                     canManageRequests: rVal === 'admin' ? q('#ue-can-manage-req').checked : false,
-                    canManageUsers: rVal === 'admin' ? q('#ue-can-manage-users').checked : false
+                    canManageUsers: rVal === 'admin' ? q('#ue-can-manage-users').checked : false,
+                    canViewLogs: rVal === 'admin' ? q('#ue-can-view-logs').checked : false
                 };
                 users.push(newUser);
                 await Store.addGlobalLog('Benutzer erstellt', `Name: ${newUser.name || newUser.username}, Rolle: ${newUser.role}`);
@@ -2260,12 +2975,20 @@ const AdminBoard = {
                         target.role = rVal;
                         target.canManageRequests = rVal === 'admin' ? q('#ue-can-manage-req').checked : false;
                         target.canManageUsers = rVal === 'admin' ? q('#ue-can-manage-users').checked : false;
+                        target.canViewLogs = rVal === 'admin' ? q('#ue-can-view-logs').checked : false;
                     }
                     target.dept = target.role === 'admin' ? dVal : undefined;
+                    target.groups = gVal;
                     await Store.addGlobalLog('Benutzer bearbeitet', `Name: ${target.name || target.username}, Rolle: ${target.role}`);
                 }
             }
             await Store.saveUsers(users);
+            const groups = await Store.getGroups();
+            groups.forEach(g => {
+                g.members = (g.members || []).filter(username => username !== uVal);
+                if (gVal.includes(g.id)) g.members.push(uVal);
+            });
+            await Store.saveGroups(groups);
             editModal.classList.remove('open');
             AdminBoard.renderUserManager(viewContext);
             UI.toast('Gespeichert');
@@ -2277,16 +3000,22 @@ const AdminBoard = {
         modal.id = 'generic-modal';
         modal.className = 'modal-overlay';
         modal.innerHTML = `
-            <div class="modal" style="max-width:400px">
-                <div class="modal-header"><h3></h3><button class="btn-ghost close-m">✕</button></div>
+            <div class="modal modal-sm">
+                <div class="modal-header">
+                    <h3></h3>
+                    <div class="modal-actions">
+                        <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
+                    </div>
+                </div>
                 <div class="modal-body"></div>
                 <div class="modal-footer">
-                    <button class="btn-ghost close-m">Abbrechen</button>
+                    <button class="btn-secondary close-m">Abbrechen</button>
                     <button class="btn-primary">Speichern</button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
         modal.querySelectorAll('.close-m').forEach(b => b.onclick = () => modal.classList.remove('open'));
+        if (window.lucide) lucide.createIcons();
         return modal;
     },
 
@@ -2297,45 +3026,154 @@ const AdminBoard = {
             modal.id = 'sys-settings-modal';
             modal.className = 'modal-overlay';
             modal.innerHTML = `
-                <div class="modal" style="max-width:500px">
-                    <div class="modal-header"><h3>Systemeinstellungen</h3><button class="btn-ghost close-m">✕</button></div>
-                    <div class="tabs" style="justify-content:flex-start; margin:0 20px; border-bottom:1px solid var(--border)">
-                        <button class="tab-btn active" data-tab="sys-email">Email</button>
-                        <button class="tab-btn" data-tab="sys-sec">Sicherheit</button>
-                        <button class="tab-btn" data-tab="sys-ldap">LDAP</button>
-                    </div>
-                    <div class="modal-body">
-                        <div id="sys-email" class="tab-content active">
-                            <div class="field"><label>SMTP Host</label><input id="sys-smtp-host" type="text" placeholder="smtp.example.com"></div>
-                            <div class="field"><label>SMTP Port</label><input id="sys-smtp-port" type="number" placeholder="587"></div>
-                            <div class="field"><label>SMTP User</label><input id="sys-smtp-user" type="text"></div>
-                            <div class="field"><label>SMTP Password</label><input id="sys-smtp-pass" type="password"></div>
-                            <div class="field"><label>Absender Adresse</label><input id="sys-smtp-from" type="email" placeholder="noreply@example.com"></div>
-                            <div style="font-size:11px; opacity:0.6; margin-top:10px;">Hinweis: Dies simuliert die Konfiguration. Echtes SMTP benötigt ein Backend.</div>
+                <div class="modal modal-xl">
+                    <div class="modal-header">
+                        <h3>${Icon('sliders', 18)}${Lang.t('systemSettings')}</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
+                    </div>
+                    <div class="sys-settings-shell">
+                    <nav class="sys-settings-nav" aria-label="${Lang.t('systemSettings')}">
+                        <button class="tab-btn active" data-tab="sys-email">
+                            <i data-lucide="mail"></i><span>${Lang.t('emailIntegration')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-notify">
+                            <i data-lucide="bell"></i><span>${Lang.t('notifications')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-sec">
+                            <i data-lucide="shield"></i><span>${Lang.t('security')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-ldap">
+                            <i data-lucide="server"></i><span>LDAP</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-outlook">
+                            <i data-lucide="mail-check"></i><span>Outlook</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-general">
+                            <i data-lucide="sliders"></i><span>${Lang.t('general')}</span>
+                        </button>
+                    </nav>
+                    <div class="modal-body sys-settings-content">
+                        <!-- E-Mail SMTP -->
+                        <div id="sys-email" class="tab-content active">
+                            <div class="callout"><strong>Hinweis:</strong> ${Lang.t('emailHint')}</div>
+                            <div class="field"><label>${Lang.t('smtpHost')}</label><input id="sys-smtp-host" type="text" placeholder="smtp.office365.com"></div>
+                            <div class="field"><label>${Lang.t('smtpPort')}</label><input id="sys-smtp-port" type="number" placeholder="587"></div>
+                            <div class="form-grid">
+                                <div class="field"><label>${Lang.t('smtpUser')}</label><input id="sys-smtp-user" type="text" placeholder="user@example.com"></div>
+                                <div class="field"><label>${Lang.t('smtpPassword')}</label><input id="sys-smtp-pass" type="password" placeholder="********"></div>
+                            </div>
+                            <div class="field"><label>${Lang.t('smtpFrom')}</label><input id="sys-smtp-from" type="email" placeholder="support@example.com"></div>
+                            <div class="field"><label>${Lang.t('smtpFromName')}</label><input id="sys-smtp-fromname" type="text" placeholder="Support Portal"></div>
+                            <div class="form-grid">
+                                <div class="field"><label>${Lang.t('smtpEncryption')}</label><select id="sys-smtp-secure"><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">None</option></select></div>
+                                <div class="field"><label>${Lang.t('replyTo')}</label><input id="sys-smtp-replyto" type="email" placeholder="support@example.com"></div>
+                            </div>
+                            <div class="field"><label>${Lang.t('emailTemplate')}</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
+                            <button class="btn-secondary btn-sm" id="sys-test-email">${Icon('send', 15)}${Lang.t('testEmail')}</button>
+                        </div>
+
+                        <!-- Benachrichtigungsregeln -->
+                        <div id="sys-notify" class="tab-content">
+                            <p>${Lang.t('notifyRules')}</p>
+                            <div class="checkbox-list">
+                                <label class="check-row">
+                                    <input type="checkbox" id="notif-new-ticket">
+                                    <span class="check-text"><strong>${Lang.t('notifyNewTicket')}</strong><span>${Lang.t('notifyNewTicketDesc')}</span></span>
+                                </label>
+                                <label class="check-row">
+                                    <input type="checkbox" id="notif-status-change">
+                                    <span class="check-text"><strong>${Lang.t('notifyStatusChange')}</strong><span>${Lang.t('notifyStatusChangeDesc')}</span></span>
+                                </label>
+                                <label class="check-row">
+                                    <input type="checkbox" id="notif-new-message">
+                                    <span class="check-text"><strong>${Lang.t('notifyNewMessage')}</strong><span>${Lang.t('notifyNewMessageDesc')}</span></span>
+                                </label>
+                                <label class="check-row">
+                                    <input type="checkbox" id="notif-ticket-closed">
+                                    <span class="check-text"><strong>${Lang.t('notifyTicketClosed')}</strong><span>${Lang.t('notifyTicketClosedDesc')}</span></span>
+                                </label>
+                                <label class="check-row">
+                                    <input type="checkbox" id="notif-account-approved">
+                                    <span class="check-text"><strong>${Lang.t('notifyAccountApproved')}</strong><span>${Lang.t('notifyAccountApprovedDesc')}</span></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Sicherheit -->
                         <div id="sys-sec" class="tab-content">
                             <div class="field">
-                                <label>2FA Erzwingen</label>
+                                <label>${Lang.t('force2fa')}</label>
                                 <select id="sys-2fa-enforce">
-                                    <option value="none">Nicht erzwingen (Optional)</option>
-                                    <option value="all">Alle Nutzer</option>
-                                    <option value="admin">Nur Admins</option>
-                                    <option value="user">Nur User</option>
+                                    <option value="none">${Lang.t('notForced')}</option>
+                                    <option value="all">${Lang.t('allUsers')}</option>
+                                    <option value="admin">${Lang.t('onlyAdmins')}</option>
+                                    <option value="user">${Lang.t('onlyUsers')}</option>
                                 </select>
                             </div>
-                            <div style="font-size:11px; opacity:0.6; margin-top:10px;">Benutzer werden beim Login aufgefordert, 2FA einzurichten, wenn sie betroffen sind.</div>
+                            <div class="field">
+                                <label>${Lang.t('sessionTimeout')}</label>
+                                <input id="sys-session-timeout" type="number" placeholder="0" min="0">
+                            </div>
+                            <div class="field">
+                                <label>${Lang.t('maxLoginAttempts')}</label>
+                                <input id="sys-max-login-attempts" type="number" placeholder="0" min="0">
+                            </div>
+                            <div class="hint">${Lang.t('securityHint')}</div>
                         </div>
+
+                        <!-- LDAP -->
                         <div id="sys-ldap" class="tab-content">
                             <div class="field"><label>LDAP Host</label><input id="sys-ldap-host" type="text" placeholder="ldap.example.com"></div>
                             <div class="field"><label>Port</label><input id="sys-ldap-port" type="number" placeholder="389"></div>
                             <div class="field"><label>Base DN</label><input id="sys-ldap-base" type="text" placeholder="dc=example,dc=com"></div>
                             <div class="field"><label>Bind User DN</label><input id="sys-ldap-user" type="text" placeholder="cn=admin,dc=example,dc=com"></div>
-                            <div style="font-size:11px; opacity:0.6; margin-top:10px;">Passwort wird bei Bedarf abgefragt (Mock).</div>
+                            <div class="hint">${Lang.t('ldapHint')}</div>
+                        </div>
+
+                        <!-- Outlook -->
+                        <div id="sys-outlook" class="tab-content">
+                            <div class="callout callout-success"><strong>${Lang.t('outlookIntegration')}:</strong> ${Lang.t('outlookHint')}</div>
+                            <div class="field">
+                                <label class="check-row">
+                                    <input type="checkbox" id="outlook-enabled">
+                                    <span class="check-text"><strong>${Lang.t('enableOutlook')}</strong><span>Microsoft-Graph-Werte speichern und für die Backend-Integration bereitstellen.</span></span>
+                                </label>
+                            </div>
+                            <div class="field"><label>${Lang.t('graphTenant')}</label><input id="outlook-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
+                            <div class="field"><label>${Lang.t('graphClient')}</label><input id="outlook-client" type="text" placeholder="App client id"></div>
+                            <div class="field"><label>${Lang.t('graphMailbox')}</label><input id="outlook-mailbox" type="email" placeholder="support@example.com"></div>
+                        </div>
+
+                        <!-- Allgemein -->
+                        <div id="sys-general" class="tab-content">
+                            <div class="field">
+                                <label>${Lang.t('portalName')}</label>
+                                <input id="sys-portal-name" type="text" placeholder="Support Portal">
+                            </div>
+                            <div class="field">
+                                <label>${Lang.t('autoArchiveDays')}</label>
+                                <input id="sys-auto-archive" type="number" placeholder="0" min="0">
+                            </div>
+                            <div class="field">
+                                <label>${Lang.t('defaultPriority')}</label>
+                                <select id="sys-default-prio">
+                                    <option value="Normal">Normal</option>
+                                    <option value="Hoch">Hoch</option>
+                                    <option value="Niedrig">Niedrig</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label>${Lang.t('defaultCategories')}</label>
+                                <input id="sys-default-cats" type="text" placeholder="Allgemein, Technik, Account, Abrechnung">
+                            </div>
                         </div>
                     </div>
+                    </div>
                     <div class="modal-footer">
-                        <button class="btn-ghost close-m">Schließen</button>
-                        <button class="btn-primary" id="sys-save">Speichern</button>
+                        <button class="btn-secondary close-m">${Lang.t('closeSystemSettings')}</button>
+                        <button class="btn-primary" id="sys-save">${Icon('save', 16)}${Lang.t('saveSettings')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -2347,23 +3185,46 @@ const AdminBoard = {
                     btn.classList.add('active');
                     modal.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                     q('#' + btn.dataset.tab).classList.add('active');
+                    if (window.lucide) lucide.createIcons();
                 };
             });
 
             modal.querySelectorAll('.close-m').forEach(b => b.onclick = () => modal.classList.remove('open'));
+
+            // Test Email button
+            q('#sys-test-email').onclick = async () => {
+                const user = await Store.currentUser();
+                if (!user.email) { UI.toast('Kein E-Mail im Profil hinterlegt'); return; }
+                await Store.sendEmail(user.email, 'Test E-Mail vom Support Portal', 'Diese Test-E-Mail bestätigt, dass die SMTP-Konfiguration gespeichert ist.');
+            };
         }
 
         const settings = await Store.getSettings();
         const email = settings.emailConfig || {};
         const sec = settings.securityConfig || {};
+        const notif = settings.notifConfig || {};
+        const general = settings.generalConfig || {};
+        const outlook = settings.outlookConfig || {};
 
         q('#sys-smtp-host').value = email.host || '';
         q('#sys-smtp-port').value = email.port || '';
         q('#sys-smtp-user').value = email.user || '';
         q('#sys-smtp-pass').value = email.pass || '';
         q('#sys-smtp-from').value = email.from || '';
+        q('#sys-smtp-fromname').value = email.fromName || '';
+        q('#sys-smtp-secure').value = email.secure || 'starttls';
+        q('#sys-smtp-replyto').value = email.replyTo || '';
+        q('#sys-email-template').value = email.template || '';
+
+        q('#notif-new-ticket').checked = !!notif.newTicket;
+        q('#notif-status-change').checked = !!notif.statusChange;
+        q('#notif-new-message').checked = !!notif.newMessage;
+        q('#notif-ticket-closed').checked = !!notif.ticketClosed;
+        q('#notif-account-approved').checked = !!notif.accountApproved;
 
         q('#sys-2fa-enforce').value = sec.force2FA || 'none';
+        q('#sys-session-timeout').value = sec.sessionTimeout || 0;
+        q('#sys-max-login-attempts').value = sec.maxLoginAttempts || 0;
 
         const ldap = settings.ldapConfig || {};
         q('#sys-ldap-host').value = ldap.host || '';
@@ -2371,7 +3232,18 @@ const AdminBoard = {
         q('#sys-ldap-base').value = ldap.baseDn || '';
         q('#sys-ldap-user').value = ldap.userDn || '';
 
+        q('#outlook-enabled').checked = !!outlook.enabled;
+        q('#outlook-tenant').value = outlook.tenantId || '';
+        q('#outlook-client').value = outlook.clientId || '';
+        q('#outlook-mailbox').value = outlook.mailbox || '';
+
+        q('#sys-portal-name').value = general.portalName || 'Support Portal';
+        q('#sys-auto-archive').value = general.autoArchiveDays || 0;
+        q('#sys-default-prio').value = general.defaultPrio || 'Normal';
+        q('#sys-default-cats').value = (settings.categories || []).join(', ');
+
         modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
 
         q('#sys-save').onclick = async () => {
             const newSettings = await Store.getSettings();
@@ -2380,10 +3252,23 @@ const AdminBoard = {
                 port: q('#sys-smtp-port').value.trim(),
                 user: q('#sys-smtp-user').value.trim(),
                 pass: q('#sys-smtp-pass').value.trim(),
-                from: q('#sys-smtp-from').value.trim()
+                from: q('#sys-smtp-from').value.trim(),
+                fromName: q('#sys-smtp-fromname').value.trim(),
+                secure: q('#sys-smtp-secure').value,
+                replyTo: q('#sys-smtp-replyto').value.trim(),
+                template: q('#sys-email-template').value.trim()
+            };
+            newSettings.notifConfig = {
+                newTicket: q('#notif-new-ticket').checked,
+                statusChange: q('#notif-status-change').checked,
+                newMessage: q('#notif-new-message').checked,
+                ticketClosed: q('#notif-ticket-closed').checked,
+                accountApproved: q('#notif-account-approved').checked,
             };
             newSettings.securityConfig = {
-                force2FA: q('#sys-2fa-enforce').value
+                force2FA: q('#sys-2fa-enforce').value,
+                sessionTimeout: parseInt(q('#sys-session-timeout').value) || 0,
+                maxLoginAttempts: parseInt(q('#sys-max-login-attempts').value) || 0,
             };
             newSettings.ldapConfig = {
                 host: q('#sys-ldap-host').value.trim(),
@@ -2391,10 +3276,23 @@ const AdminBoard = {
                 baseDn: q('#sys-ldap-base').value.trim(),
                 userDn: q('#sys-ldap-user').value.trim()
             };
+            newSettings.outlookConfig = {
+                enabled: q('#outlook-enabled').checked,
+                tenantId: q('#outlook-tenant').value.trim(),
+                clientId: q('#outlook-client').value.trim(),
+                mailbox: q('#outlook-mailbox').value.trim()
+            };
+            const catsRaw = q('#sys-default-cats').value;
+            newSettings.categories = catsRaw.split(',').map(c => c.trim()).filter(Boolean);
+            newSettings.generalConfig = {
+                portalName: q('#sys-portal-name').value.trim() || 'Support Portal',
+                autoArchiveDays: parseInt(q('#sys-auto-archive').value) || 0,
+                defaultPrio: q('#sys-default-prio').value,
+            };
 
             await Store.saveSettings(newSettings);
             modal.classList.remove('open');
-            UI.toast('Systemeinstellungen gespeichert');
+            UI.toast(Lang.current === 'en' ? 'System settings saved' : 'Systemeinstellungen gespeichert');
             await Store.addGlobalLog('Systemeinstellungen gespeichert', `Geänderte Bereiche: Email, Sicherheit, LDAP`);
         };
     },
@@ -2420,26 +3318,28 @@ const AdminBoard = {
 
         list.innerHTML = '';
         if (archived.length === 0) {
-            list.innerHTML = `<div style="opacity:0.5; padding:20px;">${query ? 'Keine Treffer im Archiv' : 'Keine archivierten Tickets'}</div>`;
+            list.innerHTML = `<div class="empty-state">${query ? 'Keine Treffer im Archiv' : 'Keine archivierten Tickets'}</div>`;
             return;
         }
+        list.innerHTML = `
+            <div class="table-head archive-grid">
+                <div></div><div>Titel</div><div>Status</div><div>Erstellt</div><div>Archiviert</div><div>Benutzer</div>
+            </div>`;
         archived.forEach(t => {
             const el = document.createElement('div');
-            el.className = 'ticket-row archive-ticket-row';
-
-            const archDate = t.archivedAt ? Utils.fmtDate(t.archivedAt) : '-';
+            el.className = 'table-row archive-grid archive-ticket-row';
+            const cats = (Array.isArray(t.category) ? t.category : [t.category || '-']).map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('');
 
             el.innerHTML = `
-                <div class="status-indicator" style="background:${getStatusColor(t.status)}; width:10px; height:10px; border-radius:50%;"></div>
-                <div style="font-weight:600; color:var(--text)"><span style="opacity:0.7">Titel:</span><br>${t.title}</div>
-                <div class="status-badge">${t.status}</div>
-                <div class="date">
-                    <span style="opacity:0.7">Erstellt:</span><br>${Utils.fmtDate(t.createdAt)}
+                <span class="status-dot" style="--dot:${getStatusColor(t.status)}"></span>
+                <div class="ticket-row-main">
+                    <div class="row-title" title="${Utils.esc(t.title)}">${Utils.esc(t.title)}</div>
+                    <div class="ticket-row-cats">${cats}</div>
                 </div>
-                <div class="date">
-                    <span style="opacity:0.7">Archiviert:</span><br>${archDate}
-                </div>
-                <div style="font-size:12px; color:var(--text-sec)"><span style="opacity:0.7">Benutzer:</span><br>${t.authorName}</div>
+                <div><span class="status-badge">${Lang.status(t.status)}</span></div>
+                <div class="date">${Utils.fmtDate(t.createdAt)}</div>
+                <div class="date">${t.archivedAt ? Utils.fmtDate(t.archivedAt) : '-'}</div>
+                <div class="row-sub">${Utils.esc(t.authorName || t.author || '-')}</div>
             `;
 
             el.onclick = () => AdminBoard.openModal(t.id);
@@ -2453,23 +3353,22 @@ const AdminBoard = {
         const reqs = await Store.getRequests();
         list.innerHTML = '';
         if (reqs.length === 0) {
-            list.innerHTML = '<div style="opacity:0.5; font-size:12px; padding:10px;">Keine Anfragen</div>';
+            list.innerHTML = '<div class="empty-state compact">Keine offenen Anfragen</div>';
             return;
         }
         reqs.forEach(r => {
             const el = document.createElement('div');
-            el.className = 'ticket-card';
-            el.style.borderColor = 'var(--warning)';
+            el.className = 'ticket-card request-card';
             el.innerHTML = `
-                 <div style="font-weight:600">${r.name}</div>
-                 <div style="font-size:12px; opacity:0.7">${r.email}</div>
-                 <div style="margin-top:8px; display:flex; gap:8px;">
-                     <button class="btn-primary" style="padding:4px 8px; font-size:11px;">Annehmen</button>
-                     <button class="btn-ghost" style="padding:4px 8px; font-size:11px;">Ablehnen</button>
-                 </div>
-             `;
-            el.querySelector('.btn-primary').onclick = () => AdminBoard.openApproveModal(r);
-            el.querySelector('.btn-ghost').onclick = () => {
+                <div class="req-name">${Utils.esc(r.name)}</div>
+                <div class="req-mail">${Utils.esc(r.email)}</div>
+                <div class="req-actions">
+                    <button class="btn-primary btn-sm req-accept">${Icon('check', 15)}Annehmen</button>
+                    <button class="btn-secondary btn-sm req-decline">${Icon('x', 15)}Ablehnen</button>
+                </div>
+            `;
+            el.querySelector('.req-accept').onclick = () => AdminBoard.openApproveModal(r);
+            el.querySelector('.req-decline').onclick = () => {
                 UI.confirm('Anfrage löschen?', async () => {
                     let rest = await Store.getRequests();
                     rest = rest.filter(x => x.id !== r.id);
@@ -2480,20 +3379,21 @@ const AdminBoard = {
             };
             list.appendChild(el);
         });
+        if (window.lucide) lucide.createIcons();
     },
 
     setupDrag: () => {
         qa('.ticket-list').forEach(zone => {
             zone.addEventListener('dragover', e => {
                 e.preventDefault();
-                zone.style.background = 'var(--card-hover)';
+                zone.classList.add('drag-over');
             });
-            zone.addEventListener('dragleave', e => {
-                zone.style.background = '';
+            zone.addEventListener('dragleave', () => {
+                zone.classList.remove('drag-over');
             });
             zone.addEventListener('drop', async e => {
                 e.preventDefault();
-                zone.style.background = '';
+                zone.classList.remove('drag-over');
                 const id = e.dataTransfer.getData('text/plain');
                 const newStatus = zone.dataset.status;
                 const tickets = await Store.getTickets();
@@ -2503,14 +3403,21 @@ const AdminBoard = {
                     t.status = newStatus;
                     await Store.saveTickets(tickets);
 
-                    // Email Notification
+                    // Email Notification (respects notifConfig)
                     const s = await Store.getSettings();
-                    if (s.emailConfig && s.emailConfig.host) {
+                    if (s.notifConfig?.statusChange && s.emailConfig?.host) {
                         // Notify Author
                         const users = await Store.getUsers();
                         const author = users.find(u => u.username === t.author);
                         if (author && author.email) {
                             Store.sendEmail(author.email, `Ticket Update: ${t.title}`, `Status geändert auf: ${newStatus}`);
+                        }
+                    }
+                    if (newStatus === 'Geschlossen' && s.notifConfig?.ticketClosed && s.emailConfig?.host) {
+                        const users = await Store.getUsers();
+                        const author = users.find(u => u.username === t.author);
+                        if (author && author.email) {
+                            Store.sendEmail(author.email, `Ticket geschlossen: ${t.title}`, `Dein Ticket wurde geschlossen. Du kannst den Verlauf weiterhin im Portal einsehen.`);
                         }
                     }
                     await Store.addGlobalLog('Ticket Status geändert', `Ticket: ${t.title}, Status: ${newStatus}`);
@@ -2523,6 +3430,157 @@ const AdminBoard = {
 
     // Modal Logic
     currentTicketId: null,
+
+    ensureResponsibilitySection: async (t, users, tickets) => {
+        const details = q('#tab-details');
+        const assignmentField = q('#assignee-multi')?.closest('.field');
+        if (!details || !assignmentField) return;
+
+        const staff = users.filter(u => u.role === 'admin' || u.role === 'superadmin');
+        if (!Array.isArray(t.assignees)) t.assignees = t.assignee ? [t.assignee] : [];
+        if (!Array.isArray(t.participants)) t.participants = [...t.assignees];
+        if (!Array.isArray(t.todos)) t.todos = [];
+        if (!t.owner && t.assignees.length) t.owner = t.assignees[0];
+
+        q('#ticket-responsibility')?.remove();
+        const section = document.createElement('div');
+        section.id = 'ticket-responsibility';
+        section.className = 'responsibility-section';
+        section.innerHTML = `
+            <div class="section-title">${Icon('user-check', 15)} Zuständigkeiten</div>
+            <div class="responsibility-grid">
+                <div class="field">
+                    <label>Hauptverantwortlicher</label>
+                    <select id="m-owner-select">
+                        <option value="">Nicht zugewiesen</option>
+                        ${staff.map(u => `<option value="${u.username}">${u.name || u.username}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Beteiligte Personen</label>
+                    <div id="participants-multi" class="multi-select-container"></div>
+                </div>
+            </div>
+            <div class="ticket-todo-panel">
+                <div class="section-title">${Icon('list-checks', 15)} Teilaufgaben</div>
+                <div id="ticket-todos" class="ticket-todos"></div>
+                <div class="todo-create-row">
+                    <input id="todo-title" type="text" placeholder="Neue Teilaufgabe">
+                    <select id="todo-assignee">
+                        <option value="">Ohne Zuweisung</option>
+                        ${staff.map(u => `<option value="${u.username}">${u.name || u.username}</option>`).join('')}
+                    </select>
+                    <button class="btn-primary" id="todo-add" type="button">${Icon('plus', 16)}Hinzufügen</button>
+                </div>
+            </div>
+        `;
+        assignmentField.after(section);
+
+        const ownerSelect = q('#m-owner-select');
+        ownerSelect.value = t.owner || '';
+        ownerSelect.disabled = !!t.archived;
+        ownerSelect.onchange = async () => {
+            const old = t.owner || 'Nicht zugewiesen';
+            t.owner = ownerSelect.value;
+            await Store.addLog(t, 'Hauptverantwortlicher geändert', `Alt: ${old} -> Neu: ${t.owner || 'Nicht zugewiesen'}`);
+            await Store.saveTickets(tickets);
+            await AdminBoard.render();
+        };
+
+        const participantsMulti = q('#participants-multi');
+        UI.createMultiSelect(participantsMulti, staff.map(u => ({ value: u.username, label: u.name || u.username })), t.participants, async (newParticipants) => {
+            t.participants = newParticipants;
+            t.assignees = newParticipants;
+            const names = newParticipants.map(username => {
+                const found = staff.find(u => u.username === username);
+                return found ? (found.name || found.username) : username;
+            }).join(', ') || 'Niemand';
+            await Store.addLog(t, 'Beteiligte Personen geändert', `Neu: ${names}`);
+            await Store.saveTickets(tickets);
+            await AdminBoard.render();
+        });
+        participantsMulti.classList.toggle('is-disabled', !!t.archived);
+
+        AdminBoard.renderTicketTodos(t, staff, tickets);
+        if (window.lucide) lucide.createIcons();
+    },
+
+    renderTicketTodos: (t, users, tickets) => {
+        const list = q('#ticket-todos');
+        const addBtn = q('#todo-add');
+        const titleInput = q('#todo-title');
+        const assigneeSelect = q('#todo-assignee');
+        if (!list || !addBtn || !titleInput || !assigneeSelect) return;
+
+        const getName = (username) => {
+            const found = users.find(u => u.username === username);
+            return found ? (found.name || found.username) : username;
+        };
+        const esc = (value = '') => String(value).replace(/[&<>"']/g, c => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[c]));
+
+        list.innerHTML = t.todos.length ? t.todos.map(todo => `
+            <div class="ticket-todo ${todo.done ? 'done' : ''}" data-id="${todo.id}">
+                <label>
+                    <input type="checkbox" ${todo.done ? 'checked' : ''} ${t.archived ? 'disabled' : ''}>
+                    <span>${esc(todo.title)}</span>
+                </label>
+                <div class="todo-meta">
+                    ${todo.assignee ? `<span class="badge">${Icon('user-round', 12)}${esc(getName(todo.assignee))}</span>` : '<span class="badge">Nicht zugewiesen</span>'}
+                    <button class="btn-ghost btn-icon btn-sm btn-danger todo-delete" title="Teilaufgabe löschen" aria-label="Teilaufgabe löschen" ${t.archived ? 'disabled' : ''}>${Icon('trash-2', 15)}</button>
+                </div>
+            </div>
+        `).join('') : '<div class="empty-state compact">Noch keine Teilaufgaben.</div>';
+
+        list.querySelectorAll('input[type="checkbox"]').forEach(chk => {
+            chk.onchange = async () => {
+                const row = chk.closest('.ticket-todo');
+                const todo = t.todos.find(x => x.id === row.dataset.id);
+                if (!todo) return;
+                todo.done = chk.checked;
+                await Store.addLog(t, `Teilaufgabe ${todo.done ? 'erledigt' : 'wieder geöffnet'}`, todo.title);
+                await Store.saveTickets(tickets);
+                AdminBoard.renderTicketTodos(t, users, tickets);
+            };
+        });
+
+        list.querySelectorAll('.todo-delete').forEach(btn => {
+            btn.onclick = async () => {
+                const row = btn.closest('.ticket-todo');
+                const todo = t.todos.find(x => x.id === row.dataset.id);
+                t.todos = t.todos.filter(x => x.id !== row.dataset.id);
+                await Store.addLog(t, 'Teilaufgabe gelöscht', todo?.title || '');
+                await Store.saveTickets(tickets);
+                AdminBoard.renderTicketTodos(t, users, tickets);
+            };
+        });
+
+        titleInput.disabled = !!t.archived;
+        assigneeSelect.disabled = !!t.archived;
+        addBtn.disabled = !!t.archived;
+        addBtn.onclick = async () => {
+            const title = titleInput.value.trim();
+            if (!title) return;
+            const todo = {
+                id: Utils.uid(),
+                title,
+                assignee: assigneeSelect.value,
+                done: false
+            };
+            t.todos.push(todo);
+            await Store.addLog(t, 'Teilaufgabe hinzugefügt', `${title}${todo.assignee ? ` -> ${getName(todo.assignee)}` : ''}`);
+            await Store.saveTickets(tickets);
+            titleInput.value = '';
+            assigneeSelect.value = '';
+            AdminBoard.renderTicketTodos(t, users, tickets);
+        };
+        if (window.lucide) lucide.createIcons();
+    },
 
     openModal: async (id) => {
         try {
@@ -2557,21 +3615,20 @@ const AdminBoard = {
                 btnReact = document.createElement('button');
                 btnReact.id = 'btn-reactivate-ticket';
                 btnReact.className = 'btn-primary';
-                btnReact.style.fontSize = '12px';
-                btnReact.innerHTML = '⚡ Reaktivieren';
+                btnReact.innerHTML = `${Icon('rotate-ccw', 16)}Reaktivieren`;
                 btnArch.parentElement.appendChild(btnReact);
             }
 
             if (t.archived) {
                 if (btnArch) btnArch.style.display = 'none';
                 if (btnReact) {
-                    btnReact.style.display = isSuper ? 'inline-block' : 'none';
+                    btnReact.style.display = isSuper ? 'inline-flex' : 'none';
                     btnReact.onclick = () => AdminBoard.reactivateTicket(t.id);
                 }
             } else {
                 if (btnReact) btnReact.style.display = 'none';
                 if (btnArch) {
-                    btnArch.style.display = (t.status === 'Geschlossen') ? 'inline-block' : 'none';
+                    btnArch.style.display = (t.status === 'Geschlossen') ? 'inline-flex' : 'none';
                     btnArch.onclick = () => AdminBoard.archiveCurrent();
                 }
             }
@@ -2579,17 +3636,10 @@ const AdminBoard = {
             // Disable edits if archived
             if (prioSel) prioSel.disabled = t.archived;
             if (catSel) catSel.disabled = t.archived;
-            if (msHeader) msHeader.style.pointerEvents = t.archived ? 'none' : 'auto';
             if (commentInput) commentInput.disabled = t.archived;
-            if (commentBtn) {
-                commentBtn.disabled = t.archived;
-                commentBtn.style.opacity = t.archived ? '0.5' : '1';
-            }
+            if (commentBtn) commentBtn.disabled = t.archived;
             if (chatInput) chatInput.disabled = t.archived;
-            if (chatSend) {
-                chatSend.disabled = t.archived;
-                chatSend.style.opacity = t.archived ? '0.5' : '1';
-            }
+            if (chatSend) chatSend.disabled = t.archived;
 
             // Metadata
             if (q('#m-author')) q('#m-author').textContent = t.authorName || t.author;
@@ -2637,8 +3687,7 @@ const AdminBoard = {
                     UI.toast('Kategorien aktualisiert');
                 });
 
-                // Disable if archived
-                if (t.archived) msContainer.style.pointerEvents = 'none';
+                msContainer.classList.toggle('is-disabled', !!t.archived);
             }
 
             // Reset Tabs
@@ -2651,14 +3700,19 @@ const AdminBoard = {
             }
 
             // --- Multi-Select Assignment ---
-            const admins = (await Store.getUsers()).filter(u => u.role === 'admin' || u.role === 'superadmin');
+            const allUsers = await Store.getUsers();
+            const admins = allUsers.filter(u => u.role === 'admin' || u.role === 'superadmin');
             const msContainerEl = q('#assignee-multi');
 
             if (msContainerEl) {
                 if (!t.assignees) t.assignees = t.assignee ? [t.assignee] : [];
+                if (!Array.isArray(t.participants)) t.participants = [...t.assignees];
+                if (!t.owner && t.assignees.length) t.owner = t.assignees[0];
 
                 UI.createMultiSelect(msContainerEl, admins.map(a => ({ value: a.username, label: a.name || a.username })), t.assignees, async (newAssignees) => {
                     t.assignees = newAssignees;
+                    t.participants = newAssignees;
+                    if (!newAssignees.includes(t.owner)) t.owner = newAssignees[0] || '';
                     delete t.assignee;
                     const names = newAssignees.map(u => {
                         const found = admins.find(a => a.username === u);
@@ -2671,9 +3725,10 @@ const AdminBoard = {
                     await AdminBoard.render();
                 });
 
-                if (t.archived) msContainerEl.style.pointerEvents = 'none';
+                msContainerEl.classList.toggle('is-disabled', !!t.archived);
             }
 
+            await AdminBoard.ensureResponsibilitySection(t, allUsers, tickets);
 
             AdminBoard.renderInternalComments(t);
             await AdminBoard.renderChat(t, '#m-chat-msgs');
@@ -2683,8 +3738,7 @@ const AdminBoard = {
             // History Toggle
             const authorEl = q('#m-author');
             if (authorEl) {
-                authorEl.style.cursor = 'pointer';
-                authorEl.style.textDecoration = 'underline';
+                authorEl.classList.add('link');
                 authorEl.title = 'Historie anzeigen';
                 authorEl.onclick = () => AdminBoard.renderHistory(t.author, t.id);
             }
@@ -2732,13 +3786,13 @@ const AdminBoard = {
         if (!searchInput) {
             sidebar.innerHTML = `
                 <div class="sidebar-header">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                        <div style="font-weight:700;">Ticket Historie</div>
-                        <button class="btn-ghost" id="m-history-close" style="padding:0; width:30px; height:30px;">✕</button>
+                    <div class="sidebar-title-row">
+                        <span class="panel-title">${Icon('history', 16)}Ticket-Historie</span>
+                        <button class="btn-ghost btn-icon" id="m-history-close" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                     </div>
                     <div class="history-search-wrap">
                         <input type="text" id="m-history-search" class="history-search-input" placeholder="Historie durchsuchen...">
-                        <span class="history-search-icon">🔍</span>
+                        <span class="history-search-icon">${Icon('search', 14)}</span>
                     </div>
                 </div>
                 <div class="sidebar-content"></div>
@@ -2750,6 +3804,7 @@ const AdminBoard = {
             closeBtn.onclick = () => {
                 sidebar.classList.remove('open');
             };
+            if (window.lucide) lucide.createIcons();
         }
 
         const content = sidebar.querySelector('.sidebar-content');
@@ -2768,9 +3823,7 @@ const AdminBoard = {
         );
 
         if (filtered.length === 0) {
-            content.innerHTML = `<div style="opacity:0.5; padding:30px 20px; font-size:12px; text-align:center;">
-                ${query ? 'Keine Treffer' : 'Keine Historie vorhanden'}
-            </div>`;
+            content.innerHTML = `<div class="empty-state">${query ? 'Keine Treffer' : 'Keine Historie vorhanden'}</div>`;
             return;
         }
 
@@ -2781,10 +3834,10 @@ const AdminBoard = {
             const isActive = !ticket.archived && ticket.status !== 'Geschlossen';
 
             card.innerHTML = `
-                <div class="history-title">${ticket.title}</div>
+                <div class="history-title">${Utils.esc(ticket.title)}</div>
                 <div class="history-meta">
                     <span>${Utils.fmtDate(ticket.createdAt).split(' ')[0]}</span>
-                    <span>${ticket.status}</span>
+                    <span>${Lang.status(ticket.status)}</span>
                 </div>
                 ${isActive ? `<span class="history-badge">Aktiv</span>` : ''}
             `;
@@ -2792,6 +3845,7 @@ const AdminBoard = {
             card.onclick = () => AdminBoard.openModal(ticket.id);
             content.appendChild(card);
         });
+        if (window.lucide) lucide.createIcons();
     },
 
     renderInternalComments: (t) => {
@@ -2799,17 +3853,13 @@ const AdminBoard = {
         if (!box) return;
         box.innerHTML = '';
         if (!t.comments || t.comments.length === 0) {
-            box.innerHTML = '<div style="opacity:0.5; font-size:11px;">Keine Notizen</div>';
+            box.innerHTML = '<div class="empty-state compact">Keine Notizen</div>';
             return;
         }
         t.comments.forEach(c => {
             const div = document.createElement('div');
-            div.style.background = 'var(--card-hover)';
-            div.style.padding = '8px';
-            div.style.marginBottom = '6px';
-            div.style.borderRadius = '4px';
-            div.style.fontSize = '12px';
-            div.innerHTML = `<strong>${c.author}</strong> <span style="opacity:0.6">${Utils.fmtDate(c.date)}</span><br>${c.text}`;
+            div.className = 'note-item';
+            div.innerHTML = `<div class="note-meta"><strong>${Utils.esc(c.author)}</strong><span>${Utils.fmtDate(c.date)}</span></div>${Utils.esc(c.text)}`;
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
@@ -2846,7 +3896,7 @@ const AdminBoard = {
         const msgs = ticket.chat || []; // Now using 'chat' field
 
         if (msgs.length === 0) {
-            box.innerHTML = '<div style="text-align:center; opacity:0.5; margin-top:20px;">Keine Nachrichten</div>';
+            box.innerHTML = '<div class="empty-state">Keine Nachrichten</div>';
             return;
         }
 
@@ -2865,26 +3915,26 @@ const AdminBoard = {
                     if (f.type.startsWith('image/')) {
                         fileHtml += `<img src="${f.data}" class="msg-img" onclick="window.open(this.src)">`;
                     } else {
-                        fileHtml += `<a href="${f.data}" download="${f.name}" class="msg-file">📎 ${f.name}</a>`;
+                        fileHtml += `<a href="${f.data}" download="${Utils.esc(f.name)}" class="msg-file">${Icon('paperclip', 13)}${Utils.esc(f.name)}</a>`;
                     }
                 });
             } else if (m.file) { // Legacy single file
                 if (m.file.type.startsWith('image/')) {
                     fileHtml = `<img src="${m.file.data}" class="msg-img" onclick="window.open(this.src)">`;
                 } else {
-                    fileHtml = `<a href="${m.file.data}" download="${m.file.name}" class="msg-file">📎 ${f.name}</a>`;
+                    fileHtml = `<a href="${m.file.data}" download="${Utils.esc(m.file.name)}" class="msg-file">${Icon('paperclip', 13)}${Utils.esc(m.file.name)}</a>`;
                 }
             }
 
-            // Format text: **bold**, *italic*
-            let htmlText = m.text
+            // Format text: **bold**, *italic* (Text vorher maskieren)
+            let htmlText = Utils.esc(m.text)
                 .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
                 .replace(/\*(.*?)\*/g, '<i>$1</i>')
                 .replace(/\n/g, '<br>');
 
             el.innerHTML = `
                 <div class="msg-meta">
-                    <span>${m.author}</span>
+                    <span>${Utils.esc(m.author)}</span>
                     <span>${Utils.fmtDate(m.date)}</span>
                 </div>
                 ${htmlText}
@@ -2893,6 +3943,7 @@ const AdminBoard = {
             box.appendChild(el);
         });
         box.scrollTop = box.scrollHeight;
+        if (window.lucide) lucide.createIcons();
     },
 
     postChat: async (role) => {
@@ -2955,6 +4006,31 @@ const AdminBoard = {
         await Store.addLog(t, 'Nachricht gesendet', txt);
         await Store.saveTickets(tickets);
         await Store.addGlobalLog('Nachricht gesendet', `Ticket: ${t.title}\nInhalt: ${txt.substring(0, 100)}${txt.length > 100 ? '...' : ''}`);
+
+        const settings = await Store.getSettings();
+        if (settings.notifConfig?.newMessage && settings.emailConfig?.host) {
+            const users = await Store.getUsers();
+            const recipients = new Map();
+            const author = users.find(u => u.username === t.author);
+            if (author?.email && user.username !== t.author) recipients.set(author.email, author);
+
+            if (role === 'user') {
+                users
+                    .filter(u => u.role === 'admin' || u.role === 'superadmin')
+                    .forEach(admin => {
+                        if (admin.email) recipients.set(admin.email, admin);
+                    });
+            } else if (t.assignees?.length) {
+                t.assignees.forEach(username => {
+                    const assigned = users.find(u => u.username === username);
+                    if (assigned?.email && assigned.username !== user.username) recipients.set(assigned.email, assigned);
+                });
+            }
+
+            recipients.forEach((recipient, email) => {
+                Store.sendEmail(email, `Neue Nachricht: ${t.title}`, `${user.name || user.username}: ${txt || 'Dateianhang'}`);
+            });
+        }
 
         txtInput.value = '';
         if (role === 'user') {
@@ -3174,10 +4250,11 @@ const AdminBoard = {
 document.addEventListener('DOMContentLoaded', async () => {
     await Store.init();
     await Auth.checkGuard();
+    await Lang.init();
     // Display Current User
     const currentUser = await Store.currentUser();
     if (currentUser && q('#user-display')) {
-        q('#user-display').textContent = `Angemeldet als: ${currentUser.name || currentUser.username}`;
+        q('#user-display').textContent = `${Lang.t('loggedInAs')}: ${currentUser.name || currentUser.username}`;
     }
     await Settings.init(); // Initialize Settings with Theme logic
     if (q('#stars')) UI.starfield();
@@ -3304,9 +4381,10 @@ const ScrollToTop = {
         if (!btn) {
             btn = document.createElement('button');
             btn.id = 'scroll-to-top-btn';
-            btn.className = 'btn-scroll-to-top';
-            btn.innerHTML = '↑';
+            btn.className = 'btn-primary btn-icon btn-scroll-to-top';
+            btn.innerHTML = Icon('arrow-up', 18);
             btn.title = 'Nach oben';
+            btn.setAttribute('aria-label', 'Nach oben');
             btn.onclick = () => window.scrollTo({
                 top: 0,
                 behavior: 'smooth'
@@ -3325,9 +4403,33 @@ const ScrollToTop = {
     }
 };
 
+// <select>-Listen: gleiche Regeln wie das Multi-Select (immer nach unten, Platz schaffen, Höhe anpassen)
+const syncSelectPicker = (e) => {
+    const sel = e.target && e.target.closest ? e.target.closest('select') : null;
+    if (!sel || sel.multiple) return;
+    sel.style.setProperty('--picker-max', `${UI.dropdownMaxHeight(sel)}px`);
+    requestAnimationFrame(() => {
+        let isOpen = false;
+        try { isOpen = sel.matches(':open'); } catch { }
+        if (!isOpen) return;
+        UI.ensureSpaceBelow(sel, Math.min(sel.options.length * 38 + 14, 260) + 18);
+        sel.style.setProperty('--picker-max', `${UI.dropdownMaxHeight(sel)}px`);
+    });
+};
+document.addEventListener('pointerdown', syncSelectPicker, true);
+document.addEventListener('keydown', syncSelectPicker, true);
+document.addEventListener('focusin', syncSelectPicker);
+
 // Initialize scroll to top button
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', ScrollToTop.init);
+    document.addEventListener('DOMContentLoaded', () => {
+        ScrollToTop.init();
+        if (window.lucide) lucide.createIcons();
+    });
 } else {
     ScrollToTop.init();
+    if (window.lucide) lucide.createIcons();
 }
+
+
+
