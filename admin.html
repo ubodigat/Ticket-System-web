@@ -22,8 +22,8 @@
         </div>
         <nav class="topbar-right">
             <button id="btn-to-dash" class="btn-ghost" onclick="window.location.href='dashboard.html'"><i data-lucide="layout-dashboard"></i>Dashboard</button>
-            <button id="btn-global-logs" class="btn-ghost" style="display:none;"><i data-lucide="bell"></i>System-Logs</button>
             <button id="btn-archive" class="btn-ghost"><i data-lucide="archive"></i>Archiv</button>
+            <button id="btn-global-logs" class="btn-ghost" style="display:none;"><i data-lucide="bell"></i>System-Logs</button>
             <button id="theme-toggle" class="btn-ghost btn-icon" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
             <button id="logout" class="btn-ghost"><i data-lucide="log-out"></i><span data-i18n="logout">Abmelden</span></button>
         </nav>
@@ -117,18 +117,36 @@
                         <h4 class="section-title">Beschreibung</h4>
                         <p id="m-desc" class="desc-text"></p>
 
-                        <div class="field">
-                            <label>Zuweisung (Mehrfachauswahl möglich)</label>
-                            <div class="multi-select-container" id="assignee-multi"></div>
-                        </div>
-
                         <div class="comments-section">
-                            <h4 class="section-title">Interne Notizen</h4>
-                            <div id="m-comments" class="note-list"></div>
-                            <div class="field">
-                                <textarea id="m-new-comment" rows="2" placeholder="Kommentar hinzufügen..."></textarea>
+                            <h4 class="section-title">Interne Notizen / Lösungsjournal</h4>
+                            <div class="note-search-wrap" id="m-note-search-wrap">
+                                <input type="text" id="m-note-search" placeholder="Interne Kommentare durchsuchen...">
+                                <span><i data-lucide="search"></i></span>
                             </div>
-                            <button class="btn-primary btn-block" id="btn-add-comment">Kommentieren</button>
+                            <div id="m-comments" class="note-list"></div>
+                            <div class="internal-note-composer">
+                                <div class="note-toolbar">
+                                    <select id="m-note-type" title="Art des Eintrags">
+                                        <option value="Analyse">Analyse</option>
+                                        <option value="Lösungsschritt">Lösungsschritt</option>
+                                        <option value="Rückfrage">Rückfrage</option>
+                                        <option value="Entscheidung">Entscheidung</option>
+                                        <option value="Systemänderung">Systemänderung</option>
+                                    </select>
+                                    <button class="btn-ghost btn-icon btn-sm" id="m-note-bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
+                                    <button class="btn-ghost btn-icon btn-sm" id="m-note-italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
+                                    <button class="btn-ghost btn-icon btn-sm" id="m-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
+                                    <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen">
+                                        <i data-lucide="paperclip"></i>
+                                        <input type="file" id="m-note-file-input" style="display:none" multiple>
+                                    </label>
+                                    <label class="note-option"><input type="checkbox" id="m-note-pin"> Anpinnen</label>
+                                    <label class="note-option"><input type="checkbox" id="m-note-resolution"> Lösungsschritt</label>
+                                </div>
+                                <textarea id="m-new-comment" rows="4" placeholder="Analyse, Ursache, Lösungsweg, nächste Schritte..."></textarea>
+                                <div id="m-note-file-preview" class="file-preview"></div>
+                                <button class="btn-primary btn-block" id="btn-add-comment"><i data-lucide="plus"></i>Eintrag speichern</button>
+                            </div>
                         </div>
 
                         <div class="actions-row">
@@ -156,9 +174,6 @@
                             </div>
                         </div>
                     </div>
-                </div>
-                <div class="modal-footer">
-                    <button class="btn-secondary" id="m-close-bt">Schließen</button>
                 </div>
             </div>
         </div>
@@ -201,7 +216,6 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn-secondary" id="a-cancel">Abbrechen</button>
                 <button class="btn-primary" id="a-confirm">Erstellen</button>
             </div>
         </div>

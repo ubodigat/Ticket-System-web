@@ -19,6 +19,37 @@ const Utils = {
         return d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: '2-digit' }) +
             ' ' + d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
     },
+    searchText: (...values) => {
+        const seen = new Set();
+        const parts = [];
+        const walk = (value) => {
+            if (value == null) return;
+            if (value instanceof Date) {
+                parts.push(value.toISOString(), Utils.fmtDate(value.toISOString()));
+                return;
+            }
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                const text = String(value);
+                parts.push(text);
+                if (/^\d{4}-\d{2}-\d{2}T/.test(text)) parts.push(Utils.fmtDate(text), text.slice(0, 10));
+                return;
+            }
+            if (typeof value !== 'object' || seen.has(value)) return;
+            seen.add(value);
+            if (Array.isArray(value)) value.forEach(walk);
+            else Object.entries(value).forEach(([key, val]) => {
+                if (key === 'data') return;
+                parts.push(key);
+                walk(val);
+            });
+        };
+        values.forEach(walk);
+        return parts.join(' ').toLowerCase();
+    },
+    matchesSearch: (query, ...values) => {
+        const qv = String(query || '').toLowerCase().trim();
+        return !qv || Utils.searchText(...values).includes(qv);
+    },
     read: (key, fallback) => {
         try {
             return JSON.parse(localStorage.getItem(key)) ?? fallback;
@@ -145,7 +176,6 @@ const Lang = {
         setHTML('#col-done .col-header span:first-child', `${Icon('check-circle', 16)}${Lang.t('statusClosed')}`);
         setText('#ticket-modal .tab-btn[data-tab="details"]', Lang.t('details'));
         setText('#ticket-modal .tab-btn[data-tab="chat"]', Lang.t('chat'));
-        setText('#m-close-bt', Lang.t('close'));
         const metaGrid = q('#ticket-modal .ticket-meta-grid');
         if (metaGrid) {
             const labels = metaGrid.querySelectorAll('strong');
@@ -214,6 +244,7 @@ Object.assign(Lang.translations.de, {
     notifications: 'Benachrichtigungen',
     general: 'Allgemein',
     emailIntegration: 'E-Mail-Integration',
+    company: 'Unternehmen',
     emailHint: 'Konfiguriert SMTP-Ausgang und Benachrichtigungsregeln. Für echten Versand ist ein Backend oder Outlook/Graph Connector erforderlich.',
     smtpHost: 'SMTP Host',
     smtpPort: 'SMTP Port',
@@ -311,6 +342,7 @@ Object.assign(Lang.translations.en, {
     notifications: 'Notifications',
     general: 'General',
     emailIntegration: 'Email Integration',
+    company: 'Company',
     emailHint: 'Configure SMTP delivery and notification rules. Real delivery requires a backend or Outlook/Graph connector.',
     smtpHost: 'SMTP Host',
     smtpPort: 'SMTP Port',
@@ -442,13 +474,99 @@ const Store = {
     getGroups: async () => Promise.resolve(Utils.read('user_groups', [])),
     saveGroups: async (groups) => Promise.resolve(Utils.write('user_groups', groups)),
     getTickets: async () => Promise.resolve(Utils.read('tickets', [])),
-    saveTickets: async (tickets) => Promise.resolve(Utils.write('tickets', tickets)),
+    saveTickets: async (tickets) => {
+        try {
+            Utils.write('tickets', tickets);
+        } catch (e) {
+            if (e?.name !== 'QuotaExceededError') throw e;
+            await Store.offloadTicketAttachments(tickets);
+            try {
+                Utils.write('tickets', tickets);
+                UI.toast('Anhänge wurden platzsparend ausgelagert.');
+            } catch (second) {
+                if (second?.name === 'QuotaExceededError') {
+                    UI.toast('Speicher voll: Bitte große alte Anhänge löschen oder Browser-Speicher leeren.');
+                }
+                throw second;
+            }
+        }
+    },
     getRequests: async () => Promise.resolve(Utils.read('account_requests', [])),
     saveRequests: async (reqs) => Promise.resolve(Utils.write('account_requests', reqs)),
     getSettings: async () => Promise.resolve(Utils.read('app_settings', Settings.defaults)),
     saveSettings: async (settings) => Promise.resolve(Utils.write('app_settings', settings)),
     getGlobalLogs: async () => Promise.resolve(Utils.read('global_logs', [])),
     saveGlobalLogs: async (logs) => Promise.resolve(Utils.write('global_logs', logs)),
+    openAttachmentDb: () => new Promise((resolve, reject) => {
+        const req = indexedDB.open('ticket_system_files', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('files', { keyPath: 'id' });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    }),
+    saveAttachment: async (fileLike) => {
+        if (fileLike.size && fileLike.size > 15 * 1024 * 1024) {
+            throw new Error('ATTACHMENT_TOO_LARGE');
+        }
+        const data = fileLike.data || await Store.readFile(fileLike);
+        const record = {
+            id: fileLike.id || Utils.uid(),
+            name: fileLike.name || 'Anhang',
+            type: fileLike.type || 'application/octet-stream',
+            size: fileLike.size || Math.round((data.length * 3) / 4),
+            data
+        };
+        const db = await Store.openAttachmentDb();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction('files', 'readwrite');
+            tx.objectStore('files').put(record);
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+        return { id: record.id, name: record.name, type: record.type, size: record.size };
+    },
+    getAttachment: async (id) => {
+        const db = await Store.openAttachmentDb();
+        const record = await new Promise((resolve, reject) => {
+            const tx = db.transaction('files', 'readonly');
+            const req = tx.objectStore('files').get(id);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+        db.close();
+        return record;
+    },
+    downloadAttachment: async (id) => {
+        const file = await Store.getAttachment(id);
+        if (!file?.data) {
+            UI.toast('Anhang nicht gefunden');
+            return;
+        }
+        const a = document.createElement('a');
+        a.href = file.data;
+        a.download = file.name || 'Anhang';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    },
+    offloadTicketAttachments: async (tickets) => {
+        for (const ticket of tickets) {
+            for (const area of ['comments', 'chat']) {
+                for (const entry of (ticket[area] || [])) {
+                    if (!Array.isArray(entry.files)) continue;
+                    for (const file of entry.files) {
+                        if (file.data && !file.attachmentId) {
+                            const saved = await Store.saveAttachment(file);
+                            file.attachmentId = saved.id;
+                            file.id = saved.id;
+                            file.size = saved.size;
+                            delete file.data;
+                        }
+                    }
+                }
+            }
+        }
+    },
     addGlobalLog: async (action, details = '') => {
         const username = localStorage.getItem('currentUser') || 'System';
         const users = await Store.getUsers();
@@ -474,12 +592,21 @@ const Store = {
             console.log('Email logging (No SMTP config):', { to, subject, body });
             return;
         }
+        const company = settings.companyConfig || {};
+        const signature = conf.htmlSignature || company.htmlSignature || company.signature || '';
+        const textSignature = company.signature || '';
+        const textBody = textSignature ? `${body || ''}\n\n${textSignature}` : body;
+        const htmlBody = conf.htmlEnabled
+            ? `${String(body || '').replace(/\n/g, '<br>')}${signature ? `<br><br>${signature}` : ''}`
+            : null;
         console.log(`Sending Email via ${conf.host}:${conf.port}`, {
             user: conf.user,
             from: conf.from,
             to,
             subject,
-            body
+            body: textBody,
+            htmlBody,
+            security: conf.security || {}
         });
         UI.toast(Lang.format('emailSent', { to }));
     },
@@ -607,10 +734,14 @@ const Store = {
     },
 
     runAutoArchive: async () => {
+        const settings = await Store.getSettings();
+        const days = parseInt(settings.generalConfig?.autoArchiveDays, 10) || 0;
+        if (days <= 0) return;
+
         const tickets = await Store.getTickets();
         const now = new Date();
         let changed = false;
-        const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+        const archiveBefore = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
         // 1. Archive if Closed > 3 days
         tickets.forEach(t => {
@@ -626,27 +757,13 @@ const Store = {
                 }
                 if (!closedDate) closedDate = new Date(t.createdAt);
 
-                if (closedDate < threeDaysAgo) {
+                if (closedDate < archiveBefore) {
                     t.archived = true;
                     t.archivedAt = Utils.nowISO();
                     changed = true;
                 }
             }
         });
-
-        // 2. Max 10 Closed Active
-        const closedActive = tickets.filter(t => !t.archived && t.status === 'Geschlossen');
-        if (closedActive.length > 10) {
-            // Sort oldest created first to archive them
-            closedActive.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-            const toArchiveCount = closedActive.length - 10;
-            for (let i = 0; i < toArchiveCount; i++) {
-                const t = closedActive[i];
-                t.archived = true;
-                t.archivedAt = Utils.nowISO();
-                changed = true;
-            }
-        }
 
         if (changed) {
             await Store.saveTickets(tickets);
@@ -723,7 +840,7 @@ const Auth = {
                     <input type="text" id="code-2fa-input" class="code-input" placeholder="123 456">
                 </div>
                 <div class="modal-footer">
-                    <button class="btn-primary btn-block" id="btn-verify-2fa">Einrichtung abschließen</button>
+                    <button class="btn-primary btn-block" id="btn-verify-2fa">${Icon('shield-check', 16)} Einrichtung abschließen</button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
@@ -772,7 +889,7 @@ const Auth = {
                         <input type="text" id="verify-2fa-input" class="code-input" placeholder="123 456">
                     </div>
                     <div class="modal-footer">
-                        <button class="btn-primary btn-block" id="btn-check-2fa">Bestätigen</button>
+                        <button class="btn-primary btn-block" id="btn-check-2fa">${Icon('shield-check', 16)} Bestätigen</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -826,12 +943,15 @@ const UI = {
                 <div class="modal modal-sm">
                     <div class="modal-header">
                         <h3>${Icon('circle-help', 18)} ${Lang.t('confirm')}</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon" id="cm-no-head" title="${Lang.t('cancel')}" aria-label="${Lang.t('cancel')}">${Icon('x', 16)}</button>
+                        </div>
                     </div>
                     <div class="modal-body">
                         <p id="cm-msg"></p>
                     </div>
                     <div class="modal-footer">
-                        <button class="btn-secondary" id="cm-no">${Lang.t('cancel')}</button>
+                        <button class="btn-secondary footer-cancel" id="cm-no">${Lang.t('cancel')}</button>
                         <button class="btn-primary" id="cm-yes">${Lang.t('yes')}</button>
                     </div>
                 </div>`;
@@ -842,18 +962,22 @@ const UI = {
         const close = () => modal.classList.remove('open');
         const yesBtn = q('#cm-yes');
         const noBtn = q('#cm-no');
+        const headNoBtn = q('#cm-no-head');
 
         // Clone to clear listeners
         const newYes = yesBtn.cloneNode(true);
         const newNo = noBtn.cloneNode(true);
+        const newHeadNo = headNoBtn.cloneNode(true);
         yesBtn.parentNode.replaceChild(newYes, yesBtn);
         noBtn.parentNode.replaceChild(newNo, noBtn);
+        headNoBtn.parentNode.replaceChild(newHeadNo, headNoBtn);
 
         newYes.onclick = () => {
             close();
             onYes();
         };
         newNo.onclick = () => close(); // Fix: close on No
+        newHeadNo.onclick = () => close();
 
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
@@ -910,9 +1034,6 @@ const UI = {
                         </div>
                     </div>
                     <div class="modal-body flush" id="logs-body"></div>
-                    <div class="modal-footer">
-                        <button class="btn-secondary" onclick="q('#logs-modal').classList.remove('open')">${Lang.t('close')}</button>
-                    </div>
                 </div>`;
             document.body.appendChild(modal);
         }
@@ -1252,6 +1373,7 @@ const Settings = {
             toggle.innerHTML = Icon('settings', 16);
             toggle.title = Lang.t('settings');
             toggle.id = 'btn-settings';
+            toggle.classList.add('btn-icon');
             toggle.onclick = Settings.openModal;
             if (window.lucide) lucide.createIcons();
         }
@@ -1293,12 +1415,19 @@ const Settings = {
         root.setProperty('--primary-rgb', Utils.hexToRgb(hex));
         root.setProperty('--primary-grad', `linear-gradient(135deg, ${hex}, ${Utils.adjustColor(hex, -20)})`);
     },
+    applyBranding: (s) => {
+        const name = (s.generalConfig?.portalName || s.companyConfig?.name || 'Support Portal').trim();
+        qa('.brand-mini').forEach(el => { el.textContent = name; });
+        const suffix = document.body.dataset.guard === 'admin' ? 'Admin' : document.body.dataset.guard === 'user' ? 'Dashboard' : 'Login';
+        document.title = `${name} | ${suffix}`;
+    },
     apply: (s) => {
         const isLight = s.theme === 'light';
         if (isLight) document.documentElement.className = 'light';
         else document.documentElement.className = '';
 
         Settings.applyAccent(s.accentColor);
+        Settings.applyBranding(s);
 
         // Applied Background
         Settings.normalizeBg(s);
@@ -1379,7 +1508,6 @@ const Settings = {
                             </div>
                         </div>
                     </div>
-                    <div class="modal-footer"><button class="btn-primary close-m">${Lang.t('done')}</button></div>
                 </div>`;
             document.body.appendChild(modal);
             modal.querySelectorAll('.close-m').forEach(x => x.onclick = () => modal.classList.remove('open'));
@@ -1473,6 +1601,7 @@ const Settings = {
                     setTimeout(() => Auth.open2FAModal(user), 200); // Wait for transition
                 }
             };
+            if (window.lucide) lucide.createIcons();
         }
 
         modal.classList.add('open');
@@ -1608,7 +1737,8 @@ const UserDash = {
         btn.onclick = async () => {
             const title = q('#t-title').value.trim();
             const desc = q('#t-desc').value.trim();
-            const prio = q('#t-prio').value;
+            const settings = await Store.getSettings();
+            const prio = q('#t-prio').value || settings.generalConfig?.defaultPrio || 'Normal';
             // Get values from custom multi-select
             const selectedCats = UserDash.categoryInstance ? UserDash.categoryInstance.getValue() : ['Allgemein'];
             const cat = selectedCats.length > 0 ? selectedCats : ['Allgemein'];
@@ -1640,8 +1770,7 @@ const UserDash = {
             await Store.saveTickets(tickets);
 
             // Notify Admins
-            const s = await Store.getSettings();
-            if (s.emailConfig && s.emailConfig.host) {
+            if (settings.emailConfig && settings.emailConfig.host) {
                 const admins = (await Store.getUsers()).filter(u => u.role === 'admin' || u.role === 'superadmin');
                 admins.forEach(a => {
                     if (a.email) Store.sendEmail(a.email, `Neues Ticket: ${title}`, `Ticket #${newTicket.id} von ${user.name || user.username} erstellt.`);
@@ -1651,6 +1780,7 @@ const UserDash = {
             UI.toast('Ticket erstellt!');
             q('#t-title').value = '';
             q('#t-desc').value = '';
+            if (q('#t-prio')) q('#t-prio').value = settings.generalConfig?.defaultPrio || 'Normal';
             await UserDash.renderList();
         };
 
@@ -1664,13 +1794,13 @@ const UserDash = {
         if (catContainer) {
             const settings = await Store.getSettings();
             const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
+            if (q('#t-prio')) q('#t-prio').value = settings.generalConfig?.defaultPrio || 'Normal';
             const initial = categories.includes('Allgemein') ? ['Allgemein'] : categories.slice(0, 1);
             UserDash.categoryInstance = UI.createMultiSelect(catContainer, categories, initial);
         }
 
         // Modal Events
         if (q('#u-m-close')) q('#u-m-close').onclick = UserDash.closeModal;
-        if (q('#u-m-close-bt')) q('#u-m-close-bt').onclick = UserDash.closeModal;
         if (q('#u-ticket-modal')) q('#u-ticket-modal').onclick = (e) => {
             if (e.target.id === 'u-ticket-modal') UserDash.closeModal();
         };
@@ -1892,12 +2022,7 @@ const UserDash = {
         // Search Filter
         const query = (q('#u-search')?.value || '').toLowerCase().trim();
         if (query) {
-            tickets = tickets.filter(t =>
-                t.title.toLowerCase().includes(query) ||
-                (t.desc && t.desc.toLowerCase().includes(query)) ||
-                t.status.toLowerCase().includes(query) ||
-                (t.category && (Array.isArray(t.category) ? t.category.join(' ') : t.category).toLowerCase().includes(query))
-            );
+            tickets = tickets.filter(t => Utils.matchesSearch(query, t));
         }
 
         // Sorting
@@ -1959,6 +2084,16 @@ function getPrioValue(p) {
 // --- Admin Kanban Logic ---
 const AdminBoard = {
     selectedFiles: [],
+    noteFiles: [],
+
+    orderTopbar: () => {
+        const nav = q('.topbar-right');
+        if (!nav) return;
+        ['btn-to-dash', 'btn-archive', 'btn-global-logs', 'btn-manage-users', 'btn-sys-settings', 'theme-toggle', 'btn-settings', 'logout'].forEach(id => {
+            const el = q(`#${id}`);
+            if (el && el.parentElement === nav) nav.appendChild(el);
+        });
+    },
 
     renderFilePreview: () => {
         const pan = q('#m-chat-file-preview');
@@ -2001,7 +2136,7 @@ const AdminBoard = {
                     btn.className = 'btn-ghost';
                     btn.innerHTML = `${Icon('users', 16)}${Lang.t('userMgmt')}`;
                     btn.onclick = AdminBoard.openUserManager;
-                    actions.insertBefore(btn, actions.firstChild);
+                    actions.insertBefore(btn, q('#theme-toggle') || q('#btn-settings') || q('#logout'));
                 }
                 if (isSuper && !q('#btn-sys-settings')) {
                     const btn = document.createElement('button');
@@ -2009,8 +2144,9 @@ const AdminBoard = {
                     btn.className = 'btn-ghost';
                     btn.innerHTML = `${Icon('sliders', 16)}${Lang.t('system')}`;
                     btn.onclick = AdminBoard.openSystemSettings;
-                    actions.insertBefore(btn, actions.firstChild);
+                    actions.insertBefore(btn, q('#theme-toggle') || q('#btn-settings') || q('#logout'));
                 }
+                AdminBoard.orderTopbar();
             }
         }
         if (isSuper || user?.canViewLogs) {
@@ -2020,6 +2156,7 @@ const AdminBoard = {
                 btnLogs.onclick = AdminBoard.openGlobalLogsModal;
             }
         }
+        AdminBoard.orderTopbar();
         if (window.lucide) lucide.createIcons();
 
         const reqBoard = q('#request-list')?.parentElement;
@@ -2056,7 +2193,6 @@ const AdminBoard = {
 
         // Setup Modal
         if (q('#m-close')) q('#m-close').onclick = AdminBoard.closeModal;
-        if (q('#m-close-bt')) q('#m-close-bt').onclick = AdminBoard.closeModal;
         if (q('#ticket-modal')) {
             q('#ticket-modal').onclick = (e) => {
                 if (e.target.id === 'ticket-modal' || e.target.classList.contains('modal-container')) {
@@ -2077,6 +2213,38 @@ const AdminBoard = {
         if (q('#btn-add-comment')) {
             q('#btn-add-comment').onclick = AdminBoard.postInternalComment;
         }
+
+        const noteFileInput = q('#m-note-file-input');
+        if (noteFileInput) {
+            noteFileInput.onchange = () => {
+                Array.from(noteFileInput.files).forEach(f => AdminBoard.noteFiles.push(f));
+                AdminBoard.renderNoteFilePreview();
+                noteFileInput.value = '';
+            };
+        }
+
+        const noteInput = q('#m-new-comment');
+        const noteBold = q('#m-note-bold');
+        const noteItalic = q('#m-note-italic');
+        const noteList = q('#m-note-list');
+        if (noteBold && noteInput) noteBold.onclick = () => insertMarkdown(noteInput, '**');
+        if (noteItalic && noteInput) noteItalic.onclick = () => insertMarkdown(noteInput, '*');
+        if (noteList && noteInput) {
+            noteList.onclick = () => {
+                const start = noteInput.selectionStart;
+                const end = noteInput.selectionEnd;
+                const selected = noteInput.value.substring(start, end) || 'Punkt';
+                const listText = selected.split('\n').map(line => `- ${line}`).join('\n');
+                noteInput.value = noteInput.value.substring(0, start) + listText + noteInput.value.substring(end);
+                noteInput.focus();
+            };
+        }
+        const noteSearch = q('#m-note-search');
+        if (noteSearch) noteSearch.oninput = async () => {
+            const tickets = await Store.getTickets();
+            const t = tickets.find(x => x.id === AdminBoard.currentTicketId);
+            if (t) AdminBoard.renderInternalComments(t);
+        };
 
         // Date input (Admin) + Formatting
         const fileAdmin = q('#m-chat-file-input');
@@ -2215,38 +2383,59 @@ const AdminBoard = {
 
         function createCard(t, usersList) {
             const card = document.createElement('div');
-            card.className = 'ticket-card';
+            card.className = `ticket-card ticket-status-${String(t.status || 'Neu').toLowerCase().replace(/\s+/g, '-')}`;
             card.draggable = true;
             card.dataset.id = t.id;
 
-            let assigneeHtml = `<span class="muted">${Lang.t('unassigned')}</span>`;
-
-            if (t.assignees && t.assignees.length > 0) {
-                const names = t.assignees.map(u => {
-                    const found = usersList.find(x => x.username === u);
-                    return found ? (found.name || found.username) : u;
+            const ownerUsername = t.owner || (Array.isArray(t.assignees) ? t.assignees[0] : t.assignee);
+            const owner = ownerUsername ? usersList.find(x => x.username === ownerUsername) : null;
+            const ownerLabel = owner ? (owner.name || owner.username) : (ownerUsername || Lang.t('unassigned'));
+            const participantNames = (Array.isArray(t.participants) ? t.participants : [])
+                .filter(username => username !== ownerUsername)
+                .map(username => {
+                    const found = usersList.find(x => x.username === username);
+                    return found ? (found.name || found.username) : username;
                 });
-                assigneeHtml = `<span class="assignee-badge">${Icon('user-round', 12)}${Utils.esc(names.join(', '))}</span>`;
-            } else if (t.assigneeName) {
-                assigneeHtml = `<span class="assignee-badge">${Icon('user-round', 12)}${Utils.esc(t.assigneeName)}</span>`;
-            }
+            // Nur die zuletzt gesendete Chat-Nachricht entscheidet, ob eine Antwort aussteht –
+            // Statusänderungen o.ä. im Protokoll lösen keinen "wartet auf Antwort"-Hinweis aus.
+            const latestChat = (t.chat || []).slice().sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0))[0];
+            const awaitingReply = latestChat?.role === 'user';
+            const todoOpen = (t.todos || []).filter(todo => !todo.done).length;
 
             card.innerHTML = `
                 <div class="t-head">
-                    <span class="t-tag prio-${t.prio}">${Lang.prio(t.prio)}</span>
+                    <span class="t-tag prio-${t.prio}">${Icon('flag', 12)}${Lang.prio(t.prio)}</span>
                     <div class="t-cats">
                         ${(Array.isArray(t.category) ? t.category : [t.category || '-']).map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('')}
                     </div>
                 </div>
                 <div class="t-title">${Utils.esc(t.title)}</div>
-                <div class="t-meta">
-                    <span>${Utils.esc(t.authorName)}</span>
-                    <span>${Utils.fmtDate(t.createdAt).split(' ')[0]}</span>
+                <div class="t-meta t-sub">
+                    <span class="t-author" title="${Utils.esc(t.authorName || t.author || '-')}">${Icon('user', 12)}${Utils.esc(t.authorName || t.author || '-')} · ${Utils.fmtDate(t.createdAt).split(' ')[0]}</span>
+                    <span class="t-counts">
+                        <span class="chat-count" title="Nachrichten">${Icon('message-square', 12)}${(t.chat?.length || 0)}</span>
+                        <span class="chat-count" title="Interne Notizen">${Icon('notebook-tabs', 12)}${(t.comments?.length || 0)}</span>
+                    </span>
                 </div>
-                <div class="t-meta t-foot">
-                    ${assigneeHtml}
-                    <span class="chat-count">${Icon('message-square', 12)}${(t.chat?.length || 0)}</span>
+                <div class="ticket-card-ops">
+                    <div class="ticket-card-owner${ownerUsername ? '' : ' is-unassigned'}" title="${ownerUsername ? 'Hauptverantwortlicher: ' + Utils.esc(ownerLabel) : 'Noch niemandem zugewiesen'}">
+                        ${Icon('user-check', 13)}
+                        <span>${Utils.esc(ownerLabel)}</span>
+                    </div>
+                    <div class="ticket-card-participants" title="${participantNames.length ? 'Beteiligt: ' + Utils.esc(participantNames.join(', ')) : 'Keine weiteren Beteiligten'}">
+                        ${Icon('users-round', 13)}
+                        <span>${participantNames.length}</span>
+                    </div>
+                    <div class="ticket-card-work" title="${todoOpen} offene Teilaufgabe${todoOpen === 1 ? '' : 'n'}">
+                        ${Icon('list-checks', 13)}
+                        <span>${todoOpen}</span>
+                    </div>
                 </div>
+                ${awaitingReply ? `
+                <div class="ticket-card-activity has-user-update">
+                    <span>${Icon('message-circle', 13)}Antwort ausstehend</span>
+                    <time>${Utils.fmtDate(latestChat.date).split(' ')[0]}</time>
+                </div>` : ''}
             `;
             card.addEventListener('dragstart', (e) => {
                 e.dataTransfer.setData('text/plain', t.id);
@@ -2288,15 +2477,12 @@ const AdminBoard = {
                     <div class="modal-header">
                         <h3>${Icon('bell', 18)} System-Protokoll</h3>
                         <div class="modal-actions">
-                            <input type="text" id="gl-search" placeholder="Durchsuchen...">
+                            <input type="text" id="gl-search" placeholder="Benutzer, Aktion, Details, Datum oder Uhrzeit suchen...">
                             <button class="btn-ghost btn-icon btn-danger" id="btn-gl-clear" title="Protokoll leeren" aria-label="Protokoll leeren">${Icon('trash-2', 16)}</button>
                             <button class="btn-ghost btn-icon" title="${Lang.t('close')}" aria-label="${Lang.t('close')}" onclick="q('#global-logs-modal').classList.remove('open')">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="modal-body flush" id="gl-body"></div>
-                    <div class="modal-footer">
-                        <button class="btn-secondary" onclick="q('#global-logs-modal').classList.remove('open')">${Lang.t('close')}</button>
-                    </div>
                 </div>`;
             document.body.appendChild(modal);
 
@@ -2320,13 +2506,9 @@ const AdminBoard = {
         if (!body) return;
 
         const logs = await Store.getGlobalLogs();
-        const search = q('#gl-search').value.toLowerCase();
+        const search = q('#gl-search').value.toLowerCase().trim();
 
-        const filtered = logs.filter(l =>
-            l.user.toLowerCase().includes(search) ||
-            l.action.toLowerCase().includes(search) ||
-            l.details.toLowerCase().includes(search)
-        );
+        const filtered = logs.filter(l => Utils.matchesSearch(search, l));
 
         const visibleLogs = filtered.slice().reverse();
         const iconForLog = (action = '') => {
@@ -2438,11 +2620,7 @@ const AdminBoard = {
 
         if (view === 'groups') {
             const groups = await Store.getGroups();
-            const filteredGroups = groups.filter(g =>
-                !searchTerm ||
-                g.name.toLowerCase().includes(searchTerm) ||
-                (g.description || '').toLowerCase().includes(searchTerm)
-            );
+            const filteredGroups = groups.filter(g => Utils.matchesSearch(searchTerm, g));
 
             filteredGroups.forEach(g => {
                 const el = document.createElement('div');
@@ -2480,7 +2658,7 @@ const AdminBoard = {
         if (view === 'cats') {
             const settings = await Store.getSettings();
             const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
-            categories.filter(c => c.toLowerCase().includes(searchTerm)).forEach(c => {
+            categories.filter(c => Utils.matchesSearch(searchTerm, c)).forEach(c => {
                 const el = document.createElement('div');
                 el.className = 'table-row user-manager-row';
                 el.innerHTML = `
@@ -2517,10 +2695,7 @@ const AdminBoard = {
                 (view === 'admins' && (u.role === 'admin' || u.role === 'superadmin'));
             if (!matchesView) return false;
 
-            if (!searchTerm) return true;
-            return u.username.toLowerCase().includes(searchTerm) ||
-                (u.name && u.name.toLowerCase().includes(searchTerm)) ||
-                (u.email && u.email.toLowerCase().includes(searchTerm));
+            return Utils.matchesSearch(searchTerm, u, groups.filter(g => (g.members || []).includes(u.username) || (u.groups || []).includes(g.id)));
         });
 
         filtered.forEach(u => {
@@ -2798,6 +2973,7 @@ const AdminBoard = {
                     <div class="modal-header">
                         <h3>Benutzer bearbeiten</h3>
                         <div class="modal-actions">
+                            <button class="btn-ghost btn-icon" id="ue-save-head" title="Speichern" aria-label="Speichern">${Icon('save', 16)}</button>
                             <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
@@ -2824,13 +3000,14 @@ const AdminBoard = {
                             </div>
                          </div>
                     </div>
-                    <div class="modal-footer">
-                        <button class="btn-secondary close-m">Abbrechen</button>
+                    <div class="modal-footer action-footer">
+                        <button class="btn-secondary close-m footer-cancel">Abbrechen</button>
                         <button class="btn-primary" id="ue-save">Speichern</button>
                     </div>
                 </div>`;
             document.body.appendChild(editModal);
             editModal.querySelectorAll('.close-m').forEach(b => b.onclick = () => editModal.classList.remove('open'));
+            editModal.querySelector('#ue-save-head').onclick = () => q('#ue-save')?.click();
             if (window.lucide) lucide.createIcons();
         }
 
@@ -3001,20 +3178,22 @@ const AdminBoard = {
         modal.className = 'modal-overlay';
         modal.innerHTML = `
             <div class="modal modal-sm">
-                <div class="modal-header">
-                    <h3></h3>
-                    <div class="modal-actions">
-                        <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
+                    <div class="modal-header">
+                        <h3></h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon" id="generic-save-head" title="${Lang.t('save')}" aria-label="${Lang.t('save')}">${Icon('save', 16)}</button>
+                            <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
+                        </div>
                     </div>
-                </div>
-                <div class="modal-body"></div>
-                <div class="modal-footer">
-                    <button class="btn-secondary close-m">Abbrechen</button>
+                    <div class="modal-body"></div>
+                <div class="modal-footer action-footer">
+                    <button class="btn-secondary close-m footer-cancel">Abbrechen</button>
                     <button class="btn-primary">Speichern</button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
         modal.querySelectorAll('.close-m').forEach(b => b.onclick = () => modal.classList.remove('open'));
+        modal.querySelector('#generic-save-head').onclick = () => modal.querySelector('.modal-footer .btn-primary')?.click();
         if (window.lucide) lucide.createIcons();
         return modal;
     },
@@ -3030,19 +3209,23 @@ const AdminBoard = {
                     <div class="modal-header">
                         <h3>${Icon('sliders', 18)}${Lang.t('systemSettings')}</h3>
                         <div class="modal-actions">
+                            <button class="btn-ghost btn-icon" id="sys-save-head" title="${Lang.t('saveSettings')}" aria-label="${Lang.t('saveSettings')}">${Icon('save', 16)}</button>
                             <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="sys-settings-shell">
                     <nav class="sys-settings-nav" aria-label="${Lang.t('systemSettings')}">
-                        <button class="tab-btn active" data-tab="sys-email">
-                            <i data-lucide="mail"></i><span>${Lang.t('emailIntegration')}</span>
+                        <button class="tab-btn active" data-tab="sys-general">
+                            <i data-lucide="sliders"></i><span>${Lang.t('general')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-sec">
+                            <i data-lucide="shield"></i><span>${Lang.t('security')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-notify">
                             <i data-lucide="bell"></i><span>${Lang.t('notifications')}</span>
                         </button>
-                        <button class="tab-btn" data-tab="sys-sec">
-                            <i data-lucide="shield"></i><span>${Lang.t('security')}</span>
+                        <button class="tab-btn" data-tab="sys-email">
+                            <i data-lucide="mail"></i><span>${Lang.t('emailIntegration')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-ldap">
                             <i data-lucide="server"></i><span>LDAP</span>
@@ -3050,14 +3233,15 @@ const AdminBoard = {
                         <button class="tab-btn" data-tab="sys-outlook">
                             <i data-lucide="mail-check"></i><span>Outlook</span>
                         </button>
-                        <button class="tab-btn" data-tab="sys-general">
-                            <i data-lucide="sliders"></i><span>${Lang.t('general')}</span>
+                        <button class="tab-btn" data-tab="sys-company">
+                            <i data-lucide="building-2"></i><span>${Lang.t('company')}</span>
                         </button>
                     </nav>
                     <div class="modal-body sys-settings-content">
                         <!-- E-Mail SMTP -->
-                        <div id="sys-email" class="tab-content active">
+                        <div id="sys-email" class="tab-content">
                             <div class="callout"><strong>Hinweis:</strong> ${Lang.t('emailHint')}</div>
+                            <div class="settings-section-title">${Icon('server-cog', 15)}SMTP-Ausgang</div>
                             <div class="field"><label>${Lang.t('smtpHost')}</label><input id="sys-smtp-host" type="text" placeholder="smtp.office365.com"></div>
                             <div class="field"><label>${Lang.t('smtpPort')}</label><input id="sys-smtp-port" type="number" placeholder="587"></div>
                             <div class="form-grid">
@@ -3070,13 +3254,35 @@ const AdminBoard = {
                                 <div class="field"><label>${Lang.t('smtpEncryption')}</label><select id="sys-smtp-secure"><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">None</option></select></div>
                                 <div class="field"><label>${Lang.t('replyTo')}</label><input id="sys-smtp-replyto" type="email" placeholder="support@example.com"></div>
                             </div>
+                            <div class="settings-section-title">${Icon('mail-check', 15)}Vorlage und Signatur</div>
                             <div class="field"><label>${Lang.t('emailTemplate')}</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
+                            <div class="field">
+                                <label class="check-row">
+                                    <input type="checkbox" id="sys-email-html-enabled">
+                                    <span class="check-text"><strong>HTML-E-Mails aktivieren</strong><span>Benachrichtigungen mit HTML-Signatur und formatiertem Inhalt vorbereiten.</span></span>
+                                </label>
+                            </div>
+                            <div class="field"><label>HTML-Signatur</label><textarea id="sys-email-html-signature" rows="6" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
+                            <div class="settings-section-title">${Icon('shield-check', 15)}Sicherheit und Zertifikate</div>
+                            <div class="callout"><strong>E-Mail Sicherheit:</strong> Zertifikate und Schlüssel werden gespeichert und für Backend/SMTP-Integration bereitgestellt.</div>
+                            <div class="form-grid">
+                                <div class="field"><label>Transport-Sicherheit</label><select id="sys-email-tls-mode"><option value="starttls">STARTTLS erzwingen</option><option value="tls">TLS/SSL erzwingen</option><option value="opportunistic">Opportunistisch</option></select></div>
+                                <div class="field"><label>Zertifikatsprüfung</label><select id="sys-email-cert-verify"><option value="strict">Strikt prüfen</option><option value="allow-self-signed">Self-signed erlauben</option><option value="disabled">Deaktiviert</option></select></div>
+                            </div>
+                            <div class="field"><label>S/MIME Zertifikat (PEM)</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+                            <div class="field"><label>S/MIME Private Key (PEM)</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+                            <div class="form-grid">
+                                <div class="field"><label>Key-Passphrase</label><input id="sys-email-smime-pass" type="password" placeholder="Optional"></div>
+                                <div class="field"><label>DKIM Selector</label><input id="sys-email-dkim-selector" type="text" placeholder="default"></div>
+                            </div>
+                            <div class="field"><label>DKIM Domain</label><input id="sys-email-dkim-domain" type="text" placeholder="example.com"></div>
+                            <div class="field"><label>DKIM Private Key (PEM)</label><textarea id="sys-email-dkim-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
                             <button class="btn-secondary btn-sm" id="sys-test-email">${Icon('send', 15)}${Lang.t('testEmail')}</button>
                         </div>
 
                         <!-- Benachrichtigungsregeln -->
                         <div id="sys-notify" class="tab-content">
-                            <p>${Lang.t('notifyRules')}</p>
+                            <div class="settings-section-title">${Icon('bell-ring', 15)}${Lang.t('notifyRules')}</div>
                             <div class="checkbox-list">
                                 <label class="check-row">
                                     <input type="checkbox" id="notif-new-ticket">
@@ -3147,7 +3353,7 @@ const AdminBoard = {
                         </div>
 
                         <!-- Allgemein -->
-                        <div id="sys-general" class="tab-content">
+                        <div id="sys-general" class="tab-content active">
                             <div class="field">
                                 <label>${Lang.t('portalName')}</label>
                                 <input id="sys-portal-name" type="text" placeholder="Support Portal">
@@ -3169,14 +3375,39 @@ const AdminBoard = {
                                 <input id="sys-default-cats" type="text" placeholder="Allgemein, Technik, Account, Abrechnung">
                             </div>
                         </div>
+
+                        <!-- Unternehmenseinstellungen -->
+                        <div id="sys-company" class="tab-content">
+                            <div class="callout"><strong>Branding:</strong> Firmenangaben werden für Portal, E-Mail-Vorlagen und interne Darstellung vorbereitet.</div>
+                            <div class="form-grid">
+                                <div class="field"><label>Firmenname</label><input id="sys-company-name" type="text" placeholder="Muster GmbH"></div>
+                                <div class="field"><label>Support-Abteilung</label><input id="sys-company-dept" type="text" placeholder="IT Service Desk"></div>
+                            </div>
+                            <div class="field">
+                                <label>Firmenlogo URL</label>
+                                <input id="sys-company-logo" type="url" placeholder="https://example.com/logo.png">
+                            </div>
+                            <div class="form-grid">
+                                <div class="field"><label>Support E-Mail</label><input id="sys-company-support-mail" type="email" placeholder="support@example.com"></div>
+                                <div class="field"><label>Support Telefon</label><input id="sys-company-support-phone" type="text" placeholder="+49 123 456789"></div>
+                            </div>
+                            <div class="form-grid">
+                                <div class="field"><label>Standard-Zeitzone</label><input id="sys-company-timezone" type="text" placeholder="Europe/Berlin"></div>
+                                <div class="field"><label>Standort / Region</label><input id="sys-company-location" type="text" placeholder="Deutschland"></div>
+                            </div>
+                            <div class="field"><label>Impressum / Datenschutz URL</label><input id="sys-company-legal" type="url" placeholder="https://example.com/impressum"></div>
+                            <div class="field"><label>E-Mail Signatur</label><textarea id="sys-company-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
+                            <div class="field"><label>HTML-E-Mail-Signatur</label><textarea id="sys-company-html-signature" rows="4" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
+                        </div>
                     </div>
                     </div>
-                    <div class="modal-footer">
-                        <button class="btn-secondary close-m">${Lang.t('closeSystemSettings')}</button>
+                    <div class="modal-footer action-footer">
+                        <button class="btn-secondary close-m footer-cancel">${Lang.t('closeSystemSettings')}</button>
                         <button class="btn-primary" id="sys-save">${Icon('save', 16)}${Lang.t('saveSettings')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
+            modal.querySelector('#sys-save-head').onclick = () => q('#sys-save')?.click();
 
             // Tab Logic
             modal.querySelectorAll('.tab-btn').forEach(btn => {
@@ -3205,6 +3436,7 @@ const AdminBoard = {
         const notif = settings.notifConfig || {};
         const general = settings.generalConfig || {};
         const outlook = settings.outlookConfig || {};
+        const company = settings.companyConfig || {};
 
         q('#sys-smtp-host').value = email.host || '';
         q('#sys-smtp-port').value = email.port || '';
@@ -3215,6 +3447,16 @@ const AdminBoard = {
         q('#sys-smtp-secure').value = email.secure || 'starttls';
         q('#sys-smtp-replyto').value = email.replyTo || '';
         q('#sys-email-template').value = email.template || '';
+        q('#sys-email-html-enabled').checked = !!email.htmlEnabled;
+        q('#sys-email-html-signature').value = email.htmlSignature || '';
+        q('#sys-email-tls-mode').value = email.security?.tlsMode || 'starttls';
+        q('#sys-email-cert-verify').value = email.security?.certVerify || 'strict';
+        q('#sys-email-smime-cert').value = email.security?.smimeCert || '';
+        q('#sys-email-smime-key').value = email.security?.smimeKey || '';
+        q('#sys-email-smime-pass').value = email.security?.smimePass || '';
+        q('#sys-email-dkim-selector').value = email.security?.dkimSelector || '';
+        q('#sys-email-dkim-domain').value = email.security?.dkimDomain || '';
+        q('#sys-email-dkim-key').value = email.security?.dkimKey || '';
 
         q('#notif-new-ticket').checked = !!notif.newTicket;
         q('#notif-status-change').checked = !!notif.statusChange;
@@ -3242,6 +3484,17 @@ const AdminBoard = {
         q('#sys-default-prio').value = general.defaultPrio || 'Normal';
         q('#sys-default-cats').value = (settings.categories || []).join(', ');
 
+        q('#sys-company-name').value = company.name || '';
+        q('#sys-company-dept').value = company.department || '';
+        q('#sys-company-logo').value = company.logoUrl || '';
+        q('#sys-company-support-mail').value = company.supportEmail || '';
+        q('#sys-company-support-phone').value = company.supportPhone || '';
+        q('#sys-company-timezone').value = company.timezone || 'Europe/Berlin';
+        q('#sys-company-location').value = company.location || '';
+        q('#sys-company-legal').value = company.legalUrl || '';
+        q('#sys-company-signature').value = company.signature || '';
+        q('#sys-company-html-signature').value = company.htmlSignature || email.htmlSignature || '';
+
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
 
@@ -3256,7 +3509,19 @@ const AdminBoard = {
                 fromName: q('#sys-smtp-fromname').value.trim(),
                 secure: q('#sys-smtp-secure').value,
                 replyTo: q('#sys-smtp-replyto').value.trim(),
-                template: q('#sys-email-template').value.trim()
+                template: q('#sys-email-template').value.trim(),
+                htmlEnabled: q('#sys-email-html-enabled').checked,
+                htmlSignature: q('#sys-email-html-signature').value.trim(),
+                security: {
+                    tlsMode: q('#sys-email-tls-mode').value,
+                    certVerify: q('#sys-email-cert-verify').value,
+                    smimeCert: q('#sys-email-smime-cert').value.trim(),
+                    smimeKey: q('#sys-email-smime-key').value.trim(),
+                    smimePass: q('#sys-email-smime-pass').value,
+                    dkimSelector: q('#sys-email-dkim-selector').value.trim(),
+                    dkimDomain: q('#sys-email-dkim-domain').value.trim(),
+                    dkimKey: q('#sys-email-dkim-key').value.trim()
+                }
             };
             newSettings.notifConfig = {
                 newTicket: q('#notif-new-ticket').checked,
@@ -3289,11 +3554,27 @@ const AdminBoard = {
                 autoArchiveDays: parseInt(q('#sys-auto-archive').value) || 0,
                 defaultPrio: q('#sys-default-prio').value,
             };
+            newSettings.companyConfig = {
+                name: q('#sys-company-name').value.trim(),
+                department: q('#sys-company-dept').value.trim(),
+                logoUrl: q('#sys-company-logo').value.trim(),
+                supportEmail: q('#sys-company-support-mail').value.trim(),
+                supportPhone: q('#sys-company-support-phone').value.trim(),
+                timezone: q('#sys-company-timezone').value.trim() || 'Europe/Berlin',
+                location: q('#sys-company-location').value.trim(),
+                legalUrl: q('#sys-company-legal').value.trim(),
+                signature: q('#sys-company-signature').value.trim(),
+                htmlSignature: q('#sys-company-html-signature').value.trim()
+            };
 
             await Store.saveSettings(newSettings);
+            Settings.apply(newSettings);
+            await Store.runAutoArchive();
+            if (q('.kanban-board')) await AdminBoard.render();
+            if (q('#user-tickets')) await UserDash.renderList();
             modal.classList.remove('open');
             UI.toast(Lang.current === 'en' ? 'System settings saved' : 'Systemeinstellungen gespeichert');
-            await Store.addGlobalLog('Systemeinstellungen gespeichert', `Geänderte Bereiche: Email, Sicherheit, LDAP`);
+            await Store.addGlobalLog('Systemeinstellungen gespeichert', `Geänderte Bereiche: Allgemein, Sicherheit, Benachrichtigungen, E-Mail, LDAP, Outlook, Unternehmen`);
         };
     },
 
@@ -3306,12 +3587,7 @@ const AdminBoard = {
         let archived = (await Store.getTickets()).filter(t => t.archived);
 
         if (query) {
-            archived = archived.filter(t =>
-                (t.title || '').toLowerCase().includes(query) ||
-                (t.authorName || '').toLowerCase().includes(query) ||
-                (t.author || '').toLowerCase().includes(query) ||
-                (t.desc || '').toLowerCase().includes(query)
-            );
+            archived = archived.filter(t => Utils.matchesSearch(query, t));
         }
 
         archived.sort((a, b) => new Date(b.archivedAt || 0) - new Date(a.archivedAt || 0));
@@ -3433,8 +3709,7 @@ const AdminBoard = {
 
     ensureResponsibilitySection: async (t, users, tickets) => {
         const details = q('#tab-details');
-        const assignmentField = q('#assignee-multi')?.closest('.field');
-        if (!details || !assignmentField) return;
+        if (!details) return;
 
         const staff = users.filter(u => u.role === 'admin' || u.role === 'superadmin');
         if (!Array.isArray(t.assignees)) t.assignees = t.assignee ? [t.assignee] : [];
@@ -3474,7 +3749,9 @@ const AdminBoard = {
                 </div>
             </div>
         `;
-        assignmentField.after(section);
+        const commentsSection = details.querySelector('.comments-section');
+        if (commentsSection) commentsSection.before(section);
+        else details.appendChild(section);
 
         const ownerSelect = q('#m-owner-select');
         ownerSelect.value = t.owner || '';
@@ -3482,15 +3759,23 @@ const AdminBoard = {
         ownerSelect.onchange = async () => {
             const old = t.owner || 'Nicht zugewiesen';
             t.owner = ownerSelect.value;
+            t.participants = (t.participants || []).filter(username => username !== t.owner);
+            t.assignees = [...t.participants];
             await Store.addLog(t, 'Hauptverantwortlicher geändert', `Alt: ${old} -> Neu: ${t.owner || 'Nicht zugewiesen'}`);
             await Store.saveTickets(tickets);
+            await AdminBoard.ensureResponsibilitySection(t, users, tickets);
             await AdminBoard.render();
         };
 
         const participantsMulti = q('#participants-multi');
-        UI.createMultiSelect(participantsMulti, staff.map(u => ({ value: u.username, label: u.name || u.username })), t.participants, async (newParticipants) => {
-            t.participants = newParticipants;
-            t.assignees = newParticipants;
+        const participantOptions = staff
+            .filter(u => u.username !== t.owner)
+            .map(u => ({ value: u.username, label: u.name || u.username }));
+        const participantValues = (t.participants || []).filter(username => username !== t.owner);
+        t.participants = participantValues;
+        UI.createMultiSelect(participantsMulti, participantOptions, participantValues, async (newParticipants) => {
+            t.participants = newParticipants.filter(username => username !== t.owner);
+            t.assignees = [...t.participants];
             const names = newParticipants.map(username => {
                 const found = staff.find(u => u.username === username);
                 return found ? (found.name || found.username) : username;
@@ -3600,8 +3885,6 @@ const AdminBoard = {
             // Elements
             const prioSel = q('#m-prio-edit');
             const catSel = q('#m-cat-edit');
-            const msHeader = q('#ms-header');
-            const msDropdown = q('#ms-dropdown');
             const commentInput = q('#m-new-comment');
             const commentBtn = q('#btn-add-comment');
             const chatInput = q('#m-chat-input');
@@ -3638,6 +3921,10 @@ const AdminBoard = {
             if (catSel) catSel.disabled = t.archived;
             if (commentInput) commentInput.disabled = t.archived;
             if (commentBtn) commentBtn.disabled = t.archived;
+            ['#m-note-type', '#m-note-bold', '#m-note-italic', '#m-note-list', '#m-note-file-input', '#m-note-pin', '#m-note-resolution'].forEach(selector => {
+                const el = q(selector);
+                if (el) el.disabled = t.archived;
+            });
             if (chatInput) chatInput.disabled = t.archived;
             if (chatSend) chatSend.disabled = t.archived;
 
@@ -3701,35 +3988,11 @@ const AdminBoard = {
 
             // --- Multi-Select Assignment ---
             const allUsers = await Store.getUsers();
-            const admins = allUsers.filter(u => u.role === 'admin' || u.role === 'superadmin');
-            const msContainerEl = q('#assignee-multi');
-
-            if (msContainerEl) {
-                if (!t.assignees) t.assignees = t.assignee ? [t.assignee] : [];
-                if (!Array.isArray(t.participants)) t.participants = [...t.assignees];
-                if (!t.owner && t.assignees.length) t.owner = t.assignees[0];
-
-                UI.createMultiSelect(msContainerEl, admins.map(a => ({ value: a.username, label: a.name || a.username })), t.assignees, async (newAssignees) => {
-                    t.assignees = newAssignees;
-                    t.participants = newAssignees;
-                    if (!newAssignees.includes(t.owner)) t.owner = newAssignees[0] || '';
-                    delete t.assignee;
-                    const names = newAssignees.map(u => {
-                        const found = admins.find(a => a.username === u);
-                        return found ? (found.name || found.username) : u;
-                    }).join(', ') || 'Niemand';
-
-                    await Store.addLog(t, `Zuweisung aktualisiert`, `Neu: ${names}`);
-                    await Store.addGlobalLog('Ticket Zuweisung geändert', `Ticket: ${t.title}, Admins: ${names}`);
-                    await Store.saveTickets(tickets);
-                    await AdminBoard.render();
-                });
-
-                msContainerEl.classList.toggle('is-disabled', !!t.archived);
-            }
 
             await AdminBoard.ensureResponsibilitySection(t, allUsers, tickets);
 
+            AdminBoard.noteFiles = [];
+            AdminBoard.renderNoteFilePreview();
             AdminBoard.renderInternalComments(t);
             await AdminBoard.renderChat(t, '#m-chat-msgs');
 
@@ -3817,10 +4080,7 @@ const AdminBoard = {
             .filter(x => x.author === username)
             .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-        const filtered = tickets.filter(t =>
-            t.title.toLowerCase().includes(query) ||
-            t.status.toLowerCase().includes(query)
-        );
+        const filtered = tickets.filter(t => Utils.matchesSearch(query, t));
 
         if (filtered.length === 0) {
             content.innerHTML = `<div class="empty-state">${query ? 'Keine Treffer' : 'Keine Historie vorhanden'}</div>`;
@@ -3852,38 +4112,165 @@ const AdminBoard = {
         const box = q('#m-comments');
         if (!box) return;
         box.innerHTML = '';
+        const searchWrap = q('#m-note-search-wrap');
+        const searchInput = q('#m-note-search');
+        const commentsRaw = t.comments || [];
+        if (searchWrap) searchWrap.style.display = commentsRaw.length >= 6 ? 'flex' : 'none';
+        if (commentsRaw.length < 6 && searchInput) searchInput.value = '';
         if (!t.comments || t.comments.length === 0) {
-            box.innerHTML = '<div class="empty-state compact">Keine Notizen</div>';
+            box.innerHTML = '<div class="empty-state compact">Noch keine internen Arbeitsschritte dokumentiert.</div>';
             return;
         }
-        t.comments.forEach(c => {
+        const renderText = (value = '') => Utils.esc(value)
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/^- (.*)$/gm, '<div class="note-bullet">$1</div>');
+        const query = (searchInput?.value || '').toLowerCase().trim();
+        const comments = [...t.comments]
+            .map((comment, index) => ({ ...comment, index }))
+            .filter(c => !query || [
+                c.text,
+                c.author,
+                c.type,
+                Utils.fmtDate(c.date),
+                ...(c.files || []).map(f => f.name)
+            ].join(' ').toLowerCase().includes(query))
+            .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || new Date(a.date) - new Date(b.date));
+        if (comments.length === 0) {
+            box.innerHTML = '<div class="empty-state compact">Keine passenden internen Kommentare gefunden.</div>';
+            return;
+        }
+        comments.forEach(c => {
             const div = document.createElement('div');
-            div.className = 'note-item';
-            div.innerHTML = `<div class="note-meta"><strong>${Utils.esc(c.author)}</strong><span>${Utils.fmtDate(c.date)}</span></div>${Utils.esc(c.text)}`;
+            div.className = `note-item ${c.pinned ? 'is-pinned' : ''} ${c.resolution ? 'is-resolution' : ''}`;
+            div.dataset.index = c.index;
+            div.innerHTML = `
+                <div class="note-meta">
+                    <div class="note-author">
+                        ${c.pinned ? Icon('pin', 13) : ''}
+                        <strong>${Utils.esc(c.author)}</strong>
+                        <span class="note-type">${Utils.esc(c.type || 'Notiz')}</span>
+                        ${c.resolution ? `<span class="note-type note-resolution">${Icon('check-circle', 12)}Lösung</span>` : ''}
+                    </div>
+                    <div class="note-actions">
+                        <span>${Utils.fmtDate(c.date)}</span>
+                        <button class="btn-ghost btn-icon btn-xs note-edit" title="Kommentar bearbeiten" aria-label="Kommentar bearbeiten">${Icon('pencil', 13)}</button>
+                    </div>
+                </div>
+                <div class="note-body">${renderText(c.text)}</div>
+                ${(c.files || []).length ? `
+                    <div class="note-attachments">
+                        ${c.files.map(f => f.data
+                            ? `<a class="file-chip" href="${f.data}" download="${Utils.esc(f.name)}">${Icon('paperclip', 12)}<span>${Utils.esc(f.name)}</span></a>`
+                            : `<button type="button" class="file-chip note-attachment-download" data-attachment-id="${Utils.esc(f.id || f.attachmentId)}">${Icon('paperclip', 12)}<span>${Utils.esc(f.name)}</span></button>`
+                        ).join('')}
+                    </div>
+                ` : ''}
+            `;
+            div.querySelector('.note-edit')?.addEventListener('click', () => AdminBoard.editInternalComment(Number(div.dataset.index)));
+            div.querySelectorAll('.note-attachment-download').forEach(btn => {
+                btn.onclick = () => Store.downloadAttachment(btn.dataset.attachmentId);
+            });
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
+        if (window.lucide) lucide.createIcons();
+    },
+
+    renderNoteFilePreview: () => {
+        const pan = q('#m-note-file-preview');
+        if (!pan) return;
+        pan.innerHTML = '';
+        pan.style.display = AdminBoard.noteFiles.length ? 'flex' : 'none';
+        AdminBoard.noteFiles.forEach((f, idx) => {
+            const tag = document.createElement('div');
+            tag.className = 'file-chip';
+            tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
+            tag.querySelector('button').onclick = () => {
+                AdminBoard.noteFiles.splice(idx, 1);
+                AdminBoard.renderNoteFilePreview();
+            };
+            pan.appendChild(tag);
+        });
+        if (window.lucide) lucide.createIcons();
+    },
+
+    editInternalComment: async (index) => {
+        const tickets = await Store.getTickets();
+        const t = tickets.find(x => x.id === AdminBoard.currentTicketId);
+        const note = t?.comments?.[index];
+        if (!note) return;
+        q('#m-new-comment').value = note.text || '';
+        if (q('#m-note-type')) q('#m-note-type').value = note.type || 'Analyse';
+        if (q('#m-note-pin')) q('#m-note-pin').checked = !!note.pinned;
+        if (q('#m-note-resolution')) q('#m-note-resolution').checked = !!note.resolution;
+        const saveBtn = q('#btn-add-comment');
+        if (saveBtn) {
+            saveBtn.dataset.editIndex = String(index);
+            saveBtn.innerHTML = `${Icon('save', 16)}Eintrag aktualisieren`;
+        }
+        q('#m-new-comment').focus();
+        if (window.lucide) lucide.createIcons();
     },
 
     postInternalComment: async () => {
         const input = q('#m-new-comment');
         const txt = input.value.trim();
-        if (!txt) return;
+        const filesToUpload = [...AdminBoard.noteFiles];
+        const saveBtn = q('#btn-add-comment');
+        const editIndex = saveBtn?.dataset.editIndex;
+        const isEditing = editIndex !== undefined && editIndex !== '';
+        if (!txt && filesToUpload.length === 0) return;
         const tickets = await Store.getTickets();
         const t = tickets.find(x => x.id === AdminBoard.currentTicketId);
         if (!t) return;
 
         const user = await Store.currentUser();
         if (!t.comments) t.comments = [];
-        t.comments.push({
+        const note = {
             text: txt,
             author: user.name || user.username,
-            date: Utils.nowISO()
-        });
-        await Store.addLog(t, 'Interne Notiz hinzugefügt', txt);
+            date: Utils.nowISO(),
+            type: q('#m-note-type')?.value || 'Notiz',
+            pinned: !!q('#m-note-pin')?.checked,
+            resolution: !!q('#m-note-resolution')?.checked,
+            files: []
+        };
+        if (filesToUpload.length) {
+            try {
+                note.files = await Promise.all(filesToUpload.map(f => Store.saveAttachment(f)));
+            } catch (e) {
+                console.error(e);
+                UI.toast(e.message === 'ATTACHMENT_TOO_LARGE' ? 'Anhang ist zu groß (max. 15 MB).' : 'Fehler beim Dateiladen');
+                return;
+            }
+        }
+        if (isEditing) {
+            const existing = t.comments[Number(editIndex)];
+            if (!existing) return;
+            existing.text = note.text;
+            existing.type = note.type;
+            existing.pinned = note.pinned;
+            existing.resolution = note.resolution;
+            existing.editedAt = Utils.nowISO();
+            existing.editedBy = user.name || user.username;
+            if (note.files.length) existing.files = [...(existing.files || []), ...note.files];
+            await Store.addLog(t, 'Interne Notiz bearbeitet', txt);
+        } else {
+            t.comments.push(note);
+            await Store.addLog(t, 'Interne Notiz hinzugefügt', txt);
+        }
         await Store.saveTickets(tickets);
-        await Store.addGlobalLog('Interne Notiz hinzugefügt', `Ticket: ${t.title}\nNotiz: ${txt.substring(0, 100)}${txt.length > 100 ? '...' : ''}`);
+        await Store.addGlobalLog(isEditing ? 'Interne Notiz bearbeitet' : 'Interne Notiz hinzugefügt', `Ticket: ${t.title}\nNotiz: ${txt.substring(0, 100)}${txt.length > 100 ? '...' : ''}`);
         input.value = '';
+        AdminBoard.noteFiles = [];
+        if (saveBtn) {
+            delete saveBtn.dataset.editIndex;
+            saveBtn.innerHTML = `${Icon('plus', 16)}Eintrag speichern`;
+        }
+        if (q('#m-note-pin')) q('#m-note-pin').checked = false;
+        if (q('#m-note-resolution')) q('#m-note-resolution').checked = false;
+        AdminBoard.renderNoteFilePreview();
         AdminBoard.renderInternalComments(t);
         await AdminBoard.render();
     },
@@ -4077,7 +4464,6 @@ const AdminBoard = {
 
         q('#a-confirm').onclick = AdminBoard.confirmApprove;
         q('#a-close').onclick = AdminBoard.closeApprove;
-        q('#a-cancel').onclick = AdminBoard.closeApprove;
 
         // Listen for Enter key in inputs
         const inputs = [q('#a-username'), q('#a-password')];

@@ -196,8 +196,14 @@ Ein Stil für alles Kleine: `.badge` (Aliase: `.status-badge`, `.prio-pill`, `.t
 
 ### 4.7 Kanban
 
-- Spalte = Panel mit `.col-header` (Icon, Titel, Zähler-Badge).
-- Karte `.ticket-card`: `.t-head` (Prioritäts-Badge links, Kategorien rechts), `.t-title`, `.t-meta` (Autor, Datum), `.t-foot` (Bearbeiter-Badge, Nachrichten-Badge).
+- Spalte = Panel mit `.col-header` (Icon, Titel, Zähler-Badge). Jede Spalte hat eine feste Höhe (`height: calc(100vh - 260px)`, nicht `max-height`), damit ihre `.ticket-list` intern scrollt statt die Karten zusammenzudrücken. **Wichtig:** `.ticket-card` braucht `flex-shrink: 0` — sonst behandelt Flexbox eine Karte mit `overflow: hidden` als beliebig auf 0 schrumpfbar, sobald die Liste nicht mehr in die Spalte passt (bei vielen Tickets sonst ein Stapel fast leerer Streifen statt einer scrollenden Liste).
+- Karte `.ticket-card` – kompakt gehalten, damit auch 50+ Tickets pro Spalte scanbar bleiben:
+  - `.t-head`: Prioritäts-Badge links, Kategorien rechts.
+  - `.t-title`: zweizeilig geclampt (`-webkit-line-clamp: 2`), lange Titel brechen nicht die Kartenhöhe auf.
+  - `.t-sub` (Klasse von `.t-meta`): eine Zeile mit Ersteller + Datum (`.t-author`, mit `flex:1 1 auto; min-width:0;` zum Kürzen) links, Nachrichten-/Notiz-Zähler (`.t-counts`) rechts.
+  - `.ticket-card-ops`: eine Zeile mit drei Chips – Hauptverantwortlicher (`.ticket-card-owner`, `flex:1 1 auto; overflow:hidden;` kürzt lange Namen statt die Zeile zu sprengen; ohne Zuweisung zusätzlich `.is-unassigned`, gestrichelt in `--warning`), Beteiligte und offene Teilaufgaben (beide `flex:0 0 auto`, nur Icon + Zahl, Name/Text im `title`-Attribut).
+  - `.ticket-card-activity.has-user-update`: **nur** rendern, wenn die zuletzt gesendete Chat-Nachricht vom Kunden stammt (Antwort steht aus). Bei jeder anderen Aktivität (Status geändert, Ticket erstellt …) wird die Zeile komplett weggelassen statt einen generischen Verlaufseintrag zu zeigen – sonst trägt jede Karte eine Zeile, die bei vielen Tickets nur Rauschen ist.
+  - Flex-Item, das kürzen soll statt zu sprengen: **immer** `flex: 1 1 auto; min-width: 0; overflow: hidden;` auf dem Container plus `overflow:hidden; text-overflow:ellipsis; white-space:nowrap;` auf dem Text. `flex: 1 1 0` (Basis 0) NICHT für sowas verwenden – der Schrumpf-Faktor wird dann `flexShrink × flexBasis = 0`, das Element schrumpft trotz `flex-shrink:1` nie und sprengt die Zeile.
 - Hover: `--sel-border`, `--shadow-float`, −2 px. Ablagefläche beim Ziehen: `.drag-over`.
 - Kontoanfrage: `.ticket-card.request-card` (Rahmen `--warning`) mit `.btn-sm`-Aktionen.
 
@@ -268,6 +274,7 @@ Lucide über `Icon(name, size)`, **ohne** eigene Abstände. Größen: 12 (Badges
 - [ ] Getestet in Dunkel **und** Hell sowie mit zwei Akzentfarben.
 - [ ] Getestet bei 768 px und schmaler.
 - [ ] `lucide.createIcons()` nach dynamischem Markup; Nutzertexte über `Utils.esc()`.
+- [ ] Listen zusätzlich mit realistischer Menge geprüft (z. B. 50+ Tickets) und mit einem sehr langen Namen/Titel – nicht nur mit den zwei, drei Demo-Einträgen.
 
 ---
 
