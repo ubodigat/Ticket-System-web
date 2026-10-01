@@ -8,6 +8,9 @@
     <link rel="icon" type="image/png" href="picture/favicon.png">
     <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mammoth@1.9.0/mammoth.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 
 <body data-guard="user">
@@ -20,6 +23,7 @@
             <div id="user-display" class="topbar-user"></div>
         </div>
         <nav class="topbar-right">
+            <button id="btn-notifications" class="btn-ghost btn-icon notification-button" title="Benachrichtigungen" aria-label="Benachrichtigungen"><i data-lucide="bell"></i><span class="notification-count" hidden>0</span></button>
             <button id="theme-toggle" class="btn-ghost btn-icon" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
             <button id="btn-logout" class="btn-ghost"><i data-lucide="log-out"></i><span data-i18n="logout">Abmelden</span></button>
         </nav>
@@ -36,13 +40,18 @@
                 <label for="t-desc" data-i18n="description">Beschreibung</label>
                 <textarea id="t-desc" rows="6" placeholder="Beschreibe dein Anliegen möglichst genau."></textarea>
             </div>
+            <div class="field">
+                <label for="t-files">Anhänge</label>
+                <input id="t-files" type="file" multiple>
+                <div id="t-files-preview" class="file-preview"></div>
+            </div>
             <div class="form-grid">
                 <div class="field">
                     <label for="t-prio" data-i18n="priority">Priorität</label>
                     <select id="t-prio">
+                        <option value="Niedrig">Niedrig</option>
                         <option value="Normal">Normal</option>
                         <option value="Hoch">Hoch</option>
-                        <option value="Kritisch">Kritisch</option>
                     </select>
                 </div>
                 <div class="field">
@@ -97,8 +106,13 @@
                         <div class="meta-item"><strong>Bearbeiter</strong><span id="u-m-assignee" class="meta-value">-</span></div>
                         <div class="meta-item"><strong>Archiviert</strong><span id="u-m-archived" class="meta-value">-</span></div>
                     </div>
+                    <div id="u-waiting-request" class="waiting-request" hidden>
+                        <strong>Wir benötigen noch folgende Angaben</strong>
+                        <p id="u-waiting-message"></p>
+                    </div>
                     <h4 class="section-title">Beschreibung</h4>
                     <p id="u-m-desc" class="desc-text"></p>
+                    <div id="u-m-ticket-attachments" class="ticket-attachments"></div>
                 </div>
 
                 <div id="u-tab-chat" class="tab-content">
@@ -106,6 +120,9 @@
                         <div id="u-chat-msgs" class="chat-messages"></div>
                         <div class="chat-input-area">
                             <div class="toolbar">
+                                <button class="btn-ghost btn-icon btn-sm" title="Fett" aria-label="Fett" id="u-chat-bold"><i data-lucide="bold"></i></button>
+                                <button class="btn-ghost btn-icon btn-sm" title="Kursiv" aria-label="Kursiv" id="u-chat-italic"><i data-lucide="italic"></i></button>
+                                <button class="btn-ghost btn-icon btn-sm" title="Link einfügen" aria-label="Link einfügen" id="u-chat-link"><i data-lucide="link"></i></button>
                                 <label class="btn btn-ghost btn-icon btn-sm" title="Datei anhängen" aria-label="Datei anhängen">
                                     <i data-lucide="paperclip"></i>
                                     <input type="file" id="u-chat-file" multiple>

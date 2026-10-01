@@ -25,24 +25,32 @@ Ein schlankes Helpdesk- und Ticketsystem, das komplett im Browser läuft – ohn
 
 ### Für Benutzer (`dashboard.html`)
 - Tickets mit Betreff, Beschreibung, Priorität und einer oder mehreren Kategorien erstellen
+- Bereits beim Erstellen mehrere Dateianhänge hinzufügen
+- Priorität auf **Niedrig**, **Normal** oder **Hoch** beschränkt; Ticketnummer und Status in der Liste sehen
 - Eigene Tickets als Liste mit Status, Datum und Priorität; geschlossene und archivierte Tickets einblendbar
-- Chat mit dem Support direkt im Ticket, inklusive Dateianhängen
+- Chat mit dem Support inklusive Formatierung, sicheren Links, bearbeitbaren eigenen Nachrichten und Dateianhängen
+- Benachrichtigungen bei Statusänderungen und neuen Chatnachrichten; Vorschau für PDF, Bilder, Text/CSV/JSON, Audio/Video sowie DOCX-, XLSX- und PPTX-Inhalte
 - Persönliche Einstellungen: helles/dunkles Theme, Akzentfarbe, Sprache (Deutsch/Englisch), Hintergrund (animiert, Verlauf oder eigenes Bild)
 - Zwei-Faktor-Authentifizierung (TOTP, z. B. Google Authenticator) selbst einrichten
 
 ### Für Admins (`admin.html`)
 - **Kanban-Board** mit den Spalten *Neu*, *In Bearbeitung* und *Geschlossen* – Tickets per Drag & Drop verschieben
+- Suche nach Ticketnummer, Titel, Beschreibung, Benutzer und Ticketinhalt; eindeutige lesbare Ticketnummern
+- Ticketnummernformat in den Unternehmenseinstellungen anpassbar, mit optionalen Vorlagen pro Kategorie und den Platzhaltern `{prefix}`, `{category}` und `{number}`
 - **Ticket-Detail** mit
-  - Priorität und Kategorien direkt bearbeiten
+  - Titel, Beschreibung, Status, Priorität und Kategorien direkt bearbeiten
+  - Warte-Status für Benutzer, externe Dienstleister und interne Rückmeldungen
   - Zuweisung an mehrere Bearbeiter, Hauptverantwortlicher und beteiligte Personen
-  - Teilaufgaben (To-dos) pro Ticket
-  - Chat mit dem Ersteller und interne Notizen
+  - Teilaufgaben mit erledigt/gesamt-Zähler; nachträgliche Bearbeitung, Zuweisung nur an Ticketverantwortliche/Beteiligte
+  - Chat mit dem Ersteller; Admin-Nachrichten sind farblich markiert. Interne Streams (Admin-Absprachen und Lösungsweg) haben einen eigenen Reiter.
+  - Admin-Erwähnungen mit In-App-Benachrichtigungen
   - Protokoll aller Änderungen und Ticket-Historie des Erstellers
 - **Archiv** mit Volltextsuche (Titel, Autor, Inhalt) und Reaktivierung
 - **Automatische Archivierung**: geschlossene Tickets nach 3 Tagen; höchstens 10 geschlossene Tickets bleiben auf dem Board
 - **Kontoanfragen** von der Startseite annehmen oder ablehnen
 - **Benutzerverwaltung**: Benutzer, Benutzergruppen und Kategorien anlegen und bearbeiten, 2FA zurücksetzen, CSV-Export und -Import
-- **System-Logs**: globales Protokoll (Anmeldungen, Änderungen, Löschungen) mit Suche
+- **System-Logs**: globales Protokoll (Anmeldungen, Änderungen, Löschungen) mit Text- und Datum/Uhrzeitbereichssuche
+- **Benachrichtigungen**: einzelne Einträge löschen, alle als gelesen markieren oder alle eigenen Einträge gesammelt löschen
 - **Systemeinstellungen** (Superadmin): E-Mail/SMTP, Benachrichtigungen, Sicherheit (2FA-Pflicht), LDAP, Outlook, allgemeine Vorgaben wie Portalname, Standardpriorität und Standardkategorien
 
 ### Startseite (`index.html`)
@@ -104,7 +112,7 @@ Für Icons, Schrift und 2FA ist daher eine Internetverbindung nötig.
 | Rolle | Rechte |
 |---|---|
 | **Benutzer** (`user`) | Eigene Tickets erstellen, einsehen und dazu chatten |
-| **Admin** (`admin`) | Kanban-Board und Archiv; sieht Tickets der zugeordneten Kategorien sowie direkt zugewiesene Tickets. Zusätzliche Rechte einzeln vergebbar: *Kontoanfragen verwalten*, *Benutzerverwaltung (nur Benutzer)*, *System-Logs anzeigen* |
+| **Admin** (`admin`) | Kanban-Board und Archiv; sieht Tickets der zugeordneten Kategorien sowie direkt zugewiesene Tickets. Zusätzliche Rechte einzeln vergebbar: *Kontoanfragen verwalten*, *Benutzerverwaltung (nur Benutzer)*, *System-Logs anzeigen*, *2FA von Benutzern zurücksetzen* |
 | **Superadmin** (`superadmin`) | Alle Rechte, inklusive Systemeinstellungen, Admin-Verwaltung, CSV-Import und 2FA-Reset |
 
 Der Zugriff auf die Seiten wird über `data-guard` am `<body>` geprüft (`Auth.checkGuard`).
@@ -160,20 +168,21 @@ Gespeichert wird im `localStorage` unter folgenden Schlüsseln:
 | `account_requests` | Offene Kontoanfragen |
 | `app_settings` | Persönliche und Systemeinstellungen |
 | `global_logs` | Systemweites Protokoll |
+| `notifications` | Lokale In-App-Benachrichtigungen je Benutzer |
 | `currentUser` | Benutzername der aktiven Sitzung |
 
 Ein Ticket enthält unter anderem:
 
 ```js
 {
-  id, title, desc, prio,          // 'Niedrig' | 'Normal' | 'Hoch' | 'Kritisch'
-  status,                         // 'Neu' | 'In Bearbeitung' | 'Geschlossen'
+  id, ticketNumber, title, desc, prio,
+  status,                         // inklusive definierter Warte-Status
   category: [],                   // eine oder mehrere Kategorien
   author, authorName, createdAt,
   owner, participants: [],        // Hauptverantwortlicher und Beteiligte
   todos: [],                      // Teilaufgaben
   chat: [],                       // Nachrichten mit dem Ersteller (inkl. Anhänge als Base64)
-  comments: [],                   // interne Notizen
+  comments: [],                   // interne Einträge mit channel 'admin-chat' oder 'solution'
   logs: [],                       // Änderungsprotokoll
   archived, archivedAt
 }
@@ -198,8 +207,9 @@ Das Projekt ist als Frontend-Prototyp gebaut. Vor einem echten Einsatz sind folg
 
 - **Keine echte Sicherheit:** Passwörter und 2FA-Secrets liegen im Klartext im `localStorage`; Anmeldung und Rechteprüfung laufen nur im Browser und lassen sich umgehen.
 - **Keine gemeinsame Datenbasis:** Jeder Browser hat seine eigenen Daten. Benutzer und Admins sehen sich nur, wenn sie denselben Browser auf demselben Gerät nutzen.
+- **Benachrichtigungen sind lokal:** Sie werden im `localStorage` geführt und aktualisieren sich über Browser-Tabs. Es gibt keine geräteübergreifende Zustellung oder echte E-Mail-Auslieferung ohne Backend.
 - **Standardpasswort:** `admin` / `123` wird beim Start immer angelegt.
-- **Speicherlimit:** Anhänge und Hintergrundbilder werden als Base64 gespeichert. Der `localStorage` ist meist auf etwa 5 MB begrenzt.
+- **Speicherlimit:** Anhänge werden im Browser gespeichert (mit IndexedDB-Auslagerung bei Bedarf); der `localStorage` bleibt meist auf etwa 5 MB begrenzt.
 - **E-Mail, LDAP, Outlook:** Die Einstellungen werden gespeichert, aber nicht ausgeführt. E-Mails erscheinen nur in der Browser-Konsole.
 - **Nur gespeichert, nicht ausgewertet:** Session-Timeout, maximale Login-Fehlversuche und die Tage für die Auto-Archivierung. Die Auto-Archivierung verwendet fest 3 Tage bzw. maximal 10 geschlossene Tickets.
 - **Externer Dienst:** Der QR-Code für die 2FA wird über `api.qrserver.com` erzeugt; dabei wird das Secret an diesen Dienst übertragen.

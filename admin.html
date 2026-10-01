@@ -9,6 +9,9 @@
     <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/otpauth/dist/otpauth.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mammoth@1.9.0/mammoth.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 
 <body data-guard="admin">
@@ -24,6 +27,7 @@
             <button id="btn-to-dash" class="btn-ghost" onclick="window.location.href='dashboard.html'"><i data-lucide="layout-dashboard"></i>Dashboard</button>
             <button id="btn-archive" class="btn-ghost"><i data-lucide="archive"></i>Archiv</button>
             <button id="btn-global-logs" class="btn-ghost" style="display:none;"><i data-lucide="bell"></i>System-Logs</button>
+            <button id="btn-notifications" class="btn-ghost btn-icon notification-button" title="Benachrichtigungen" aria-label="Benachrichtigungen"><i data-lucide="bell"></i><span class="notification-count" hidden>0</span></button>
             <button id="theme-toggle" class="btn-ghost btn-icon" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
             <button id="logout" class="btn-ghost"><i data-lucide="log-out"></i><span data-i18n="logout">Abmelden</span></button>
         </nav>
@@ -41,6 +45,10 @@
         </div>
 
         <div id="kanban-view">
+            <div class="board-tools">
+                <label for="admin-ticket-search">Tickets durchsuchen</label>
+                <input type="search" id="admin-ticket-search" class="section-search" placeholder="Titel, Beschreibung, Benutzer oder Ticket-ID...">
+            </div>
             <!-- Kontoanfragen -->
             <section class="requests-board">
                 <div class="panel-head">
@@ -66,6 +74,14 @@
                     <div class="ticket-list" data-status="In Bearbeitung" id="list-doing"></div>
                 </div>
 
+                <div class="column" id="col-waiting">
+                    <div class="col-header">
+                        <span><i data-lucide="pause-circle"></i>Wartet</span>
+                        <span class="count" id="count-waiting">0</span>
+                    </div>
+                    <div class="ticket-list" data-status="Warten auf Benutzer" id="list-waiting"></div>
+                </div>
+
                 <div class="column" id="col-done">
                     <div class="col-header">
                         <span><i data-lucide="check-circle"></i>Geschlossen</span>
@@ -85,6 +101,7 @@
                 <div class="modal-header">
                     <h3 id="m-title">Ticket</h3>
                     <div class="modal-actions">
+                        <button class="btn-ghost btn-icon" id="m-edit-ticket" title="Titel und Beschreibung bearbeiten" aria-label="Titel und Beschreibung bearbeiten"><i data-lucide="pencil"></i></button>
                         <button class="btn-ghost btn-icon" id="m-logs" title="Protokoll anzeigen" aria-label="Protokoll anzeigen"><i data-lucide="scroll-text"></i></button>
                         <button class="btn-ghost btn-icon" id="m-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
                     </div>
@@ -93,12 +110,24 @@
                     <div class="tabs">
                         <div class="tab-btn active" data-tab="details">Details</div>
                         <div class="tab-btn" data-tab="chat">Chat</div>
+                        <div class="tab-btn" data-tab="internal">Interne Kommunikation</div>
                     </div>
 
                     <div id="tab-details" class="tab-content active">
                         <div class="meta-grid ticket-meta-grid">
                             <div class="meta-item"><strong>Von</strong><span id="m-author" class="meta-value">-</span></div>
                             <div class="meta-item"><strong>Datum</strong><span id="m-date" class="meta-value">-</span></div>
+                            <div class="meta-item">
+                                <strong>Status</strong>
+                                <select id="m-status-edit">
+                                    <option value="Neu">Neu</option>
+                                    <option value="In Bearbeitung">In Bearbeitung</option>
+                                    <option value="Warten auf Benutzer">Warten auf Benutzer</option>
+                                    <option value="Warten auf externen Dienstleister">Warten auf externen Dienstleister</option>
+                                    <option value="Warten auf interne Rückmeldung">Warten auf interne Rückmeldung</option>
+                                    <option value="Geschlossen">Geschlossen</option>
+                                </select>
+                            </div>
                             <div class="meta-item">
                                 <strong>Prio</strong>
                                 <select id="m-prio-edit">
@@ -116,36 +145,65 @@
 
                         <h4 class="section-title">Beschreibung</h4>
                         <p id="m-desc" class="desc-text"></p>
+                        <div id="m-ticket-attachments" class="ticket-attachments"></div>
 
                         <div class="comments-section">
-                            <h4 class="section-title">Interne Notizen / Lösungsjournal</h4>
-                            <div class="note-search-wrap" id="m-note-search-wrap">
-                                <input type="text" id="m-note-search" placeholder="Interne Kommentare durchsuchen...">
-                                <span><i data-lucide="search"></i></span>
-                            </div>
-                            <div id="m-comments" class="note-list"></div>
-                            <div class="internal-note-composer">
-                                <div class="note-toolbar">
-                                    <select id="m-note-type" title="Art des Eintrags">
-                                        <option value="Analyse">Analyse</option>
-                                        <option value="Lösungsschritt">Lösungsschritt</option>
-                                        <option value="Rückfrage">Rückfrage</option>
-                                        <option value="Entscheidung">Entscheidung</option>
-                                        <option value="Systemänderung">Systemänderung</option>
-                                    </select>
-                                    <button class="btn-ghost btn-icon btn-sm" id="m-note-bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
-                                    <button class="btn-ghost btn-icon btn-sm" id="m-note-italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
-                                    <button class="btn-ghost btn-icon btn-sm" id="m-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
-                                    <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen">
-                                        <i data-lucide="paperclip"></i>
-                                        <input type="file" id="m-note-file-input" style="display:none" multiple>
-                                    </label>
-                                    <label class="note-option"><input type="checkbox" id="m-note-pin"> Anpinnen</label>
-                                    <label class="note-option"><input type="checkbox" id="m-note-resolution"> Lösungsschritt</label>
-                                </div>
-                                <textarea id="m-new-comment" rows="4" placeholder="Analyse, Ursache, Lösungsweg, nächste Schritte..."></textarea>
-                                <div id="m-note-file-preview" class="file-preview"></div>
-                                <button class="btn-primary btn-block" id="btn-add-comment"><i data-lucide="plus"></i>Eintrag speichern</button>
+                            <h4 class="section-title">Interne Kommunikation</h4>
+                            <div class="internal-stream-grid">
+                                <section class="internal-stream">
+                                    <h5>Admin-Chat</h5>
+                                    <div class="note-search-wrap" id="m-admin-note-search-wrap">
+                                        <input type="text" id="m-admin-note-search" placeholder="Admin-Chat durchsuchen...">
+                                        <span><i data-lucide="search"></i></span>
+                                    </div>
+                                    <div id="m-admin-comments" class="note-list"></div>
+                                    <div class="internal-note-composer">
+                                        <div class="note-toolbar">
+                                            <select id="m-admin-note-type" title="Art des Eintrags">
+                                                <option value="Abstimmung">Abstimmung</option>
+                                                <option value="Rückfrage">Rückfrage</option>
+                                                <option value="Entscheidung">Entscheidung</option>
+                                            </select>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
+                                            <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-admin-note-file-input" style="display:none" multiple></label>
+                                            <label class="note-option"><input type="checkbox" id="m-admin-note-pin"> Anpinnen</label>
+                                        </div>
+                                        <textarea id="m-admin-new-comment" rows="4" placeholder="Nachricht an andere Admins... @Benutzername"></textarea>
+                                        <div id="m-admin-mention-picker" class="mention-autocomplete" role="listbox" aria-label="Admins mit Ticketzugriff" hidden></div>
+                                        <div id="m-admin-note-file-preview" class="file-preview"></div>
+                                        <button class="btn-primary btn-block" id="btn-add-admin-comment"><i data-lucide="send"></i>Senden</button>
+                                    </div>
+                                </section>
+                                <section class="internal-stream">
+                                    <h5>Lösungsweg</h5>
+                                    <div class="note-search-wrap" id="m-note-search-wrap">
+                                        <input type="text" id="m-note-search" placeholder="Lösungsweg durchsuchen...">
+                                        <span><i data-lucide="search"></i></span>
+                                    </div>
+                                    <div id="m-comments" class="note-list"></div>
+                                    <div class="internal-note-composer">
+                                        <div class="note-toolbar">
+                                            <select id="m-note-type" title="Art des Eintrags">
+                                                <option value="Analyse">Analyse</option>
+                                                <option value="Lösungsschritt">Lösungsschritt</option>
+                                                <option value="Rückfrage">Rückfrage</option>
+                                                <option value="Entscheidung">Entscheidung</option>
+                                                <option value="Systemänderung">Systemänderung</option>
+                                            </select>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
+                                            <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" style="display:none" multiple></label>
+                                            <label class="note-option"><input type="checkbox" id="m-note-pin"> Anpinnen</label>
+                                            <label class="note-option"><input type="checkbox" id="m-note-resolution"> Lösungsschritt</label>
+                                        </div>
+                                        <textarea id="m-new-comment" rows="4" placeholder="Analyse, Ursache, Lösungsweg, nächste Schritte..."></textarea>
+                                        <div id="m-note-file-preview" class="file-preview"></div>
+                                        <button class="btn-primary btn-block" id="btn-add-comment"><i data-lucide="plus"></i>Eintrag speichern</button>
+                                    </div>
+                                </section>
                             </div>
                         </div>
 
@@ -154,6 +212,8 @@
                         </div>
                     </div>
 
+                    <div id="tab-internal" class="tab-content"></div>
+
                     <div id="tab-chat" class="tab-content">
                         <div class="chat-container">
                             <div id="m-chat-msgs" class="chat-messages"></div>
@@ -161,6 +221,7 @@
                                 <div class="toolbar">
                                     <button class="btn-ghost btn-icon btn-sm" title="Fett" aria-label="Fett" id="m-chat-bold"><i data-lucide="bold"></i></button>
                                     <button class="btn-ghost btn-icon btn-sm" title="Kursiv" aria-label="Kursiv" id="m-chat-italic"><i data-lucide="italic"></i></button>
+                                    <button class="btn-ghost btn-icon btn-sm" title="Link einfügen" aria-label="Link einfügen" id="m-chat-link"><i data-lucide="link"></i></button>
                                     <label class="btn btn-ghost btn-icon btn-sm" title="Datei anhängen" aria-label="Datei anhängen">
                                         <i data-lucide="paperclip"></i>
                                         <input type="file" id="m-chat-file-input" multiple>
@@ -232,6 +293,33 @@
             </div>
             <div class="modal-body">
                 <div id="um-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="waiting-status-modal">
+        <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="waiting-status-title">
+            <div class="modal-header">
+                <h3 id="waiting-status-title"><i data-lucide="pause-circle"></i>Worauf wird gewartet?</h3>
+            </div>
+            <div class="modal-body">
+                <div class="field" id="waiting-status-reason-field">
+                    <label for="waiting-status-choice">Wartegrund</label>
+                    <select id="waiting-status-choice">
+                        <option value="">Bitte auswählen</option>
+                        <option value="Warten auf Benutzer">Auf Benutzer</option>
+                        <option value="Warten auf externen Dienstleister">Auf externen Dienstleister</option>
+                        <option value="Warten auf interne Rückmeldung">Auf interne Rückmeldung</option>
+                    </select>
+                </div>
+                <div class="field" id="waiting-user-message-field" hidden>
+                    <label for="waiting-user-message">Nachricht an den Benutzer</label>
+                    <textarea id="waiting-user-message" rows="4" placeholder="Was wird vom Benutzer benötigt?"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="waiting-status-cancel" type="button">Abbrechen</button>
+                <button class="btn-primary" id="waiting-status-confirm" type="button" disabled>Übernehmen</button>
             </div>
         </div>
     </div>
