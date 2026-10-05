@@ -127,6 +127,26 @@ const Utils = {
         if (clean.length !== 6) return '99, 102, 241';
         const n = parseInt(clean, 16);
         return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+    },
+    fmtDateOnly: (value) => {
+        const d = value instanceof Date ? value : new Date(value);
+        if (Number.isNaN(d.getTime())) return '';
+        return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+    },
+    fmtTimeOnly: (value) => {
+        const d = value instanceof Date ? value : new Date(value);
+        if (Number.isNaN(d.getTime())) return '';
+        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    },
+    parseGermanDateTime: (dateValue, timeValue = '00:00') => {
+        const match = String(dateValue || '').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+        const time = String(timeValue || '').trim().match(/^(\d{2}):(\d{2})$/);
+        if (!match || !time) return null;
+        const [, dd, mm, yyyy] = match.map(Number);
+        const [, hh, min] = time.map(Number);
+        const d = new Date(yyyy, mm - 1, dd, hh, min, 0, 0);
+        if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd || d.getHours() !== hh || d.getMinutes() !== min) return null;
+        return d.getTime();
     }
 };
 
@@ -251,26 +271,47 @@ const Lang = {
         setHTML('#btn-to-dash', `${Icon('layout-dashboard', 16)}${Lang.t('dashboard')}`);
         setHTML('#btn-global-logs', `${Icon('bell', 16)}${Lang.t('systemLogs')}`);
         setHTML('#btn-archive', `${Icon('archive', 16)}${Lang.t('archive')}`);
+        setHTML('#btn-list-view', q('#list-view')?.style.display === 'block'
+            ? `${Icon('layout-grid', 16)}${Lang.t('board')}`
+            : `${Icon('table-properties', 16)}${Lang.t('list')}`);
+        setHTML('#btn-admin-create-ticket', `${Icon('plus', 16)}${Lang.t('newTicket')}`);
+        setHTML('#btn-admin-create-incident', `${Icon('siren', 16)}${Lang.t('createIncident')}`);
+        const adminSearchLabel = q('label[for="admin-ticket-search"]');
+        if (adminSearchLabel) adminSearchLabel.textContent = Lang.t('searchTickets');
+        const adminTicketSearch = q('#admin-ticket-search');
+        if (adminTicketSearch) adminTicketSearch.placeholder = Lang.t('ticketSearchPlaceholder');
+        const notifBtn = q('#btn-notifications');
+        if (notifBtn) {
+            notifBtn.title = Lang.t('notifications');
+            notifBtn.setAttribute('aria-label', Lang.t('notifications'));
+        }
         setHTML('#archive-view .archive-header h3', `${Icon('archive', 18)}${Lang.t('archivedTickets')}`);
         setHTML('#btn-back-kanban', `${Icon('arrow-left', 16)}${Lang.t('backToOverview')}`);
         const archiveSearch = q('#archive-search');
         if (archiveSearch) archiveSearch.placeholder = Lang.current === 'en' ? 'Search archive (title, author, content)...' : 'Suche im Archiv (Titel, Autor, Inhalt)...';
-        setText('.requests-board h3', Lang.t('requests'));
+        setText('#requests-board .request-banner-title', Lang.t('requests'));
+        setText('#overdue-board .request-banner-title', Lang.t('overdue'));
+        const requestCount = q('#request-count')?.parentElement;
+        if (requestCount) requestCount.innerHTML = `<b id="request-count">${q('#request-count')?.textContent || '0'}</b> ${Lang.t('open')}`;
+        const overdueCount = q('#overdue-ticket-count')?.parentElement;
+        if (overdueCount) overdueCount.innerHTML = `<b id="overdue-ticket-count" class="overdue-count">${q('#overdue-ticket-count')?.textContent || '0'}</b> ${Lang.t('tickets')}`;
+        setHTML('#requests-modal-title', `${Icon('user-round-plus', 18)}${Lang.t('requests')}`);
         setHTML('#col-new .col-header span:first-child', `${Icon('inbox', 16)}${Lang.t('statusNew')}`);
         setHTML('#col-doing .col-header span:first-child', `${Icon('loader', 16)}${Lang.t('statusDoing')}`);
+        setHTML('#col-waiting .col-header span:first-child', `${Icon('pause-circle', 16)}${Lang.t('statusWaiting')}`);
         setHTML('#col-done .col-header span:first-child', `${Icon('check-circle', 16)}${Lang.t('statusClosed')}`);
         setText('#ticket-modal .tab-btn[data-tab="details"]', Lang.t('details'));
         setText('#ticket-modal .tab-btn[data-tab="chat"]', Lang.t('chat'));
         setText('#ticket-modal .tab-btn[data-tab="internal"]', Lang.current === 'en' ? 'Internal communication' : 'Interne Kommunikation');
-        const metaGrid = q('#ticket-modal .ticket-meta-grid');
-        if (metaGrid) {
-            const labels = metaGrid.querySelectorAll('strong');
-            if (labels[0]) labels[0].textContent = Lang.t('from');
-            if (labels[1]) labels[1].textContent = Lang.t('date');
-            if (labels[2]) labels[2].textContent = Lang.t('status');
-            if (labels[3]) labels[3].textContent = Lang.t('prio');
-            if (labels[4]) labels[4].textContent = Lang.t('category');
-        }
+        const setMetaLabel = (fieldSelector, text) => {
+            const label = q(fieldSelector)?.closest('.meta-item')?.querySelector('strong');
+            if (label) label.textContent = text;
+        };
+        setMetaLabel('#m-author', Lang.t('from'));
+        setMetaLabel('#m-date', Lang.t('date'));
+        setMetaLabel('#m-status-edit', Lang.t('status'));
+        setMetaLabel('#m-prio-edit', Lang.t('prio'));
+        setMetaLabel('#m-cat-container', Lang.t('category'));
         const waitingLabels = {
             'Warten auf Benutzer': 'Waiting for user',
             'Warten auf externen Dienstleister': 'Waiting for external provider',
@@ -401,7 +442,45 @@ Object.assign(Lang.translations.de, {
     onlyUsers: 'Nur User',
     loggedInAs: 'Angemeldet als',
     notes: 'Notizen',
-    possible: 'möglich'
+    possible: 'möglich',
+    list: 'Liste',
+    board: 'Board',
+    switchToBoard: 'Zur Kanban-Übersicht wechseln',
+    switchToList: 'Zur Listenansicht wechseln',
+    searchTickets: 'Tickets durchsuchen',
+    ticketSearchPlaceholder: 'Titel, Beschreibung, Benutzer oder Ticket-ID...',
+    overdue: 'Überfällig',
+    open: 'offen',
+    tickets: 'Tickets',
+    statusWaiting: 'Wartet',
+    replyPending: 'Antwort ausstehend',
+    majorIncident: 'Großstörung',
+    linked: 'Verknüpft',
+    stillDue: 'Noch {time}',
+    dueIn: 'Fällig in ',
+    overdueSince: 'Überfällig seit {time}',
+    dayShort: 'Tg.',
+    hourShort: 'Std.',
+    minuteShort: 'Min.',
+    messages: 'Nachrichten',
+    internalNotesShort: 'Interne Notizen',
+    markAllRead: 'Alle als gelesen markieren',
+    deleteAllNotifications: 'Alle Benachrichtigungen löschen',
+    deleteNotification: 'Benachrichtigung löschen',
+    noNotifications: 'Keine Benachrichtigungen',
+    confirmDeleteNotifications: 'Alle Benachrichtigungen löschen?',
+    createIncident: 'Störung erstellen',
+    incident: 'Störung',
+    knownIncident: 'Bekannte Störung',
+    assignTicketToIncident: 'Ticket einer Störung zuordnen',
+    noIncidentAssignment: 'Keine Zuordnung',
+    activeKnownIncidents: '{count} bekannte Störungen aktiv. Bitte auswählen, falls dein Ticket dazugehört.',
+    linkedTickets: 'Zugeordnete Tickets',
+    incidentNotice: 'Für Benutzer sichtbarer Hinweis',
+    incidentTitle: 'Titel der Störung',
+    dueDate: 'Frist',
+    dateFormatLabel: 'Datum (dd.mm.jjjj)',
+    time: 'Uhrzeit'
 });
 
 Object.assign(Lang.translations.en, {
@@ -499,7 +578,45 @@ Object.assign(Lang.translations.en, {
     onlyUsers: 'Users only',
     loggedInAs: 'Logged in as',
     notes: 'Notes',
-    possible: 'available'
+    possible: 'available',
+    list: 'List',
+    board: 'Board',
+    switchToBoard: 'Switch to Kanban board',
+    switchToList: 'Switch to list view',
+    searchTickets: 'Search tickets',
+    ticketSearchPlaceholder: 'Title, description, user or ticket ID...',
+    overdue: 'Overdue',
+    open: 'open',
+    tickets: 'Tickets',
+    statusWaiting: 'Waiting',
+    replyPending: 'Reply pending',
+    majorIncident: 'Major incident',
+    linked: 'Linked',
+    stillDue: '{time} left',
+    dueIn: 'Due in ',
+    overdueSince: 'Overdue since {time}',
+    dayShort: 'd',
+    hourShort: 'h',
+    minuteShort: 'min',
+    messages: 'Messages',
+    internalNotesShort: 'Internal notes',
+    markAllRead: 'Mark all as read',
+    deleteAllNotifications: 'Delete all notifications',
+    deleteNotification: 'Delete notification',
+    noNotifications: 'No notifications',
+    confirmDeleteNotifications: 'Delete all notifications?',
+    createIncident: 'Create incident',
+    incident: 'Incident',
+    knownIncident: 'Known Incident',
+    assignTicketToIncident: 'Assign ticket to incident',
+    noIncidentAssignment: 'No assignment',
+    activeKnownIncidents: '{count} known incidents active. Select one if your ticket belongs to it.',
+    linkedTickets: 'Linked Tickets',
+    incidentNotice: 'User-visible notice',
+    incidentTitle: 'Incident title',
+    dueDate: 'Due Date',
+    dateFormatLabel: 'Date (dd.mm.yyyy)',
+    time: 'Time'
 });
 
 Lang.format = (key, values = {}) =>
@@ -572,6 +689,8 @@ const Store = {
     saveUsers: async (users) => Promise.resolve(Utils.write('users', users)),
     getGroups: async () => Promise.resolve(Utils.read('user_groups', [])),
     saveGroups: async (groups) => Promise.resolve(Utils.write('user_groups', groups)),
+    getListViews: async () => Promise.resolve(Utils.read('list_views', [])),
+    saveListViews: async (views) => Promise.resolve(Utils.write('list_views', views)),
     getTickets: async () => Promise.resolve(Utils.read('tickets', [])),
     saveTickets: async (tickets) => {
         try {
@@ -598,10 +717,66 @@ const Store = {
     saveGlobalLogs: async (logs) => Promise.resolve(Utils.write('global_logs', logs)),
     getNotifications: async () => Promise.resolve(Utils.read('notifications', [])),
     saveNotifications: async (notifications) => Promise.resolve(Utils.write('notifications', notifications)),
-    addNotifications: async (recipients, ticket, message, actorUsername) => {
+
+    // Welche Benachrichtigungs-Ereignisse es gibt, für wen sie relevant sind, und wie sie heißen.
+    notifTypeMeta: {
+        newTicket: { label: 'Neues Ticket eingegangen', roles: ['admin'] },
+        mention: { label: 'In einem Kommentar erwähnt worden', roles: ['admin'] },
+        statusChange: { label: 'Status deines Tickets geändert', roles: ['user'] },
+        newMessage: { label: 'Neue Chat-Nachricht', roles: ['user', 'admin'] },
+        ticketClosed: { label: 'Ticket wurde geschlossen', roles: ['user'] },
+        ticketEdited: { label: 'Ticket wurde bearbeitet', roles: ['user'] }
+    },
+    // Werkseinstellung: wer darf was personalisieren, und was gilt, solange nichts eingestellt ist.
+    defaultNotifPolicy: () => ({
+        newTicket: { admin: { appLocked: true, emailLocked: false, defaultApp: true, defaultEmail: true } },
+        mention: { admin: { appLocked: true, emailLocked: false, defaultApp: true, defaultEmail: false } },
+        statusChange: { user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: true } },
+        newMessage: {
+            user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: true },
+            admin: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: false }
+        },
+        ticketClosed: { user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: true } },
+        ticketEdited: { user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: false } }
+    }),
+    roleGroup: (user) => (user && (user.role === 'admin' || user.role === 'superadmin')) ? 'admin' : 'user',
+    getNotifPolicy: async () => {
+        const settings = await Store.getSettings();
+        const base = Store.defaultNotifPolicy();
+        const saved = settings.generalConfig?.notifPolicy || {};
+        const merged = {};
+        Object.keys(base).forEach(type => {
+            merged[type] = {};
+            Object.keys(base[type]).forEach(role => {
+                merged[type][role] = { ...base[type][role], ...(saved[type]?.[role] || {}) };
+            });
+        });
+        return merged;
+    },
+    resolveNotifPref: async (user, type) => {
+        const policy = await Store.getNotifPolicy();
+        const role = Store.roleGroup(user);
+        const rule = policy[type]?.[role];
+        if (!rule) return { app: true, email: false };
+        const personal = user?.notifPrefs?.[type] || {};
+        return {
+            app: rule.appLocked ? rule.defaultApp : (typeof personal.app === 'boolean' ? personal.app : rule.defaultApp),
+            email: rule.emailLocked ? rule.defaultEmail : (typeof personal.email === 'boolean' ? personal.email : rule.defaultEmail)
+        };
+    },
+
+    addNotifications: async (recipients, ticket, message, actorUsername, type = 'generic') => {
         const notifications = await Store.getNotifications();
+        const users = await Store.getUsers();
         const targets = [...new Set((recipients || []).filter(username => username && username !== actorUsername))];
-        targets.forEach(recipient => notifications.push({
+        const allowed = [];
+        for (const username of targets) {
+            const person = users.find(u => u.username === username);
+            if (!person) { allowed.push(username); continue; }
+            const pref = await Store.resolveNotifPref(person, type);
+            if (pref.app) allowed.push(username);
+        }
+        allowed.forEach(recipient => notifications.push({
             id: Utils.uid(),
             recipient,
             ticketId: ticket.id,
@@ -647,6 +822,130 @@ const Store = {
             ticketNumberSequence: sequence
         };
     },
+    // Automatische Team-Zuweisung: erste passende Regel (Kategorie -> Team) gewinnt.
+    // Ohne Treffer bleibt das Ticket unzugewiesen und muss von Hand verteilt werden.
+    // Eigene Felder sind je Kategorie definiert; bei Mehrfachkategorien gilt die Vereinigung.
+    getCustomFieldsForCategories: (categories, settings) => {
+        const map = new Map();
+        (Array.isArray(categories) ? categories : [categories]).filter(Boolean).forEach(cat => {
+            (settings.customFields?.[cat] || []).forEach(f => map.set(f.id, f));
+        });
+        return [...map.values()];
+    },
+    autoAssignTeam: (ticket, settings, groups) => {
+        const rules = settings.generalConfig?.assignmentRules || [];
+        const categories = Array.isArray(ticket.category) ? ticket.category : [ticket.category || 'Allgemein'];
+        const rule = rules.find(r => r.groupId && categories.includes(r.category));
+        if (!rule) return null;
+        return groups.find(g => g.id === rule.groupId) || null;
+    },
+    // Addiert eine Dauer (ms) in Geschäftszeiten auf einen Startzeitpunkt, überspringt
+    // Nicht-Arbeitstage/-Feiertage und Zeiten außerhalb des Arbeitsfensters.
+    addBusinessMs: (startMs, durationMs, bh) => {
+        const perDay = bh.perDay || {};
+        const legacyDays = bh.days && bh.days.length ? bh.days : [1, 2, 3, 4, 5];
+        const holidays = new Set(bh.holidays || []);
+        let remaining = durationMs;
+        let cursor = new Date(startMs);
+        // Lokales Datum (nicht toISOString/UTC), damit es zu den lokal gepflegten Feiertagen passt
+        const localDateStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        for (let iter = 0; iter < 3650 && remaining > 0; iter++) {
+            const dateStr = localDateStr(cursor);
+            const dow = cursor.getDay();
+            const dayCfg = perDay[dow] || {
+                enabled: legacyDays.includes(dow),
+                start: bh.start || '08:00',
+                end: bh.end || '17:00'
+            };
+            if (!dayCfg.enabled || holidays.has(dateStr)) {
+                cursor.setDate(cursor.getDate() + 1);
+                cursor.setHours(0, 0, 0, 0);
+                continue;
+            }
+            const [startH, startM] = (dayCfg.start || '08:00').split(':').map(Number);
+            const [endH, endM] = (dayCfg.end || '17:00').split(':').map(Number);
+            const dayStart = new Date(cursor);
+            dayStart.setHours(startH, startM, 0, 0);
+            const dayEnd = new Date(cursor);
+            dayEnd.setHours(endH, endM, 0, 0);
+            if (dayEnd <= dayStart || cursor >= dayEnd) {
+                cursor.setDate(cursor.getDate() + 1);
+                cursor.setHours(0, 0, 0, 0);
+                continue;
+            }
+            if (cursor < dayStart) cursor = new Date(dayStart);
+            const availableToday = dayEnd.getTime() - cursor.getTime();
+            if (remaining <= availableToday) {
+                cursor = new Date(cursor.getTime() + remaining);
+                remaining = 0;
+            } else {
+                remaining -= availableToday;
+                cursor.setDate(cursor.getDate() + 1);
+                cursor.setHours(0, 0, 0, 0);
+            }
+        }
+        return cursor.getTime();
+    },
+    ticketSlaDueAt: (ticket, settings) => {
+        // Manuell gesetzte Frist überschreibt die berechnete Lösungsfrist vollständig.
+        if (ticket?.customDueAt) {
+            const customMs = new Date(ticket.customDueAt).getTime();
+            if (Number.isFinite(customMs)) return customMs;
+        }
+        const priorityKey = {
+            'Niedrig': 'low',
+            'Normal': 'normal',
+            'Hoch': 'high',
+            'Kritisch': 'critical'
+        } [ticket?.prio];
+        if (!priorityKey || !ticket?.createdAt) return null;
+        const defaults = {
+            low: 72,
+            normal: 48,
+            high: 24,
+            critical: 4
+        };
+        const configured = Number(settings?.generalConfig?.slaHours?.[priorityKey]);
+        const hours = Number.isFinite(configured) && configured > 0 ? configured : defaults[priorityKey];
+        const createdAt = new Date(ticket.createdAt).getTime();
+        if (!Number.isFinite(createdAt)) return null;
+        const durationMs = hours * 60 * 60 * 1000;
+        const bh = settings?.generalConfig?.businessHours;
+        const baseDue = bh?.enabled ? Store.addBusinessMs(createdAt, durationMs, bh) : createdAt + durationMs;
+        // Die Uhr pausiert im Warte-Status: bereits pausierte Zeit plus eine laufende Pause
+        // verschieben die Frist 1:1 um die stillstehende Dauer nach hinten.
+        const runningPauseMs = ticket.slaPausedSince ? Math.max(0, Date.now() - new Date(ticket.slaPausedSince).getTime()) : 0;
+        const pausedMs = (ticket.slaPausedMs || 0) + runningPauseMs;
+        return baseDue + pausedMs;
+    },
+    isTicketOverdue: (ticket, settings, now = Date.now()) => {
+        if (!ticket || ticket.archived || ticket.status === 'Geschlossen') return false;
+        const dueAt = Store.ticketSlaDueAt(ticket, settings);
+        return dueAt !== null && dueAt <= now;
+    },
+    // Countdown-Badge für ein Ticket: Ampel-Farbe (success/warning/danger) nach dem
+    // üblichen Muster aus Helpdesk-Tools (z. B. Zendesk/Freshdesk) – grün = genug Zeit,
+    // gelb = letztes Viertel der Frist oder unter 2 Std., rot = überschritten.
+    formatSlaCountdown: (ticket, settings, now = Date.now()) => {
+        if (!ticket || ticket.archived || ticket.status === 'Geschlossen') return null;
+        const dueAt = Store.ticketSlaDueAt(ticket, settings);
+        const createdAt = new Date(ticket.createdAt).getTime();
+        if (dueAt === null || !Number.isFinite(createdAt)) return null;
+        const diffMs = dueAt - now;
+        const overdue = diffMs <= 0;
+        const minutes = Math.max(1, Math.round(Math.abs(diffMs) / 60000));
+        const duration = minutes >= 1440 ? `${Math.floor(minutes / 1440)} ${Lang.t('dayShort')}` :
+            minutes >= 60 ? `${Math.floor(minutes / 60)} ${Lang.t('hourShort')}` : `${minutes} ${Lang.t('minuteShort')}`;
+        const totalMs = Math.max(1, dueAt - createdAt);
+        const urgent = !overdue && diffMs <= Math.max(totalMs * 0.25, 2 * 60 * 60 * 1000);
+        return {
+            overdue,
+            dueAt,
+            tone: overdue ? 'danger' : urgent ? 'warning' : 'success',
+            label: overdue ? Lang.format('overdueSince', { time: duration }) : `${Lang.t('dueIn')}${duration}`,
+            dueDateLabel: Utils.fmtDate(new Date(dueAt).toISOString())
+        };
+    },
 
     notificationUI: {
         init: async () => {
@@ -675,11 +974,11 @@ const Store = {
                 modal.innerHTML = `
                     <div class="modal modal-md">
                         <div class="modal-header">
-                            <h3>${Icon('bell', 18)} Benachrichtigungen</h3>
+                            <h3>${Icon('bell', 18)} ${Lang.t('notifications')}</h3>
                             <div class="modal-actions">
-                                <button class="btn-ghost btn-icon" id="notifications-mark-all" title="Alle als gelesen markieren" aria-label="Alle als gelesen markieren">${Icon('check-check', 16)}</button>
-                                <button class="btn-ghost btn-icon btn-danger" id="notifications-delete-all" title="Alle Benachrichtigungen löschen" aria-label="Alle Benachrichtigungen löschen">${Icon('trash-2', 16)}</button>
-                                <button class="btn-ghost btn-icon" data-close-notifications title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                                <button class="btn-ghost btn-icon" id="notifications-mark-all" title="${Lang.t('markAllRead')}" aria-label="${Lang.t('markAllRead')}">${Icon('check-check', 16)}</button>
+                                <button class="btn-ghost btn-icon btn-danger" id="notifications-delete-all" title="${Lang.t('deleteAllNotifications')}" aria-label="${Lang.t('deleteAllNotifications')}">${Icon('trash-2', 16)}</button>
+                                <button class="btn-ghost btn-icon" data-close-notifications title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                             </div>
                         </div>
                         <div class="modal-body notification-list" id="notification-list"></div>
@@ -717,8 +1016,8 @@ const Store = {
                             <time>${Utils.fmtDate(item.date)}</time>
                         </span>
                     </button>
-                    <button class="btn-ghost btn-icon btn-sm notification-delete" type="button" title="Benachrichtigung löschen" aria-label="Benachrichtigung löschen">${Icon('trash-2', 14)}</button>
-                </div>`).join('') : '<div class="empty-state">Keine Benachrichtigungen</div>';
+                    <button class="btn-ghost btn-icon btn-sm notification-delete" type="button" title="${Lang.t('deleteNotification')}" aria-label="${Lang.t('deleteNotification')}">${Icon('trash-2', 14)}</button>
+                </div>`).join('') : `<div class="empty-state">${Lang.t('noNotifications')}</div>`;
             list.querySelectorAll('.notification-item').forEach(row => {
                 row.querySelector('.notification-open').onclick = async () => {
                     const all = await Store.getNotifications();
@@ -758,7 +1057,7 @@ const Store = {
             const user = await Store.currentUser();
             const notifications = await Store.getNotifications();
             if (!notifications.some(item => item.recipient === user?.username)) return;
-            UI.confirm('Alle Benachrichtigungen löschen?', async () => {
+            UI.confirm(Lang.t('confirmDeleteNotifications'), async () => {
                 const latest = await Store.getNotifications();
                 await Store.saveNotifications(latest.filter(item => item.recipient !== user?.username));
                 await Notifications.render();
@@ -961,6 +1260,14 @@ const Store = {
             const legacyNumber = Number(String(ticket.ticketNumber || '').match(/(\d+)$/)?.[1] || 0);
             return Math.max(max, savedSequence, legacyNumber);
         }, 0) + 1;
+        const numberingSettings = await Store.getSettings();
+        const numberingCompany = numberingSettings.companyConfig || {};
+        const numberingPrefix = String(numberingCompany.ticketNumberPrefix || 'TS').trim();
+        const numberingPadding = Math.max(1, Math.min(12, parseInt(numberingCompany.ticketNumberPadding, 10) || 6));
+        const numberingBaseFormat = String(numberingCompany.ticketNumberFormat || '{prefix}-{number}').trim();
+        const numberingCategoryFormats = numberingCompany.ticketNumberCategoryFormats || {};
+        const numberingCategoryCode = (cat) => String(cat || 'Allgemein').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+            .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toUpperCase() || 'GENERAL';
         tickets.forEach(t => {
             if (!Number.isSafeInteger(t.ticketNumberSequence) || t.ticketNumberSequence < 1) {
                 const legacyNumber = Number(String(t.ticketNumber || '').match(/(\d+)$/)?.[1] || 0);
@@ -968,7 +1275,12 @@ const Store = {
                 changed = true;
             }
             if (!t.ticketNumber) {
-                t.ticketNumber = `TS-${String(t.ticketNumberSequence).padStart(6, '0')}`;
+                const category = Array.isArray(t.category) ? (t.category[0] || 'Allgemein') : (t.category || 'Allgemein');
+                const format = String(numberingCategoryFormats[category] || numberingBaseFormat).trim();
+                const number = String(t.ticketNumberSequence).padStart(numberingPadding, '0');
+                t.ticketNumber = format.includes('{number}')
+                    ? format.replaceAll('{prefix}', numberingPrefix).replaceAll('{category}', numberingCategoryCode(category)).replaceAll('{number}', number)
+                    : `${numberingPrefix}-${number}`;
                 changed = true;
             }
             if (!t.chat) {
@@ -1238,6 +1550,89 @@ const UI = {
         el.classList.add('show');
         setTimeout(() => el.classList.remove('show'), 2500);
     },
+    // Druckt HTML über ein unsichtbares iFrame statt einem neuen Tab/Fenster --
+    // kein Pop-up-Blocker-Risiko, und die Ticket-System-Seite bleibt immer im Hintergrund erhalten.
+    printHTML: (html) => {
+        let frame = q('#print-frame');
+        if (!frame) {
+            frame = document.createElement('iframe');
+            frame.id = 'print-frame';
+            frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+            document.body.appendChild(frame);
+        }
+        const doc = frame.contentWindow.document;
+        doc.open();
+        doc.write(html);
+        doc.close();
+        UI.toast('Druckvorschau wird geöffnet...');
+        frame.onload = () => {
+            frame.contentWindow.focus();
+            frame.contentWindow.print();
+        };
+    },
+    // Ersetzt native title-Tooltips (vom Browser gezeichnet, nicht stylebar) durch eine
+    // ans Design angepasste, abgerundete Tooltip-Box. Funktioniert per Delegation auch für
+    // Elemente, die erst später (z.B. in Modals) ins DOM kommen.
+    _tooltipEl: null,
+    showTooltip: (target, text) => {
+        if (!UI._tooltipEl) {
+            UI._tooltipEl = document.createElement('div');
+            UI._tooltipEl.className = 'custom-tooltip';
+            document.body.appendChild(UI._tooltipEl);
+        }
+        const el = UI._tooltipEl;
+        el.textContent = text;
+        el.classList.add('visible');
+        const rect = target.getBoundingClientRect();
+        const tipRect = el.getBoundingClientRect();
+        let top = rect.top - tipRect.height - 8;
+        let left = rect.left + rect.width / 2 - tipRect.width / 2;
+        if (top < 4) top = rect.bottom + 8;
+        left = Math.max(4, Math.min(left, window.innerWidth - tipRect.width - 4));
+        el.style.top = `${top}px`;
+        el.style.left = `${left}px`;
+    },
+    hideTooltip: () => {
+        if (UI._tooltipEl) UI._tooltipEl.classList.remove('visible');
+    },
+    initTooltips: () => {
+        if (UI._tooltipsInitialized) return;
+        UI._tooltipsInitialized = true;
+        document.addEventListener('mouseover', (e) => {
+            const target = e.target.closest?.('[title],[data-tooltip-text]');
+            if (!target) return;
+            let text = target.getAttribute('title');
+            if (text) {
+                target.dataset.tooltipText = text;
+                target.removeAttribute('title');
+            } else {
+                text = target.dataset.tooltipText;
+            }
+            if (text) UI.showTooltip(target, text);
+        });
+        document.addEventListener('mouseout', (e) => {
+            const target = e.target.closest?.('[data-tooltip-text]');
+            if (target && !target.contains(e.relatedTarget)) UI.hideTooltip();
+        });
+        document.addEventListener('focusin', (e) => {
+            const target = e.target.closest?.('[title],[data-tooltip-text]');
+            if (!target) return;
+            let text = target.getAttribute('title');
+            if (text) {
+                target.dataset.tooltipText = text;
+                target.removeAttribute('title');
+            } else {
+                text = target.dataset.tooltipText;
+            }
+            if (text) UI.showTooltip(target, text);
+        });
+        document.addEventListener('focusout', (e) => {
+            const target = e.target.closest?.('[data-tooltip-text]');
+            if (target) UI.hideTooltip();
+        });
+        window.addEventListener('scroll', () => UI.hideTooltip(), true);
+        document.addEventListener('mousedown', () => UI.hideTooltip());
+    },
     confirm: (msg, onYes) => {
         let modal = q('#confirm-modal');
         if (!modal) {
@@ -1287,6 +1682,100 @@ const UI = {
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
     },
+    askIncidentLink: (incidents) => new Promise(resolve => {
+        let modal = q('#incident-link-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'incident-link-modal';
+            modal.className = 'modal-overlay modal-top';
+            modal.innerHTML = `
+                <div class="modal modal-sm">
+                    <div class="modal-header">
+                        <h3>${Icon('siren', 18)}Gehört dein Ticket zu einer Störung?</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon" id="ilk-close" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        </div>
+                    </div>
+                    <div class="modal-body">
+                        <div class="incident-link-options" id="ilk-options"></div>
+                    </div>
+                    <div class="modal-footer modal-footer-visible">
+                        <button class="btn-secondary" id="ilk-cancel">Abbrechen</button>
+                        <button class="btn-primary" id="ilk-confirm">Ticket absenden</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+        }
+        const options = modal.querySelector('#ilk-options');
+        options.innerHTML = [
+            ...incidents.map((incident, i) => `
+                <label class="check-row incident-link-option">
+                    <input type="radio" name="ilk-incident" value="${Utils.esc(incident.id)}"${i === 0 ? ' checked' : ''}>
+                    <span class="check-text"><strong>${Utils.esc(incident.ticketNumber || incident.id)} · ${Utils.esc(incident.title)}</strong><span>${Utils.esc(incident.incidentNotice || '')}</span></span>
+                </label>`),
+            `<label class="check-row incident-link-option">
+                <input type="radio" name="ilk-incident" value="">
+                <span class="check-text"><strong>Nein, keine dieser Störungen</strong></span>
+            </label>`
+        ].join('');
+        const finish = (result) => {
+            modal.classList.remove('open');
+            resolve(result);
+        };
+        modal.querySelector('#ilk-close').onclick = () => finish(undefined);
+        modal.querySelector('#ilk-cancel').onclick = () => finish(undefined);
+        modal.querySelector('#ilk-confirm').onclick = () => {
+            const checked = modal.querySelector('input[name="ilk-incident"]:checked');
+            finish(checked && checked.value ? checked.value : null);
+        };
+        modal.onclick = e => { if (e.target === modal) finish(undefined); };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    }),
+
+    promptText: ({ title, label, value = '', placeholder = '', multiline = false, saveLabel = null } = {}) => new Promise(resolve => {
+        let modal = q('#prompt-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'prompt-modal';
+            modal.className = 'modal-overlay modal-top';
+            modal.innerHTML = `
+                <div class="modal modal-sm">
+                    <div class="modal-header">
+                        <h3></h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon" id="pm-save" title="${Lang.t('save')}" aria-label="${Lang.t('save')}">${Icon('save', 16)}</button>
+                            <button class="btn-ghost btn-icon" id="pm-close" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
+                        </div>
+                    </div>
+                    <div class="modal-body"></div>
+                </div>`;
+            document.body.appendChild(modal);
+        }
+        const inputId = 'pm-value';
+        modal.querySelector('.modal-header h3').textContent = title || '';
+        modal.querySelector('#pm-save').title = saveLabel || Lang.t('save');
+        modal.querySelector('#pm-save').setAttribute('aria-label', saveLabel || Lang.t('save'));
+        modal.querySelector('.modal-body').innerHTML = `
+            <div class="field">
+                <label for="${inputId}">${Utils.esc(label || '')}</label>
+                ${multiline
+                ? `<textarea id="${inputId}" rows="4" placeholder="${Utils.esc(placeholder)}">${Utils.esc(value)}</textarea>`
+                : `<input id="${inputId}" type="text" value="${Utils.esc(value)}" placeholder="${Utils.esc(placeholder)}">`}
+            </div>`;
+        const close = (result) => {
+            modal.classList.remove('open');
+            resolve(result);
+        };
+        modal.querySelector('#pm-close').onclick = () => close(null);
+        modal.onclick = e => {
+            if (e.target === modal) close(null);
+        };
+        modal.querySelector('#pm-save').onclick = () => close(q(`#${inputId}`)?.value || '');
+        modal.classList.add('open');
+        setTimeout(() => q(`#${inputId}`)?.focus(), 0);
+        if (window.lucide) lucide.createIcons();
+    }),
     starfield: () => {
         const c = q('#stars');
         if (!c) return;
@@ -1582,6 +2071,249 @@ const UI = {
         window.scrollBy(0, missing);
     },
 
+    // Zeigt die je Kategorie definierten eigenen Felder in einem Ticket-Formular an.
+    // Eigener Datum/Uhrzeit-Picker im App-Design -- ersetzt den nativen datetime-local-Kalender,
+    // der sich (Browser-UI) nicht ins dunkle Theme einfügt.
+    dateTimePickerMarkup: (id) => `
+        <div class="dtp-field" id="${id}">
+            <button type="button" class="dtp-trigger">
+                <span class="dtp-value is-placeholder">Datum &amp; Uhrzeit wählen...</span>
+                ${Icon('calendar', 15)}
+            </button>
+            <div class="dtp-popover">
+                <div class="dtp-header">
+                    <button type="button" class="dtp-nav dtp-prev" aria-label="Vorheriger Monat">${Icon('chevron-left', 16)}</button>
+                    <span class="dtp-month-label"></span>
+                    <button type="button" class="dtp-nav dtp-next" aria-label="Nächster Monat">${Icon('chevron-right', 16)}</button>
+                </div>
+                <div class="dtp-weekdays"><span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span></div>
+                <div class="dtp-grid"></div>
+                <div class="dtp-time-row">
+                    <div class="dtp-time-col dtp-hour" role="listbox" aria-label="Stunde"></div>
+                    <span class="dtp-time-sep">:</span>
+                    <div class="dtp-time-col dtp-minute" role="listbox" aria-label="Minute"></div>
+                </div>
+                <div class="dtp-actions">
+                    <button type="button" class="dtp-clear">Löschen</button>
+                    <button type="button" class="dtp-today">Heute</button>
+                </div>
+            </div>
+        </div>`,
+
+    createDateTimePicker: (root, { value = null, onChange = null, anchor = null } = {}) => {
+        const trigger = root.querySelector('.dtp-trigger');
+        const valueLabel = root.querySelector('.dtp-value');
+        const monthLabel = root.querySelector('.dtp-month-label');
+        const grid = root.querySelector('.dtp-grid');
+        const hourSel = root.querySelector('.dtp-hour');
+        const minuteSel = root.querySelector('.dtp-minute');
+        const monthNames = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+
+        let hourVal = 0;
+        let minuteVal = 0;
+        const renderTimeCol = (col, count, current, onPick) => {
+            col.innerHTML = Array.from({ length: count }, (_, n) => `<button type="button" class="dtp-time-opt${n === current ? ' is-selected' : ''}" data-value="${n}">${String(n).padStart(2, '0')}</button>`).join('');
+            col.querySelectorAll('.dtp-time-opt').forEach(btn => {
+                btn.onclick = () => onPick(Number(btn.dataset.value));
+            });
+            const active = col.querySelector('.is-selected');
+            if (active) col.scrollTop = active.offsetTop - col.clientHeight / 2 + active.offsetHeight / 2;
+        };
+        const renderTimeCols = () => {
+            renderTimeCol(hourSel, 24, hourVal, h => { hourVal = h; renderTimeCols(); applyTime(); });
+            renderTimeCol(minuteSel, 60, minuteVal, m => { minuteVal = m; renderTimeCols(); applyTime(); });
+        };
+
+        let selected = value ? new Date(value) : null;
+        let viewDate = selected ? new Date(selected.getFullYear(), selected.getMonth(), 1) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+        const sameDay = (a, b) => a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+        const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+        const renderLabel = () => {
+            if (selected) {
+                valueLabel.textContent = fmt(selected);
+                valueLabel.classList.remove('is-placeholder');
+            } else {
+                valueLabel.textContent = 'Datum & Uhrzeit wählen...';
+                valueLabel.classList.add('is-placeholder');
+            }
+        };
+
+        const renderGrid = () => {
+            monthLabel.textContent = `${monthNames[viewDate.getMonth()]} ${viewDate.getFullYear()}`;
+            const firstOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
+            const startOffset = (firstOfMonth.getDay() + 6) % 7; // Woche beginnt Montag
+            const gridStart = new Date(firstOfMonth);
+            gridStart.setDate(gridStart.getDate() - startOffset);
+            const today = new Date();
+            const cells = [];
+            for (let i = 0; i < 42; i++) {
+                const d = new Date(gridStart);
+                d.setDate(gridStart.getDate() + i);
+                const classes = ['dtp-day'];
+                if (d.getMonth() !== viewDate.getMonth()) classes.push('is-outside');
+                if (sameDay(d, today)) classes.push('is-today');
+                if (sameDay(d, selected)) classes.push('is-selected');
+                cells.push(`<button type="button" class="${classes.join(' ')}" data-date="${d.toISOString()}">${d.getDate()}</button>`);
+            }
+            grid.innerHTML = cells.join('');
+            grid.querySelectorAll('.dtp-day').forEach(btn => {
+                btn.onclick = () => {
+                    const picked = new Date(btn.dataset.date);
+                    const h = selected ? selected.getHours() : new Date().getHours();
+                    const m = selected ? selected.getMinutes() : new Date().getMinutes();
+                    selected = new Date(picked.getFullYear(), picked.getMonth(), picked.getDate(), h, m);
+                    viewDate = new Date(selected.getFullYear(), selected.getMonth(), 1);
+                    hourVal = h;
+                    minuteVal = m;
+                    renderTimeCols();
+                    renderGrid();
+                    renderLabel();
+                    if (onChange) onChange(selected.getTime());
+                };
+            });
+        };
+
+        const applyTime = () => {
+            if (!selected) selected = new Date();
+            selected.setHours(hourVal, minuteVal, 0, 0);
+            renderLabel();
+            if (onChange) onChange(selected.getTime());
+        };
+        if (selected) {
+            hourVal = selected.getHours();
+            minuteVal = selected.getMinutes();
+        }
+        renderTimeCols();
+
+        root.querySelector('.dtp-clear').onclick = () => {
+            selected = null;
+            renderLabel();
+            renderGrid();
+            if (onChange) onChange(null);
+        };
+        root.querySelector('.dtp-today').onclick = () => {
+            const now = new Date();
+            selected = selected ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), selected.getHours(), selected.getMinutes()) : now;
+            viewDate = new Date(selected.getFullYear(), selected.getMonth(), 1);
+            hourVal = selected.getHours();
+            minuteVal = selected.getMinutes();
+            renderTimeCols();
+            renderGrid();
+            renderLabel();
+            if (onChange) onChange(selected.getTime());
+        };
+        root.querySelector('.dtp-prev').onclick = () => {
+            viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1);
+            renderGrid();
+        };
+        root.querySelector('.dtp-next').onclick = () => {
+            viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1);
+            renderGrid();
+        };
+
+        // Das Popover wird beim Öffnen aus dem Modal gelöst und direkt an <body> gehängt --
+        // sonst schneidet das scrollbare .modal-body den Kalender ab, sobald er größer als
+        // der sichtbare Rest des Dialogs ist.
+        const popover = root.querySelector('.dtp-popover');
+        popover.classList.add('dtp-popover-detached');
+        if (root.id) popover.id = `${root.id}-popover`;
+        const positionPopover = () => {
+            const rect = (anchor || trigger).getBoundingClientRect();
+            const popH = popover.offsetHeight || 420;
+            const popW = popover.offsetWidth || 280;
+            let top = rect.bottom + 6;
+            if (top + popH > window.innerHeight - 8) top = Math.max(8, rect.top - popH - 6);
+            let left = rect.left;
+            if (left + popW > window.innerWidth - 8) left = Math.max(8, window.innerWidth - popW - 8);
+            popover.style.top = `${top}px`;
+            popover.style.left = `${left}px`;
+            popover.style.width = `${rect.width < 240 ? 280 : rect.width}px`;
+        };
+        const close = () => {
+            root.classList.remove('open');
+            popover.classList.remove('open');
+        };
+        const open = () => {
+            qa('.dtp-popover-detached.open').forEach(p => p.classList.remove('open'));
+            qa('.dtp-field.open').forEach(f => f.classList.remove('open'));
+            if (popover.parentElement !== document.body) document.body.appendChild(popover);
+            root.classList.add('open');
+            positionPopover();
+            popover.classList.add('open');
+        };
+        trigger.onclick = (e) => {
+            e.stopPropagation();
+            root.classList.contains('open') ? close() : open();
+        };
+        if (root._dtpOutside) window.removeEventListener('click', root._dtpOutside);
+        root._dtpOutside = (e) => { if (!root.contains(e.target) && !popover.contains(e.target) && !(anchor && anchor.contains(e.target))) close(); };
+        window.addEventListener('click', root._dtpOutside);
+        if (root._dtpReposition) window.removeEventListener('resize', root._dtpReposition);
+        root._dtpReposition = () => { if (root.classList.contains('open')) positionPopover(); };
+        window.addEventListener('resize', root._dtpReposition);
+
+        renderGrid();
+        renderLabel();
+
+        return {
+            getValue: () => selected ? selected.getTime() : null,
+            setValue: (ms) => {
+                selected = ms ? new Date(ms) : null;
+                viewDate = selected ? new Date(selected.getFullYear(), selected.getMonth(), 1) : new Date();
+                if (selected) {
+                    hourVal = selected.getHours();
+                    minuteVal = selected.getMinutes();
+                }
+                renderTimeCols();
+                renderGrid();
+                renderLabel();
+            },
+            open,
+            close
+        };
+    },
+
+    renderCustomFieldsForm: (container, fields, values = {}) => {
+        if (!container) return;
+        if (!fields.length) {
+            container.innerHTML = '';
+            return;
+        }
+        container.innerHTML = fields.map(f => `
+            <div class="field">
+                <label for="cf-${f.id}">${Utils.esc(f.label)}${f.required ? ' *' : ''}</label>
+                ${f.type === 'select'
+                ? `<select id="cf-${f.id}" data-field-id="${f.id}" data-field-label="${Utils.esc(f.label)}" data-field-required="${f.required ? '1' : ''}"><option value="">Bitte wählen...</option>${(f.options || []).map(o => `<option value="${Utils.esc(o)}" ${values[f.id] === o ? 'selected' : ''}>${Utils.esc(o)}</option>`).join('')}</select>`
+                : `<input id="cf-${f.id}" data-field-id="${f.id}" data-field-label="${Utils.esc(f.label)}" data-field-required="${f.required ? '1' : ''}" type="${f.type === 'number' ? 'number' : 'text'}" value="${Utils.esc(values[f.id] || '')}">`}
+            </div>`).join('');
+    },
+    // Zeigt die ausgefüllten eigenen Felder eines Tickets schreibgeschützt an (Ticket-Detailansicht).
+    renderCustomFieldsDisplay: (container, fields, values = {}) => {
+        if (!container) return;
+        const filled = fields.filter(f => String(values[f.id] ?? '').trim());
+        if (!filled.length) {
+            container.hidden = true;
+            container.innerHTML = '';
+            return;
+        }
+        container.hidden = false;
+        container.innerHTML = filled.map(f => `<div class="cf-display-item"><strong>${Utils.esc(f.label)}</strong><span>${Utils.esc(values[f.id])}</span></div>`).join('');
+    },
+    // Liest die Werte aus renderCustomFieldsForm; missing enthält die Labels fehlender Pflichtfelder.
+    readCustomFieldsForm: (container) => {
+        const values = {};
+        const missing = [];
+        if (!container) return { values, missing };
+        container.querySelectorAll('[data-field-id]').forEach(el => {
+            const val = el.value.trim();
+            if (el.dataset.fieldRequired && !val) missing.push(el.dataset.fieldLabel);
+            if (val) values[el.dataset.fieldId] = val;
+        });
+        return { values, missing };
+    },
+
     createMultiSelect: (container, options, initialValues = [], onChange = null) => {
         // Mehrfachauswahl im selben Look wie <select> (Stile in style.css, Abschnitt "Auswahllisten")
         container.innerHTML = '';
@@ -1685,6 +2417,7 @@ const UI = {
             setValue: (vals) => {
                 inputs.forEach(i => i.checked = vals.includes(i.value));
                 updateHeader();
+                if (onChange) onChange(inputs.filter(i => i.checked).map(i => i.value));
             }
         };
     }
@@ -1826,7 +2559,10 @@ const Settings = {
             document.body.style.background = isLight ? s.bgValue : `linear-gradient(${overlay}, ${overlay}), ${s.bgValue}`;
             if (stars) stars.style.display = 'none';
         } else if (s.bgType === 'image') {
-            document.body.style.background = `linear-gradient(${overlay}, ${overlay}), url(${s.bgValue}) no-repeat center center fixed`;
+            // Eigene Bilder sind oft dunkel fotografiert -- im hellen Theme braucht es einen
+            // hellen statt dunklen Schleier, sonst wirkt alles (z. B. die Navbar) weiterhin dunkel.
+            const imageOverlay = isLight ? 'rgba(255,255,255,0.55)' : overlay;
+            document.body.style.background = `linear-gradient(${imageOverlay}, ${imageOverlay}), url(${s.bgValue}) no-repeat center center fixed`;
             document.body.style.backgroundSize = 'cover';
             if (stars) stars.style.display = 'none';
         } else if (s.bgType === 'class') {
@@ -1889,6 +2625,11 @@ const Settings = {
                                 <!-- Rendered dynamically -->
                             </div>
                         </div>
+                        <div class="field field-wide">
+                            <label>Benachrichtigungen</label>
+                            <p class="hint">Lege fest, ob du Benachrichtigungen in der App, per E-Mail oder auf beiden Wegen erhalten möchtest. Grau hinterlegte Einträge wurden vom Administrator fest vorgegeben.</p>
+                            <div id="s-notif-area" class="notif-personal-list"></div>
+                        </div>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -1935,10 +2676,11 @@ const Settings = {
                 Lang.current = e.target.value;
                 Lang.applyToDOM();
                 if (q('.kanban-board')) {
-                    AdminBoard.render();
-                    AdminBoard.renderArchive();
+                    await AdminBoard.render();
+                    await AdminBoard.renderArchive();
                 }
-                if (q('#user-tickets')) UserDash.renderList();
+                if (q('#user-tickets')) await UserDash.renderList();
+                Lang.applyToDOM();
                 q('#sys-settings-modal')?.remove();
                 modal.remove();
                 Settings.openModal();
@@ -1986,8 +2728,48 @@ const Settings = {
             if (window.lucide) lucide.createIcons();
         }
 
+        await Settings.renderNotifArea(user);
+
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
+    },
+    renderNotifArea: async (user) => {
+        const area = q('#s-notif-area');
+        if (!area || !user) return;
+        const policy = await Store.getNotifPolicy();
+        const role = Store.roleGroup(user);
+        const rows = [];
+        Object.entries(Store.notifTypeMeta).forEach(([type, meta]) => {
+            if (!meta.roles.includes(role)) return;
+            const rule = policy[type]?.[role];
+            if (!rule) return;
+            const personal = user.notifPrefs?.[type] || {};
+            const appValue = rule.appLocked ? rule.defaultApp : (typeof personal.app === 'boolean' ? personal.app : rule.defaultApp);
+            const emailValue = rule.emailLocked ? rule.defaultEmail : (typeof personal.email === 'boolean' ? personal.email : rule.defaultEmail);
+            rows.push(`
+                <div class="notif-personal-row${rule.appLocked && rule.emailLocked ? ' locked' : ''}" data-notif-type="${type}">
+                    <div class="notif-matrix-label"><strong>${Utils.esc(meta.label)}</strong>${rule.appLocked && rule.emailLocked ? '<span>Vom Administrator festgelegt</span>' : ''}</div>
+                    <label class="check-row compact"><input type="checkbox" class="sn-app" ${appValue ? 'checked' : ''} ${rule.appLocked ? 'disabled' : ''}>In-App</label>
+                    <label class="check-row compact"><input type="checkbox" class="sn-email" ${emailValue ? 'checked' : ''} ${rule.emailLocked ? 'disabled' : ''}>E-Mail</label>
+                </div>`);
+        });
+        area.innerHTML = rows.join('') || '<div class="empty-state compact">Keine personalisierbaren Benachrichtigungen verfügbar.</div>';
+        area.querySelectorAll('.notif-personal-row').forEach(row => {
+            const type = row.dataset.notifType;
+            const appBox = row.querySelector('.sn-app');
+            const emailBox = row.querySelector('.sn-email');
+            const persist = async () => {
+                const users = await Store.getUsers();
+                const target = users.find(u => u.id === user.id);
+                if (!target) return;
+                target.notifPrefs = target.notifPrefs || {};
+                target.notifPrefs[type] = { app: appBox.checked, email: emailBox.checked };
+                await Store.saveUsers(users);
+                user.notifPrefs = target.notifPrefs;
+            };
+            if (!appBox.disabled) appBox.onchange = persist;
+            if (!emailBox.disabled) emailBox.onchange = persist;
+        });
     },
     renderState: (modal, s) => {
         modal.querySelectorAll('.s-theme-btn').forEach(b => {
@@ -2099,6 +2881,7 @@ const Settings = {
 const UserDash = {
     selectedFiles: [], // Staging for file uploads
     createFiles: [],
+    activeIncident: null,
 
     init: async () => {
         // Admin Button Injection if on dashboard (for superadmin/admin)
@@ -2134,9 +2917,22 @@ const UserDash = {
                 return;
             }
 
+            const { values: customFieldValues, missing: missingFields } = UI.readCustomFieldsForm(q('#t-custom-fields'));
+            if (missingFields.length) {
+                UI.toast(`Bitte Pflichtfeld${missingFields.length > 1 ? 'er' : ''} ausfüllen: ${missingFields.join(', ')}`);
+                return;
+            }
+
             if (UserDash.createFiles.some(file => file.size > 15 * 1024 * 1024)) {
                 UI.toast('Anhänge dürfen maximal 15 MB groß sein.');
                 return;
+            }
+            const activeIncidents = (await Store.getTickets()).filter(t => t.isMajorIncident && t.status !== 'Geschlossen' && !t.archived);
+            let linkedIncidentId = null;
+            if (activeIncidents.length) {
+                const choice = await UI.askIncidentLink(activeIncidents);
+                if (choice === undefined) return;
+                linkedIncidentId = choice;
             }
             const tickets = await Store.getTickets();
             let ticketNumberData;
@@ -2171,22 +2967,30 @@ const UserDash = {
                 comments: [],
                 chat: [],
                 attachments,
-                archived: false
+                archived: false,
+                customFieldValues,
+                linkedIncidentId
             };
+            const autoTeam = Store.autoAssignTeam(newTicket, settings, await Store.getGroups());
+            if (autoTeam) {
+                newTicket.team = autoTeam.id;
+                newTicket.assignees = [...new Set([...(newTicket.assignees || []), ...autoTeam.members])];
+            }
             tickets.push(newTicket);
-            await Store.addLog(newTicket, 'Ticket erstellt');
+            await Store.addLog(newTicket, autoTeam ? `Ticket erstellt und automatisch Team "${autoTeam.name}" zugewiesen` : 'Ticket erstellt');
             await Store.addGlobalLog('Neues Ticket erstellt', `Titel: ${newTicket.title}`);
             await Store.saveTickets(tickets);
             const admins = (await Store.getUsers()).filter(person => person.role === 'admin' || person.role === 'superadmin');
-            await Store.addNotifications(admins.map(person => person.username), newTicket, 'Neues Ticket wurde erstellt.', user.username);
+            await Store.addNotifications(admins.map(person => person.username), newTicket, 'Neues Ticket wurde erstellt.', user.username, 'newTicket');
             await Notifications.refresh();
 
-            // Notify Admins
+            // Admins per E-Mail benachrichtigen, je nach persönlicher/administrativer Einstellung
             if (settings.emailConfig && settings.emailConfig.host) {
-                const admins = (await Store.getUsers()).filter(u => u.role === 'admin' || u.role === 'superadmin');
-                admins.forEach(a => {
-                    if (a.email) Store.sendEmail(a.email, `Neues Ticket: ${title}`, `Ticket #${newTicket.id} von ${user.name || user.username} erstellt.`);
-                });
+                for (const admin of admins) {
+                    if (!admin.email) continue;
+                    const pref = await Store.resolveNotifPref(admin, 'newTicket');
+                    if (pref.email) Store.sendEmail(admin.email, `Neues Ticket: ${title}`, `Ticket #${newTicket.id} von ${user.name || user.username} erstellt.`);
+                }
             }
 
             UI.toast('Ticket erstellt!');
@@ -2196,6 +3000,7 @@ const UserDash = {
             if (q('#t-files')) q('#t-files').value = '';
             UserDash.renderCreateFilePreview();
             if (q('#t-prio')) q('#t-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(settings.generalConfig?.defaultPrio) ? settings.generalConfig.defaultPrio : 'Normal';
+            UI.renderCustomFieldsForm(q('#t-custom-fields'), Store.getCustomFieldsForCategories(cat, settings));
             await UserDash.renderList();
         };
 
@@ -2205,6 +3010,23 @@ const UserDash = {
             createFileInput.value = '';
             UserDash.renderCreateFilePreview();
         };
+        const createDropzone = q('#t-files-dropzone');
+        if (createDropzone) {
+            ['dragenter', 'dragover'].forEach(evt => createDropzone.addEventListener(evt, (e) => {
+                e.preventDefault();
+                createDropzone.classList.add('drag-over');
+            }));
+            ['dragleave', 'dragend'].forEach(evt => createDropzone.addEventListener(evt, (e) => {
+                e.preventDefault();
+                createDropzone.classList.remove('drag-over');
+            }));
+            createDropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                createDropzone.classList.remove('drag-over');
+                UserDash.createFiles.push(...Array.from(e.dataTransfer?.files || []));
+                UserDash.renderCreateFilePreview();
+            });
+        }
 
         // ... Key listeners for Create Ticket ...
         q('#t-title').onkeydown = (e) => {
@@ -2218,7 +3040,12 @@ const UserDash = {
             const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
             if (q('#t-prio')) q('#t-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(settings.generalConfig?.defaultPrio) ? settings.generalConfig.defaultPrio : 'Normal';
             const initial = categories.includes('Allgemein') ? ['Allgemein'] : categories.slice(0, 1);
-            UserDash.categoryInstance = UI.createMultiSelect(catContainer, categories, initial);
+            const refreshCustomFields = (selectedCats) => {
+                const fields = Store.getCustomFieldsForCategories(selectedCats, settings);
+                UI.renderCustomFieldsForm(q('#t-custom-fields'), fields);
+            };
+            UserDash.categoryInstance = UI.createMultiSelect(catContainer, categories, initial, refreshCustomFields);
+            refreshCustomFields(initial);
         }
 
         // Modal Events
@@ -2323,8 +3150,13 @@ const UserDash = {
         preview.style.display = UserDash.createFiles.length ? 'flex' : 'none';
         UserDash.createFiles.forEach((file, index) => {
             const chip = document.createElement('div');
-            chip.className = 'file-chip';
+            chip.className = 'file-chip file-chip-clickable';
+            chip.title = 'Vorschau anzeigen';
             chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="Entfernen" aria-label="${Utils.esc(file.name)} entfernen">${Icon('x', 13)}</button>`;
+            chip.querySelector('span').onclick = async () => {
+                const data = await Store.readFile(file);
+                AdminBoard.openAttachmentPreview({ name: file.name, type: file.type, data });
+            };
             chip.querySelector('button').onclick = () => {
                 UserDash.createFiles.splice(index, 1);
                 UserDash.renderCreateFilePreview();
@@ -2345,6 +3177,10 @@ const UserDash = {
 
         if (q('#u-m-title')) q('#u-m-title').textContent = `${t.ticketNumber || t.id} · ${t.title}${t.archived ? ` (${Lang.t('archived')})` : ''}`;
         if (q('#u-m-desc')) q('#u-m-desc').textContent = t.desc || Lang.t('noDescription');
+        {
+            const fieldsSettings = await Store.getSettings();
+            UI.renderCustomFieldsDisplay(q('#u-m-custom-fields-display'), Store.getCustomFieldsForCategories(t.category, fieldsSettings), t.customFieldValues || {});
+        }
         AdminBoard.renderTicketAttachments(t, '#u-m-ticket-attachments');
 
         // Read-only check for archived
@@ -2364,6 +3200,20 @@ const UserDash = {
             q('#u-waiting-message').textContent = showRequest ? t.waitingMessage : '';
         }
         if (q('#u-m-date')) q('#u-m-date').textContent = Utils.fmtDate(t.createdAt);
+
+        // Lösungsfrist für Benutzer: nur wenn in den Systemeinstellungen aktiviert, und
+        // immer dezent (neutrale Farbe) – nie als Alarm, auch nicht bei Überschreitung.
+        const slaItemUser = q('#u-m-sla-item');
+        if (slaItemUser) {
+            const slaSettingsForUser = await Store.getSettings();
+            const slaCountdownUser = slaSettingsForUser.generalConfig?.showSlaToUsers
+                ? Store.formatSlaCountdown(t, slaSettingsForUser)
+                : null;
+            slaItemUser.hidden = !slaCountdownUser;
+            if (slaCountdownUser) {
+                q('#u-m-sla-badge').innerHTML = `${Icon('timer', 13)}${Utils.esc(slaCountdownUser.label)}`;
+            }
+        }
 
         // Handle Archived Date Visibility
         if (q('#u-m-archived')) {
@@ -2463,6 +3313,7 @@ const UserDash = {
         };
 
         let tickets = (await Store.getTickets()).filter(belongsToCurrentUser);
+        const slaSettings = await Store.getSettings();
 
         // Default: show every still-open ticket this user created. Toggle adds closed and archived history.
         const showClosedArchived = q('#dash-filter-archive') && q('#dash-filter-archive').checked;
@@ -2489,20 +3340,22 @@ const UserDash = {
             list.innerHTML = `<div class="empty-state">${Lang.t('noTickets')}</div>`;
         } else {
             toDisplay.forEach(t => {
+                const isOverdue = !!slaSettings.generalConfig?.showSlaToUsers && Store.isTicketOverdue(t, slaSettings);
                 const el = document.createElement('div');
-                el.className = `table-row user-ticket-row${t.archived ? ' is-archived' : ''}`;
+                el.className = `table-row user-ticket-row${t.archived ? ' is-archived' : ''}${isOverdue ? ' is-overdue-dezent' : ''}`;
 
                 const cats = Array.isArray(t.category) ? t.category : [t.category || '-'];
                 const catBadges = cats.map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('');
                 const archivedBadge = t.archived ? `<span class="archive-badge">${Icon('archive', 12)}${Lang.t('archived')}</span>` : '';
+                const overdueBadge = isOverdue ? `<span class="sla-overdue-icon sla-badge-muted" title="Frist überschritten">${Icon('timer', 11)}</span>` : '';
 
                 el.innerHTML = `
                     <span class="status-dot" style="--dot:${getStatusColor(t.status)}" title="${Utils.esc(Lang.status(t.status))}"></span>
                     <div class="ticket-row-main">
                         <div class="row-title" title="${Utils.esc(t.title)}">${Utils.esc(t.title)}</div>
-                        <div class="ticket-row-cats"><span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>${catBadges}${archivedBadge}</div>
+                        <div class="ticket-row-cats"><span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>${catBadges}${archivedBadge}${overdueBadge}</div>
                     </div>
-                    <div class="ticket-row-status"><span class="status-badge">${Lang.status(t.status)}</span></div>
+                    <div class="ticket-row-status${String(t.status).startsWith('Warten auf') ? ' is-waiting' : ''}"><span class="status-badge">${Lang.status(t.status)}</span></div>
                     <div class="ticket-row-date date">${Utils.fmtDate(t.createdAt)}</div>
                     <div class="ticket-row-prio"><span class="prio-pill prio-${t.prio}">${Lang.prio(t.prio)}</span></div>
                 `;
@@ -2523,7 +3376,7 @@ const UserDash = {
 function getStatusColor(s) {
     if (s === 'Neu') return 'var(--info)';
     if (s === 'In Bearbeitung') return 'var(--warning)';
-    if (String(s).startsWith('Warten auf')) return 'var(--warning)';
+    if (String(s).startsWith('Warten auf')) return 'var(--wait)';
     if (s === 'Geschlossen') return 'var(--success)';
     return 'var(--text-sec)';
 }
@@ -2546,11 +3399,17 @@ function insertMarkdownText(area, marker) {
     area.selectionEnd = end + marker.length;
 }
 
-function insertMarkdownLink(area) {
+async function insertMarkdownLink(area) {
     const start = area.selectionStart;
     const end = area.selectionEnd;
     const selected = area.value.substring(start, end).replace(/[\[\]]/g, '');
-    const href = window.prompt('Link-Adresse (https:// oder mailto:)');
+    const href = await UI.promptText({
+        title: 'Link einfügen',
+        label: 'Link-Adresse',
+        value: selected && /^(https?:\/\/|mailto:)/i.test(selected) ? selected : '',
+        placeholder: 'https://example.com oder mailto:name@example.com',
+        saveLabel: 'Link einfügen'
+    });
     if (!href) return;
     if (!/^(https?:\/\/|mailto:)/i.test(href.trim())) {
         UI.toast('Nur http-, https- und mailto-Links sind erlaubt.');
@@ -2564,9 +3423,25 @@ function insertMarkdownLink(area) {
     area.selectionEnd = area.selectionStart;
 }
 
+function insertMarkdownTable(area) {
+    const table = '| Überschrift 1 | Überschrift 2 |\n| --- | --- |\n| Eintrag | Eintrag |';
+    const start = area.selectionStart;
+    const end = area.selectionEnd;
+    const before = area.value.slice(0, start);
+    const after = area.value.slice(end);
+    const prefix = before && !before.endsWith('\n') ? '\n' : '';
+    const suffix = after && !after.startsWith('\n') ? '\n' : '';
+    area.setRangeText(`${prefix}${table}${suffix}`, start, end, 'end');
+    area.focus();
+    area.dispatchEvent(new Event('input', {
+        bubbles: true
+    }));
+}
+
 // --- Admin Kanban Logic ---
 const AdminBoard = {
     selectedFiles: [],
+    slaRefreshTimer: null,
     noteFiles: {
         'admin-chat': [],
         solution: []
@@ -2588,6 +3463,127 @@ const AdminBoard = {
         const categories = Array.isArray(ticket.category) ? ticket.category : [ticket.category || 'Allgemein'];
         const assignedUsers = [ticket.owner, ticket.assignee, ...(ticket.assignees || []), ...(ticket.participants || [])];
         return departments.includes('All') || categories.some(category => departments.includes(category)) || assignedUsers.includes(user.username);
+    },
+
+    // SLA-Felder: intern wird immer in Stunden gespeichert, angezeigt wird in der
+    // Einheit, die sich am natürlichsten liest (volle Tage als "Tage", sonst "Stunden").
+    setSlaField: (key, hours) => {
+        const input = q(`#sys-sla-${key}`);
+        const unitSelect = q(`#sys-sla-${key}-unit`);
+        if (!input || !unitSelect) return;
+        const asDays = hours >= 24 && hours % 24 === 0;
+        unitSelect.value = asDays ? 'days' : 'hours';
+        input.value = asDays ? hours / 24 : hours;
+    },
+    getSlaField: (key, fallbackHours) => {
+        const input = q(`#sys-sla-${key}`);
+        const unitSelect = q(`#sys-sla-${key}-unit`);
+        const raw = parseFloat(input?.value);
+        const value = Number.isFinite(raw) && raw > 0 ? raw : fallbackHours;
+        return unitSelect?.value === 'days' ? value * 24 : value;
+    },
+
+    roleLabel: { user: 'Benutzer', admin: 'Admins' },
+    renderNotifMatrix: (container, policy) => {
+        if (!container) return;
+        const rows = [];
+        Object.entries(Store.notifTypeMeta).forEach(([type, meta]) => {
+            meta.roles.forEach(role => {
+                const rule = policy[type]?.[role] || { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: false };
+                rows.push(`
+                    <div class="notif-matrix-row" data-notif-type="${type}" data-notif-role="${role}">
+                        <div class="notif-matrix-label"><strong>${Utils.esc(meta.label)}</strong><span>${AdminBoard.roleLabel[role]}</span></div>
+                        <label class="check-row compact"><input type="checkbox" class="nm-default-app" ${rule.defaultApp ? 'checked' : ''}>In-App (Standard)</label>
+                        <label class="check-row compact"><input type="checkbox" class="nm-default-email" ${rule.defaultEmail ? 'checked' : ''}>E-Mail (Standard)</label>
+                        <label class="check-row compact"><input type="checkbox" class="nm-app-configurable" ${!rule.appLocked ? 'checked' : ''}>In-App anpassbar</label>
+                        <label class="check-row compact"><input type="checkbox" class="nm-email-configurable" ${!rule.emailLocked ? 'checked' : ''}>E-Mail anpassbar</label>
+                    </div>`);
+            });
+        });
+        container.innerHTML = rows.join('');
+    },
+    readNotifMatrix: (container) => {
+        const policy = {};
+        if (!container) return policy;
+        container.querySelectorAll('.notif-matrix-row').forEach(row => {
+            const type = row.dataset.notifType;
+            const role = row.dataset.notifRole;
+            policy[type] = policy[type] || {};
+            policy[type][role] = {
+                defaultApp: row.querySelector('.nm-default-app').checked,
+                defaultEmail: row.querySelector('.nm-default-email').checked,
+                appLocked: !row.querySelector('.nm-app-configurable').checked,
+                emailLocked: !row.querySelector('.nm-email-configurable').checked
+            };
+        });
+        return policy;
+    },
+
+    refreshOverdueIndicator: async (tickets, user, settings) => {
+        const button = q('#btn-overdue-tickets');
+        if (!button) return;
+        const visibleTickets = tickets.filter(ticket => !ticket.archived &&
+            (user?.role !== 'admin' || AdminBoard.canAccessTicket(user, ticket)));
+        const count = visibleTickets.filter(ticket => Store.isTicketOverdue(ticket, settings)).length;
+        const section = q('#overdue-board');
+        if (section) section.hidden = count === 0;
+        const badge = q('#overdue-ticket-count');
+        if (badge) badge.textContent = String(count);
+        button.onclick = AdminBoard.openOverdueTickets;
+        if (count) button.title = `${count} ${Lang.t('overdue')} ${Lang.t('tickets')}`;
+    },
+
+    openOverdueTickets: async () => {
+        let modal = q('#sla-overdue-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'sla-overdue-modal';
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal modal-md">
+                    <div class="modal-header">
+                        <h3>${Icon('alarm-clock', 18)} ${Lang.t('overdue')} ${Lang.t('tickets')}</h3>
+                        <button class="btn-ghost btn-icon" data-close-sla title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                    </div>
+                    <div class="modal-body sla-overdue-list" id="sla-overdue-list"></div>
+                </div>`;
+            document.body.appendChild(modal);
+            modal.querySelector('[data-close-sla]').onclick = () => modal.classList.remove('open');
+            modal.onclick = event => {
+                if (event.target === modal) modal.classList.remove('open');
+            };
+        }
+        const user = await Store.currentUser();
+        const settings = await Store.getSettings();
+        const tickets = (await Store.getTickets()).filter(ticket =>
+            !ticket.archived && (user?.role !== 'admin' || AdminBoard.canAccessTicket(user, ticket)) &&
+            Store.isTicketOverdue(ticket, settings)
+        ).sort((a, b) => Store.ticketSlaDueAt(a, settings) - Store.ticketSlaDueAt(b, settings));
+        const list = q('#sla-overdue-list');
+        list.innerHTML = tickets.length ? tickets.map(ticket => {
+            const deadline = Store.ticketSlaDueAt(ticket, settings);
+            const overdueMinutes = Math.max(1, Math.floor((Date.now() - deadline) / 60000));
+            const overdueDuration = overdueMinutes >= 1440 ? `${Math.floor(overdueMinutes / 1440)} ${Lang.t('dayShort')}` :
+                overdueMinutes >= 60 ? `${Math.floor(overdueMinutes / 60)} ${Lang.t('hourShort')}` : `${overdueMinutes} ${Lang.t('minuteShort')}`;
+            const overdueText = Lang.format('overdueSince', { time: overdueDuration });
+            return `
+                <button class="sla-overdue-item" type="button" data-ticket-id="${Utils.esc(ticket.id)}">
+                    <span class="sla-overdue-icon">${Icon('triangle-alert', 16)}</span>
+                    <span class="sla-overdue-copy">
+                        <strong>${Utils.esc(ticket.ticketNumber || ticket.id)} · ${Utils.esc(ticket.title)}</strong>
+                        <span>${Lang.prio(ticket.prio)} · Frist ${Utils.fmtDate(new Date(deadline).toISOString())}</span>
+                        <time>${overdueText}</time>
+                    </span>
+                </button>`;
+        }).join('') : `<div class="empty-state">${Lang.current === 'en' ? 'No overdue tickets' : 'Keine überfälligen Tickets'}</div>`;
+        list.querySelectorAll('.sla-overdue-item').forEach(item => {
+            item.onclick = async () => {
+                modal.classList.remove('open');
+                await AdminBoard.openModal(item.dataset.ticketId);
+            };
+        });
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
     },
 
     mentionCandidates: [],
@@ -2768,13 +3764,23 @@ const AdminBoard = {
         AdminBoard.orderTopbar();
         if (window.lucide) lucide.createIcons();
 
-        const reqBoard = q('#request-list')?.parentElement;
+        const reqBoard = q('#requests-board');
         if (reqBoard) {
             reqBoard.style.display = canReqs ? '' : 'none';
         }
 
+        if (q('#btn-open-requests')) q('#btn-open-requests').onclick = async () => {
+            await AdminBoard.renderRequests();
+            q('#requests-modal').classList.add('open');
+        };
+        if (q('#requests-modal-close')) q('#requests-modal-close').onclick = () => q('#requests-modal').classList.remove('open');
+        if (q('#requests-modal')) q('#requests-modal').onclick = event => {
+            if (event.target === q('#requests-modal')) q('#requests-modal').classList.remove('open');
+        };
+
         await AdminBoard.render();
         AdminBoard.setupDrag();
+        if (!AdminBoard.slaRefreshTimer) AdminBoard.slaRefreshTimer = window.setInterval(() => AdminBoard.render(), 60000);
 
         // Archive View Toggle
         const btnArch = q('#btn-archive');
@@ -2786,12 +3792,40 @@ const AdminBoard = {
             btnArch.onclick = () => {
                 viewKanban.style.display = 'none';
                 viewArchive.style.display = 'block';
+                q('#list-view').style.display = 'none';
+                setListViewButtonState(false);
                 AdminBoard.renderArchive();
             };
             btnBack.onclick = () => {
                 viewArchive.style.display = 'none';
                 viewKanban.style.display = 'block';
+                q('#list-view').style.display = 'none';
                 AdminBoard.render();
+            };
+        }
+
+        const btnListView = q('#btn-list-view');
+        const setListViewButtonState = (active) => {
+            if (!btnListView) return;
+            btnListView.innerHTML = active ? `${Icon('layout-grid', 16)}${Lang.t('board')}` : `${Icon('table-properties', 16)}${Lang.t('list')}`;
+            btnListView.title = active ? Lang.t('switchToBoard') : Lang.t('switchToList');
+        };
+        if (btnListView) {
+            setListViewButtonState(false);
+            btnListView.onclick = async () => {
+                const isListActive = q('#list-view').style.display === 'block';
+                viewArchive.style.display = 'none';
+                if (isListActive) {
+                    q('#list-view').style.display = 'none';
+                    viewKanban.style.display = 'block';
+                    setListViewButtonState(false);
+                    await AdminBoard.render();
+                } else {
+                    viewKanban.style.display = 'none';
+                    q('#list-view').style.display = 'block';
+                    setListViewButtonState(true);
+                    await AdminBoard.openListView();
+                }
             };
         }
 
@@ -2801,6 +3835,10 @@ const AdminBoard = {
         }
         const ticketSearch = q('#admin-ticket-search');
         if (ticketSearch) ticketSearch.oninput = () => AdminBoard.render();
+        const btnCreateTicket = q('#btn-admin-create-ticket');
+        if (btnCreateTicket) btnCreateTicket.onclick = () => AdminBoard.openCreateTicketModal();
+        const btnCreateIncident = q('#btn-admin-create-incident');
+        if (btnCreateIncident) btnCreateIncident.onclick = () => AdminBoard.openIncidentCreateModal();
 
         // Setup Modal
         if (q('#m-close')) q('#m-close').onclick = AdminBoard.closeModal;
@@ -2811,6 +3849,19 @@ const AdminBoard = {
                 }
             };
         }
+        qa('.internal-stream-tab').forEach(button => {
+            button.onclick = () => {
+                const selected = button.dataset.stream;
+                qa('.internal-stream-tab').forEach(tab => {
+                    const active = tab === button;
+                    tab.classList.toggle('active', active);
+                    tab.setAttribute('aria-selected', String(active));
+                });
+                qa('.internal-stream').forEach(stream => {
+                    stream.classList.toggle('active', stream.dataset.stream === selected);
+                });
+            };
+        });
 
         // Chat Send (Admin)
         if (q('#btn-chat-send')) {
@@ -2858,6 +3909,17 @@ const AdminBoard = {
                     noteInput.value = noteInput.value.substring(0, start) + listText + noteInput.value.substring(end);
                     noteInput.focus();
                 };
+                const numberedListButton = q(`#${prefix}-numbered`);
+                if (numberedListButton) numberedListButton.onclick = () => {
+                    const start = noteInput.selectionStart;
+                    const end = noteInput.selectionEnd;
+                    const selected = noteInput.value.substring(start, end) || 'Punkt';
+                    const listText = selected.split('\n').map((line, index) => `${index + 1}. ${line}`).join('\n');
+                    noteInput.value = noteInput.value.substring(0, start) + listText + noteInput.value.substring(end);
+                    noteInput.focus();
+                };
+                const tableButton = q(`#${prefix}-table`);
+                if (tableButton) tableButton.onclick = () => insertMarkdownTable(noteInput);
             }
             const search = q(`#${prefix}-search`);
             if (search) search.oninput = async () => {
@@ -2949,6 +4011,8 @@ const AdminBoard = {
 
         // Filter by Department (if not Superadmin)
         if (user.role === 'admin') tickets = tickets.filter(ticket => AdminBoard.canAccessTicket(user, ticket));
+        const slaSettings = await Store.getSettings();
+        await AdminBoard.refreshOverdueIndicator(tickets, user, slaSettings);
         const query = q('#admin-ticket-search')?.value || '';
         if (query.trim()) tickets = tickets.filter(ticket => Utils.matchesSearch(query, ticket));
         // Superadmin sees all (no filter)
@@ -2981,8 +4045,9 @@ const AdminBoard = {
         // Loop tickets but await createCard since it calls Store.getUsers()?
         // createCard uses Store.getUsers() to show assignees properly.
         const allUsers = await Store.getUsers();
+        const allGroups = await Store.getGroups();
 
-        tickets.forEach(t => {
+        tickets.filter(t => !t.linkedIncidentId).forEach(t => {
             const boardStatus = String(t.status).startsWith('Warten auf') ? 'Warten' : t.status;
             if (!cols[boardStatus]) {
                 if (cols['Neu']) cols['Neu'].appendChild(createCard(t, allUsers));
@@ -3002,7 +4067,10 @@ const AdminBoard = {
 
         function createCard(t, usersList) {
             const card = document.createElement('div');
-            card.className = `ticket-card ticket-status-${String(t.status || 'Neu').toLowerCase().replace(/\s+/g, '-')}`;
+            const isWaiting = String(t.status || '').startsWith('Warten auf');
+            const statusClass = isWaiting ? 'ticket-status-warten' : `ticket-status-${String(t.status || 'Neu').toLowerCase().replace(/\s+/g, '-')}`;
+            const isOverdue = Store.isTicketOverdue(t, slaSettings);
+            card.className = `ticket-card ${statusClass}${isOverdue ? ' is-overdue' : ''}`;
             card.draggable = true;
             card.dataset.id = t.id;
 
@@ -3024,12 +4092,17 @@ const AdminBoard = {
             const todoDone = todoTotal - todoOpen;
             const waitingReason = String(t.status || '').startsWith('Warten auf') ? Lang.status(t.status) : '';
 
+            const linkedCount = t.isMajorIncident ? rawTickets.filter(x => x.linkedIncidentId === t.id && !x.archived).length : 0;
             card.innerHTML = `
                 <div class="t-head">
+                    ${t.isMajorIncident ? `<span class="t-incident-badge" title="${Utils.esc(t.incidentNotice || Lang.t('majorIncident'))}">${Icon('siren', 12)}${Lang.t('majorIncident')}</span>` : ''}
+                    ${t.isMajorIncident ? `<span class="t-team" title="${Lang.t('linkedTickets')}">${Icon('list-tree', 11)}${linkedCount}</span>` : ''}
+                    ${t.linkedIncidentId ? `<span class="t-team" title="${Utils.esc(Lang.t('linked'))}">${Icon('link', 11)}${Lang.t('linked')}</span>` : ''}
                     <span class="t-tag prio-${t.prio}">${Icon('flag', 12)}${Lang.prio(t.prio)}</span>
                     <span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>
                     <div class="t-cats">
                         ${(Array.isArray(t.category) ? t.category : [t.category || '-']).map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('')}
+                        ${(() => { const team = t.team ? allGroups.find(g => g.id === t.team) : null; return team ? `<span class="t-team" title="Automatisch zugewiesenes Team">${Icon('route', 11)}${Utils.esc(team.name)}</span>` : ''; })()}
                     </div>
                 </div>
                 <div class="t-title">${Utils.esc(t.title)}</div>
@@ -3037,8 +4110,14 @@ const AdminBoard = {
                 <div class="t-meta t-sub">
                     <span class="t-author" title="${Utils.esc(t.authorName || t.author || '-')}">${Icon('user', 12)}${Utils.esc(t.authorName || t.author || '-')} · ${Utils.fmtDate(t.createdAt).split(' ')[0]}</span>
                     <span class="t-counts">
-                        <span class="chat-count" title="Nachrichten">${Icon('message-square', 12)}${(t.chat?.length || 0)}</span>
-                        <span class="chat-count" title="Interne Notizen">${Icon('notebook-tabs', 12)}${(t.comments?.length || 0)}</span>
+                        ${(() => {
+                            const c = Store.formatSlaCountdown(t, slaSettings);
+                            if (!c) return '';
+                            const short = c.overdue ? c.label : Lang.format('stillDue', { time: c.label.replace(Lang.t('dueIn'), '').replace('Fällig in ', '') });
+                            return `<span class="sla-mini-badge sla-badge-${c.tone}" title="Frist: ${Utils.esc(c.dueDateLabel)}">${Icon(c.overdue ? 'triangle-alert' : 'timer', 11)}${Utils.esc(short)}</span>`;
+                        })()}
+                        <span class="chat-count" title="${Lang.t('messages')}">${Icon('message-square', 12)}${(t.chat?.length || 0)}</span>
+                        <span class="chat-count" title="${Lang.t('internalNotesShort')}">${Icon('notebook-tabs', 12)}${(t.comments?.length || 0)}</span>
                     </span>
                 </div>
                 <div class="ticket-card-ops">
@@ -3057,7 +4136,7 @@ const AdminBoard = {
                 </div>
                 ${awaitingReply ? `
                 <div class="ticket-card-activity has-user-update">
-                    <span>${Icon('message-circle', 13)}Antwort ausstehend</span>
+                    <span>${Icon('message-circle', 13)}${Lang.t('replyPending')}</span>
                     <time>${Utils.fmtDate(latestChat.date).split(' ')[0]}</time>
                 </div>` : ''}
             `;
@@ -3066,6 +4145,25 @@ const AdminBoard = {
                 card.classList.add('dragging');
             });
             card.addEventListener('dragend', () => card.classList.remove('dragging'));
+            if (t.isMajorIncident) {
+                card.addEventListener('dragover', e => {
+                    const draggedId = e.dataTransfer.types.includes('text/plain');
+                    if (!draggedId) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    card.classList.add('incident-drop-target');
+                });
+                card.addEventListener('dragleave', () => card.classList.remove('incident-drop-target'));
+                card.addEventListener('drop', async e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    card.classList.remove('incident-drop-target');
+                    const draggedId = e.dataTransfer.getData('text/plain');
+                    if (!draggedId || draggedId === t.id) return;
+                    const linked = await AdminBoard.linkTicketToIncident(draggedId, t.id);
+                    if (linked) UI.toast('Ticket mit Großstörung verknüpft.');
+                });
+            }
             card.addEventListener('click', () => AdminBoard.openModal(t.id));
             return card;
         }
@@ -3102,21 +4200,24 @@ const AdminBoard = {
                         <h3>${Icon('bell', 18)} System-Protokoll</h3>
                         <div class="modal-actions">
                             <input type="text" id="gl-search" placeholder="Benutzer, Aktion, Details, Datum oder Uhrzeit suchen...">
+                            <button class="btn-ghost btn-icon" id="btn-gl-print" title="Protokoll drucken" aria-label="Protokoll drucken">${Icon('printer', 16)}</button>
                             <button class="btn-ghost btn-icon btn-danger" id="btn-gl-clear" title="Protokoll leeren" aria-label="Protokoll leeren">${Icon('trash-2', 16)}</button>
                             <button class="btn-ghost btn-icon" title="${Lang.t('close')}" aria-label="${Lang.t('close')}" onclick="q('#global-logs-modal').classList.remove('open')">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="log-datetime-filters">
-                        <label>Von <input type="datetime-local" id="gl-from"></label>
-                        <label>Bis <input type="datetime-local" id="gl-to"></label>
+                        <label>Von ${UI.dateTimePickerMarkup('gl-from')}</label>
+                        <label>Bis ${UI.dateTimePickerMarkup('gl-to')}</label>
                     </div>
                     <div class="modal-body flush" id="gl-body"></div>
                 </div>`;
             document.body.appendChild(modal);
 
             q('#gl-search').oninput = () => AdminBoard.renderGlobalLogs();
-            q('#gl-from').oninput = () => AdminBoard.renderGlobalLogs();
-            q('#gl-to').oninput = () => AdminBoard.renderGlobalLogs();
+            AdminBoard.glFromMs = null;
+            AdminBoard.glToMs = null;
+            UI.createDateTimePicker(q('#gl-from'), { onChange: (ms) => { AdminBoard.glFromMs = ms; AdminBoard.renderGlobalLogs(); } });
+            UI.createDateTimePicker(q('#gl-to'), { onChange: (ms) => { AdminBoard.glToMs = ms; AdminBoard.renderGlobalLogs(); } });
             q('#btn-gl-clear').onclick = () => {
                 UI.confirm('System-Protokoll wirklich vollständig leeren?', async () => {
                     await Store.saveGlobalLogs([]);
@@ -3124,6 +4225,7 @@ const AdminBoard = {
                     UI.toast('Protokoll geleert');
                 });
             };
+            q('#btn-gl-print').onclick = () => AdminBoard.printGlobalLogs();
         }
 
         AdminBoard.renderGlobalLogs();
@@ -3131,22 +4233,60 @@ const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    renderGlobalLogs: async () => {
-        const body = q('#gl-body');
-        if (!body) return;
-
+    getFilteredGlobalLogs: async () => {
         const logs = await Store.getGlobalLogs();
-        const search = q('#gl-search').value.toLowerCase().trim();
-        const fromValue = q('#gl-from')?.value;
-        const toValue = q('#gl-to')?.value;
-        const from = fromValue ? new Date(fromValue).getTime() : -Infinity;
-        const to = toValue ? new Date(toValue).getTime() + 59999 : Infinity;
+        const search = q('#gl-search')?.value.toLowerCase().trim() || '';
+        const from = AdminBoard.glFromMs ?? -Infinity;
+        const to = AdminBoard.glToMs ? AdminBoard.glToMs + 59999 : Infinity;
         const filtered = logs.filter(log => {
             const timestamp = new Date(log.date).getTime();
             return Utils.matchesSearch(search, log) && timestamp >= from && timestamp <= to;
         });
+        return filtered.slice().reverse();
+    },
 
-        const visibleLogs = filtered.slice().reverse();
+    printGlobalLogs: async () => {
+        const visibleLogs = await AdminBoard.getFilteredGlobalLogs();
+        const settings = await Store.getSettings();
+        const company = settings.companyConfig || {};
+        const actor = await Store.currentUser();
+        const rows = visibleLogs.map(l => `
+            <tr>
+                <td>${Utils.esc(Utils.fmtDate(l.date))}</td>
+                <td>${Utils.esc(l.user || '-')}</td>
+                <td>${Utils.esc(l.action || '-')}</td>
+                <td>${Utils.esc(l.details || '')}</td>
+            </tr>`).join('');
+        const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>System-Protokoll</title>
+            <style>
+                body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px;}
+                .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:4px;}
+                .print-head img{max-height:48px;max-width:180px;object-fit:contain;}
+                h1{font-size:18px;margin:0 0 4px;}
+                .meta{color:#555;font-size:12px;margin-bottom:16px;}
+                table{width:100%;border-collapse:collapse;font-size:12px;}
+                th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top;}
+                th{background:#f0f0f0;}
+                tr:nth-child(even){background:#fafafa;}
+            </style></head><body>
+            <div class="print-head">
+                <div>
+                    <h1>System-Protokoll</h1>
+                    <div class="meta">Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))} &middot; ${visibleLogs.length} Einträge</div>
+                </div>
+                ${company.logoUrl ? `<img src="${Utils.esc(company.logoUrl)}" alt="Logo">` : ''}
+            </div>
+            <table><thead><tr><th>Datum/Uhrzeit</th><th>Benutzer</th><th>Aktion</th><th>Details</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="4">Keine Einträge gefunden.</td></tr>'}</tbody></table>
+            </body></html>`;
+        UI.printHTML(html);
+    },
+
+    renderGlobalLogs: async () => {
+        const body = q('#gl-body');
+        if (!body) return;
+
+        const visibleLogs = await AdminBoard.getFilteredGlobalLogs();
         const iconForLog = (action = '') => {
             const text = action.toLowerCase();
             if (text.includes('geloescht') || text.includes('geaendert')) return text.includes('geloescht') ? 'trash-2' : 'refresh-cw';
@@ -3364,14 +4504,19 @@ const AdminBoard = {
                     <div class="group-chip-row">
                         <span class="badge">${Utils.esc(roleInfo)}</span>
                         ${userGroups.map(name => `<span class="group-chip">${Icon('users-round', 12)}${Utils.esc(name)}</span>`).join('')}
+                        ${u.absence?.active ? `<span class="badge badge-accent" title="Vertretung aktiv">${Icon('plane', 12)}Abwesend${u.absence.substitute ? ' → ' + Utils.esc((users.find(x => x.username === u.absence.substitute)?.name) || u.absence.substitute) : ' → zurück ins Team'}</span>` : ''}
                     </div>
                 </div>
                 <div class="user-manager-actions">
                     ${(isSuper || canManage2FA) && u.twoFactorEnabled ? `<button class="btn-ghost btn-sm reset-2fa" title="2FA zurücksetzen">${Icon('unlock-keyhole', 15)}2FA</button>` : ''}
+                    ${view === 'admins' && canManageUsers ? `<button class="btn-ghost btn-icon absence-btn" title="Abwesenheit &amp; Vertretung" aria-label="Abwesenheit und Vertretung">${Icon('plane', 16)}</button>` : ''}
                     ${canManageUsers ? `<button class="btn-ghost btn-icon edit-u" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>` : ''}
                     ${canManageUsers && u.role !== 'superadmin' && u.username !== 'admin' ? `<button class="btn-ghost btn-icon btn-danger del-u" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>` : ''}
                 </div>
             `;
+
+            const absenceBtn = el.querySelector('.absence-btn');
+            if (absenceBtn) absenceBtn.onclick = () => AdminBoard.openAbsenceModal(u.username);
 
             if (el.querySelector('.reset-2fa')) {
                 el.querySelector('.reset-2fa').onclick = () => {
@@ -3486,7 +4631,63 @@ const AdminBoard = {
                 <input type="text" id="g-input" value="${Utils.esc(catName || '')}" placeholder="z. B. Technik">
             </div>
             ${adminListHtml}
+            <div class="field field-wide">
+                <label>Eigene Felder für diese Kategorie</label>
+                <p class="hint">Zusätzliche Angaben, die beim Erstellen eines Tickets in dieser Kategorie abgefragt werden, z. B. Standort, Raum, Gerätenummer oder Kostenstelle.</p>
+                <div id="cat-custom-fields" class="custom-fields-editor"></div>
+                <button type="button" class="btn-secondary btn-sm" id="cat-add-field">${Icon('plus', 15)}Feld hinzufügen</button>
+            </div>
         `;
+
+        const allSettingsForFields = await Store.getSettings();
+        const existingFields = (catName && allSettingsForFields.customFields?.[catName]) ? allSettingsForFields.customFields[catName].slice() : [];
+        const fieldsContainer = q('#cat-custom-fields');
+        // Aktuelle Eingaben aus dem DOM zurück ins Array schreiben, bevor neu gerendert wird --
+        // sonst gehen Änderungen beim Hinzufügen/Entfernen eines anderen Feldes verloren.
+        const syncFieldsFromDOM = () => {
+            fieldsContainer.querySelectorAll('.custom-field-row').forEach(row => {
+                const idx = Number(row.dataset.index);
+                if (!existingFields[idx]) return;
+                existingFields[idx].label = row.querySelector('.cf-label').value;
+                existingFields[idx].type = row.querySelector('.cf-type').value;
+                existingFields[idx].required = row.querySelector('.cf-required').checked;
+                existingFields[idx].options = row.querySelector('.cf-options').value.split(',').map(s => s.trim()).filter(Boolean);
+            });
+        };
+        const renderFieldRows = () => {
+            fieldsContainer.innerHTML = existingFields.length ? existingFields.map((f, i) => `
+                <div class="custom-field-row" data-index="${i}">
+                    <input type="text" class="cf-label" placeholder="Feldname (z. B. Standort)" value="${Utils.esc(f.label || '')}">
+                    <select class="cf-type">
+                        <option value="text" ${f.type === 'text' ? 'selected' : ''}>Text</option>
+                        <option value="number" ${f.type === 'number' ? 'selected' : ''}>Zahl</option>
+                        <option value="select" ${f.type === 'select' ? 'selected' : ''}>Auswahl</option>
+                    </select>
+                    <input type="text" class="cf-options" placeholder="Optionen, kommagetrennt" value="${Utils.esc((f.options || []).join(', '))}" style="${f.type === 'select' ? '' : 'display:none;'}">
+                    <label class="check-row compact"><input type="checkbox" class="cf-required" ${f.required ? 'checked' : ''}>Pflicht</label>
+                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-remove" title="Feld entfernen" aria-label="Feld entfernen">${Icon('x', 14)}</button>
+                </div>`).join('') : '<div class="empty-state compact">Keine eigenen Felder definiert.</div>';
+            fieldsContainer.querySelectorAll('.cf-type').forEach(sel => {
+                sel.onchange = () => {
+                    sel.closest('.custom-field-row').querySelector('.cf-options').style.display = sel.value === 'select' ? '' : 'none';
+                };
+            });
+            fieldsContainer.querySelectorAll('.cf-remove').forEach(btn => {
+                btn.onclick = () => {
+                    syncFieldsFromDOM();
+                    const idx = Number(btn.closest('.custom-field-row').dataset.index);
+                    existingFields.splice(idx, 1);
+                    renderFieldRows();
+                };
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        renderFieldRows();
+        q('#cat-add-field').onclick = () => {
+            syncFieldsFromDOM();
+            existingFields.push({ id: Utils.uid(), label: '', type: 'text', required: false, options: [] });
+            renderFieldRows();
+        };
 
         confirmBtn.textContent = Lang.t('save');
         modal.classList.add('open');
@@ -3541,6 +4742,18 @@ const AdminBoard = {
                 });
                 await Store.addGlobalLog('Kategorie erstellt', `Name: ${val}`);
             }
+
+            const collectedFields = Array.from(fieldsContainer.querySelectorAll('.custom-field-row')).map(row => ({
+                id: existingFields[Number(row.dataset.index)]?.id || Utils.uid(),
+                label: row.querySelector('.cf-label').value.trim(),
+                type: row.querySelector('.cf-type').value,
+                required: row.querySelector('.cf-required').checked,
+                options: row.querySelector('.cf-type').value === 'select' ? row.querySelector('.cf-options').value.split(',').map(s => s.trim()).filter(Boolean) : []
+            })).filter(f => f.label);
+            settings.customFields = settings.customFields || {};
+            if (catName && catName !== val) delete settings.customFields[catName];
+            if (collectedFields.length) settings.customFields[val] = collectedFields;
+            else delete settings.customFields[val];
 
             await Store.saveSettings(settings);
             await Store.saveUsers(allUsers);
@@ -3856,6 +5069,20 @@ const AdminBoard = {
         return modal;
     },
 
+    // Das generische Modal versteckt seine Fußzeile standardmäßig (Speichern läuft über das
+    // Disketten-Icon im Kopf). Für Dialoge, bei denen ein eindeutig beschrifteter Button
+    // klarer ist, blendet diese Funktion die Fußzeile sichtbar ein (nur für das übergebene,
+    // bereits individualisierte Modal-Element -- nie das geteilte #generic-modal selbst).
+    makeModalFooterVisible: (modal) => {
+        const footer = modal.querySelector('.modal-footer');
+        if (!footer) return;
+        footer.classList.remove('action-footer');
+        footer.classList.add('modal-footer-visible');
+        footer.querySelectorAll('.footer-cancel, .close-m').forEach(btn => btn.classList.remove('footer-cancel', 'close-m'));
+        // Das Disketten-Icon im Kopf wäre jetzt doppelt zum sichtbaren Speichern-Button in der Fußzeile
+        modal.querySelector('#generic-save-head')?.remove();
+    },
+
     openSystemSettings: async () => {
         let modal = q('#sys-settings-modal');
         if (!modal) {
@@ -3893,6 +5120,9 @@ const AdminBoard = {
                         </button>
                         <button class="tab-btn" data-tab="sys-company">
                             <i data-lucide="building-2"></i><span>${Lang.t('company')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-assignment">
+                            <i data-lucide="route"></i><span>Zuweisung</span>
                         </button>
                     </nav>
                     <div class="modal-body sys-settings-content">
@@ -3943,26 +5173,14 @@ const AdminBoard = {
                             <div class="settings-section-title">${Icon('bell-ring', 15)}${Lang.t('notifyRules')}</div>
                             <div class="checkbox-list">
                                 <label class="check-row">
-                                    <input type="checkbox" id="notif-new-ticket">
-                                    <span class="check-text"><strong>${Lang.t('notifyNewTicket')}</strong><span>${Lang.t('notifyNewTicketDesc')}</span></span>
-                                </label>
-                                <label class="check-row">
-                                    <input type="checkbox" id="notif-status-change">
-                                    <span class="check-text"><strong>${Lang.t('notifyStatusChange')}</strong><span>${Lang.t('notifyStatusChangeDesc')}</span></span>
-                                </label>
-                                <label class="check-row">
-                                    <input type="checkbox" id="notif-new-message">
-                                    <span class="check-text"><strong>${Lang.t('notifyNewMessage')}</strong><span>${Lang.t('notifyNewMessageDesc')}</span></span>
-                                </label>
-                                <label class="check-row">
-                                    <input type="checkbox" id="notif-ticket-closed">
-                                    <span class="check-text"><strong>${Lang.t('notifyTicketClosed')}</strong><span>${Lang.t('notifyTicketClosedDesc')}</span></span>
-                                </label>
-                                <label class="check-row">
                                     <input type="checkbox" id="notif-account-approved">
                                     <span class="check-text"><strong>${Lang.t('notifyAccountApproved')}</strong><span>${Lang.t('notifyAccountApprovedDesc')}</span></span>
                                 </label>
                             </div>
+
+                            <div class="settings-section-title">${Icon('sliders-horizontal', 15)}Richtlinie je Ereignis (Benutzer &amp; Admins getrennt)</div>
+                            <p class="hint">Standardwerte gelten, solange ein Benutzer nichts eigenes einstellt. Wird ein Kästchen unter „Anpassbar" deaktiviert, ist der Standardwert für alle verbindlich.</p>
+                            <div id="sys-notif-matrix" class="notif-matrix"></div>
                         </div>
 
                         <!-- Sicherheit -->
@@ -4032,6 +5250,41 @@ const AdminBoard = {
                                 <label>${Lang.t('defaultCategories')}</label>
                                 <input id="sys-default-cats" type="text" placeholder="Allgemein, Technik, Account, Abrechnung">
                             </div>
+                            <div class="settings-section-title">Lösungsfrist je Priorität</div>
+                            <div class="hint">Zeit bis zur Lösung, wahlweise in Stunden oder Tagen.</div>
+                            <div class="form-grid">
+                                <div class="field"><label for="sys-sla-low">Niedrig</label><div class="sla-field-row"><input id="sys-sla-low" type="number" min="0.25" step="0.25"><select id="sys-sla-low-unit" aria-label="Einheit Niedrig"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
+                                <div class="field"><label for="sys-sla-normal">Normal</label><div class="sla-field-row"><input id="sys-sla-normal" type="number" min="0.25" step="0.25"><select id="sys-sla-normal-unit" aria-label="Einheit Normal"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
+                                <div class="field"><label for="sys-sla-high">Hoch</label><div class="sla-field-row"><input id="sys-sla-high" type="number" min="0.25" step="0.25"><select id="sys-sla-high-unit" aria-label="Einheit Hoch"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
+                                <div class="field"><label for="sys-sla-critical">Kritisch</label><div class="sla-field-row"><input id="sys-sla-critical" type="number" min="0.25" step="0.25"><select id="sys-sla-critical-unit" aria-label="Einheit Kritisch"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
+                            </div>
+                            <label class="check-row sla-user-visibility-row">
+                                <input type="checkbox" id="sys-sla-show-users">
+                                <span class="check-text"><strong>Frist auch Benutzern anzeigen</strong><span>Dezenter Hinweis im Ticket, ohne Alarmfarben – auch wenn die Frist überschritten ist.</span></span>
+                            </label>
+
+                            <div class="settings-section-title">Geschäftszeiten für Fristen</div>
+                            <label class="check-row">
+                                <input type="checkbox" id="sys-bh-enabled">
+                                <span class="check-text"><strong>Geschäftszeiten berücksichtigen</strong><span>Außerhalb dieser Zeiten sowie an Feiertagen läuft die Lösungsfrist nicht weiter.</span></span>
+                            </label>
+                            <div class="field field-wide">
+                                <label>Geschäftszeiten je Tag</label>
+                                <div class="business-hours-grid" id="sys-bh-days">
+                                    ${[1, 2, 3, 4, 5, 6, 0].map(i => ({ i, d: ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'][i] })).map(({ i, d }) => `
+                                        <div class="business-day-row" data-day="${i}">
+                                            <label class="check-row compact"><input type="checkbox" class="bh-day-enabled" value="${i}"><span>${d}</span></label>
+                                            <input class="bh-day-start" type="time" aria-label="${d} Beginn">
+                                            <span class="business-day-sep">bis</span>
+                                            <input class="bh-day-end" type="time" aria-label="${d} Ende">
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                            <div class="field field-wide">
+                                <label for="sys-bh-holidays">Feiertage (ein Datum pro Zeile, dd.mm.jjjj)</label>
+                                <textarea id="sys-bh-holidays" rows="4" placeholder="01.01.2026&#10;25.12.2026"></textarea>
+                            </div>
                         </div>
 
                         <!-- Unternehmenseinstellungen -->
@@ -4067,6 +5320,13 @@ const AdminBoard = {
                             <div class="field"><label>Impressum / Datenschutz URL</label><input id="sys-company-legal" type="url" placeholder="https://example.com/impressum"></div>
                             <div class="field"><label>E-Mail Signatur</label><textarea id="sys-company-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
                             <div class="field"><label>HTML-E-Mail-Signatur</label><textarea id="sys-company-html-signature" rows="4" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
+                        </div>
+
+                        <!-- Automatische Zuweisung -->
+                        <div id="sys-assignment" class="tab-content">
+                            <div class="callout">Lege fest, welches Team ein neues Ticket automatisch bekommt, wenn es zu einer bestimmten Kategorie passt. Ohne passende Regel bleibt das Ticket unzugewiesen und muss von Hand verteilt werden. Teams werden unter Benutzerverwaltung → Gruppen gepflegt.</div>
+                            <div id="sys-assignment-rules" class="assignment-rules"></div>
+                            <button type="button" class="btn-secondary btn-sm" id="sys-assignment-add">${Icon('plus', 15)}Regel hinzufügen</button>
                         </div>
                     </div>
                     </div>
@@ -4130,11 +5390,8 @@ const AdminBoard = {
         q('#sys-email-dkim-domain').value = email.security?.dkimDomain || '';
         q('#sys-email-dkim-key').value = email.security?.dkimKey || '';
 
-        q('#notif-new-ticket').checked = !!notif.newTicket;
-        q('#notif-status-change').checked = !!notif.statusChange;
-        q('#notif-new-message').checked = !!notif.newMessage;
-        q('#notif-ticket-closed').checked = !!notif.ticketClosed;
         q('#notif-account-approved').checked = !!notif.accountApproved;
+        AdminBoard.renderNotifMatrix(q('#sys-notif-matrix'), await Store.getNotifPolicy());
 
         q('#sys-2fa-enforce').value = sec.force2FA || 'none';
         q('#sys-session-timeout').value = sec.sessionTimeout || 0;
@@ -4154,6 +5411,29 @@ const AdminBoard = {
         q('#sys-portal-name').value = general.portalName || 'Support Portal';
         q('#sys-auto-archive').value = general.autoArchiveDays || 0;
         q('#sys-default-prio').value = general.defaultPrio || 'Normal';
+        const slaHours = general.slaHours || {};
+        AdminBoard.setSlaField('low', slaHours.low ?? 72);
+        AdminBoard.setSlaField('normal', slaHours.normal ?? 48);
+        AdminBoard.setSlaField('high', slaHours.high ?? 24);
+        AdminBoard.setSlaField('critical', slaHours.critical ?? 4);
+        q('#sys-sla-show-users').checked = !!general.showSlaToUsers;
+
+        const businessHours = general.businessHours || {};
+        q('#sys-bh-enabled').checked = !!businessHours.enabled;
+        const bhDays = businessHours.days && businessHours.days.length ? businessHours.days : [1, 2, 3, 4, 5];
+        qa('#sys-bh-days .business-day-row').forEach(row => {
+            const day = Number(row.dataset.day);
+            const cfg = businessHours.perDay?.[day] || {
+                enabled: bhDays.includes(day),
+                start: businessHours.start || '08:00',
+                end: businessHours.end || '17:00'
+            };
+            row.querySelector('.bh-day-enabled').checked = !!cfg.enabled;
+            row.querySelector('.bh-day-start').value = cfg.start || '08:00';
+            row.querySelector('.bh-day-end').value = cfg.end || '17:00';
+        });
+        q('#sys-bh-holidays').value = (businessHours.holidays || []).map(d => /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : d).join('\n');
+
         q('#sys-default-cats').value = (settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung']).join(', ');
 
         q('#sys-company-name').value = company.name || '';
@@ -4187,6 +5467,43 @@ const AdminBoard = {
         renderCategoryNumberFormats();
         q('#sys-default-cats').oninput = renderCategoryNumberFormats;
 
+        // Automatische Zuweisung: Kategorie -> Team (Gruppe)
+        const assignmentGroups = await Store.getGroups();
+        const assignmentRulesList = q('#sys-assignment-rules');
+        const renderAssignmentRules = (rules) => {
+            const categories = q('#sys-default-cats').value.split(',').map(c => c.trim()).filter(Boolean);
+            assignmentRulesList.innerHTML = rules.length ? rules.map((rule, index) => `
+                <div class="assignment-rule-row" data-index="${index}">
+                    <span class="assignment-rule-text">Kategorie</span>
+                    <select class="ar-category">
+                        ${categories.map(c => `<option value="${Utils.esc(c)}" ${c === rule.category ? 'selected' : ''}>${Utils.esc(c)}</option>`).join('')}
+                    </select>
+                    <span class="assignment-rule-text">→ Team</span>
+                    <select class="ar-group">
+                        <option value="">Kein Team</option>
+                        ${assignmentGroups.map(g => `<option value="${Utils.esc(g.id)}" ${g.id === rule.groupId ? 'selected' : ''}>${Utils.esc(g.name)}</option>`).join('')}
+                    </select>
+                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger ar-remove" title="Regel entfernen" aria-label="Regel entfernen">${Icon('x', 14)}</button>
+                </div>`).join('') : '<div class="empty-state compact">Noch keine Regeln definiert.</div>';
+            assignmentRulesList.querySelectorAll('.ar-remove').forEach(btn => {
+                btn.onclick = () => {
+                    const idx = Number(btn.closest('.assignment-rule-row').dataset.index);
+                    currentAssignmentRules.splice(idx, 1);
+                    renderAssignmentRules(currentAssignmentRules);
+                };
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        let currentAssignmentRules = (general.assignmentRules || []).slice();
+        renderAssignmentRules(currentAssignmentRules);
+        q('#sys-assignment-add').onclick = () => {
+            const categories = q('#sys-default-cats').value.split(',').map(c => c.trim()).filter(Boolean);
+            if (!categories.length) { UI.toast('Bitte zuerst Kategorien anlegen.'); return; }
+            if (!assignmentGroups.length) { UI.toast('Bitte zuerst ein Team unter Benutzerverwaltung → Gruppen anlegen.'); return; }
+            currentAssignmentRules.push({ category: categories[0], groupId: assignmentGroups[0].id });
+            renderAssignmentRules(currentAssignmentRules);
+        };
+
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
 
@@ -4216,12 +5533,9 @@ const AdminBoard = {
                 }
             };
             newSettings.notifConfig = {
-                newTicket: q('#notif-new-ticket').checked,
-                statusChange: q('#notif-status-change').checked,
-                newMessage: q('#notif-new-message').checked,
-                ticketClosed: q('#notif-ticket-closed').checked,
                 accountApproved: q('#notif-account-approved').checked,
             };
+            const notifPolicy = AdminBoard.readNotifMatrix(q('#sys-notif-matrix'));
             newSettings.securityConfig = {
                 force2FA: q('#sys-2fa-enforce').value,
                 sessionTimeout: parseInt(q('#sys-session-timeout').value) || 0,
@@ -4245,6 +5559,34 @@ const AdminBoard = {
                 portalName: q('#sys-portal-name').value.trim() || 'Support Portal',
                 autoArchiveDays: parseInt(q('#sys-auto-archive').value) || 0,
                 defaultPrio: q('#sys-default-prio').value,
+                slaHours: {
+                    low: AdminBoard.getSlaField('low', 72),
+                    normal: AdminBoard.getSlaField('normal', 48),
+                    high: AdminBoard.getSlaField('high', 24),
+                    critical: AdminBoard.getSlaField('critical', 4)
+                },
+                showSlaToUsers: !!q('#sys-sla-show-users')?.checked,
+                businessHours: {
+                    enabled: !!q('#sys-bh-enabled')?.checked,
+                    perDay: Object.fromEntries(qa('#sys-bh-days .business-day-row').map(row => [
+                        row.dataset.day,
+                        {
+                            enabled: !!row.querySelector('.bh-day-enabled')?.checked,
+                            start: row.querySelector('.bh-day-start')?.value || '08:00',
+                            end: row.querySelector('.bh-day-end')?.value || '17:00'
+                        }
+                    ])),
+                    days: qa('#sys-bh-days .bh-day-enabled:checked').map(cb => Number(cb.value)),
+                    holidays: (q('#sys-bh-holidays')?.value || '').split('\n').map(s => s.trim()).filter(Boolean).map(value => {
+                        const match = value.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+                        return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
+                    })
+                },
+                notifPolicy,
+                assignmentRules: Array.from(assignmentRulesList.querySelectorAll('.assignment-rule-row')).map(row => ({
+                    category: row.querySelector('.ar-category').value,
+                    groupId: row.querySelector('.ar-group').value
+                })).filter(rule => rule.groupId)
             };
             const ticketNumberFormat = q('#sys-ticket-number-format').value.trim() || '{prefix}-{number}';
             if (!ticketNumberFormat.includes('{number}')) {
@@ -4286,6 +5628,274 @@ const AdminBoard = {
             UI.toast(Lang.current === 'en' ? 'System settings saved' : 'Systemeinstellungen gespeichert');
             await Store.addGlobalLog('Systemeinstellungen gespeichert', `Geänderte Bereiche: Allgemein, Sicherheit, Benachrichtigungen, E-Mail, LDAP, Outlook, Unternehmen`);
         };
+    },
+
+    // Listenansicht: Tabelle mit sortierbaren Spalten, Filtern, gespeicherten Ansichten
+    // und Mehrfachauswahl für Sammelaktionen -- für Admins mit vielen offenen Tickets,
+    // wo ein Kanban-Board nicht mehr überschaubar ist.
+    listViewState: { sortKey: 'createdAt', sortDir: 'desc', selected: new Set() },
+
+    openListView: async () => {
+        const container = q('#list-view');
+        if (!container.dataset.built) {
+            container.dataset.built = '1';
+            container.innerHTML = `
+                <div class="list-view-toolbar">
+                    <button type="button" class="btn-primary" id="lv-create-ticket">${Icon('plus', 16)}Neues Ticket</button>
+                    <button type="button" class="btn-secondary" id="lv-create-incident">${Icon('siren', 16)}Störung erstellen</button>
+                    <input type="search" id="lv-search" class="section-search" placeholder="Suchen...">
+                    <select id="lv-status"><option value="">Alle Status</option></select>
+                    <select id="lv-prio"><option value="">Alle Prioritäten</option><option>Niedrig</option><option>Normal</option><option>Hoch</option><option>Kritisch</option></select>
+                    <select id="lv-category"><option value="">Alle Kategorien</option></select>
+                    <select id="lv-team"><option value="">Alle Teams</option></select>
+                    <label class="check-row compact"><input type="checkbox" id="lv-mine">Nur meine</label>
+                    <label class="check-row compact"><input type="checkbox" id="lv-sla-risk">SLA in Gefahr</label>
+                    <select id="lv-saved-views"><option value="">Gespeicherte Ansicht...</option></select>
+                    <button id="lv-save-view" class="btn-secondary btn-sm">${Icon('bookmark-plus', 15)}Ansicht speichern</button>
+                </div>
+                <div id="lv-bulk-bar" class="list-view-bulk-bar" hidden>
+                    <span id="lv-selected-count"></span>
+                    <select id="lv-bulk-status">
+                        <option value="">Status setzen...</option>
+                        <option value="Neu">Neu</option>
+                        <option value="In Bearbeitung">In Bearbeitung</option>
+                        <option value="Geschlossen">Geschlossen</option>
+                    </select>
+                    <button id="lv-bulk-apply-status" class="btn-secondary btn-sm">Anwenden</button>
+                    <button id="lv-bulk-archive" class="btn-secondary btn-sm">${Icon('archive', 15)}Archivieren</button>
+                </div>
+                <div class="list-view-table-wrap">
+                    <table class="list-view-table">
+                        <thead><tr>
+                            <th><input type="checkbox" id="lv-select-all"></th>
+                            <th data-sort="ticketNumber">Ticket-Nr</th>
+                            <th data-sort="title">Titel</th>
+                            <th data-sort="status">Status</th>
+                            <th data-sort="prio">Priorität</th>
+                            <th data-sort="category">Kategorie</th>
+                            <th data-sort="owner">Verantwortlich</th>
+                            <th data-sort="createdAt">Erstellt</th>
+                            <th data-sort="sla">Frist</th>
+                        </tr></thead>
+                        <tbody id="lv-body"></tbody>
+                    </table>
+                </div>`;
+
+            q('#lv-create-ticket').onclick = () => q('#btn-admin-create-ticket').click();
+            q('#lv-create-incident').onclick = () => AdminBoard.openIncidentCreateModal();
+            ['lv-search'].forEach(id => q('#' + id).oninput = () => AdminBoard.renderListView());
+            ['lv-status', 'lv-prio', 'lv-category', 'lv-team'].forEach(id => q('#' + id).onchange = () => AdminBoard.renderListView());
+            ['lv-mine', 'lv-sla-risk'].forEach(id => q('#' + id).onchange = () => AdminBoard.renderListView());
+            q('#lv-select-all').onchange = (e) => {
+                qa('#lv-body input[type="checkbox"]').forEach(cb => { cb.checked = e.target.checked; });
+                const ids = qa('#lv-body input[type="checkbox"]').map(cb => cb.dataset.id);
+                AdminBoard.listViewState.selected = e.target.checked ? new Set(ids) : new Set();
+                AdminBoard.updateListViewBulkBar();
+            };
+            qa('.list-view-table th[data-sort]').forEach(th => {
+                th.onclick = () => {
+                    const key = th.dataset.sort;
+                    if (AdminBoard.listViewState.sortKey === key) {
+                        AdminBoard.listViewState.sortDir = AdminBoard.listViewState.sortDir === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        AdminBoard.listViewState.sortKey = key;
+                        AdminBoard.listViewState.sortDir = 'asc';
+                    }
+                    AdminBoard.renderListView();
+                };
+            });
+            q('#lv-saved-views').onchange = async (e) => {
+                if (!e.target.value) return;
+                const views = await Store.getListViews();
+                const view = views.find(v => v.id === e.target.value);
+                if (!view) return;
+                q('#lv-search').value = view.filters.search || '';
+                q('#lv-status').value = view.filters.status || '';
+                q('#lv-prio').value = view.filters.prio || '';
+                q('#lv-category').value = view.filters.category || '';
+                q('#lv-team').value = view.filters.team || '';
+                q('#lv-mine').checked = !!view.filters.mine;
+                q('#lv-sla-risk').checked = !!view.filters.slaRisk;
+                AdminBoard.renderListView();
+            };
+            q('#lv-save-view').onclick = async () => {
+                const name = await UI.promptText({
+                    title: 'Ansicht speichern',
+                    label: 'Name der Ansicht',
+                    placeholder: 'z. B. Meine offenen oder SLA in Gefahr',
+                    saveLabel: 'Ansicht speichern'
+                });
+                if (!name || !name.trim()) return;
+                const actor = await Store.currentUser();
+                const views = await Store.getListViews();
+                views.push({
+                    id: Utils.uid(),
+                    name: name.trim(),
+                    owner: actor?.username,
+                    filters: {
+                        search: q('#lv-search').value,
+                        status: q('#lv-status').value,
+                        prio: q('#lv-prio').value,
+                        category: q('#lv-category').value,
+                        team: q('#lv-team').value,
+                        mine: q('#lv-mine').checked,
+                        slaRisk: q('#lv-sla-risk').checked
+                    }
+                });
+                await Store.saveListViews(views);
+                UI.toast('Ansicht gespeichert.');
+                await AdminBoard.populateListViewFilters();
+            };
+            q('#lv-bulk-apply-status').onclick = async () => {
+                const status = q('#lv-bulk-status').value;
+                if (!status || !AdminBoard.listViewState.selected.size) return;
+                const tickets = await Store.getTickets();
+                let changed = 0;
+                tickets.forEach(t => {
+                    if (AdminBoard.listViewState.selected.has(t.id) && t.status !== status && !t.archived) {
+                        t.status = status;
+                        changed++;
+                    }
+                });
+                await Store.saveTickets(tickets);
+                await Store.addGlobalLog('Sammelaktion: Status geändert', `${changed} Ticket(s) auf "${status}" gesetzt`);
+                UI.toast(`${changed} Ticket(s) aktualisiert.`);
+                AdminBoard.listViewState.selected = new Set();
+                await AdminBoard.renderListView();
+            };
+            q('#lv-bulk-archive').onclick = async () => {
+                if (!AdminBoard.listViewState.selected.size) return;
+                UI.confirm(`${AdminBoard.listViewState.selected.size} ausgewählte Ticket(s) archivieren?`, async () => {
+                    const tickets = await Store.getTickets();
+                    let changed = 0;
+                    tickets.forEach(t => {
+                        if (AdminBoard.listViewState.selected.has(t.id) && t.status === 'Geschlossen' && !t.archived) {
+                            t.archived = true;
+                            t.archivedAt = Utils.nowISO();
+                            changed++;
+                        }
+                    });
+                    await Store.saveTickets(tickets);
+                    await Store.addGlobalLog('Sammelaktion: Archiviert', `${changed} Ticket(s) archiviert`);
+                    UI.toast(changed ? `${changed} Ticket(s) archiviert.` : 'Nur geschlossene Tickets können archiviert werden.');
+                    AdminBoard.listViewState.selected = new Set();
+                    await AdminBoard.renderListView();
+                });
+            };
+        }
+        await AdminBoard.populateListViewFilters();
+        await AdminBoard.renderListView();
+    },
+
+    populateListViewFilters: async () => {
+        const settings = await Store.getSettings();
+        const groups = await Store.getGroups();
+        const views = (await Store.getListViews());
+        const actor = await Store.currentUser();
+        const statusSel = q('#lv-status');
+        const curStatus = statusSel.value;
+        statusSel.innerHTML = '<option value="">Alle Status</option>' + ['Neu', 'In Bearbeitung', 'Warten auf Benutzer', 'Warten auf externen Dienstleister', 'Warten auf interne Rückmeldung', 'Geschlossen'].map(s => `<option ${s === curStatus ? 'selected' : ''}>${Utils.esc(s)}</option>`).join('');
+        const catSel = q('#lv-category');
+        const curCat = catSel.value;
+        catSel.innerHTML = '<option value="">Alle Kategorien</option>' + (settings.categories || []).map(c => `<option ${c === curCat ? 'selected' : ''}>${Utils.esc(c)}</option>`).join('');
+        const teamSel = q('#lv-team');
+        const curTeam = teamSel.value;
+        teamSel.innerHTML = '<option value="">Alle Teams</option>' + groups.map(g => `<option value="${Utils.esc(g.id)}" ${g.id === curTeam ? 'selected' : ''}>${Utils.esc(g.name)}</option>`).join('');
+        const viewsSel = q('#lv-saved-views');
+        viewsSel.innerHTML = '<option value="">Gespeicherte Ansicht...</option>' + views.filter(v => v.owner === actor?.username).map(v => `<option value="${v.id}">${Utils.esc(v.name)}</option>`).join('');
+    },
+
+    updateListViewBulkBar: () => {
+        const bar = q('#lv-bulk-bar');
+        const count = AdminBoard.listViewState.selected.size;
+        bar.hidden = count === 0;
+        q('#lv-selected-count').textContent = `${count} ausgewählt`;
+    },
+
+    renderListView: async () => {
+        const [tickets, users, groups, settings, actor] = await Promise.all([
+            Store.getTickets(), Store.getUsers(), Store.getGroups(), Store.getSettings(), Store.currentUser()
+        ]);
+        const nameFor = (username) => {
+            if (!username) return '-';
+            const u = users.find(x => x.username === username);
+            return u ? (u.name || u.username) : username;
+        };
+        const search = q('#lv-search').value;
+        const statusFilter = q('#lv-status').value;
+        const prioFilter = q('#lv-prio').value;
+        const catFilter = q('#lv-category').value;
+        const teamFilter = q('#lv-team').value;
+        const mineOnly = q('#lv-mine').checked;
+        const slaRiskOnly = q('#lv-sla-risk').checked;
+
+        let visible = tickets.filter(t => !t.archived);
+        if (actor?.role === 'admin') visible = visible.filter(t => AdminBoard.canAccessTicket(actor, t));
+        if (search.trim()) visible = visible.filter(t => Utils.matchesSearch(search, t));
+        if (statusFilter) visible = visible.filter(t => t.status === statusFilter);
+        if (prioFilter) visible = visible.filter(t => t.prio === prioFilter);
+        if (catFilter) visible = visible.filter(t => (Array.isArray(t.category) ? t.category : [t.category]).includes(catFilter));
+        if (teamFilter) visible = visible.filter(t => t.team === teamFilter);
+        if (mineOnly) visible = visible.filter(t => t.owner === actor?.username || (t.assignees || []).includes(actor?.username));
+        if (slaRiskOnly) visible = visible.filter(t => { const c = Store.formatSlaCountdown(t, settings); return c && (c.tone === 'warning' || c.tone === 'danger'); });
+
+        const { sortKey, sortDir } = AdminBoard.listViewState;
+        const sortValue = (t) => {
+            if (sortKey === 'category') return (Array.isArray(t.category) ? t.category[0] : t.category) || '';
+            if (sortKey === 'owner') return nameFor(t.owner);
+            if (sortKey === 'sla') { const d = Store.ticketSlaDueAt(t, settings); return d ?? Infinity; }
+            if (sortKey === 'createdAt') return new Date(t.createdAt).getTime();
+            return t[sortKey] || '';
+        };
+        visible.sort((a, b) => {
+            const va = sortValue(a), vb = sortValue(b);
+            const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
+            return sortDir === 'asc' ? cmp : -cmp;
+        });
+
+        qa('.list-view-table th[data-sort]').forEach(th => {
+            th.classList.toggle('sorted-asc', th.dataset.sort === sortKey && sortDir === 'asc');
+            th.classList.toggle('sorted-desc', th.dataset.sort === sortKey && sortDir === 'desc');
+        });
+
+        const validIds = new Set(visible.map(t => t.id));
+        AdminBoard.listViewState.selected.forEach(id => { if (!validIds.has(id)) AdminBoard.listViewState.selected.delete(id); });
+
+        const body = q('#lv-body');
+        body.innerHTML = visible.length ? visible.map(t => {
+            const team = t.team ? groups.find(g => g.id === t.team) : null;
+            const countdown = Store.formatSlaCountdown(t, settings);
+            const checked = AdminBoard.listViewState.selected.has(t.id) ? 'checked' : '';
+            return `<tr data-id="${Utils.esc(t.id)}" class="lv-row">
+                <td><input type="checkbox" data-id="${Utils.esc(t.id)}" ${checked}></td>
+                <td>${Utils.esc(t.ticketNumber || t.id)}</td>
+                <td class="lv-title" title="${Utils.esc(t.title)}">${t.isMajorIncident ? `<span class="t-incident-badge lv-incident-icon" title="${Lang.t('majorIncident')}">${Icon('siren', 12)}</span> ` : ''}${Utils.esc(t.title)}</td>
+                <td><span class="status-badge">${Utils.esc(Lang.status(t.status))}</span></td>
+                <td><span class="t-tag prio-${t.prio}">${Utils.esc(Lang.prio(t.prio))}</span></td>
+                <td>${Utils.esc((Array.isArray(t.category) ? t.category : [t.category]).filter(Boolean).join(', ') || '-')}${team ? ` <span class="t-team">${Icon('route', 10)}${Utils.esc(team.name)}</span>` : ''}</td>
+                <td>${Utils.esc(nameFor(t.owner))}</td>
+                <td>${Utils.esc(Utils.fmtDate(t.createdAt))}</td>
+                <td>${countdown ? `<span class="sla-mini-badge sla-badge-${countdown.tone}" title="Frist: ${Utils.esc(countdown.dueDateLabel)}">${Utils.esc(countdown.dueDateLabel)} · ${Utils.esc(countdown.label)}</span>` : '-'}</td>
+            </tr>`;
+        }).join('') : `<tr><td colspan="9"><div class="empty-state">Keine Tickets gefunden.</div></td></tr>`;
+
+        qa('#lv-body tr.lv-row').forEach(row => {
+            row.querySelector('td:not(:first-child)').parentElement.onclick = null;
+            row.querySelectorAll('td:not(:first-child)').forEach(td => {
+                td.onclick = () => AdminBoard.openModal(row.dataset.id);
+                td.style.cursor = 'pointer';
+            });
+            const cb = row.querySelector('input[type="checkbox"]');
+            cb.onclick = (e) => e.stopPropagation();
+            cb.onchange = () => {
+                if (cb.checked) AdminBoard.listViewState.selected.add(cb.dataset.id);
+                else AdminBoard.listViewState.selected.delete(cb.dataset.id);
+                AdminBoard.updateListViewBulkBar();
+            };
+        });
+        q('#lv-select-all').checked = visible.length > 0 && visible.every(t => AdminBoard.listViewState.selected.has(t.id));
+        AdminBoard.updateListViewBulkBar();
+        if (window.lucide) lucide.createIcons();
     },
 
     // ... existing openApproveModal ...
@@ -4337,6 +5947,10 @@ const AdminBoard = {
         const list = q('#request-list');
         if (!list) return;
         const reqs = await Store.getRequests();
+        const banner = q('#requests-board');
+        const count = q('#request-count');
+        if (banner) banner.hidden = reqs.length === 0;
+        if (count) count.textContent = String(reqs.length);
         list.innerHTML = '';
         if (reqs.length === 0) {
             list.innerHTML = '<div class="empty-state compact">Keine offenen Anfragen</div>';
@@ -4458,6 +6072,17 @@ const AdminBoard = {
         const oldStatus = ticket.status;
         const actor = await Store.currentUser();
         ticket.status = newStatus;
+
+        // SLA-Uhr pausieren/fortsetzen: läuft während "Warten auf ..." nicht weiter.
+        const wasWaiting = String(oldStatus || '').startsWith('Warten auf');
+        const isWaitingNow = String(newStatus || '').startsWith('Warten auf');
+        if (!wasWaiting && isWaitingNow) {
+            ticket.slaPausedSince = Utils.nowISO();
+        } else if (wasWaiting && !isWaitingNow && ticket.slaPausedSince) {
+            ticket.slaPausedMs = (ticket.slaPausedMs || 0) + (Date.now() - new Date(ticket.slaPausedSince).getTime());
+            ticket.slaPausedSince = null;
+        }
+
         if (newStatus === 'Warten auf Benutzer') {
             ticket.waitingMessage = waitingMessage.trim();
             if (!Array.isArray(ticket.chat)) ticket.chat = [];
@@ -4474,21 +6099,52 @@ const AdminBoard = {
             delete ticket.waitingMessage;
         }
         await Store.addLog(ticket, `Status geändert von ${oldStatus} zu ${newStatus}`);
+
+        // Großstörung: verknüpfte Tickets übernehmen automatisch denselben Status.
+        let linkedForNotify = [];
+        if (ticket.isMajorIncident) {
+            linkedForNotify = tickets.filter(t => t.linkedIncidentId === ticket.id && !t.archived && t.status !== newStatus);
+            for (const lt of linkedForNotify) {
+                const prevStatus = lt.status;
+                lt.status = newStatus;
+                const wasWaitingL = String(prevStatus || '').startsWith('Warten auf');
+                const isWaitingNowL = String(newStatus || '').startsWith('Warten auf');
+                if (!wasWaitingL && isWaitingNowL) {
+                    lt.slaPausedSince = Utils.nowISO();
+                } else if (wasWaitingL && !isWaitingNowL && lt.slaPausedSince) {
+                    lt.slaPausedMs = (lt.slaPausedMs || 0) + (Date.now() - new Date(lt.slaPausedSince).getTime());
+                    lt.slaPausedSince = null;
+                }
+                if (newStatus === 'Warten auf Benutzer') lt.waitingMessage = ticket.waitingMessage;
+                else delete lt.waitingMessage;
+                await Store.addLog(lt, `Status automatisch von Großstörung übernommen: ${newStatus}`);
+            }
+        }
+
         await Store.saveTickets(tickets);
+        if (newStatus === 'Geschlossen' && ticket.isMajorIncident) {
+            await AdminBoard.notifyLinkedIncidentTickets(ticket, ticket.desc);
+        }
+        if (linkedForNotify.length) {
+            await Store.addNotifications(linkedForNotify.map(lt => lt.author).filter(Boolean), ticket, `Status der Großstörung wurde auf "${Lang.status(newStatus)}" geändert.`, actor?.username, 'statusChange');
+        }
         const requestDetails = newStatus === 'Warten auf Benutzer' ? `\nAnforderung: ${ticket.waitingMessage}` : '';
         await Store.addGlobalLog('Ticket Status geändert', `Ticket: ${ticket.title}, Status: ${newStatus}${requestDetails}`);
         const notificationMessage = newStatus === 'Warten auf Benutzer' ?
             `Wir benötigen noch folgende Angaben: ${ticket.waitingMessage}` :
             `Status geändert: ${Lang.status(newStatus)}`;
-        await Store.addNotifications([ticket.author, ...(ticket.participants || [])], ticket, notificationMessage, actor?.username);
+        const statusNotifType = newStatus === 'Geschlossen' ? 'ticketClosed' : 'statusChange';
+        await Store.addNotifications([ticket.author, ...(ticket.participants || [])], ticket, notificationMessage, actor?.username, statusNotifType);
 
         const settings = await Store.getSettings();
         const author = (await Store.getUsers()).find(user => user.username === ticket.author);
-        if (author?.email && settings.notifConfig?.statusChange && settings.emailConfig?.host) {
-            await Store.sendEmail(author.email, `Ticket Update: ${ticket.title}`, `Status geändert auf: ${Lang.status(newStatus)}${newStatus === 'Warten auf Benutzer' ? `\n\nWir benötigen noch folgende Angaben:\n${ticket.waitingMessage}` : ''}`);
-        }
-        if (newStatus === 'Geschlossen' && author?.email && settings.notifConfig?.ticketClosed && settings.emailConfig?.host) {
-            await Store.sendEmail(author.email, `Ticket geschlossen: ${ticket.title}`, 'Dein Ticket wurde geschlossen. Du kannst den Verlauf weiterhin im Portal einsehen.');
+        if (author?.email && settings.emailConfig?.host) {
+            const statusPref = await Store.resolveNotifPref(author, statusNotifType);
+            if (statusNotifType === 'ticketClosed' && statusPref.email) {
+                await Store.sendEmail(author.email, `Ticket geschlossen: ${ticket.title}`, 'Dein Ticket wurde geschlossen. Du kannst den Verlauf weiterhin im Portal einsehen.');
+            } else if (statusNotifType === 'statusChange' && statusPref.email) {
+                await Store.sendEmail(author.email, `Ticket Update: ${ticket.title}`, `Status geändert auf: ${Lang.status(newStatus)}${newStatus === 'Warten auf Benutzer' ? `\n\nWir benötigen noch folgende Angaben:\n${ticket.waitingMessage}` : ''}`);
+            }
         }
         await AdminBoard.render();
         if (AdminBoard.currentTicketId === ticket.id && q('#ticket-modal.open')) await AdminBoard.renderChat(ticket, '#m-chat-msgs');
@@ -4585,7 +6241,8 @@ const AdminBoard = {
                 </div>
             </div>
             <div class="ticket-todo-panel">
-                <div class="section-title">${Icon('list-checks', 15)} Teilaufgaben</div>
+                <div class="section-title todo-section-title"><span class="todo-title-group">${Icon('list-checks', 15)}Teilaufgaben</span><span id="todo-progress-count" class="todo-progress-count"></span></div>
+                <div id="todo-progress-bar" class="todo-progress-bar" hidden><div id="todo-progress-fill" class="todo-progress-fill"></div></div>
                 <div id="ticket-todos" class="ticket-todos"></div>
                 <div class="todo-create-row">
                     <input id="todo-title" type="text" placeholder="Neue Teilaufgabe">
@@ -4594,6 +6251,15 @@ const AdminBoard = {
                         ${AdminBoard.getTodoAssigneeOptions(t, staff).map(u => `<option value="${Utils.esc(u.username)}">${Utils.esc(u.name || u.username)}</option>`).join('')}
                     </select>
                     <button class="btn-primary" id="todo-add" type="button">${Icon('plus', 16)}Hinzufügen</button>
+                </div>
+            </div>
+            <div class="time-tracking-panel">
+                <div class="section-title todo-section-title"><span class="todo-title-group">${Icon('clock', 15)}Zeiterfassung</span><span id="time-total-label" class="todo-progress-count"></span></div>
+                <div id="time-entry-list" class="time-entry-list"></div>
+                <div class="todo-create-row">
+                    <input id="time-minutes" type="number" min="1" step="5" placeholder="Minuten">
+                    <input id="time-note" type="text" placeholder="Notiz (optional)">
+                    <button class="btn-primary" id="time-add" type="button">${Icon('plus', 16)}Hinzufügen</button>
                 </div>
             </div>
         `;
@@ -4642,6 +6308,107 @@ const AdminBoard = {
         participantsMulti.classList.toggle('is-disabled', !!t.archived);
 
         AdminBoard.renderTicketTodos(t, staff, tickets);
+        AdminBoard.renderTimeEntries(t, users, tickets);
+        if (window.lucide) lucide.createIcons();
+    },
+
+    // Zeiterfassung: aufgewendete Zeit pro Ticket, für interne Verrechnung oder Dienstleister-Abrechnung.
+    renderTimeEntries: (t, users, tickets) => {
+        const list = q('#time-entry-list');
+        const addBtn = q('#time-add');
+        if (!list || !addBtn) return;
+        if (!Array.isArray(t.timeEntries)) t.timeEntries = [];
+        const nameFor = (username) => {
+            const u = users.find(x => x.username === username);
+            return u ? (u.name || u.username) : username;
+        };
+        const fmtMinutes = (mins) => mins >= 60 ? `${(mins / 60).toFixed(mins % 60 === 0 ? 0 : 1)} Std.` : `${mins} Min.`;
+        const totalMinutes = t.timeEntries.reduce((sum, e) => sum + (e.minutes || 0), 0);
+        const totalLabel = q('#time-total-label');
+        if (totalLabel) totalLabel.textContent = totalMinutes ? `${fmtMinutes(totalMinutes)} erfasst` : '';
+        list.innerHTML = t.timeEntries.length ? t.timeEntries.slice().reverse().map(e => `
+            <div class="time-entry-row" data-id="${Utils.esc(e.id)}">
+                <span class="time-entry-duration">${fmtMinutes(e.minutes)}</span>
+                <span class="time-entry-meta">${Utils.esc(nameFor(e.username))} · ${Utils.esc(Utils.fmtDate(e.date))}${e.note ? ' · ' + Utils.esc(e.note) : ''}</span>
+                <button type="button" class="btn-ghost btn-icon btn-xs btn-danger time-entry-remove" title="Eintrag entfernen" aria-label="Eintrag entfernen">${Icon('x', 13)}</button>
+            </div>`).join('') : '<div class="empty-state compact">Noch keine Zeit erfasst.</div>';
+        list.querySelectorAll('.time-entry-remove').forEach(btn => {
+            btn.onclick = async () => {
+                const id = btn.closest('.time-entry-row').dataset.id;
+                t.timeEntries = t.timeEntries.filter(e => e.id !== id);
+                await Store.addLog(t, 'Zeiterfassungseintrag entfernt');
+                await Store.saveTickets(tickets);
+                AdminBoard.renderTimeEntries(t, users, tickets);
+            };
+        });
+        addBtn.disabled = !!t.archived;
+        addBtn.onclick = async () => {
+            const minutesInput = q('#time-minutes');
+            const noteInput = q('#time-note');
+            const minutes = parseInt(minutesInput.value, 10);
+            if (!Number.isFinite(minutes) || minutes <= 0) {
+                UI.toast('Bitte eine gültige Dauer in Minuten angeben.');
+                return;
+            }
+            const actor = await Store.currentUser();
+            t.timeEntries.push({
+                id: Utils.uid(),
+                username: actor?.username || 'admin',
+                minutes,
+                note: noteInput.value.trim(),
+                date: Utils.nowISO()
+            });
+            await Store.addLog(t, 'Zeit erfasst', `${fmtMinutes(minutes)}${noteInput.value.trim() ? ' – ' + noteInput.value.trim() : ''}`);
+            await Store.saveTickets(tickets);
+            minutesInput.value = '';
+            noteInput.value = '';
+            AdminBoard.renderTimeEntries(t, users, tickets);
+        };
+    },
+
+    linkTicketToIncident: async (ticketId, incidentId) => {
+        if (ticketId === incidentId) return false;
+        const tickets = await Store.getTickets();
+        const ticket = tickets.find(t => t.id === ticketId);
+        const incident = tickets.find(t => t.id === incidentId);
+        if (!ticket || !incident || !incident.isMajorIncident || ticket.isMajorIncident || ticket.linkedIncidentId === incidentId) return false;
+        ticket.linkedIncidentId = incidentId;
+        if (ticket.status !== incident.status) ticket.status = incident.status;
+        await Store.addLog(ticket, 'Mit Großstörung verknüpft', incident.title);
+        await Store.addLog(incident, 'Ticket zur Großstörung hinzugefügt', ticket.title);
+        await Store.saveTickets(tickets);
+        await Store.addGlobalLog('Ticket mit Großstörung verknüpft', `Ticket: ${ticket.title} -> Störung: ${incident.title}`);
+        const actor = await Store.currentUser();
+        await Store.addNotifications([ticket.author].filter(Boolean), ticket, `Dein Ticket wurde der Großstörung "${incident.title}" zugeordnet.`, actor?.username, 'newMessage');
+        await AdminBoard.render();
+        return true;
+    },
+
+    renderIncidentLinkedTickets: (ticket, allTickets) => {
+        const box = q('#m-incident-linked-list');
+        if (!box) return;
+        if (!ticket.isMajorIncident) {
+            box.hidden = true;
+            box.innerHTML = '';
+            return;
+        }
+        const linked = allTickets.filter(item => item.linkedIncidentId === ticket.id && !item.archived);
+        box.hidden = false;
+        box.innerHTML = `
+            <h4 class="section-title">${Icon('list-tree', 15)} ${Lang.t('linkedTickets')}</h4>
+            ${linked.length ? `<div class="incident-linked-table">
+                ${linked.map(item => `
+                    <button type="button" class="incident-linked-row" data-ticket-id="${Utils.esc(item.id)}">
+                        <span><strong>${Utils.esc(item.ticketNumber || item.id)}</strong>${Utils.esc(item.title)}</span>
+                        <span>${Utils.esc(item.authorName || item.author || '-')}</span>
+                        <span>${Lang.status(item.status)}</span>
+                    </button>
+                `).join('')}
+            </div>` : '<div class="empty-state compact">Noch keine Tickets zugeordnet.</div>'}
+        `;
+        box.querySelectorAll('.incident-linked-row').forEach(row => {
+            row.onclick = () => AdminBoard.openModal(row.dataset.ticketId);
+        });
         if (window.lucide) lucide.createIcons();
     },
 
@@ -4657,6 +6424,14 @@ const AdminBoard = {
             return found ? (found.name || found.username) : username;
         };
         const assigneeOptions = AdminBoard.getTodoAssigneeOptions(t, users);
+        const todoTotal = t.todos.length;
+        const todoDone = t.todos.filter(todo => todo.done).length;
+        const progressCount = q('#todo-progress-count');
+        if (progressCount) progressCount.textContent = todoTotal ? `${todoDone} von ${todoTotal} erledigt` : '';
+        const progressBar = q('#todo-progress-bar');
+        const progressFill = q('#todo-progress-fill');
+        if (progressBar) progressBar.hidden = !todoTotal;
+        if (progressFill) progressFill.style.width = `${todoTotal ? Math.round((todoDone / todoTotal) * 100) : 0}%`;
         const esc = (value = '') => String(value).replace(/[&<>"']/g, c => ({
             '&': '&amp;',
             '<': '&lt;',
@@ -4759,6 +6534,363 @@ const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    // Vertretung/Abwesenheit: offene Tickets eines abwesenden Agenten gehen an eine Vertretung
+    // oder zurück ins Team (Owner wird geleert), damit nichts liegen bleibt.
+    openAbsenceModal: async (username) => {
+        const users = await Store.getUsers();
+        const target = users.find(u => u.username === username);
+        if (!target) return;
+        const substitutes = users.filter(u => u.username !== username && (u.role === 'admin' || u.role === 'superadmin'));
+        q('#absence-modal')?.remove();
+        const modal = AdminBoard.createGenericModal();
+        modal.id = 'absence-modal';
+        modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
+        modal.querySelector('.modal-header h3').textContent = `Abwesenheit · ${target.name || target.username}`;
+        AdminBoard.makeModalFooterVisible(modal);
+        modal.querySelector('.modal-body').innerHTML = `
+            <label class="check-row"><input type="checkbox" id="abs-active" ${target.absence?.active ? 'checked' : ''}>Als abwesend markieren</label>
+            <div class="field">
+                <label for="abs-substitute">Vertretung</label>
+                <select id="abs-substitute">
+                    <option value="">Keine – Tickets zurück ins Team</option>
+                    ${substitutes.map(u => `<option value="${Utils.esc(u.username)}" ${target.absence?.substitute === u.username ? 'selected' : ''}>${Utils.esc(u.name || u.username)}</option>`).join('')}
+                </select>
+            </div>
+            <p class="hint">Beim Aktivieren werden alle offenen Tickets, bei denen ${Utils.esc(target.name || target.username)} Hauptverantwortlicher ist, sofort an die Vertretung übergeben – oder ohne Vertretung dem Team zur erneuten Verteilung zurückgegeben.</p>`;
+        modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
+            const active = q('#abs-active').checked;
+            const substitute = q('#abs-substitute').value || null;
+            await AdminBoard.setAbsence(username, active, substitute);
+            modal.classList.remove('open');
+            AdminBoard.renderUserManager('admins');
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
+    setAbsence: async (username, active, substituteUsername) => {
+        const users = await Store.getUsers();
+        const target = users.find(u => u.username === username);
+        if (!target) return;
+        const wasActive = !!target.absence?.active;
+        target.absence = active ? { active: true, substitute: substituteUsername || null, since: Utils.nowISO() } : { active: false, substitute: null, since: null };
+        await Store.saveUsers(users);
+
+        if (active && !wasActive) {
+            const tickets = await Store.getTickets();
+            const openTickets = tickets.filter(t => t.owner === username && t.status !== 'Geschlossen' && !t.archived);
+            const substitute = substituteUsername ? users.find(u => u.username === substituteUsername) : null;
+            for (const t of openTickets) {
+                if (substitute) {
+                    t.owner = substitute.username;
+                    t.assignees = [...new Set([...(t.assignees || []).filter(a => a !== username), substitute.username])];
+                    t.participants = [...new Set([...(t.participants || []), substitute.username])];
+                    await Store.addLog(t, `Hauptverantwortlicher wegen Abwesenheit geändert: ${target.name || username} → ${substitute.name || substitute.username}`);
+                } else {
+                    t.owner = '';
+                    t.assignees = (t.assignees || []).filter(a => a !== username);
+                    await Store.addLog(t, `Ticket wegen Abwesenheit von ${target.name || username} zurück ins Team gelegt`);
+                }
+            }
+            if (openTickets.length) {
+                await Store.saveTickets(tickets);
+                await Store.addGlobalLog('Abwesenheit aktiviert', `Benutzer: ${target.name || username}, ${openTickets.length} Ticket(s) ${substitute ? 'an ' + (substitute.name || substitute.username) + ' übergeben' : 'zurück ins Team gelegt'}`);
+            }
+            UI.toast(`${openTickets.length} Ticket(s) ${substitute ? 'übergeben' : 'zurück ins Team gelegt'}.`);
+        } else if (!active && wasActive) {
+            await Store.addGlobalLog('Abwesenheit beendet', `Benutzer: ${target.name || username}`);
+            UI.toast('Abwesenheit beendet.');
+        }
+        await AdminBoard.render();
+    },
+
+    // Admin legt ein Ticket im Namen einer anderen Person an (Telefonanruf, am Schalter, etc.)
+    openCreateTicketModal: async () => {
+        let modal = q('#admin-create-ticket-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'admin-create-ticket-modal';
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal modal-md">
+                    <div class="modal-header">
+                        <h3>${Icon('plus', 18)}Neues Ticket anlegen</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon close-m" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        </div>
+                    </div>
+                    <div class="modal-body form-grid">
+                        <div class="field field-wide">
+                            <label for="act-on-behalf-search">Im Namen von</label>
+                            <input type="text" id="act-on-behalf-search" placeholder="Nach Namen oder Benutzername suchen...">
+                            <div id="act-on-behalf-list" class="user-picker-list"></div>
+                            <p class="hint">Person nicht dabei? Lege sie zuerst in der Benutzerverwaltung an.</p>
+                        </div>
+                        <div class="field field-wide">
+                            <label for="act-title">Betreff</label>
+                            <input id="act-title" type="text" placeholder="Kurzer Titel">
+                        </div>
+                        <div class="field field-wide">
+                            <label for="act-desc">Beschreibung</label>
+                            <textarea id="act-desc" rows="6" placeholder="Worum geht es?"></textarea>
+                        </div>
+                        <div class="field">
+                            <label for="act-prio">Priorität</label>
+                            <select id="act-prio">
+                                <option value="Niedrig">Niedrig</option>
+                                <option value="Normal">Normal</option>
+                                <option value="Hoch">Hoch</option>
+                                <option value="Kritisch">Kritisch</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Kategorie</label>
+                            <div id="act-cat-container"></div>
+                        </div>
+                        <div id="act-custom-fields" class="field-wide custom-fields-fill"></div>
+                        <div class="field field-wide">
+                            <label>Anhänge</label>
+                            <label for="act-files" class="dropzone" id="act-files-dropzone">
+                                <i data-lucide="upload-cloud"></i>
+                                <span class="dropzone-text"><strong>Dateien hierher ziehen</strong> oder klicken zum Auswählen</span>
+                                <input id="act-files" type="file" multiple>
+                            </label>
+                            <div id="act-files-preview" class="file-preview"></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer modal-footer-visible">
+                        <button class="btn-secondary" id="act-cancel">Abbrechen</button>
+                        <button class="btn-primary" id="act-submit">${Icon('plus', 16)}Ticket anlegen</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+            modal.querySelectorAll('.close-m').forEach(b => b.onclick = () => modal.classList.remove('open'));
+            modal.querySelector('#act-cancel').onclick = () => modal.classList.remove('open');
+        }
+        const users = (await Store.getUsers()).slice().sort((a, b) => (a.name || a.username).localeCompare(b.name || b.username));
+        let selectedBehalfUsername = '';
+        const listEl = q('#act-on-behalf-list');
+        const searchInput = q('#act-on-behalf-search');
+        const renderUserPicker = (filter = '') => {
+            const term = filter.toLowerCase().trim();
+            const filtered = term ? users.filter(u => (u.name || '').toLowerCase().includes(term) || u.username.toLowerCase().includes(term)) : users;
+            listEl.innerHTML = filtered.length ? filtered.map(u => `
+                <div class="user-picker-row${u.username === selectedBehalfUsername ? ' selected' : ''}" data-username="${Utils.esc(u.username)}">
+                    <span class="user-picker-name">${Utils.esc(u.name || u.username)}</span>
+                    <span class="user-picker-meta">${Utils.esc(u.username)} · ${u.role === 'user' ? 'Benutzer' : 'Admin'}</span>
+                </div>`).join('') : '<div class="empty-state compact">Keine Treffer.</div>';
+            listEl.querySelectorAll('.user-picker-row').forEach(row => {
+                row.onclick = () => {
+                    selectedBehalfUsername = row.dataset.username;
+                    renderUserPicker(searchInput.value);
+                };
+            });
+        };
+        renderUserPicker();
+        searchInput.value = '';
+        searchInput.oninput = () => renderUserPicker(searchInput.value);
+        q('#act-title').value = '';
+        q('#act-desc').value = '';
+        q('#act-prio').value = 'Normal';
+        AdminBoard.createTicketFiles = [];
+        q('#act-files-preview').innerHTML = '';
+        q('#act-files-preview').style.display = 'none';
+        const renderActFilePreview = () => {
+            const preview = q('#act-files-preview');
+            preview.innerHTML = '';
+            preview.style.display = AdminBoard.createTicketFiles.length ? 'flex' : 'none';
+            AdminBoard.createTicketFiles.forEach((file, index) => {
+                const chip = document.createElement('div');
+                chip.className = 'file-chip';
+                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="Entfernen" aria-label="${Utils.esc(file.name)} entfernen">${Icon('x', 13)}</button>`;
+                chip.querySelector('button').onclick = () => {
+                    AdminBoard.createTicketFiles.splice(index, 1);
+                    renderActFilePreview();
+                };
+                preview.appendChild(chip);
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        const actFileInput = q('#act-files');
+        actFileInput.value = '';
+        actFileInput.onchange = () => {
+            AdminBoard.createTicketFiles.push(...Array.from(actFileInput.files || []));
+            actFileInput.value = '';
+            renderActFilePreview();
+        };
+        const actDropzone = q('#act-files-dropzone');
+        ['dragenter', 'dragover'].forEach(evt => actDropzone.addEventListener(evt, (e) => { e.preventDefault(); actDropzone.classList.add('drag-over'); }));
+        ['dragleave', 'dragend'].forEach(evt => actDropzone.addEventListener(evt, (e) => { e.preventDefault(); actDropzone.classList.remove('drag-over'); }));
+        actDropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            actDropzone.classList.remove('drag-over');
+            AdminBoard.createTicketFiles.push(...Array.from(e.dataTransfer?.files || []));
+            renderActFilePreview();
+        });
+        const settings = await Store.getSettings();
+        const categories = settings.categories && settings.categories.length ? settings.categories : ['Allgemein'];
+        const refreshActCustomFields = (selectedCats) => {
+            UI.renderCustomFieldsForm(q('#act-custom-fields'), Store.getCustomFieldsForCategories(selectedCats, settings));
+        };
+        AdminBoard.createTicketCategoryInstance = UI.createMultiSelect(q('#act-cat-container'), categories, [categories[0]], refreshActCustomFields);
+        refreshActCustomFields([categories[0]]);
+        q('#act-submit').onclick = async () => {
+            const title = q('#act-title').value.trim();
+            const desc = q('#act-desc').value.trim();
+            if (!title) return UI.toast('Bitte einen Titel angeben.');
+            const { values: customFieldValues, missing: missingFields } = UI.readCustomFieldsForm(q('#act-custom-fields'));
+            if (missingFields.length) return UI.toast(`Bitte Pflichtfeld${missingFields.length > 1 ? 'er' : ''} ausfüllen: ${missingFields.join(', ')}`);
+            const onBehalfUser = users.find(u => u.username === selectedBehalfUsername);
+            if (!onBehalfUser) return UI.toast('Bitte eine Person auswählen.');
+            if (AdminBoard.createTicketFiles.some(file => file.size > 15 * 1024 * 1024)) {
+                UI.toast('Anhänge dürfen maximal 15 MB groß sein.');
+                return;
+            }
+            let attachments = [];
+            try {
+                attachments = await Promise.all(AdminBoard.createTicketFiles.map(file => Store.saveAttachment(file)));
+            } catch (error) {
+                console.error(error);
+                UI.toast('Anhänge konnten nicht gespeichert werden. Bitte erneut versuchen.');
+                return;
+            }
+            const tickets = await Store.getTickets();
+            const cat = AdminBoard.createTicketCategoryInstance.getValue();
+            const category = cat.length ? cat : ['Allgemein'];
+            let ticketNumberData;
+            try {
+                ticketNumberData = Store.nextTicketNumber(tickets, category, settings);
+            } catch (error) {
+                UI.toast('Ticketnummernformat ungültig: Das Format muss {number} enthalten.');
+                return;
+            }
+            const actor = await Store.currentUser();
+            const newTicket = {
+                id: Utils.uid(),
+                title,
+                desc,
+                prio: q('#act-prio').value,
+                category,
+                status: 'Neu',
+                author: onBehalfUser.username,
+                authorName: onBehalfUser.name || onBehalfUser.username,
+                createdAt: Utils.nowISO(),
+                comments: [],
+                chat: [],
+                attachments,
+                archived: false,
+                ticketNumber: ticketNumberData.ticketNumber,
+                ticketNumberSequence: ticketNumberData.ticketNumberSequence,
+                assignees: [],
+                participants: [],
+                owner: '',
+                todos: [],
+                createdByAdmin: actor?.username,
+                customFieldValues
+            };
+            const autoTeam = Store.autoAssignTeam(newTicket, settings, await Store.getGroups());
+            if (autoTeam) {
+                newTicket.team = autoTeam.id;
+                newTicket.assignees = [...new Set([...newTicket.assignees, ...autoTeam.members])];
+            }
+            tickets.push(newTicket);
+            await Store.addLog(newTicket, `Ticket im Namen von ${newTicket.authorName} angelegt (durch ${actor?.name || actor?.username || 'Admin'})${autoTeam ? ` – automatisch Team "${autoTeam.name}" zugewiesen` : ''}`);
+            await Store.saveTickets(tickets);
+            await Store.addGlobalLog('Ticket im Namen eines Benutzers erstellt', `Ticket: ${title}, Im Namen von: ${newTicket.authorName}`);
+            modal.classList.remove('open');
+            UI.toast('Ticket wurde angelegt.');
+            await AdminBoard.render();
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
+    openIncidentCreateModal: async () => {
+        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
+        modal.querySelector('.modal-header h3').textContent = Lang.t('createIncident');
+        AdminBoard.makeModalFooterVisible(modal);
+        const settings = await Store.getSettings();
+        const categories = settings.categories && settings.categories.length ? settings.categories : ['Allgemein'];
+        modal.querySelector('.modal-body').innerHTML = `
+            <div class="field">
+                <label>${Lang.t('incidentTitle')}</label>
+                <input id="incident-title" type="text" placeholder="z. B. VPN-Störung">
+            </div>
+            <div class="field">
+                <label>${Lang.t('incidentNotice')}</label>
+                <textarea id="incident-notice" rows="4" placeholder="Kurze Beschreibung der Störung und was betroffen ist."></textarea>
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label>${Lang.t('priority')}</label>
+                    <select id="incident-prio">
+                        <option value="Normal">Normal</option>
+                        <option value="Hoch">Hoch</option>
+                        <option value="Kritisch">Kritisch</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Kategorie</label>
+                    <select id="incident-category">
+                        ${categories.map(c => `<option value="${Utils.esc(c)}">${Utils.esc(c)}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+        `;
+        const saveBtn = modal.querySelector('.modal-footer .btn-primary');
+        saveBtn.textContent = 'Störung erstellen';
+        saveBtn.onclick = async () => {
+            const title = q('#incident-title').value.trim();
+            const notice = q('#incident-notice').value.trim();
+            if (!title) return UI.toast('Bitte einen Titel angeben.');
+            if (!notice) return UI.toast('Bitte einen sichtbaren Hinweis eintragen.');
+            const tickets = await Store.getTickets();
+            const category = [q('#incident-category').value || 'Allgemein'];
+            let ticketNumberData;
+            try {
+                ticketNumberData = Store.nextTicketNumber(tickets, category, settings);
+            } catch {
+                return UI.toast('Ticketnummernformat ungültig: Das Format muss {number} enthalten.');
+            }
+            const actor = await Store.currentUser();
+            const incidentTicket = {
+                id: Utils.uid(),
+                title,
+                desc: notice,
+                prio: q('#incident-prio').value,
+                category,
+                status: 'Neu',
+                author: actor?.username || 'admin',
+                authorName: actor?.name || actor?.username || 'Administrator',
+                createdAt: Utils.nowISO(),
+                comments: [],
+                chat: [],
+                attachments: [],
+                archived: false,
+                ticketNumber: ticketNumberData.ticketNumber,
+                ticketNumberSequence: ticketNumberData.ticketNumberSequence,
+                assignees: [],
+                participants: [],
+                owner: '',
+                todos: [],
+                isMajorIncident: true,
+                incidentNotice: notice
+            };
+            tickets.push(incidentTicket);
+            await Store.addLog(incidentTicket, 'Störung erstellt', notice);
+            await Store.saveTickets(tickets);
+            await Store.addGlobalLog('Störung erstellt', `Ticket: ${title}`);
+            modal.classList.remove('open');
+            UI.toast('Störung wurde erstellt.');
+            await AdminBoard.render();
+            await AdminBoard.openModal(incidentTicket.id);
+        };
+        modal.classList.add('open');
+        q('#incident-title').focus();
+        if (window.lucide) lucide.createIcons();
+    },
+
     editTicket: async (id) => {
         const tickets = await Store.getTickets();
         const ticket = tickets.find(item => item.id === id);
@@ -4780,16 +6912,281 @@ const AdminBoard = {
             await Store.addLog(ticket, 'Ticketdaten bearbeitet', `Vorher: ${before}\nNachher: ${title}\n${desc}`);
             await Store.saveTickets(tickets);
             const actor = await Store.currentUser();
-            await Store.addNotifications([ticket.author], ticket, 'Titel oder Beschreibung wurde vom Support angepasst.', actor?.username);
+            await Store.addNotifications([ticket.author], ticket, 'Titel oder Beschreibung wurde vom Support angepasst.', actor?.username, 'ticketEdited');
             await Store.addGlobalLog('Ticketdaten bearbeitet', `Ticket ${ticket.ticketNumber || ticket.id}: ${title}`);
             modal.classList.remove('open');
-            q('#m-title').textContent = `${ticket.ticketNumber || ticket.id} · ${ticket.title}`;
+            q('#m-title').textContent = `${ticket.ticketNumber || ticket.id} - ${ticket.title}`;
             q('#m-desc').textContent = ticket.desc || 'Keine Beschreibung';
             await AdminBoard.render();
             await Notifications.refresh();
         };
         modal.classList.add('open');
         q('#edit-ticket-title').focus();
+    },
+
+    // Großstörung: ein Agent markiert eine bekannte Störung. Benutzer sehen beim Erstellen
+    // eines neuen Tickets einen Hinweis und können sich verknüpfen, statt ein Dubletten-Ticket
+    // anzulegen. Wird das Haupt-Ticket geschlossen, bekommen alle verknüpften Tickets die
+    // Lösung automatisch als Chat-Nachricht mitgeteilt.
+    // Manuell gesetzte Frist für einzelne Tickets (überschreibt die berechnete Lösungsfrist vollständig).
+    openCustomDueModal: async (id) => {
+        const tickets = await Store.getTickets();
+        const t = tickets.find(x => x.id === id);
+        if (!t) return;
+        q('#custom-due-modal')?.remove();
+        const modal = AdminBoard.createGenericModal();
+        modal.id = 'custom-due-modal';
+        modal.querySelector('.modal-header h3').textContent = Lang.t('dueDate');
+        const currentDue = Store.ticketSlaDueAt(t, await Store.getSettings());
+        const initialMs = t.customDueAt ? new Date(t.customDueAt).getTime() : currentDue;
+        const initialDate = initialMs ? new Date(initialMs) : null;
+        modal.querySelector('.modal-body').innerHTML = `
+            <div class="form-grid">
+                <div class="field">
+                    <label>${Lang.t('dateFormatLabel')}</label>
+                    <div class="date-input-row">
+                        <input id="custom-due-date" type="text" inputmode="numeric" placeholder="31.12.2026" value="${initialDate ? Utils.fmtDateOnly(initialDate) : ''}">
+                        <button type="button" class="btn-ghost btn-icon" id="custom-due-calendar-btn" title="Kalender öffnen" aria-label="Kalender öffnen">${Icon('calendar', 16)}</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>${Lang.t('time')}</label>
+                    <input id="custom-due-time" type="text" inputmode="numeric" placeholder="17:00" value="${initialDate ? Utils.fmtTimeOnly(initialDate) : '17:00'}">
+                </div>
+            </div>
+            <div id="custom-due-dtp-host" style="display:none;">${UI.dateTimePickerMarkup('custom-due-dtp')}</div>
+            <p class="hint">${t.customDueAt ? 'Diese Frist wurde manuell gesetzt und ersetzt die automatische Berechnung.' : 'Standardmäßig wird die Frist aus Priorität und Geschäftszeiten berechnet. Hier kannst du sie für dieses Ticket überschreiben.'}</p>
+            ${t.customDueAt ? `<button type="button" class="btn-secondary btn-sm" id="custom-due-reset">${Icon('rotate-ccw', 15)}Automatisch berechnen (zurücksetzen)</button>` : ''}
+        `;
+        const dtpPicker = UI.createDateTimePicker(q('#custom-due-dtp'), {
+            value: initialMs,
+            anchor: q('#custom-due-calendar-btn'),
+            onChange: (ms) => {
+                if (!ms) return;
+                const d = new Date(ms);
+                q('#custom-due-date').value = Utils.fmtDateOnly(d);
+                q('#custom-due-time').value = Utils.fmtTimeOnly(d);
+            }
+        });
+        q('#custom-due-calendar-btn').onclick = () => dtpPicker.open();
+        modal.querySelector('.modal-footer .btn-primary').textContent = 'Speichern';
+        const resetBtn = q('#custom-due-reset');
+        if (resetBtn) resetBtn.onclick = async () => {
+            delete t.customDueAt;
+            await Store.addLog(t, 'Manuelle Frist zurückgesetzt');
+            await Store.saveTickets(tickets);
+            modal.classList.remove('open');
+            await AdminBoard.openModal(id);
+            await AdminBoard.render();
+        };
+        modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
+            const pickedMs = Utils.parseGermanDateTime(q('#custom-due-date').value, q('#custom-due-time').value);
+            if (!pickedMs) { UI.toast('Bitte ein Datum/Uhrzeit wählen.'); return; }
+            t.customDueAt = new Date(pickedMs).toISOString();
+            await Store.addLog(t, 'Eigene Frist gesetzt', Utils.fmtDate(t.customDueAt));
+            await Store.saveTickets(tickets);
+            modal.classList.remove('open');
+            UI.toast('Frist gespeichert.');
+            await AdminBoard.openModal(id);
+            await AdminBoard.render();
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
+    toggleMajorIncident: async (id) => {
+        const tickets = await Store.getTickets();
+        const t = tickets.find(x => x.id === id);
+        if (!t) return;
+        if (t.isMajorIncident) {
+            UI.confirm('Großstörung wirklich aufheben? Neue Tickets erhalten dann keinen Hinweis mehr auf diese Störung.', async () => {
+                t.isMajorIncident = false;
+                delete t.incidentNotice;
+                await Store.addLog(t, 'Großstörung aufgehoben');
+                await Store.saveTickets(tickets);
+                await Store.addGlobalLog('Großstörung aufgehoben', `Ticket: ${t.title}`);
+                await AdminBoard.openModal(id);
+                await AdminBoard.render();
+            });
+            return;
+        }
+        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
+        modal.querySelector('.modal-header h3').textContent = 'Als Störung markieren';
+        AdminBoard.makeModalFooterVisible(modal);
+        modal.querySelector('.modal-body').innerHTML = `
+            <div class="field">
+                <label>Sichtbarer Hinweis für Benutzer</label>
+                <textarea id="incident-existing-notice" rows="4">${Utils.esc(t.incidentNotice || t.title)}</textarea>
+            </div>
+            <p class="hint">Diese Störung wird Benutzern beim Erstellen eines Tickets angeboten.</p>
+        `;
+        modal.querySelector('.modal-footer .btn-primary').textContent = 'Speichern';
+        modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
+            const notice = q('#incident-existing-notice').value.trim();
+            if (!notice) return UI.toast('Bitte einen Hinweis eintragen.');
+            t.isMajorIncident = true;
+            t.incidentNotice = notice;
+            await Store.addLog(t, 'Als Großstörung markiert', notice);
+            await Store.saveTickets(tickets);
+            await Store.addGlobalLog('Großstörung markiert', `Ticket: ${t.title}, Hinweis: ${notice}`);
+            modal.classList.remove('open');
+            UI.toast('Als Störung markiert. Benutzer können Tickets damit verknüpfen.');
+            await AdminBoard.openModal(id);
+            await AdminBoard.render();
+        };
+        modal.classList.add('open');
+        q('#incident-existing-notice').focus();
+    },
+
+    // Beim Schließen eines Großstörungs-Tickets bekommen alle verknüpften Tickets die
+    // Lösung automatisch als Chat-Nachricht mitgeteilt, damit niemand einzeln nachfragen muss.
+    notifyLinkedIncidentTickets: async (incidentTicket, resolutionText) => {
+        const tickets = await Store.getTickets();
+        const linked = tickets.filter(t => t.linkedIncidentId === incidentTicket.id && !t.archived);
+        if (!linked.length) return;
+        const actor = await Store.currentUser();
+        for (const t of linked) {
+            if (!Array.isArray(t.chat)) t.chat = [];
+            t.chat.push({
+                text: `Update zur bekannten Störung "${incidentTicket.title}": ${resolutionText || 'Die Störung wurde behoben.'}`,
+                author: actor?.name || actor?.username || 'Support',
+                authorUsername: actor?.username,
+                date: Utils.nowISO(),
+                role: 'admin',
+                files: []
+            });
+            await Store.addLog(t, 'Lösung der verknüpften Großstörung automatisch mitgeteilt');
+            await Store.addNotifications([t.author], t, 'Es gibt ein Update zur bekannten Störung, die dein Ticket betrifft.', actor?.username, 'newMessage');
+        }
+        await Store.saveTickets(tickets);
+        await Store.addGlobalLog('Großstörung behoben – verknüpfte Tickets informiert', `Haupt-Ticket: ${incidentTicket.title}, Betroffene Tickets: ${linked.length}`);
+        UI.toast(`${linked.length} verknüpfte Ticket(s) wurden über die Lösung informiert.`);
+    },
+
+    openPrintOptions: async (id) => {
+        let modal = q('#print-options-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'print-options-modal';
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal modal-sm">
+                    <div class="modal-header">
+                        <h3>${Icon('printer', 18)}Ticket drucken</h3>
+                        <div class="modal-actions">
+                            <button class="btn-ghost btn-icon close-m" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        </div>
+                    </div>
+                    <div class="modal-body">
+                        <p class="hint">Wähle aus, welche Inhalte mit ausgedruckt werden sollen.</p>
+                        <div class="checkbox-list">
+                            <label class="check-row"><input type="checkbox" id="pp-todos" checked>Teilaufgaben</label>
+                            <label class="check-row"><input type="checkbox" id="pp-admin-chat" checked>Admin-Chat (intern)</label>
+                            <label class="check-row"><input type="checkbox" id="pp-solution" checked>Lösungsweg (intern)</label>
+                            <label class="check-row"><input type="checkbox" id="pp-chat" checked>Chat-Verlauf mit Benutzer</label>
+                            <label class="check-row"><input type="checkbox" id="pp-time" checked>Zeiterfassung</label>
+                            <label class="check-row"><input type="checkbox" id="pp-log">Ticket-Protokoll</label>
+                        </div>
+                    </div>
+                    <div class="modal-footer modal-footer-visible">
+                        <button class="btn-secondary" id="pp-cancel">Abbrechen</button>
+                        <button class="btn-primary" id="pp-confirm">${Icon('printer', 16)}Drucken</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+            modal.querySelectorAll('.close-m').forEach(b => b.onclick = () => modal.classList.remove('open'));
+            modal.querySelector('#pp-cancel').onclick = () => modal.classList.remove('open');
+        }
+        modal.querySelector('#pp-confirm').onclick = async () => {
+            modal.classList.remove('open');
+            await AdminBoard.printTicket(id, {
+                todos: q('#pp-todos').checked,
+                adminChat: q('#pp-admin-chat').checked,
+                solution: q('#pp-solution').checked,
+                chat: q('#pp-chat').checked,
+                time: q('#pp-time').checked,
+                log: q('#pp-log').checked
+            });
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
+    printTicket: async (id, options = {}) => {
+        const opts = { todos: true, adminChat: true, solution: true, chat: true, time: true, log: false, ...options };
+        const tickets = await Store.getTickets();
+        const t = tickets.find(x => x.id === id);
+        if (!t) return;
+        const users = await Store.getUsers();
+        const nameFor = (username) => {
+            if (!username) return '-';
+            const u = users.find(x => x.username === username);
+            return u ? (u.name || u.username) : username;
+        };
+        const settings = await Store.getSettings();
+        const company = settings.companyConfig || {};
+        const actor = await Store.currentUser();
+        const slaCountdown = Store.formatSlaCountdown(t, settings);
+        const todos = opts.todos ? (t.todos || []).map(d => `<li>${d.done ? '☑' : '☐'} ${Utils.esc(d.title)}${d.assignee ? ' – ' + Utils.esc(nameFor(d.assignee)) : ''}</li>`).join('') : '';
+        const entryRow = (c) => `
+            <div class="p-entry"><strong>${Utils.esc(c.author)}</strong> <span>${Utils.esc(Utils.fmtDate(c.date))}</span>
+            <p>${Utils.esc(c.text || '')}</p></div>`;
+        const adminChatEntries = opts.adminChat ? (t.comments || []).filter(c => (c.channel || 'solution') === 'admin-chat').map(entryRow).join('') : '';
+        const solutionEntries = opts.solution ? (t.comments || []).filter(c => (c.channel || 'solution') === 'solution').map(entryRow).join('') : '';
+        const chat = opts.chat ? (t.chat || []).map(entryRow).join('') : '';
+        const logEntries = opts.log ? (t.logs || []).map(l => `
+            <div class="p-entry"><strong>${Utils.esc(l.user || '-')}</strong> <span>${Utils.esc(Utils.fmtDate(l.date))}</span>
+            <p>${Utils.esc(l.action || '')}${l.details ? ' – ' + Utils.esc(l.details) : ''}</p></div>`).join('') : '';
+        const fmtMinutesPrint = (mins) => mins >= 60 ? `${(mins / 60).toFixed(mins % 60 === 0 ? 0 : 1)} Std.` : `${mins} Min.`;
+        const totalMinutes = (t.timeEntries || []).reduce((sum, e) => sum + (e.minutes || 0), 0);
+        const timeEntries = opts.time ? (t.timeEntries || []).map(e => `
+            <div class="p-entry"><strong>${Utils.esc(nameFor(e.username))}</strong> <span>${Utils.esc(Utils.fmtDate(e.date))} – ${fmtMinutesPrint(e.minutes)}</span>
+            ${e.note ? `<p>${Utils.esc(e.note)}</p>` : ''}</div>`).join('') : '';
+        const participants = [...new Set([t.owner, ...(t.participants || [])].filter(Boolean))].map(nameFor).join(', ') || '-';
+        const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>${Utils.esc(t.ticketNumber || t.id)}</title>
+            <style>
+                body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px;max-width:800px;margin:0 auto;}
+                .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:4px;}
+                .print-head img{max-height:48px;max-width:180px;object-fit:contain;}
+                h1{font-size:20px;margin:0 0 4px;}
+                .meta{color:#555;font-size:12px;margin-bottom:16px;}
+                .grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;margin-bottom:16px;font-size:13px;}
+                .grid div strong{display:block;font-size:11px;color:#555;text-transform:uppercase;}
+                h2{font-size:14px;border-bottom:1px solid #ccc;padding-bottom:4px;margin-top:24px;}
+                .desc{white-space:pre-wrap;font-size:13px;}
+                ul{padding-left:20px;font-size:13px;}
+                .p-entry{border-bottom:1px solid #eee;padding:6px 0;font-size:12px;}
+                .p-entry span{color:#777;margin-left:8px;}
+                .p-entry p{margin:4px 0 0;white-space:pre-wrap;}
+            </style></head><body>
+            <div class="print-head">
+                <div>
+                    <h1>${Utils.esc(t.ticketNumber || t.id)} &middot; ${Utils.esc(t.title)}</h1>
+                    <div class="meta">Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div>
+                </div>
+                ${company.logoUrl ? `<img src="${Utils.esc(company.logoUrl)}" alt="Logo">` : ''}
+            </div>
+            <div class="grid">
+                <div><strong>Von</strong>${Utils.esc(nameFor(t.author) || t.author)}</div>
+                <div><strong>Erstellt am</strong>${Utils.esc(Utils.fmtDate(t.createdAt))}</div>
+                <div><strong>Status</strong>${Utils.esc(t.status)}</div>
+                <div><strong>Priorität</strong>${Utils.esc(t.prio)}</div>
+                <div><strong>Kategorie</strong>${Utils.esc((t.category || []).join(', ') || '-')}</div>
+                <div><strong>Hauptverantwortlicher</strong>${Utils.esc(nameFor(t.owner))}</div>
+                <div><strong>Beteiligte Personen</strong>${Utils.esc(participants)}</div>
+                ${slaCountdown ? `<div><strong>Frist</strong>${Utils.esc(slaCountdown.label)} (${Utils.esc(slaCountdown.dueDateLabel)})</div>` : ''}
+            </div>
+            <h2>Beschreibung</h2>
+            <p class="desc">${Utils.esc(t.desc || 'Keine Beschreibung')}</p>
+            ${todos ? `<h2>Teilaufgaben</h2><ul>${todos}</ul>` : ''}
+            ${adminChatEntries ? `<h2>Admin-Chat</h2>${adminChatEntries}` : ''}
+            ${solutionEntries ? `<h2>Lösungsweg</h2>${solutionEntries}` : ''}
+            ${chat ? `<h2>Chat-Verlauf</h2>${chat}` : ''}
+            ${timeEntries ? `<h2>Zeiterfassung (gesamt: ${Utils.esc(fmtMinutesPrint(totalMinutes))})</h2>${timeEntries}` : ''}
+            ${logEntries ? `<h2>Ticket-Protokoll</h2>${logEntries}` : ''}
+            </body></html>`;
+        UI.printHTML(html);
     },
 
     openModal: async (id) => {
@@ -4806,7 +7203,12 @@ const AdminBoard = {
 
             q('#m-title').textContent = `${t.ticketNumber || t.id} · ${t.title}${t.archived ? ' [ARCHIVIERT]' : ''}`;
             q('#m-desc').textContent = t.desc || 'Keine Beschreibung';
+            {
+                const fieldsSettings = await Store.getSettings();
+                UI.renderCustomFieldsDisplay(q('#m-custom-fields-display'), Store.getCustomFieldsForCategories(t.category, fieldsSettings), t.customFieldValues || {});
+            }
             AdminBoard.renderTicketAttachments(t, '#m-ticket-attachments');
+            AdminBoard.renderIncidentLinkedTickets(t, tickets);
 
             // Elements
             const prioSel = q('#m-prio-edit');
@@ -4822,6 +7224,16 @@ const AdminBoard = {
             if (btnEditTicket) {
                 btnEditTicket.style.display = t.archived ? 'none' : '';
                 btnEditTicket.onclick = () => AdminBoard.editTicket(t.id);
+            }
+            const btnPrint = q('#m-print');
+            if (btnPrint) btnPrint.onclick = () => AdminBoard.openPrintOptions(t.id);
+
+            const btnIncident = q('#btn-mark-incident');
+            if (btnIncident) {
+                btnIncident.style.display = (t.archived || t.linkedIncidentId) ? 'none' : '';
+                btnIncident.innerHTML = t.isMajorIncident ? `${Icon('siren', 16)}Großstörung aufheben` : `${Icon('siren', 16)}Als Großstörung markieren`;
+                btnIncident.classList.toggle('btn-danger', !!t.isMajorIncident);
+                btnIncident.onclick = () => AdminBoard.toggleMajorIncident(t.id);
             }
 
             // Archive/Re-activate logic integration
@@ -4871,7 +7283,7 @@ const AdminBoard = {
             if (catSel) catSel.disabled = t.archived;
             if (commentInput) commentInput.disabled = t.archived;
             if (commentBtn) commentBtn.disabled = t.archived;
-            ['#m-note-type', '#m-note-bold', '#m-note-italic', '#m-note-list', '#m-note-file-input', '#m-note-pin', '#m-note-resolution', '#m-admin-note-type', '#m-admin-note-bold', '#m-admin-note-italic', '#m-admin-note-list', '#m-admin-note-file-input', '#m-admin-note-pin'].forEach(selector => {
+            ['#m-note-type', '#m-note-bold', '#m-note-italic', '#m-note-list', '#m-note-numbered', '#m-note-table', '#m-note-file-input', '#m-note-pin', '#m-note-resolution', '#m-admin-note-type', '#m-admin-note-bold', '#m-admin-note-italic', '#m-admin-note-list', '#m-admin-note-file-input', '#m-admin-note-pin'].forEach(selector => {
                 const el = q(selector);
                 if (el) el.disabled = t.archived;
             });
@@ -4883,6 +7295,24 @@ const AdminBoard = {
             // Metadata
             if (q('#m-author')) q('#m-author').textContent = t.authorName || t.author;
             if (q('#m-date')) q('#m-date').textContent = Utils.fmtDate(t.createdAt);
+
+            // Lösungsfrist: Badge mit verbleibender/überschrittener Zeit, dazu ein dezenter
+            // roter Rahmen ums Popup, wenn die Frist schon überschritten ist.
+            const slaItem = q('#m-sla-item');
+            const slaBadge = q('#m-sla-badge');
+            const slaSettingsForModal = await Store.getSettings();
+            const slaCountdown = Store.formatSlaCountdown(t, slaSettingsForModal);
+            if (slaItem && slaBadge) {
+                slaItem.hidden = !slaCountdown;
+                if (slaCountdown) {
+                    slaBadge.className = `sla-badge sla-badge-${slaCountdown.tone}`;
+                    slaBadge.title = `Frist: ${slaCountdown.dueDateLabel}${t.customDueAt ? ' (manuell gesetzt)' : ''}`;
+                    slaBadge.innerHTML = `${Icon(slaCountdown.overdue ? 'triangle-alert' : 'timer', 13)}${Utils.esc(slaCountdown.dueDateLabel)} · ${Utils.esc(slaCountdown.label)}${t.customDueAt ? ' ' + Icon('pin', 11) : ''}`;
+                }
+            }
+            q('#ticket-modal .modal')?.classList.toggle('is-sla-overdue', !!slaCountdown?.overdue);
+            const slaEditBtn = q('#m-sla-edit');
+            if (slaEditBtn) slaEditBtn.onclick = () => AdminBoard.openCustomDueModal(t.id);
 
             // Populate Priority
             if (prioSel) {
@@ -5081,16 +7511,72 @@ const AdminBoard = {
                 originalIndex: index
             }))
             .filter(comment => (comment.channel || 'solution') === channel);
-        if (searchWrap) searchWrap.style.display = commentsRaw.length >= 6 ? 'flex' : 'none';
-        if (commentsRaw.length < 6 && searchInput) searchInput.value = '';
+        const countSelector = channel === 'admin-chat' ? '#m-admin-note-count' : '#m-solution-note-count';
+        if (q(countSelector)) q(countSelector).textContent = String(commentsRaw.length);
+        if (searchWrap) searchWrap.style.display = commentsRaw.length ? 'flex' : 'none';
+        if (commentsRaw.length === 0 && searchInput) searchInput.value = '';
         if (commentsRaw.length === 0) {
             box.innerHTML = `<div class="empty-state compact">${channel === 'admin-chat' ? 'Noch keine Admin-Nachrichten.' : 'Noch keine Lösungsversuche dokumentiert.'}</div>`;
             return;
         }
-        const renderText = (value = '') => Utils.esc(value)
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            .replace(/^- (.*)$/gm, '<div class="note-bullet">$1</div>');
+        const renderText = (value = '') => {
+            const lines = Utils.esc(value).replace(/\r/g, '').split('\n');
+            const inline = text => text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>');
+            const cellsFrom = line => {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('|')) return null;
+                return trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+            };
+            const isTableSeparator = cells => cells?.length > 1 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
+            const output = [];
+            let listType = '';
+            const closeList = () => {
+                if (listType) output.push(`</${listType}>`);
+                listType = '';
+            };
+
+            for (let index = 0; index < lines.length;) {
+                const header = cellsFrom(lines[index]);
+                const separator = cellsFrom(lines[index + 1] || '');
+                if (header?.length > 1 && isTableSeparator(separator)) {
+                    closeList();
+                    const rows = [];
+                    let rowIndex = index + 2;
+                    while (rowIndex < lines.length) {
+                        const cells = cellsFrom(lines[rowIndex]);
+                        if (!cells) break;
+                        rows.push(cells);
+                        rowIndex++;
+                    }
+                    output.push(`<div class="note-table-wrap"><table class="note-markdown-table"><thead><tr>${header.map(cell => `<th>${inline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${header.map((_, column) => `<td>${inline(row[column] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+                    index = rowIndex;
+                    continue;
+                }
+
+                const bullet = lines[index].match(/^\s*-\s+(.*)$/);
+                const numbered = lines[index].match(/^\s*\d+[.)]\s+(.*)$/);
+                const listItem = bullet || numbered;
+                if (listItem) {
+                    const nextType = bullet ? 'ul' : 'ol';
+                    if (listType !== nextType) {
+                        closeList();
+                        listType = nextType;
+                        output.push(`<${listType}>`);
+                    }
+                    output.push(`<li>${inline(listItem[1])}</li>`);
+                    index++;
+                    continue;
+                }
+                closeList();
+                output.push(lines[index] ? `${inline(lines[index])}<br>` : '<br>');
+                index++;
+            }
+            closeList();
+            return output.join('');
+        };
         const query = (searchInput?.value || '').toLowerCase().trim();
         const comments = [...commentsRaw]
             .map(comment => ({
@@ -5104,7 +7590,7 @@ const AdminBoard = {
                 Utils.fmtDate(c.date),
                 ...(c.files || []).map(f => f.name)
             ].join(' ').toLowerCase().includes(query))
-            .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || new Date(a.date) - new Date(b.date));
+            .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || Number(!!b.resolution) - Number(!!a.resolution) || new Date(b.date) - new Date(a.date));
         if (comments.length === 0) {
             box.innerHTML = '<div class="empty-state compact">Keine passenden internen Kommentare gefunden.</div>';
             return;
@@ -5119,7 +7605,7 @@ const AdminBoard = {
                         ${c.pinned ? Icon('pin', 13) : ''}
                         <strong>${Utils.esc(c.author)}</strong>
                         <span class="note-type">${Utils.esc(c.type || 'Notiz')}</span>
-                        ${c.resolution ? `<span class="note-type note-resolution">${Icon('check-circle', 12)}Lösung</span>` : ''}
+                        ${c.resolution ? `<span class="note-type note-resolution">${Icon('check-circle', 12)}Endgültige Lösung</span>` : ''}
                     </div>
                     <div class="note-actions">
                         <span>${Utils.fmtDate(c.date)}</span>
@@ -5139,7 +7625,7 @@ const AdminBoard = {
             });
             box.appendChild(div);
         });
-        box.scrollTop = box.scrollHeight;
+        box.scrollTop = 0;
         if (window.lucide) lucide.createIcons();
     },
 
@@ -5240,7 +7726,15 @@ const AdminBoard = {
             AdminBoard.canAccessTicket(person, t) &&
             mentionedUsers.has(person.username.toLowerCase())
         ) : [];
-        await Store.addNotifications(mentionedAdmins.map(person => person.username), t, `${user.name || user.username} hat dich in einem internen Kommentar erwähnt.`, user.username);
+        await Store.addNotifications(mentionedAdmins.map(person => person.username), t, `${user.name || user.username} hat dich in einem internen Kommentar erwähnt.`, user.username, 'mention');
+        const mentionSettings = await Store.getSettings();
+        if (mentionSettings.emailConfig?.host) {
+            for (const admin of mentionedAdmins) {
+                if (!admin.email) continue;
+                const pref = await Store.resolveNotifPref(admin, 'mention');
+                if (pref.email) Store.sendEmail(admin.email, `Erwähnung in Ticket: ${t.title}`, `${user.name || user.username} hat dich in einem internen Kommentar erwähnt.`);
+            }
+        }
         await Notifications.refresh();
         input.value = '';
         if (q('#m-admin-mention-picker')) q('#m-admin-mention-picker').hidden = true;
@@ -5289,12 +7783,38 @@ const AdminBoard = {
         q('#edit-chat-message').focus();
     },
 
+    // data: URIs werden von Chrome in iframes/embed häufig blockiert ("Diese Seite wurde von
+    // Chrome blockiert"). blob:-URLs aus demselben Origin sind davon nicht betroffen -- daher
+    // wird jeder Anhang vor der Anzeige einmal in ein Blob umgewandelt.
+    dataUriToBlobUrl: (dataUri, mime) => {
+        const commaIdx = dataUri.indexOf(',');
+        const meta = dataUri.slice(5, commaIdx);
+        const isBase64 = meta.includes(';base64');
+        const payload = dataUri.slice(commaIdx + 1);
+        const byteString = isBase64 ? atob(payload) : decodeURIComponent(payload);
+        const bytes = new Uint8Array(byteString.length);
+        for (let i = 0; i < byteString.length; i++) bytes[i] = byteString.charCodeAt(i);
+        const blob = new Blob([bytes], { type: mime || meta.split(';')[0] || 'application/octet-stream' });
+        return URL.createObjectURL(blob);
+    },
+
     openAttachmentPreview: async (file) => {
         let attachment = file;
         if (!attachment?.data && (attachment?.attachmentId || attachment?.id)) {
             attachment = await Store.getAttachment(attachment.attachmentId || attachment.id);
         }
         if (!attachment?.data) return UI.toast('Anhang nicht gefunden.');
+        if (AdminBoard._lastPreviewBlobUrl) {
+            URL.revokeObjectURL(AdminBoard._lastPreviewBlobUrl);
+            AdminBoard._lastPreviewBlobUrl = null;
+        }
+        let blobUrl = null;
+        try {
+            blobUrl = AdminBoard.dataUriToBlobUrl(attachment.data, attachment.type);
+            AdminBoard._lastPreviewBlobUrl = blobUrl;
+        } catch (error) {
+            console.error(error);
+        }
 
         let modal = q('#attachment-preview-modal');
         if (!modal) {
@@ -5305,7 +7825,11 @@ const AdminBoard = {
                 <div class="modal modal-xl attachment-preview-modal">
                     <div class="modal-header">
                         <h3 id="attachment-preview-title"></h3>
-                        <button class="btn-ghost btn-icon" data-close-preview title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        <div class="modal-actions">
+                            <a class="btn-ghost btn-icon" id="attachment-preview-open" target="_blank" rel="noopener" title="In neuem Tab öffnen" aria-label="In neuem Tab öffnen">${Icon('external-link', 16)}</a>
+                            <a class="btn-ghost btn-icon" id="attachment-preview-download" title="Herunterladen" aria-label="Herunterladen">${Icon('download', 16)}</a>
+                            <button class="btn-ghost btn-icon" data-close-preview title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        </div>
                     </div>
                     <div class="modal-body attachment-preview-body" id="attachment-preview-body"></div>
                 </div>`;
@@ -5315,47 +7839,59 @@ const AdminBoard = {
                 if (event.target === modal) modal.classList.remove('open');
             };
         }
-        q('#attachment-preview-title').textContent = attachment.name || 'Anhang';
-        const body = q('#attachment-preview-body');
-        body.replaceChildren();
         const name = String(attachment.name || '').toLowerCase();
         const mime = attachment.type || 'application/octet-stream';
+        q('#attachment-preview-title').textContent = attachment.name || 'Anhang';
+        const topDownload = q('#attachment-preview-download');
+        const topOpen = q('#attachment-preview-open');
+        const previewSrc = blobUrl || attachment.data;
+        if (topDownload) {
+            topDownload.href = previewSrc;
+            topDownload.download = attachment.name || 'Anhang';
+        }
+        if (topOpen) {
+            topOpen.href = previewSrc;
+            topOpen.style.display = 'inline-flex';
+        }
+        const body = q('#attachment-preview-body');
+        body.replaceChildren();
         const addText = text => {
             const pre = document.createElement('pre');
             pre.className = 'attachment-text-preview';
             pre.textContent = text;
             body.appendChild(pre);
         };
-        const download = document.createElement('a');
-        download.className = 'btn-secondary attachment-download-fallback';
-        download.href = attachment.data;
-        download.download = attachment.name || 'Anhang';
-        download.textContent = 'Herunterladen';
-
         if (mime === 'application/pdf' || name.endsWith('.pdf')) {
-            const frame = document.createElement('iframe');
-            frame.className = 'attachment-document-frame';
-            frame.title = attachment.name || 'PDF-Vorschau';
-            frame.sandbox = 'allow-same-origin';
-            frame.src = attachment.data;
-            body.append(frame, download);
+            if (blobUrl) {
+                const frameWrap = document.createElement('div');
+                frameWrap.className = 'attachment-document-frame-wrap';
+                const frame = document.createElement('iframe');
+                frame.className = 'attachment-document-frame';
+                frame.src = blobUrl;
+                frame.title = attachment.name || 'PDF-Vorschau';
+                frameWrap.appendChild(frame);
+                body.appendChild(frameWrap);
+            } else {
+                const message = document.createElement('div');
+                message.className = 'attachment-download-fallback';
+                message.innerHTML = `${Icon('file-text', 28)}<strong>PDF-Vorschau konnte nicht geladen werden</strong><span>Nutze oben das Öffnen- oder Download-Icon.</span>`;
+                body.appendChild(message);
+            }
         } else if (mime.startsWith('image/')) {
             const image = document.createElement('img');
             image.className = 'attachment-image-preview';
-            image.src = attachment.data;
+            image.src = previewSrc;
             image.alt = attachment.name || 'Bildanhang';
-            body.append(image, download);
+            body.append(image);
         } else if (/\.(txt|csv|tsv|json|xml|md|log|html?)$/.test(name) || mime.startsWith('text/')) {
             try {
-                addText(await (await fetch(attachment.data)).text());
-                body.appendChild(download);
+                addText(await (await fetch(previewSrc)).text());
             } catch {
                 addText('Diese Datei kann nicht als Text gelesen werden.');
-                body.appendChild(download);
             }
         } else if (/\.(docx|xlsx|xls|pptx)$/.test(name)) {
             try {
-                const buffer = await (await fetch(attachment.data)).arrayBuffer();
+                const buffer = await (await fetch(previewSrc)).arrayBuffer();
                 if (name.endsWith('.docx') && window.mammoth) {
                     const result = await window.mammoth.extractRawText({
                         arrayBuffer: buffer
@@ -5405,22 +7941,20 @@ const AdminBoard = {
                 } else {
                     addText('Die Office-Vorschau konnte nicht geladen werden.');
                 }
-                body.appendChild(download);
             } catch {
-                addText('Die Datei konnte nicht geöffnet werden. Bitte lade sie herunter.');
-                body.appendChild(download);
+                addText('Die Datei konnte nicht geöffnet werden. Nutze das Download-Icon oben.');
             }
         } else if (mime.startsWith('audio/') || mime.startsWith('video/')) {
             const media = document.createElement(mime.startsWith('audio/') ? 'audio' : 'video');
             media.controls = true;
             media.className = 'attachment-media-preview';
-            media.src = attachment.data;
-            body.append(media, download);
+            media.src = previewSrc;
+            body.append(media);
         } else {
             const message = document.createElement('p');
             message.className = 'empty-state';
-            message.textContent = 'Für dieses Dateiformat ist keine sichere Vorschau verfügbar.';
-            body.append(message, download);
+            message.textContent = 'Für dieses Dateiformat ist keine sichere Vorschau verfügbar. Nutze das Download-Icon oben.';
+            body.append(message);
         }
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
@@ -5559,11 +8093,11 @@ const AdminBoard = {
         } else {
             notifyUsers = [t.author];
         }
-        await Store.addNotifications(notifyUsers, t, `${user.name || user.username}: ${txt || 'Dateianhang'}`, user.username);
+        await Store.addNotifications(notifyUsers, t, `${user.name || user.username}: ${txt || 'Dateianhang'}`, user.username, 'newMessage');
         await Notifications.refresh();
 
         const settings = await Store.getSettings();
-        if (settings.notifConfig?.newMessage && settings.emailConfig?.host) {
+        if (settings.emailConfig?.host) {
             const users = await Store.getUsers();
             const recipients = new Map();
             const author = users.find(u => u.username === t.author);
@@ -5582,9 +8116,10 @@ const AdminBoard = {
                 });
             }
 
-            recipients.forEach((recipient, email) => {
-                Store.sendEmail(email, `Neue Nachricht: ${t.title}`, `${user.name || user.username}: ${txt || 'Dateianhang'}`);
-            });
+            for (const [email, recipient] of recipients) {
+                const pref = await Store.resolveNotifPref(recipient, 'newMessage');
+                if (pref.email) Store.sendEmail(email, `Neue Nachricht: ${t.title}`, `${user.name || user.username}: ${txt || 'Dateianhang'}`);
+            }
         }
 
         txtInput.value = '';
@@ -5814,6 +8349,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     await Settings.init(); // Initialize Settings with Theme logic
     await Notifications.init();
+    UI.initTooltips();
     if (q('#stars')) UI.starfield();
 
     // Login Page

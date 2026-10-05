@@ -25,6 +25,7 @@
         </div>
         <nav class="topbar-right">
             <button id="btn-to-dash" class="btn-ghost" onclick="window.location.href='dashboard.html'"><i data-lucide="layout-dashboard"></i>Dashboard</button>
+            <button id="btn-list-view" class="btn-ghost"><i data-lucide="table-properties"></i>Liste</button>
             <button id="btn-archive" class="btn-ghost"><i data-lucide="archive"></i>Archiv</button>
             <button id="btn-global-logs" class="btn-ghost" style="display:none;"><i data-lucide="bell"></i>System-Logs</button>
             <button id="btn-notifications" class="btn-ghost btn-icon notification-button" title="Benachrichtigungen" aria-label="Benachrichtigungen"><i data-lucide="bell"></i><span class="notification-count" hidden>0</span></button>
@@ -44,18 +45,42 @@
             <div id="archive-list" class="archived-list"></div>
         </div>
 
+        <!-- Kontoanfragen + Überfällige Tickets -->
+        <div class="board-banners">
+            <section class="requests-board" id="requests-board" hidden>
+                <button id="btn-open-requests" class="requests-banner" type="button">
+                    <i data-lucide="user-round-plus"></i>
+                    <span class="requests-banner-copy">
+                        <strong class="request-banner-title">Konto-Anfragen</strong>
+                        <span><b id="request-count">0</b> offen</span>
+                    </span>
+                    <i class="requests-banner-arrow" data-lucide="arrow-right"></i>
+                </button>
+            </section>
+            <section class="overdue-board" id="overdue-board" hidden>
+                <button id="btn-overdue-tickets" class="requests-banner overdue-banner" type="button">
+                    <i data-lucide="alarm-clock"></i>
+                    <span class="requests-banner-copy">
+                        <strong class="request-banner-title">Überfällig</strong>
+                        <span><b id="overdue-ticket-count" class="overdue-count">0</b> Tickets</span>
+                    </span>
+                    <i class="requests-banner-arrow" data-lucide="arrow-right"></i>
+                </button>
+            </section>
+        </div>
+
+        <!-- Listenansicht mit Filtern, gespeicherten Ansichten und Mehrfachauswahl -->
+        <div id="list-view" style="display:none;"></div>
+
         <div id="kanban-view">
             <div class="board-tools">
-                <label for="admin-ticket-search">Tickets durchsuchen</label>
-                <input type="search" id="admin-ticket-search" class="section-search" placeholder="Titel, Beschreibung, Benutzer oder Ticket-ID...">
-            </div>
-            <!-- Kontoanfragen -->
-            <section class="requests-board">
-                <div class="panel-head">
-                    <h3 class="panel-title">Konto-Anfragen</h3>
+                <div>
+                    <label for="admin-ticket-search">Tickets durchsuchen</label>
+                    <input type="search" id="admin-ticket-search" class="section-search" placeholder="Titel, Beschreibung, Benutzer oder Ticket-ID...">
                 </div>
-                <div id="request-list" class="request-grid"></div>
-            </section>
+                <button type="button" class="btn-primary" id="btn-admin-create-ticket"><i data-lucide="plus"></i>Neues Ticket</button>
+                <button type="button" class="btn-secondary" id="btn-admin-create-incident"><i data-lucide="siren"></i>Störung erstellen</button>
+            </div>
 
             <div class="kanban-board">
                 <div class="column" id="col-new">
@@ -93,6 +118,18 @@
         </div>
     </main>
 
+    <div class="modal-overlay" id="requests-modal">
+        <div class="modal modal-md">
+            <div class="modal-header">
+                <h3 id="requests-modal-title"><i data-lucide="user-round-plus"></i>Konto-Anfragen</h3>
+                <button class="btn-ghost btn-icon" id="requests-modal-close" type="button" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="request-list" class="request-grid"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Ticket-Detail -->
     <div class="modal-overlay" id="ticket-modal">
         <div class="modal-container">
@@ -103,6 +140,7 @@
                     <div class="modal-actions">
                         <button class="btn-ghost btn-icon" id="m-edit-ticket" title="Titel und Beschreibung bearbeiten" aria-label="Titel und Beschreibung bearbeiten"><i data-lucide="pencil"></i></button>
                         <button class="btn-ghost btn-icon" id="m-logs" title="Protokoll anzeigen" aria-label="Protokoll anzeigen"><i data-lucide="scroll-text"></i></button>
+                        <button class="btn-ghost btn-icon" id="m-print" title="Ticket drucken" aria-label="Ticket drucken"><i data-lucide="printer"></i></button>
                         <button class="btn-ghost btn-icon" id="m-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
                     </div>
                 </div>
@@ -117,6 +155,7 @@
                         <div class="meta-grid ticket-meta-grid">
                             <div class="meta-item"><strong>Von</strong><span id="m-author" class="meta-value">-</span></div>
                             <div class="meta-item"><strong>Datum</strong><span id="m-date" class="meta-value">-</span></div>
+                            <div class="meta-item" id="m-sla-item" hidden><strong>Frist</strong><span class="sla-item-row"><span id="m-sla-badge" class="sla-badge"></span><button type="button" id="m-sla-edit" class="btn-ghost btn-icon btn-xs" title="Eigene Frist setzen" aria-label="Eigene Frist setzen"><i data-lucide="pencil"></i></button></span></div>
                             <div class="meta-item">
                                 <strong>Status</strong>
                                 <select id="m-status-edit">
@@ -145,18 +184,22 @@
 
                         <h4 class="section-title">Beschreibung</h4>
                         <p id="m-desc" class="desc-text"></p>
+                        <div id="m-custom-fields-display" class="custom-fields-display" hidden></div>
                         <div id="m-ticket-attachments" class="ticket-attachments"></div>
+                        <div id="m-incident-linked-list" class="incident-linked-list" hidden></div>
 
                         <div class="comments-section">
                             <h4 class="section-title">Interne Kommunikation</h4>
+                            <div class="internal-stream-tabs" role="tablist" aria-label="Interne Kommunikationsbereiche">
+                                <button class="internal-stream-tab active" id="internal-tab-admin-chat" type="button" role="tab" aria-selected="true" data-stream="admin-chat">
+                                    <span>Admin-Chat</span><span class="internal-stream-count" id="m-admin-note-count">0</span>
+                                </button>
+                                <button class="internal-stream-tab" id="internal-tab-solution" type="button" role="tab" aria-selected="false" data-stream="solution">
+                                    <span>Lösungsweg</span><span class="internal-stream-count" id="m-solution-note-count">0</span>
+                                </button>
+                            </div>
                             <div class="internal-stream-grid">
-                                <section class="internal-stream">
-                                    <h5>Admin-Chat</h5>
-                                    <div class="note-search-wrap" id="m-admin-note-search-wrap">
-                                        <input type="text" id="m-admin-note-search" placeholder="Admin-Chat durchsuchen...">
-                                        <span><i data-lucide="search"></i></span>
-                                    </div>
-                                    <div id="m-admin-comments" class="note-list"></div>
+                                <section class="internal-stream active" id="internal-stream-admin-chat" role="tabpanel" aria-labelledby="internal-tab-admin-chat" data-stream="admin-chat">
                                     <div class="internal-note-composer">
                                         <div class="note-toolbar">
                                             <select id="m-admin-note-type" title="Art des Eintrags">
@@ -175,14 +218,13 @@
                                         <div id="m-admin-note-file-preview" class="file-preview"></div>
                                         <button class="btn-primary btn-block" id="btn-add-admin-comment"><i data-lucide="send"></i>Senden</button>
                                     </div>
-                                </section>
-                                <section class="internal-stream">
-                                    <h5>Lösungsweg</h5>
-                                    <div class="note-search-wrap" id="m-note-search-wrap">
-                                        <input type="text" id="m-note-search" placeholder="Lösungsweg durchsuchen...">
+                                    <div class="note-search-wrap" id="m-admin-note-search-wrap">
+                                        <input type="text" id="m-admin-note-search" placeholder="Admin-Chat durchsuchen...">
                                         <span><i data-lucide="search"></i></span>
                                     </div>
-                                    <div id="m-comments" class="note-list"></div>
+                                    <div id="m-admin-comments" class="note-list"></div>
+                                </section>
+                                <section class="internal-stream" id="internal-stream-solution" role="tabpanel" aria-labelledby="internal-tab-solution" data-stream="solution">
                                     <div class="internal-note-composer">
                                         <div class="note-toolbar">
                                             <select id="m-note-type" title="Art des Eintrags">
@@ -195,19 +237,27 @@
                                             <button class="btn-ghost btn-icon btn-sm" id="m-note-bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
                                             <button class="btn-ghost btn-icon btn-sm" id="m-note-italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
                                             <button class="btn-ghost btn-icon btn-sm" id="m-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-numbered" title="Nummerierte Liste" aria-label="Nummerierte Liste"><i data-lucide="list-ordered"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-table" title="Tabelle einfügen" aria-label="Tabelle einfügen"><i data-lucide="table"></i></button>
                                             <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" style="display:none" multiple></label>
                                             <label class="note-option"><input type="checkbox" id="m-note-pin"> Anpinnen</label>
-                                            <label class="note-option"><input type="checkbox" id="m-note-resolution"> Lösungsschritt</label>
+                                            <label class="note-option"><input type="checkbox" id="m-note-resolution"> Endgültige Lösung</label>
                                         </div>
                                         <textarea id="m-new-comment" rows="4" placeholder="Analyse, Ursache, Lösungsweg, nächste Schritte..."></textarea>
                                         <div id="m-note-file-preview" class="file-preview"></div>
                                         <button class="btn-primary btn-block" id="btn-add-comment"><i data-lucide="plus"></i>Eintrag speichern</button>
                                     </div>
+                                    <div class="note-search-wrap" id="m-note-search-wrap">
+                                        <input type="text" id="m-note-search" placeholder="Lösungsweg durchsuchen...">
+                                        <span><i data-lucide="search"></i></span>
+                                    </div>
+                                    <div id="m-comments" class="note-list"></div>
                                 </section>
                             </div>
                         </div>
 
                         <div class="actions-row">
+                            <button id="btn-mark-incident" class="btn-secondary"><i data-lucide="siren"></i>Als Großstörung markieren</button>
                             <button id="btn-archive-ticket" class="btn-secondary" style="display:none;"><i data-lucide="archive"></i>Archivieren</button>
                         </div>
                     </div>
@@ -284,7 +334,7 @@
 
     <!-- Benutzerverwaltung -->
     <div class="modal-overlay" id="user-man-modal">
-        <div class="modal modal-md">
+        <div class="modal modal-lg">
             <div class="modal-header">
                 <h3><i data-lucide="users"></i>Benutzerverwaltung</h3>
                 <div class="modal-actions">
