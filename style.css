@@ -223,6 +223,10 @@ svg.lucide {
     flex-shrink: 0;
 }
 
+[hidden] {
+    display: none !important;
+}
+
 .sr-only {
     position: absolute;
     width: 1px;
@@ -1067,6 +1071,14 @@ option {
     visibility: hidden;
     pointer-events: none;
     transition: opacity var(--ease), transform var(--ease), visibility var(--ease);
+}
+
+.ms-search {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    width: 100%;
+    margin-bottom: 6px;
 }
 
 .multi-select-container.open .multi-select-dropdown {
@@ -2926,6 +2938,171 @@ button:disabled {
     border-color: rgba(var(--danger-rgb), 0.55);
 }
 
+.ticket-card.card-v2 {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px;
+    border-color: var(--border);
+}
+
+.ticket-card.card-v2>* {
+    margin: 0;
+    min-height: 18px;
+    line-height: 18px;
+}
+
+.ticket-card.card-v2::before {
+    display: none;
+}
+
+.ticket-card.card-v2.card-tone-overdue {
+    border-left: 3px solid var(--danger);
+}
+
+.ticket-card.card-v2.card-tone-incident {
+    border-left: 3px solid #a855f7;
+}
+
+.ticket-card.card-v2.card-tone-critical {
+    border-left: 3px solid #f97316;
+}
+
+.card-v2 .card-line {
+    font-size: 11px;
+    color: #888;
+}
+
+.card-v2 .card-meta-line > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-v2 .card-title-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.card-v2 .card-title {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 18px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    color: var(--text);
+}
+
+.card-v2 .card-incident-badge {
+    background: transparent;
+    border: 1px solid rgba(168, 85, 247, 0.6);
+    color: #a855f7;
+    font-size: 10px;
+    padding: 1px 6px;
+}
+
+.card-v2 .card-deadline-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+}
+
+.card-v2 .card-deadline {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 600;
+}
+
+.sla-text-overdue,
+.sla-text-danger {
+    color: var(--danger);
+}
+
+.sla-text-warning,
+.sla-text-warn {
+    color: var(--warning);
+}
+
+.sla-text-ok,
+.sla-text-success {
+    color: var(--success);
+}
+
+.sla-text-neutral {
+    color: #888;
+}
+
+.card-v2 .card-prio-outline {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    background: transparent;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-sec);
+}
+
+.card-v2 .card-prio-outline.prio-Kritisch {
+    color: var(--danger);
+}
+
+.card-v2 .card-prio-outline.prio-Hoch {
+    color: var(--warning);
+}
+
+.card-v2 .card-prio-outline.prio-Normal {
+    color: var(--info);
+}
+
+.card-v2 .card-prio-outline.prio-Niedrig {
+    color: var(--success);
+}
+
+.card-v2 .card-owner-line {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+}
+
+.card-v2 .card-owner-line>span:not(.card-incident-badge) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-v2 .card-owner-line .card-incident-badge {
+    margin-left: auto;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.card-v2 .card-icon {
+    display: inline-flex;
+    color: var(--warning);
+}
+
+.card-v2 .card-hover-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: #888;
+}
+
+.card-v2 .card-hover-meta span {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
 .sla-overdue-icon {
     display: inline-flex;
     align-items: center;
@@ -3353,10 +3530,10 @@ button:disabled {
     gap: var(--space-2);
 }
 
-.t-head > .t-tag,
-.t-head > .t-team,
-.t-head > .t-incident-badge,
-.t-head > .ticket-number {
+.t-head>.t-tag,
+.t-head>.t-team,
+.t-head>.t-incident-badge,
+.t-head>.ticket-number {
     flex-shrink: 0;
     white-space: nowrap;
 }
@@ -3536,6 +3713,104 @@ button:disabled {
     gap: var(--space-3);
     max-width: 1500px;
     margin: 0 auto var(--space-3);
+}
+
+.board-banners>button,
+.list-view-toolbar>button,
+.list-view-toolbar>details>summary,
+.list-view-bulk-bar button {
+    align-self: center;
+    height: var(--control-h);
+    min-height: var(--control-h);
+    white-space: nowrap;
+}
+
+.lv-more {
+    position: relative;
+}
+
+.lv-more>summary {
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+}
+
+.lv-more>summary::-webkit-details-marker {
+    display: none;
+}
+
+.lv-more-body {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+    min-width: 260px;
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg2);
+    box-shadow: var(--shadow-modal);
+}
+
+.absence-banner {
+    position: fixed;
+    top: 72px;
+    right: 16px;
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-width: 300px;
+    padding: var(--space-3);
+    border: 1px solid rgba(var(--warning-rgb), 0.5);
+    border-radius: var(--radius-lg);
+    background: var(--bg2);
+    box-shadow: var(--shadow-modal);
+}
+
+.absence-banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.absence-banner-text strong {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--warning);
+}
+
+.absence-banner-text span {
+    font-size: var(--fs-sm);
+    color: var(--text-sec);
+}
+
+.substitute-popup {
+    border: 2px solid rgba(var(--warning-rgb), 0.8);
+    box-shadow: 0 0 0 6px rgba(var(--warning-rgb), 0.15), var(--shadow-modal);
+}
+
+.substitute-popup-body {
+    white-space: pre-line;
+    font-size: 15px;
+    line-height: 1.6;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.absence-overview-row {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
 }
 
 .requests-board,
@@ -4093,10 +4368,19 @@ button:disabled {
     background: rgba(var(--danger-rgb), 0.08);
 }
 
+.incident-notice[hidden],
+.incident-linked-list[hidden] {
+    display: none;
+}
+
 .incident-notice-text {
     display: flex;
     flex-direction: column;
     gap: 2px;
+}
+
+.incident-linked-add {
+    margin-bottom: var(--space-3);
 }
 
 .incident-notice-text strong {

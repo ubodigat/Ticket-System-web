@@ -45,7 +45,7 @@
             <div id="archive-list" class="archived-list"></div>
         </div>
 
-        <!-- Kontoanfragen + Überfällige Tickets -->
+        <!-- Kontoanfragen + Überfällige Tickets + Erstellen -->
         <div class="board-banners">
             <section class="requests-board" id="requests-board" hidden>
                 <button id="btn-open-requests" class="requests-banner" type="button">
@@ -67,6 +67,8 @@
                     <i class="requests-banner-arrow" data-lucide="arrow-right"></i>
                 </button>
             </section>
+            <button type="button" class="btn-primary" id="btn-admin-create-ticket"><i data-lucide="plus"></i>Neues Ticket</button>
+            <button type="button" class="btn-secondary" id="btn-admin-create-incident"><i data-lucide="siren"></i>Störung erstellen</button>
         </div>
 
         <!-- Listenansicht mit Filtern, gespeicherten Ansichten und Mehrfachauswahl -->
@@ -78,8 +80,6 @@
                     <label for="admin-ticket-search">Tickets durchsuchen</label>
                     <input type="search" id="admin-ticket-search" class="section-search" placeholder="Titel, Beschreibung, Benutzer oder Ticket-ID...">
                 </div>
-                <button type="button" class="btn-primary" id="btn-admin-create-ticket"><i data-lucide="plus"></i>Neues Ticket</button>
-                <button type="button" class="btn-secondary" id="btn-admin-create-incident"><i data-lucide="siren"></i>Störung erstellen</button>
             </div>
 
             <div class="kanban-board">
@@ -258,6 +258,7 @@
 
                         <div class="actions-row">
                             <button id="btn-mark-incident" class="btn-secondary"><i data-lucide="siren"></i>Als Großstörung markieren</button>
+                            <button id="btn-assign-incident" class="btn-secondary" style="display:none;"><i data-lucide="link"></i>Einer Störung zuordnen</button>
                             <button id="btn-archive-ticket" class="btn-secondary" style="display:none;"><i data-lucide="archive"></i>Archivieren</button>
                         </div>
                     </div>

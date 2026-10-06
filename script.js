@@ -686,13 +686,24 @@ const TOTP = {
 // --- Store ---
 const Store = {
     getUsers: async () => Promise.resolve(Utils.read('users', [])),
-    saveUsers: async (users) => Promise.resolve(Utils.write('users', users)),
+    saveUsers: async (users) => {
+        const before = Utils.read('users', []);
+        const result = Utils.write('users', users);
+        await LogDiff.users(before, users);
+        return result;
+    },
     getGroups: async () => Promise.resolve(Utils.read('user_groups', [])),
-    saveGroups: async (groups) => Promise.resolve(Utils.write('user_groups', groups)),
+    saveGroups: async (groups) => {
+        const before = Utils.read('user_groups', []);
+        const result = Utils.write('user_groups', groups);
+        await LogDiff.groups(before, groups);
+        return result;
+    },
     getListViews: async () => Promise.resolve(Utils.read('list_views', [])),
     saveListViews: async (views) => Promise.resolve(Utils.write('list_views', views)),
     getTickets: async () => Promise.resolve(Utils.read('tickets', [])),
     saveTickets: async (tickets) => {
+        const before = Utils.read('tickets', []);
         try {
             Utils.write('tickets', tickets);
         } catch (e) {
@@ -708,11 +719,22 @@ const Store = {
                 throw second;
             }
         }
+        await LogDiff.tickets(before, tickets);
     },
     getRequests: async () => Promise.resolve(Utils.read('account_requests', [])),
-    saveRequests: async (reqs) => Promise.resolve(Utils.write('account_requests', reqs)),
+    saveRequests: async (reqs) => {
+        const before = Utils.read('account_requests', []);
+        const result = Utils.write('account_requests', reqs);
+        await LogDiff.requests(before, reqs);
+        return result;
+    },
     getSettings: async () => Promise.resolve(Utils.read('app_settings', Settings.defaults)),
-    saveSettings: async (settings) => Promise.resolve(Utils.write('app_settings', settings)),
+    saveSettings: async (settings) => {
+        const before = Utils.read('app_settings', Settings.defaults);
+        const result = Utils.write('app_settings', settings);
+        await LogDiff.settings(before, settings);
+        return result;
+    },
     getGlobalLogs: async () => Promise.resolve(Utils.read('global_logs', [])),
     saveGlobalLogs: async (logs) => Promise.resolve(Utils.write('global_logs', logs)),
     getNotifications: async () => Promise.resolve(Utils.read('notifications', [])),
@@ -1156,7 +1178,7 @@ const Store = {
             action: action,
             details: details
         });
-        if (logs.length > 1000) logs.shift(); // Max 1000 entries
+        if (logs.length > 10000) logs.splice(0, logs.length - 10000);
         await Store.saveGlobalLogs(logs);
     },
 
@@ -1389,18 +1411,227 @@ const Store = {
 };
 const Notifications = Store.notificationUI;
 
+// Protokolliert jede Änderung an Tickets, Benutzern, Gruppen, Anfragen und Einstellungen im Systemprotokoll.
+const LogDiff = {
+    fmt: v => {
+        if (v === undefined || v === null || v === '') return '–';
+        if (Array.isArray(v)) return v.length ? v.join(', ') : '–';
+        if (typeof v === 'object') return JSON.stringify(v).slice(0, 300);
+        return String(v).slice(0, 300);
+    },
+    isSecret: key => /pass|secret|token|private|key/i.test(key),
+    flatten(value, prefix = '', out = {}) {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            const keys = Object.keys(value);
+            if (!keys.length && prefix) out[prefix] = {};
+            keys.forEach(k => LogDiff.flatten(value[k], prefix ? `${prefix}.${k}` : k, out));
+            return out;
+        }
+        out[prefix] = value;
+        return out;
+    },
+    async write(action, details) {
+        try {
+            await Store.addGlobalLog(action, details.slice(0, 4000));
+        } catch (error) {
+            console.error('Protokollierung fehlgeschlagen', error);
+        }
+    },
+    async tickets(oldList, newList) {
+        const oldMap = new Map(oldList.map(t => [t.id, t]));
+        const newIds = new Set(newList.map(t => t.id));
+        const chatKey = c => `${c.date}|${c.author}|${c.text}`;
+        for (const t of newList) {
+            const label = `${t.ticketNumber || t.id} „${t.title || ''}“`;
+            const o = oldMap.get(t.id);
+            if (!o) {
+                await LogDiff.write('Ticket angelegt', `${label}\nErsteller: ${t.author || '–'} · Priorität: ${t.prio || '–'} · Kategorie: ${LogDiff.fmt(t.category)} · Status: ${t.status || '–'} · Hauptverantwortlicher: ${LogDiff.fmt(t.owner)}${t.linkedIncidentId ? ' · Verknüpft mit Störung: ' + t.linkedIncidentId : ''}`);
+                continue;
+            }
+            const changes = [];
+            const cmp = (name, a, b) => {
+                if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) changes.push(`${name}: ${LogDiff.fmt(a)} → ${LogDiff.fmt(b)}`);
+            };
+            cmp('Titel', o.title, t.title);
+            cmp('Beschreibung', o.desc, t.desc);
+            cmp('Status', o.status, t.status);
+            cmp('Priorität', o.prio, t.prio);
+            cmp('Kategorie', o.category, t.category);
+            cmp('Hauptverantwortlicher', o.owner, t.owner);
+            cmp('Zuständige', o.assignees, t.assignees);
+            cmp('Beteiligte', o.participants, t.participants);
+            cmp('Team', o.team, t.team);
+            cmp('Ersteller', o.author, t.author);
+            cmp('Verknüpfte Störung', o.linkedIncidentId, t.linkedIncidentId);
+            cmp('Großstörung', o.isMajorIncident, t.isMajorIncident);
+            cmp('Störungshinweis', o.incidentNotice, t.incidentNotice);
+            cmp('Archiviert', o.archived, t.archived);
+            cmp('Ersteller archiviert', o.authorArchived, t.authorArchived);
+            cmp('Frist (manuell)', o.customDueAt, t.customDueAt);
+            cmp('Wartet auf Antwort mit Nachricht', o.waitingMessage, t.waitingMessage);
+
+            const oTodos = o.todos || [];
+            const nTodos = t.todos || [];
+            const todoKey = x => x.id || x.title;
+            nTodos.forEach(td => {
+                const prev = oTodos.find(x => todoKey(x) === todoKey(td));
+                if (!prev) {
+                    changes.push(`Teilaufgabe hinzugefügt: „${td.title}“ · Zuweisung: ${LogDiff.fmt(td.assignee)}`);
+                    return;
+                }
+                if (!!prev.done !== !!td.done) changes.push(`Teilaufgabe ${td.done ? 'erledigt' : 'wieder offen'}: „${td.title}“`);
+                if (prev.title !== td.title) changes.push(`Teilaufgabe umbenannt: „${prev.title}“ → „${td.title}“`);
+                if ((prev.assignee || '') !== (td.assignee || '')) changes.push(`Teilaufgabe „${td.title}“ Zuweisung: ${LogDiff.fmt(prev.assignee)} → ${LogDiff.fmt(td.assignee)}`);
+            });
+            oTodos.forEach(prev => {
+                if (!nTodos.some(x => todoKey(x) === todoKey(prev))) changes.push(`Teilaufgabe entfernt: „${prev.title}“`);
+            });
+
+            const oTime = o.timeEntries || [];
+            const nTime = t.timeEntries || [];
+            nTime.filter(e => !oTime.some(x => x.id === e.id)).forEach(e => changes.push(`Zeit erfasst: ${e.minutes} Min. von ${e.username}${e.note ? ' („' + e.note + '“)' : ''}`));
+            oTime.filter(e => !nTime.some(x => x.id === e.id)).forEach(e => changes.push(`Zeiteintrag entfernt: ${e.minutes} Min. von ${e.username}`));
+
+            const oAtt = (o.attachments || []).map(a => a.name);
+            const nAtt = (t.attachments || []).map(a => a.name);
+            nAtt.filter(n => !oAtt.includes(n)).forEach(n => changes.push(`Anhang hinzugefügt: ${n}`));
+            oAtt.filter(n => !nAtt.includes(n)).forEach(n => changes.push(`Anhang entfernt: ${n}`));
+
+            const oChat = new Set((o.chat || []).map(chatKey));
+            (t.chat || []).filter(c => !oChat.has(chatKey(c))).forEach(c => {
+                changes.push(`Chat-Nachricht (${c.role === 'user' ? 'Benutzer' : 'Support'}, ${c.author || '–'}): „${String(c.text || '').slice(0, 500)}“${c.files?.length ? ' + ' + c.files.length + ' Datei(en)' : ''}`);
+            });
+            const oComments = new Set((o.comments || []).map(chatKey));
+            (t.comments || []).filter(c => !oComments.has(chatKey(c))).forEach(c => {
+                changes.push(`Interne Notiz (${c.channel || 'solution'}, ${c.type || '–'}, ${c.author || '–'}): „${String(c.text || '').slice(0, 500)}“${c.pinned ? ' · angepinnt' : ''}${c.resolution ? ' · endgültige Lösung' : ''}`);
+            });
+
+            if (changes.length) await LogDiff.write('Ticket geändert', `${label}\n${changes.join('\n')}`);
+        }
+        for (const o of oldList) {
+            if (!newIds.has(o.id)) await LogDiff.write('Ticket entfernt', `${o.ticketNumber || o.id} „${o.title || ''}“`);
+        }
+    },
+    async users(oldList, newList) {
+        const oldMap = new Map(oldList.map(u => [u.username, u]));
+        const newNames = new Set(newList.map(u => u.username));
+        const fields = ['name', 'email', 'department', 'role', 'dept', 'groups', 'canManageRequests', 'canManageUsers', 'canViewLogs', 'canManage2FA', 'twoFactorEnabled', 'accountLocked', 'accountArchived', 'lockedUntil'];
+        for (const u of newList) {
+            const o = oldMap.get(u.username);
+            if (!o) {
+                await LogDiff.write('Benutzer angelegt', `${u.username} · Name: ${LogDiff.fmt(u.name)} · Rolle: ${LogDiff.fmt(u.role)} · E-Mail: ${LogDiff.fmt(u.email)} · Abteilung: ${LogDiff.fmt(u.department)}`);
+                continue;
+            }
+            const changes = [];
+            fields.forEach(f => {
+                const a = o[f], b = u[f];
+                if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) {
+                    const shown = f === 'lockedUntil' ? (b ? new Date(b).toLocaleString('de-DE') : '–') : LogDiff.fmt(b);
+                    changes.push(`${f}: ${f === 'lockedUntil' && a ? new Date(a).toLocaleString('de-DE') : LogDiff.fmt(a)} → ${shown}`);
+                }
+            });
+            if (o.password !== u.password) changes.push('Passwort geändert');
+            const oAbs = LogDiff.flatten(o.absence || {});
+            const nAbs = LogDiff.flatten(u.absence || {});
+            [...new Set([...Object.keys(oAbs), ...Object.keys(nAbs)])].forEach(k => {
+                if (JSON.stringify(oAbs[k] ?? null) !== JSON.stringify(nAbs[k] ?? null)) changes.push(`Abwesenheit ${k}: ${LogDiff.fmt(oAbs[k])} → ${LogDiff.fmt(nAbs[k])}`);
+            });
+            if (changes.length) await LogDiff.write('Benutzer geändert', `${u.username}\n${changes.join('\n')}`);
+        }
+        for (const o of oldList) {
+            if (!newNames.has(o.username)) await LogDiff.write('Benutzer gelöscht', `${o.username} · Name: ${LogDiff.fmt(o.name)} · Rolle: ${LogDiff.fmt(o.role)}`);
+        }
+    },
+    async settings(oldS, newS) {
+        const a = LogDiff.flatten(oldS || {});
+        const b = LogDiff.flatten(newS || {});
+        const changes = [];
+        [...new Set([...Object.keys(a), ...Object.keys(b)])].forEach(k => {
+            if (JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null)) return;
+            if (k.endsWith('bgValue')) return changes.push(`${k}: Hintergrundbild geändert`);
+            if (LogDiff.isSecret(k)) return changes.push(`${k}: Wert geändert (geheim)`);
+            changes.push(`${k}: ${LogDiff.fmt(a[k])} → ${LogDiff.fmt(b[k])}`);
+        });
+        if (changes.length) await LogDiff.write('Einstellungen geändert', changes.join('\n'));
+    },
+    async groups(oldList, newList) {
+        const oldMap = new Map(oldList.map(g => [g.id, g]));
+        const newIds = new Set(newList.map(g => g.id));
+        for (const g of newList) {
+            const o = oldMap.get(g.id);
+            if (!o) { await LogDiff.write('Gruppe angelegt', `${g.name} · Mitglieder: ${LogDiff.fmt(g.members)}`); continue; }
+            const changes = [];
+            if (o.name !== g.name) changes.push(`Name: ${o.name} → ${g.name}`);
+            if (o.description !== g.description) changes.push(`Beschreibung: ${LogDiff.fmt(o.description)} → ${LogDiff.fmt(g.description)}`);
+            if (JSON.stringify(o.members || []) !== JSON.stringify(g.members || [])) changes.push(`Mitglieder: ${LogDiff.fmt(o.members)} → ${LogDiff.fmt(g.members)}`);
+            if (changes.length) await LogDiff.write('Gruppe geändert', `${g.name}\n${changes.join('\n')}`);
+        }
+        for (const o of oldList) if (!newIds.has(o.id)) await LogDiff.write('Gruppe gelöscht', o.name);
+    },
+    async requests(oldList, newList) {
+        const oldIds = new Set(oldList.map(r => r.id));
+        const newIds = new Set(newList.map(r => r.id));
+        for (const r of newList) if (!oldIds.has(r.id)) await LogDiff.write('Kontoanfrage eingegangen', `${r.name} · ${r.email}`);
+        for (const r of oldList) if (!newIds.has(r.id)) await LogDiff.write('Kontoanfrage entfernt', `${r.name} · ${r.email}`);
+    }
+};
+
 // --- Auth ---
 // --- Auth ---
 const Auth = {
+    lastError: null,
     login: async (u, p) => {
+        Auth.lastError = null;
         const users = await Store.getUsers();
-        const user = users.find(x => x.username === u && x.password === p);
-        if (user) {
-            localStorage.setItem('currentUser', user.username);
-            await Store.addGlobalLog('Anmeldung erfolgreich', `Benutzer: ${user.name || user.username}`);
-            return user;
+        const candidate = users.find(x => x.username === u);
+        if (candidate?.accountArchived) {
+            Auth.lastError = 'archived';
+            await Store.addGlobalLog('Anmeldung abgelehnt (archiviert)', `Benutzer: ${u}`);
+            return null;
+        }
+        if (candidate?.accountLocked) {
+            Auth.lastError = 'locked';
+            await Store.addGlobalLog('Anmeldung abgelehnt (gesperrt)', `Benutzer: ${u}`);
+            return null;
+        }
+        if (candidate?.lockedUntil && Date.now() < candidate.lockedUntil) {
+            Auth.lastError = 'tempLocked';
+            Auth.lockedUntil = candidate.lockedUntil;
+            await Store.addGlobalLog('Anmeldung abgelehnt (vorübergehend gesperrt)', `Benutzer: ${u}`);
+            return null;
+        }
+        if (candidate && candidate.password === p) {
+            candidate.failedLogins = 0;
+            delete candidate.lockedUntil;
+            await Store.saveUsers(users);
+            localStorage.setItem('currentUser', candidate.username);
+            await Store.addGlobalLog('Anmeldung erfolgreich', `Benutzer: ${candidate.name || candidate.username}`);
+            return candidate;
         }
         await Store.addGlobalLog('Anmeldung fehlgeschlagen', `Benutzerversuch: ${u}`);
+        if (candidate) {
+            const settings = await Store.getSettings();
+            const limit = Number(settings.securityConfig?.maxLoginAttempts) || 0;
+            candidate.failedLogins = (candidate.failedLogins || 0) + 1;
+            if (limit > 0 && candidate.failedLogins >= limit) {
+                const action = settings.securityConfig?.lockoutAction || 'lock';
+                if (action === 'lock') {
+                    candidate.accountLocked = true;
+                    Auth.lastError = 'locked';
+                    await Store.addGlobalLog('Konto nach Fehlversuchen gesperrt', `Benutzer: ${u}`);
+                } else if (action === 'temp') {
+                    const minutes = Number(settings.securityConfig?.lockoutMinutes) || 15;
+                    candidate.lockedUntil = Date.now() + minutes * 60000;
+                    candidate.failedLogins = 0;
+                    Auth.lockedUntil = candidate.lockedUntil;
+                    Auth.lastError = 'tempLocked';
+                    await Store.addGlobalLog('Konto nach Fehlversuchen vorübergehend gesperrt', `Benutzer: ${u}, ${minutes} Min.`);
+                } else {
+                    await Store.addGlobalLog('Maximale Fehlversuche erreicht', `Benutzer: ${u}`);
+                }
+            }
+            await Store.saveUsers(users);
+        }
         return null;
     },
     logout: async () => {
@@ -1682,7 +1913,7 @@ const UI = {
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
     },
-    askIncidentLink: (incidents) => new Promise(resolve => {
+    askIncidentLink: (incidents, opts = {}) => new Promise(resolve => {
         let modal = q('#incident-link-modal');
         if (!modal) {
             modal = document.createElement('div');
@@ -1706,6 +1937,8 @@ const UI = {
                 </div>`;
             document.body.appendChild(modal);
         }
+        modal.querySelector('.modal-header h3').innerHTML = `${Icon('siren', 18)}${Utils.esc(opts.title || 'Gehört dein Ticket zu einer Störung?')}`;
+        modal.querySelector('#ilk-confirm').textContent = opts.confirmLabel || 'Ticket absenden';
         const options = modal.querySelector('#ilk-options');
         options.innerHTML = [
             ...incidents.map((incident, i) => `
@@ -2369,6 +2602,21 @@ const UI = {
             dropdown.appendChild(row);
         });
 
+        if (options.length > 6) {
+            const search = document.createElement('input');
+            search.type = 'search';
+            search.className = 'ms-search';
+            search.placeholder = 'Suchen...';
+            search.setAttribute('aria-label', 'Auswahl durchsuchen');
+            search.oninput = () => {
+                const term = search.value.trim().toLowerCase();
+                dropdown.querySelectorAll('.ms-row').forEach(row => {
+                    row.hidden = !!term && !row.textContent.toLowerCase().includes(term);
+                });
+            };
+            dropdown.prepend(search);
+        }
+
         container.appendChild(header);
         container.appendChild(dropdown);
         updateHeader();
@@ -2571,6 +2819,99 @@ const Settings = {
             if (stars) stars.style.display = 'none';
         }
     },
+    absencePeriodMarkup: (absence = {}, prefix = 'abs') => `
+        <div class="form-grid">
+            <div class="field">
+                <label for="${prefix}-from">Von (TT.MM.JJJJ, leer = sofort)</label>
+                <input id="${prefix}-from" type="text" inputmode="numeric" placeholder="dd.mm.jjjj" value="${absence.fromMs ? Utils.fmtDateOnly(new Date(absence.fromMs)) : ''}">
+            </div>
+            <div class="field">
+                <label for="${prefix}-until">Bis (TT.MM.JJJJ, leer = offen)</label>
+                <input id="${prefix}-until" type="text" inputmode="numeric" placeholder="dd.mm.jjjj" value="${absence.untilMs ? Utils.fmtDateOnly(new Date(absence.untilMs)) : ''}">
+            </div>
+        </div>`,
+
+    readAbsencePeriod: (prefix = 'abs') => {
+        const fromRaw = q(`#${prefix}-from`)?.value.trim() || '';
+        const untilRaw = q(`#${prefix}-until`)?.value.trim() || '';
+        const fromMs = fromRaw ? Utils.parseGermanDateTime(fromRaw, '00:00') : null;
+        const untilMs = untilRaw ? Utils.parseGermanDateTime(untilRaw, '23:59') : null;
+        if (fromRaw && !fromMs) throw new Error('Bitte das Startdatum im Format TT.MM.JJJJ eingeben.');
+        if (untilRaw && !untilMs) throw new Error('Bitte das Enddatum im Format TT.MM.JJJJ eingeben.');
+        if (fromMs && untilMs && untilMs < fromMs) throw new Error('Das Enddatum liegt vor dem Startdatum.');
+        return { fromMs, untilMs };
+    },
+
+    renderAbsenceArea: async (user) => {
+        const field = q('#s-absence-field');
+        const area = q('#s-absence-area');
+        if (!field || !area) return;
+        const isAdmin = !!user && (user.role === 'admin' || user.role === 'superadmin');
+        field.hidden = !isAdmin;
+        if (!isAdmin) return;
+        const users = await Store.getUsers();
+        const me = users.find(u => u.id === user.id);
+        const absence = me?.absence || {};
+        const substitutes = users.filter(u => u.username !== user.username && (u.role === 'admin' || u.role === 'superadmin') && !u.accountArchived);
+        area.innerHTML = `
+            <label class="check-row"><input type="checkbox" id="s-abs-active" ${absence.active || absence.pending ? 'checked' : ''}><span>Ich bin abwesend</span></label>
+            ${Settings.absencePeriodMarkup(absence, 's-abs')}
+            <div class="field">
+                <label for="s-abs-sub">Vertretung</label>
+                <select id="s-abs-sub">
+                    <option value="">Keine – Tickets zurück ins Team</option>
+                    ${substitutes.map(u => `<option value="${Utils.esc(u.username)}" ${absence.substitute === u.username ? 'selected' : ''}>${Utils.esc(u.name || u.username)}</option>`).join('')}
+                </select>
+            </div>
+            <label class="check-row"><input type="checkbox" id="s-abs-visible" ${absence.visible ? 'checked' : ''}><span>Anderen Admins anzeigen, dass ich abwesend bin</span></label>
+            <div class="setting-row"><span class="hint">${absence.pending ? `Geplant ab ${new Date(absence.fromMs).toLocaleDateString('de-DE')}.` : 'Beim Start wird die Vertretung Hauptverantwortlicher aller offenen Tickets. Am Ende kannst du sie zurückholen.'}</span>
+                <button class="btn-primary btn-sm" id="btn-save-absence">${Icon('save', 15)}Abwesenheit speichern</button>
+            </div>`;
+        q('#btn-save-absence').onclick = async () => {
+            let period;
+            try { period = Settings.readAbsencePeriod('s-abs'); } catch (error) { return UI.toast(error.message); }
+            await AdminBoard.setAbsence(user.username, q('#s-abs-active').checked, q('#s-abs-sub').value || null, q('#s-abs-visible').checked, period.fromMs, period.untilMs);
+            UI.toast('Abwesenheit gespeichert.');
+            Settings.renderAbsenceArea(user);
+        };
+    },
+
+    renderAccountArea: (user, settings) => {
+        const field = q('#s-account-field');
+        const area = q('#s-account-area');
+        if (!field || !area) return;
+        if (!user) { field.hidden = true; return; }
+        const editable = { name: true, email: true, department: false, ...(settings.accountConfig?.editable || {}) };
+        const rows = [
+            { key: 'name', label: 'Name', value: user.name || '' },
+            { key: 'email', label: 'E-Mail', value: user.email || '' },
+            { key: 'department', label: 'Einrichtung / Abteilung', value: user.department || '' },
+        ];
+        const anyEditable = rows.some(row => editable[row.key]);
+        field.hidden = false;
+        area.innerHTML = `
+            <div class="form-grid">
+                ${rows.map(row => `<div class="field"><label for="acc-${row.key}">${row.label}${editable[row.key] ? '' : ' <span class="hint">(vom Administrator gesperrt)</span>'}</label><input id="acc-${row.key}" type="text" value="${Utils.esc(row.value)}"${editable[row.key] ? '' : ' disabled'}></div>`).join('')}
+            </div>
+            ${anyEditable ? `<div class="setting-row"><span class="hint">Nur die freigegebenen Felder kannst du ändern.</span>
+                <button class="btn-primary btn-sm" id="btn-save-account">${Icon('save', 15)}Konto speichern</button>
+            </div>` : ''}`;
+        q('#btn-save-account')?.addEventListener('click', async () => {
+            const users = await Store.getUsers();
+            const target = users.find(u => u.id === user.id);
+            if (!target) return;
+            const emailValue = q('#acc-email')?.value.trim();
+            if (editable.email && emailValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) return UI.toast('Bitte eine gültige E-Mail-Adresse eingeben.');
+            rows.forEach(row => {
+                const el = q(`#acc-${row.key}`);
+                if (el && editable[row.key]) target[row.key] = el.value.trim();
+            });
+            await Store.saveUsers(users);
+            await Store.addGlobalLog('Konto geändert', `Benutzer: ${target.username}`);
+            UI.toast('Konto gespeichert.');
+        });
+    },
+
     openModal: async () => {
         let modal = q('#settings-modal');
         if (!modal) {
@@ -2586,6 +2927,10 @@ const Settings = {
                         </div>
                     </div>
                     <div class="modal-body form-grid">
+                        <div class="field field-wide" id="s-absence-field" hidden>
+                            <label>Abwesenheit &amp; Vertretung</label>
+                            <div id="s-absence-area"></div>
+                        </div>
                         <div class="field">
                             <label>${Lang.t('themeMode')}</label>
                             <div class="tabs segmented">
@@ -2619,13 +2964,17 @@ const Settings = {
                             </div>
                             <input type="file" id="s-bg-file" accept="image/*">
                         </div>
-                        <div class="field field-wide">
+                        <div class="field field-wide" id="s-sec-field">
                             <label>${Lang.t('security')}</label>
                             <div id="s-sec-area">
                                 <!-- Rendered dynamically -->
                             </div>
                         </div>
-                        <div class="field field-wide">
+                        <div class="field field-wide" id="s-account-field" hidden>
+                            <label>Konto</label>
+                            <div id="s-account-area"></div>
+                        </div>
+                        <div class="field field-wide" id="s-notif-field">
                             <label>Benachrichtigungen</label>
                             <p class="hint">Lege fest, ob du Benachrichtigungen in der App, per E-Mail oder auf beiden Wegen erhalten möchtest. Grau hinterlegte Einträge wurden vom Administrator fest vorgegeben.</p>
                             <div id="s-notif-area" class="notif-personal-list"></div>
@@ -2692,6 +3041,10 @@ const Settings = {
 
         // Render Security Section
         const user = await Store.currentUser();
+        q('#s-sec-field').hidden = !user;
+        q('#s-notif-field').hidden = !user;
+        Settings.renderAccountArea(user, s);
+        Settings.renderAbsenceArea(user);
         const secArea = q('#s-sec-area');
         if (user && secArea) {
             const isEnabled = user.twoFactorEnabled;
@@ -3178,6 +3531,14 @@ const UserDash = {
         if (q('#u-m-title')) q('#u-m-title').textContent = `${t.ticketNumber || t.id} · ${t.title}${t.archived ? ` (${Lang.t('archived')})` : ''}`;
         if (q('#u-m-desc')) q('#u-m-desc').textContent = t.desc || Lang.t('noDescription');
         {
+            const incidentBox = q('#u-m-incident');
+            if (incidentBox) {
+                const incident = t.linkedIncidentId ? (await Store.getTickets()).find(x => x.id === t.linkedIncidentId) : null;
+                incidentBox.hidden = !incident;
+                incidentBox.innerHTML = incident ? `<div class="incident-notice-text"><strong>${Icon('siren', 14)}Zugeordnete Störung</strong><span>${Utils.esc(incident.ticketNumber || incident.id)} · ${Utils.esc(incident.title)}</span></div>` : '';
+            }
+        }
+        {
             const fieldsSettings = await Store.getSettings();
             UI.renderCustomFieldsDisplay(q('#u-m-custom-fields-display'), Store.getCustomFieldsForCategories(t.category, fieldsSettings), t.customFieldValues || {});
         }
@@ -3459,6 +3820,7 @@ const AdminBoard = {
     canAccessTicket: (user, ticket) => {
         if (!user || !ticket || !['admin', 'superadmin'].includes(user.role)) return false;
         if (user.role === 'superadmin') return true;
+        if (!ticket.owner && !(ticket.assignees || []).length) return true;
         const departments = Array.isArray(user.dept) ? user.dept : [user.dept || 'Allgemein'];
         const categories = Array.isArray(ticket.category) ? ticket.category : [ticket.category || 'Allgemein'];
         const assignedUsers = [ticket.owner, ticket.assignee, ...(ticket.assignees || []), ...(ticket.participants || [])];
@@ -3731,6 +4093,23 @@ const AdminBoard = {
         const canManage2FA = isSuper || !!user?.canManage2FA;
         const canUsers = canManageUsers || canManage2FA;
         const canReqs = isSuper || (user && user.canManageRequests);
+
+        const actionsForAbsence = q('.topbar-right');
+        if (actionsForAbsence && !q('#btn-absence-overview')) {
+            const btn = document.createElement('button');
+            btn.id = 'btn-absence-overview';
+            btn.className = 'btn-ghost';
+            btn.title = 'Abwesenheiten';
+            btn.setAttribute('aria-label', 'Abwesenheiten');
+            btn.innerHTML = `${Icon('plane', 16)}Abwesend`;
+            btn.onclick = () => AdminBoard.openAbsenceOverview();
+            actionsForAbsence.insertBefore(btn, q('#theme-toggle') || q('#btn-settings') || q('#logout'));
+        }
+        await AdminBoard.processAbsences();
+        AdminBoard.renderAbsenceBanner(user);
+        await AdminBoard.openAbsenceReturnPopup(user);
+        AdminBoard.openArchivedAuthorDecisions(user);
+        AdminBoard.openSubstituteNoticePopups(user);
 
         if (canUsers) {
             const actions = q('.topbar-right');
@@ -4077,12 +4456,6 @@ const AdminBoard = {
             const ownerUsername = t.owner || (Array.isArray(t.assignees) ? t.assignees[0] : t.assignee);
             const owner = ownerUsername ? usersList.find(x => x.username === ownerUsername) : null;
             const ownerLabel = owner ? (owner.name || owner.username) : (ownerUsername || Lang.t('unassigned'));
-            const participantNames = (Array.isArray(t.participants) ? t.participants : [])
-                .filter(username => username !== ownerUsername)
-                .map(username => {
-                    const found = usersList.find(x => x.username === username);
-                    return found ? (found.name || found.username) : username;
-                });
             // Nur die zuletzt gesendete Chat-Nachricht entscheidet, ob eine Antwort aussteht –
             // Statusänderungen o.ä. im Protokoll lösen keinen "wartet auf Antwort"-Hinweis aus.
             const latestChat = (t.chat || []).slice().sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0))[0];
@@ -4093,52 +4466,34 @@ const AdminBoard = {
             const waitingReason = String(t.status || '').startsWith('Warten auf') ? Lang.status(t.status) : '';
 
             const linkedCount = t.isMajorIncident ? rawTickets.filter(x => x.linkedIncidentId === t.id && !x.archived).length : 0;
+            const catList = (Array.isArray(t.category) ? t.category : [t.category]).filter(Boolean);
+            const categoryText = catList.length ? catList.slice(0, 2).join(', ') + (catList.length > 2 ? ` +${catList.length - 2}` : '') : '-';
+            const sla = Store.formatSlaCountdown(t, slaSettings);
+            const attachmentCount = (t.attachments || []).length;
+            const tone = isOverdue ? 'overdue' : t.isMajorIncident ? 'incident' : t.prio === 'Kritisch' ? 'critical' : '';
+            card.classList.add('card-v2');
+            if (tone) card.classList.add(`card-tone-${tone}`);
             card.innerHTML = `
-                <div class="t-head">
-                    ${t.isMajorIncident ? `<span class="t-incident-badge" title="${Utils.esc(t.incidentNotice || Lang.t('majorIncident'))}">${Icon('siren', 12)}${Lang.t('majorIncident')}</span>` : ''}
-                    ${t.isMajorIncident ? `<span class="t-team" title="${Lang.t('linkedTickets')}">${Icon('list-tree', 11)}${linkedCount}</span>` : ''}
-                    ${t.linkedIncidentId ? `<span class="t-team" title="${Utils.esc(Lang.t('linked'))}">${Icon('link', 11)}${Lang.t('linked')}</span>` : ''}
-                    <span class="t-tag prio-${t.prio}">${Icon('flag', 12)}${Lang.prio(t.prio)}</span>
-                    <span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>
-                    <div class="t-cats">
-                        ${(Array.isArray(t.category) ? t.category : [t.category || '-']).map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('')}
-                        ${(() => { const team = t.team ? allGroups.find(g => g.id === t.team) : null; return team ? `<span class="t-team" title="Automatisch zugewiesenes Team">${Icon('route', 11)}${Utils.esc(team.name)}</span>` : ''; })()}
-                    </div>
+                <div class="card-line card-meta-line">
+                    <span title="${Utils.esc(catList.join(', ') || '-')}">${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(categoryText)} · ${Utils.fmtDate(t.createdAt).split(' ')[0]}</span>
                 </div>
-                <div class="t-title">${Utils.esc(t.title)}</div>
-                ${waitingReason ? `<div class="ticket-wait-reason">${Icon('pause-circle', 12)}<span>${Utils.esc(waitingReason)}</span></div>` : ''}
-                <div class="t-meta t-sub">
-                    <span class="t-author" title="${Utils.esc(t.authorName || t.author || '-')}">${Icon('user', 12)}${Utils.esc(t.authorName || t.author || '-')} · ${Utils.fmtDate(t.createdAt).split(' ')[0]}</span>
-                    <span class="t-counts">
-                        ${(() => {
-                            const c = Store.formatSlaCountdown(t, slaSettings);
-                            if (!c) return '';
-                            const short = c.overdue ? c.label : Lang.format('stillDue', { time: c.label.replace(Lang.t('dueIn'), '').replace('Fällig in ', '') });
-                            return `<span class="sla-mini-badge sla-badge-${c.tone}" title="Frist: ${Utils.esc(c.dueDateLabel)}">${Icon(c.overdue ? 'triangle-alert' : 'timer', 11)}${Utils.esc(short)}</span>`;
-                        })()}
-                        <span class="chat-count" title="${Lang.t('messages')}">${Icon('message-square', 12)}${(t.chat?.length || 0)}</span>
-                        <span class="chat-count" title="${Lang.t('internalNotesShort')}">${Icon('notebook-tabs', 12)}${(t.comments?.length || 0)}</span>
-                    </span>
+                <div class="card-title">${Utils.esc(t.title)}</div>
+                <div class="card-line card-deadline-row">
+                    ${sla ? `<span class="card-deadline sla-text-${sla.tone}" title="Frist: ${Utils.esc(sla.dueDateLabel)}">${Icon(sla.overdue ? 'triangle-alert' : 'timer', 11)}${Utils.esc(sla.label)}</span>` : '<span></span>'}
+                    <span class="card-prio-outline prio-${t.prio}">${Lang.prio(t.prio)}</span>
                 </div>
-                <div class="ticket-card-ops">
-                    <div class="ticket-card-owner${ownerUsername ? '' : ' is-unassigned'}" title="${ownerUsername ? 'Hauptverantwortlicher: ' + Utils.esc(ownerLabel) : 'Noch niemandem zugewiesen'}">
-                        ${Icon('user-check', 13)}
-                        <span>${Utils.esc(ownerLabel)}</span>
-                    </div>
-                    <div class="ticket-card-participants" title="${participantNames.length ? 'Beteiligt: ' + Utils.esc(participantNames.join(', ')) : 'Keine weiteren Beteiligten'}">
-                        ${Icon('users-round', 13)}
-                        <span>${participantNames.length}</span>
-                    </div>
-                    <div class="ticket-card-work" title="${todoDone} von ${todoTotal} Teilaufgaben erledigt" aria-label="${todoDone} von ${todoTotal} Teilaufgaben erledigt">
-                        ${Icon('list-checks', 13)}
-                        <span>${todoDone}/${todoTotal}</span>
-                    </div>
+                <div class="card-line card-owner-line${ownerUsername ? '' : ' is-unassigned'}">
+                    ${waitingReason ? `<span class="card-icon" title="${Utils.esc(waitingReason)}">${Icon('pause-circle', 12)}</span>` : ''}
+                    ${awaitingReply ? `<span class="card-icon" title="${Lang.t('replyPending')}">${Icon('message-circle', 12)}</span>` : ''}
+                    ${Icon('user', 12)}<span>${Utils.esc(ownerLabel)}</span>
+                    ${t.isMajorIncident ? `<span class="t-incident-badge card-incident-badge" title="${Utils.esc(t.incidentNotice || Lang.t('majorIncident'))}">${Icon('siren', 11)}${Lang.t('majorIncident')} · ${linkedCount}</span>` : ''}
                 </div>
-                ${awaitingReply ? `
-                <div class="ticket-card-activity has-user-update">
-                    <span>${Icon('message-circle', 13)}${Lang.t('replyPending')}</span>
-                    <time>${Utils.fmtDate(latestChat.date).split(' ')[0]}</time>
-                </div>` : ''}
+                <div class="card-hover-meta" aria-hidden="true">
+                    <span title="${Lang.t('messages')}">${Icon('message-square', 12)}${(t.chat?.length || 0)}</span>
+                    <span title="${Lang.t('internalNotesShort')}">${Icon('notebook-tabs', 12)}${(t.comments?.length || 0)}</span>
+                    <span title="Anhänge">${Icon('paperclip', 12)}${attachmentCount}</span>
+                    <span title="${todoDone} von ${todoTotal} Teilaufgaben erledigt">${Icon('list-checks', 12)}${todoDone}/${todoTotal}</span>
+                </div>
             `;
             card.addEventListener('dragstart', (e) => {
                 e.dataTransfer.setData('text/plain', t.id);
@@ -4265,7 +4620,7 @@ const AdminBoard = {
                 h1{font-size:18px;margin:0 0 4px;}
                 .meta{color:#555;font-size:12px;margin-bottom:16px;}
                 table{width:100%;border-collapse:collapse;font-size:12px;}
-                th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top;}
+                th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top;white-space:pre-line;}
                 th{background:#f0f0f0;}
                 tr:nth-child(even){background:#fafafa;}
             </style></head><body>
@@ -4478,10 +4833,20 @@ const AdminBoard = {
             const matchesView = (view === 'users' && u.role === 'user') ||
                 (view === 'admins' && (u.role === 'admin' || u.role === 'superadmin'));
             if (!matchesView) return false;
+            if (u.accountArchived && !AdminBoard.showArchivedUsers) return false;
             if (!canManageUsers && (!canManage2FA || !u.twoFactorEnabled)) return false;
 
             return Utils.matchesSearch(searchTerm, u, groups.filter(g => (g.members || []).includes(u.username) || (u.groups || []).includes(g.id)));
         });
+
+        const archivedToggle = document.createElement('label');
+        archivedToggle.className = 'check-row compact';
+        archivedToggle.innerHTML = `<input type="checkbox" ${AdminBoard.showArchivedUsers ? 'checked' : ''}><span>Archivierte anzeigen</span>`;
+        archivedToggle.querySelector('input').onchange = e => {
+            AdminBoard.showArchivedUsers = e.target.checked;
+            AdminBoard.renderUserManager(view);
+        };
+        list.appendChild(archivedToggle);
 
         filtered.forEach(u => {
             const el = document.createElement('div');
@@ -4499,7 +4864,7 @@ const AdminBoard = {
 
             el.innerHTML = `
                 <div class="user-manager-text">
-                    <span class="user-manager-name">${Utils.esc(u.username)}${u.twoFactorEnabled ? `<span class="badge badge-accent" title="2FA aktiv">${Icon('shield-check', 12)}2FA</span>` : ''}</span>
+                    <span class="user-manager-name">${Utils.esc(u.username)}${u.twoFactorEnabled ? `<span class="badge badge-accent" title="2FA aktiv">${Icon('shield-check', 12)}2FA</span>` : ''}${u.accountLocked ? `<span class="badge badge-danger" title="Nach Fehlversuchen oder manuell gesperrt">${Icon('lock', 12)}Gesperrt</span>` : ''}${u.lockedUntil && u.lockedUntil > Date.now() ? `<span class="badge badge-danger" title="Vorübergehend nach Fehlversuchen gesperrt">${Icon('lock', 12)}Gesperrt bis ${new Date(u.lockedUntil).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</span>` : ''}${u.accountArchived ? `<span class="badge" title="Archiviert">${Icon('archive', 12)}Archiviert</span>` : ''}</span>
                     <span class="row-sub">${Utils.esc(u.name || '-')} · ${Utils.esc(u.email || 'Keine E-Mail')}</span>
                     <div class="group-chip-row">
                         <span class="badge">${Utils.esc(roleInfo)}</span>
@@ -4509,6 +4874,8 @@ const AdminBoard = {
                 </div>
                 <div class="user-manager-actions">
                     ${(isSuper || canManage2FA) && u.twoFactorEnabled ? `<button class="btn-ghost btn-sm reset-2fa" title="2FA zurücksetzen">${Icon('unlock-keyhole', 15)}2FA</button>` : ''}
+                    ${canManageUsers && u.username !== 'admin' && !u.accountArchived ? `<button class="btn-ghost btn-icon lock-u" title="${u.accountLocked ? 'Entsperren' : 'Sperren'}" aria-label="${u.accountLocked ? 'Entsperren' : 'Sperren'}">${Icon(u.accountLocked ? 'lock-open' : 'lock', 16)}</button>` : ''}
+                    ${canManageUsers && u.username !== 'admin' ? `<button class="btn-ghost btn-icon archive-u" title="${u.accountArchived ? 'Reaktivieren' : 'Archivieren'}" aria-label="${u.accountArchived ? 'Reaktivieren' : 'Archivieren'}">${Icon(u.accountArchived ? 'archive-restore' : 'archive', 16)}</button>` : ''}
                     ${view === 'admins' && canManageUsers ? `<button class="btn-ghost btn-icon absence-btn" title="Abwesenheit &amp; Vertretung" aria-label="Abwesenheit und Vertretung">${Icon('plane', 16)}</button>` : ''}
                     ${canManageUsers ? `<button class="btn-ghost btn-icon edit-u" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>` : ''}
                     ${canManageUsers && u.role !== 'superadmin' && u.username !== 'admin' ? `<button class="btn-ghost btn-icon btn-danger del-u" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>` : ''}
@@ -4517,6 +4884,37 @@ const AdminBoard = {
 
             const absenceBtn = el.querySelector('.absence-btn');
             if (absenceBtn) absenceBtn.onclick = () => AdminBoard.openAbsenceModal(u.username);
+
+            const lockBtn = el.querySelector('.lock-u');
+            if (lockBtn) lockBtn.onclick = async () => {
+                const users = await Store.getUsers();
+                const target = users.find(x => x.id === u.id);
+                if (!target) return;
+                target.accountLocked = !target.accountLocked;
+                if (!target.accountLocked) target.failedLogins = 0;
+                await Store.saveUsers(users);
+                await Store.addGlobalLog(target.accountLocked ? 'Konto gesperrt' : 'Konto entsperrt', `Benutzer: ${u.username}`);
+                UI.toast(target.accountLocked ? 'Konto gesperrt.' : 'Konto entsperrt.');
+                AdminBoard.renderUserManager(view);
+            };
+
+            const archiveBtn = el.querySelector('.archive-u');
+            if (archiveBtn) archiveBtn.onclick = () => {
+                const restoring = !!u.accountArchived;
+                UI.confirm(restoring ? `${u.username} reaktivieren?` : `${u.username} archivieren? Das Konto kann sich dann nicht mehr anmelden.`, async () => {
+                    const users = await Store.getUsers();
+                    const target = users.find(x => x.id === u.id);
+                    if (!target) return;
+                    target.accountArchived = !restoring;
+                    if (restoring) target.accountLocked = false;
+                    target.failedLogins = 0;
+                    await Store.saveUsers(users);
+                    await AdminBoard.applyArchiveConsequences(target, restoring);
+                    await Store.addGlobalLog(restoring ? 'Konto reaktiviert' : 'Konto archiviert', `Benutzer: ${u.username}`);
+                    UI.toast(restoring ? 'Konto reaktiviert.' : 'Konto archiviert.');
+                    AdminBoard.renderUserManager(view);
+                });
+            };
 
             if (el.querySelector('.reset-2fa')) {
                 el.querySelector('.reset-2fa').onclick = () => {
@@ -4847,6 +5245,7 @@ const AdminBoard = {
                         <div class="field"><label>Benutzername</label><input id="ue-user" type="text"></div>
                         <div class="field"><label>Name</label><input id="ue-name" type="text"></div>
                         <div class="field"><label>E-Mail</label><input id="ue-email" type="email"></div>
+                        <div class="field"><label>Einrichtung / Abteilung</label><input id="ue-department" type="text"></div>
                         <div class="field"><label>Passwort (leer = unverändert)</label><input id="ue-pass" type="password"></div>
                         <div class="field field-wide" id="ue-role-box"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
                         <div class="field field-wide" id="ue-dept-box" style="display:none">
@@ -4887,6 +5286,7 @@ const AdminBoard = {
         q('#ue-user').disabled = !isNew;
         q('#ue-name').value = isNew ? '' : (user.name || '');
         q('#ue-email').value = isNew ? '' : (user.email || '');
+        q('#ue-department').value = isNew ? '' : (user.department || '');
         q('#ue-pass').value = '';
 
         const roleSel = q('#ue-role');
@@ -4949,12 +5349,10 @@ const AdminBoard = {
         if (groupList) {
             const groups = await Store.getGroups();
             const userGroupIds = user?.groups || groups.filter(g => (g.members || []).includes(user?.username)).map(g => g.id);
-            groupList.innerHTML = groups.map(g => `
-                <label class="check-row">
-                    <input type="checkbox" value="${g.id}" ${userGroupIds.includes(g.id) ? 'checked' : ''}>
-                    <span>${Utils.esc(g.name)}</span>
-                </label>
-            `).join('') || '<div class="empty-state compact">Keine Gruppen vorhanden</div>';
+            AdminBoard.selectedGroupIds = [...userGroupIds];
+            UI.createMultiSelect(groupList, groups.map(g => ({ value: g.id, label: g.name })), userGroupIds, ids => {
+                AdminBoard.selectedGroupIds = ids;
+            });
         }
 
         const toggleDept = () => {
@@ -4973,7 +5371,7 @@ const AdminBoard = {
             const eVal = q('#ue-email').value.trim();
             const pVal = q('#ue-pass').value.trim();
             const rVal = q('#ue-role').value;
-            const gVal = qa('#ue-groups-list input:checked').map(x => x.value);
+            const gVal = [...(AdminBoard.selectedGroupIds || [])];
 
             // Collect checked departments
             const dVal = [];
@@ -5016,6 +5414,7 @@ const AdminBoard = {
                 if (target) {
                     target.name = nVal;
                     target.email = eVal;
+                    target.department = q('#ue-department').value.trim();
                     if (pVal) target.password = pVal;
                     // Only superadmins can change these
                     if (isSuper) {
@@ -5193,6 +5592,7 @@ const AdminBoard = {
                                     <option value="admin">${Lang.t('onlyAdmins')}</option>
                                     <option value="user">${Lang.t('onlyUsers')}</option>
                                 </select>
+                                <div class="hint">${Lang.t('securityHint')}</div>
                             </div>
                             <div class="field">
                                 <label>${Lang.t('sessionTimeout')}</label>
@@ -5202,7 +5602,23 @@ const AdminBoard = {
                                 <label>${Lang.t('maxLoginAttempts')}</label>
                                 <input id="sys-max-login-attempts" type="number" placeholder="0" min="0">
                             </div>
-                            <div class="hint">${Lang.t('securityHint')}</div>
+                            <div class="field">
+                                <label>Was passiert nach Erreichen der Fehlversuche?</label>
+                                <select id="sys-lockout-action">
+                                    <option value="lock">Konto sperren (Admin muss entsperren)</option>
+                                    <option value="temp">Konto vorübergehend sperren</option>
+                                    <option value="none">Nur protokollieren</option>
+                                </select>
+                            </div>
+                            <div class="field" id="sys-lockout-minutes-field">
+                                <label>Sperrdauer (Minuten)</label>
+                                <input id="sys-lockout-minutes" type="number" placeholder="15" min="1">
+                            </div>
+                            <div class="settings-section-title">Konto-Selbstverwaltung</div>
+                            <div class="hint">Welche Angaben dürfen Benutzer in ihrem Konto selbst ändern?</div>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-name"><span>Name</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-email"><span>E-Mail</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-dept"><span>Einrichtung / Abteilung</span></label>
                         </div>
 
                         <!-- LDAP -->
@@ -5396,6 +5812,12 @@ const AdminBoard = {
         q('#sys-2fa-enforce').value = sec.force2FA || 'none';
         q('#sys-session-timeout').value = sec.sessionTimeout || 0;
         q('#sys-max-login-attempts').value = sec.maxLoginAttempts || 0;
+        q('#sys-lockout-action').value = sec.lockoutAction || 'lock';
+        q('#sys-lockout-minutes').value = sec.lockoutMinutes || 15;
+        const accEditable = settings.accountConfig?.editable || {};
+        q('#sys-acc-name').checked = accEditable.name !== false;
+        q('#sys-acc-email').checked = accEditable.email !== false;
+        q('#sys-acc-dept').checked = !!accEditable.department;
 
         const ldap = settings.ldapConfig || {};
         q('#sys-ldap-host').value = ldap.host || '';
@@ -5540,6 +5962,15 @@ const AdminBoard = {
                 force2FA: q('#sys-2fa-enforce').value,
                 sessionTimeout: parseInt(q('#sys-session-timeout').value) || 0,
                 maxLoginAttempts: parseInt(q('#sys-max-login-attempts').value) || 0,
+                lockoutAction: q('#sys-lockout-action').value,
+                lockoutMinutes: Math.max(1, parseInt(q('#sys-lockout-minutes').value) || 15),
+            };
+            newSettings.accountConfig = {
+                editable: {
+                    name: q('#sys-acc-name').checked,
+                    email: q('#sys-acc-email').checked,
+                    department: q('#sys-acc-dept').checked,
+                }
             };
             newSettings.ldapConfig = {
                 host: q('#sys-ldap-host').value.trim(),
@@ -5641,17 +6072,20 @@ const AdminBoard = {
             container.dataset.built = '1';
             container.innerHTML = `
                 <div class="list-view-toolbar">
-                    <button type="button" class="btn-primary" id="lv-create-ticket">${Icon('plus', 16)}Neues Ticket</button>
-                    <button type="button" class="btn-secondary" id="lv-create-incident">${Icon('siren', 16)}Störung erstellen</button>
                     <input type="search" id="lv-search" class="section-search" placeholder="Suchen...">
                     <select id="lv-status"><option value="">Alle Status</option></select>
                     <select id="lv-prio"><option value="">Alle Prioritäten</option><option>Niedrig</option><option>Normal</option><option>Hoch</option><option>Kritisch</option></select>
                     <select id="lv-category"><option value="">Alle Kategorien</option></select>
                     <select id="lv-team"><option value="">Alle Teams</option></select>
-                    <label class="check-row compact"><input type="checkbox" id="lv-mine">Nur meine</label>
-                    <label class="check-row compact"><input type="checkbox" id="lv-sla-risk">SLA in Gefahr</label>
-                    <select id="lv-saved-views"><option value="">Gespeicherte Ansicht...</option></select>
-                    <button id="lv-save-view" class="btn-secondary btn-sm">${Icon('bookmark-plus', 15)}Ansicht speichern</button>
+                    <details class="lv-more">
+                        <summary class="btn-secondary btn-sm">${Icon('sliders-horizontal', 15)}Filter &amp; Ansichten</summary>
+                        <div class="lv-more-body">
+                            <label class="check-row compact"><input type="checkbox" id="lv-mine">Nur meine</label>
+                            <label class="check-row compact"><input type="checkbox" id="lv-sla-risk">SLA in Gefahr</label>
+                            <select id="lv-saved-views"><option value="">Gespeicherte Ansicht...</option></select>
+                            <button id="lv-save-view" class="btn-secondary btn-sm">${Icon('bookmark-plus', 15)}Ansicht speichern</button>
+                        </div>
+                    </details>
                 </div>
                 <div id="lv-bulk-bar" class="list-view-bulk-bar" hidden>
                     <span id="lv-selected-count"></span>
@@ -5681,8 +6115,6 @@ const AdminBoard = {
                     </table>
                 </div>`;
 
-            q('#lv-create-ticket').onclick = () => q('#btn-admin-create-ticket').click();
-            q('#lv-create-incident').onclick = () => AdminBoard.openIncidentCreateModal();
             ['lv-search'].forEach(id => q('#' + id).oninput = () => AdminBoard.renderListView());
             ['lv-status', 'lv-prio', 'lv-category', 'lv-team'].forEach(id => q('#' + id).onchange = () => AdminBoard.renderListView());
             ['lv-mine', 'lv-sla-risk'].forEach(id => q('#' + id).onchange = () => AdminBoard.renderListView());
@@ -5956,18 +6388,36 @@ const AdminBoard = {
             list.innerHTML = '<div class="empty-state compact">Keine offenen Anfragen</div>';
             return;
         }
+        const existingUsers = await Store.getUsers();
         reqs.forEach(r => {
             const el = document.createElement('div');
             el.className = 'ticket-card request-card';
+            const match = existingUsers.find(u => u.email && u.email.toLowerCase() === String(r.email || '').toLowerCase());
+            const restoreLabel = match?.accountArchived ? 'Reaktivieren' : 'Entsperren';
+            const showRestore = !!match && (match.accountLocked || match.accountArchived);
             el.innerHTML = `
                 <div class="req-name">${Utils.esc(r.name)}</div>
                 <div class="req-mail">${Utils.esc(r.email)}</div>
                 <div class="req-actions">
                     <button class="btn-primary btn-sm req-accept">${Icon('check', 15)}Annehmen</button>
+                    ${showRestore ? `<button class="btn-secondary btn-sm req-restore">${Icon(match.accountArchived ? 'archive-restore' : 'lock-open', 15)}${restoreLabel}</button>` : ''}
                     <button class="btn-secondary btn-sm req-decline">${Icon('x', 15)}Ablehnen</button>
                 </div>
             `;
             el.querySelector('.req-accept').onclick = () => AdminBoard.openApproveModal(r);
+            const restoreBtn = el.querySelector('.req-restore');
+            if (restoreBtn) restoreBtn.onclick = async () => {
+                const users = await Store.getUsers();
+                const target = users.find(x => x.id === match.id);
+                if (!target) return;
+                target.accountLocked = false;
+                target.accountArchived = false;
+                target.failedLogins = 0;
+                await Store.saveUsers(users);
+                await Store.addGlobalLog('Konto über Kontoanfrage reaktiviert', `Benutzer: ${target.username}`);
+                UI.toast(`${target.username} wurde ${restoreLabel === 'Reaktivieren' ? 'reaktiviert' : 'entsperrt'}.`);
+                AdminBoard.renderRequests();
+            };
             el.querySelector('.req-decline').onclick = () => {
                 UI.confirm('Anfrage löschen?', async () => {
                     let rest = await Store.getRequests();
@@ -6072,6 +6522,10 @@ const AdminBoard = {
         const oldStatus = ticket.status;
         const actor = await Store.currentUser();
         ticket.status = newStatus;
+        if (newStatus === 'In Bearbeitung' && oldStatus !== 'In Bearbeitung' && actor && !ticket.owner && !(ticket.assignees || []).length) {
+            ticket.owner = actor.username;
+            ticket.assignees = [actor.username];
+        }
 
         // SLA-Uhr pausieren/fortsetzen: läuft während "Warten auf ..." nicht weiter.
         const wasWaiting = String(oldStatus || '').startsWith('Warten auf');
@@ -6215,7 +6669,7 @@ const AdminBoard = {
         const details = q('#tab-details');
         if (!details) return;
 
-        const staff = users.filter(u => u.role === 'admin' || u.role === 'superadmin');
+        const staff = users.filter(u => (u.role === 'admin' || u.role === 'superadmin') && !u.accountArchived);
         if (!Array.isArray(t.assignees)) t.assignees = t.assignee ? [t.assignee] : [];
         if (!Array.isArray(t.participants)) t.participants = [...t.assignees];
         if (!Array.isArray(t.todos)) t.todos = [];
@@ -6384,6 +6838,57 @@ const AdminBoard = {
         return true;
     },
 
+    openAddTicketsToIncident: async (incidentId) => {
+        const tickets = await Store.getTickets();
+        const candidates = tickets.filter(t => !t.archived && !t.isMajorIncident && !t.linkedIncidentId && t.id !== incidentId);
+        const modal = document.createElement('div');
+        modal.id = 'incident-add-modal';
+        modal.className = 'modal-overlay modal-top';
+        modal.innerHTML = `
+            <div class="modal modal-md">
+                <div class="modal-header">
+                    <h3>${Icon('list-tree', 18)}Tickets zur Störung hinzufügen</h3>
+                    <div class="modal-actions">
+                        <button class="btn-ghost btn-icon" id="iam-save" title="Hinzufügen" aria-label="Hinzufügen">${Icon('save', 16)}</button>
+                        <button class="btn-ghost btn-icon" id="iam-close" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <input type="search" id="iam-search" class="section-search" placeholder="Ticket-Nr, Titel oder Person suchen...">
+                    <div class="checkbox-list" id="iam-list">${candidates.map(t => `
+                        <label class="check-row" data-search="${Utils.esc(`${t.ticketNumber || ''} ${t.title} ${t.authorName || ''} ${t.author || ''}`.toLowerCase())}"><input type="checkbox" value="${Utils.esc(t.id)}">
+                            <span class="check-text"><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span>${Utils.esc(t.authorName || t.author || '-')} · ${Lang.status(t.status)}</span></span>
+                        </label>`).join('')}</div>
+                    <div class="empty-state compact" id="iam-empty" ${candidates.length ? 'hidden' : ''}>Keine Treffer.</div>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        const close = () => { modal.remove(); };
+        const searchInput = modal.querySelector('#iam-search');
+        searchInput.oninput = () => {
+            const term = searchInput.value.trim().toLowerCase();
+            let visible = 0;
+            modal.querySelectorAll('#iam-list .check-row').forEach(row => {
+                const match = !term || row.dataset.search.includes(term);
+                row.hidden = !match;
+                if (match) visible++;
+            });
+            modal.querySelector('#iam-empty').hidden = visible > 0;
+        };
+        modal.querySelector('#iam-close').onclick = close;
+        modal.onclick = e => { if (e.target === modal) close(); };
+        modal.querySelector('#iam-save').onclick = async () => {
+            const ids = [...modal.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+            if (!ids.length) return UI.toast('Bitte mindestens ein Ticket auswählen.');
+            for (const ticketId of ids) await AdminBoard.linkTicketToIncident(ticketId, incidentId);
+            close();
+            UI.toast(`${ids.length} Ticket(s) zur Störung hinzugefügt.`);
+            await AdminBoard.openModal(incidentId);
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
     renderIncidentLinkedTickets: (ticket, allTickets) => {
         const box = q('#m-incident-linked-list');
         if (!box) return;
@@ -6409,6 +6914,13 @@ const AdminBoard = {
         box.querySelectorAll('.incident-linked-row').forEach(row => {
             row.onclick = () => AdminBoard.openModal(row.dataset.ticketId);
         });
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'btn-secondary btn-sm incident-linked-add';
+        addBtn.innerHTML = `${Icon('plus', 14)}Ticket hinzufügen`;
+        addBtn.disabled = !!ticket.archived;
+        addBtn.onclick = () => AdminBoard.openAddTicketsToIncident(ticket.id);
+        box.querySelector('.section-title')?.after(addBtn);
         if (window.lucide) lucide.createIcons();
     },
 
@@ -6540,15 +7052,16 @@ const AdminBoard = {
         const users = await Store.getUsers();
         const target = users.find(u => u.username === username);
         if (!target) return;
-        const substitutes = users.filter(u => u.username !== username && (u.role === 'admin' || u.role === 'superadmin'));
+        const substitutes = users.filter(u => u.username !== username && (u.role === 'admin' || u.role === 'superadmin') && !u.accountArchived);
         q('#absence-modal')?.remove();
         const modal = AdminBoard.createGenericModal();
         modal.id = 'absence-modal';
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
         modal.querySelector('.modal-header h3').textContent = `Abwesenheit · ${target.name || target.username}`;
-        AdminBoard.makeModalFooterVisible(modal);
         modal.querySelector('.modal-body').innerHTML = `
             <label class="check-row"><input type="checkbox" id="abs-active" ${target.absence?.active ? 'checked' : ''}>Als abwesend markieren</label>
+            ${Settings.absencePeriodMarkup(target.absence, 'abm')}
+            <label class="check-row"><input type="checkbox" id="abs-visible" ${target.absence?.visible ? 'checked' : ''}>Anderen Admins anzeigen, dass ich abwesend bin</label>
             <div class="field">
                 <label for="abs-substitute">Vertretung</label>
                 <select id="abs-substitute">
@@ -6560,7 +7073,9 @@ const AdminBoard = {
         modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
             const active = q('#abs-active').checked;
             const substitute = q('#abs-substitute').value || null;
-            await AdminBoard.setAbsence(username, active, substitute);
+            let period;
+            try { period = Settings.readAbsencePeriod('abm'); } catch (error) { return UI.toast(error.message); }
+            await AdminBoard.setAbsence(username, active, substitute, q('#abs-visible').checked, period.fromMs, period.untilMs);
             modal.classList.remove('open');
             AdminBoard.renderUserManager('admins');
         };
@@ -6568,40 +7083,387 @@ const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    setAbsence: async (username, active, substituteUsername) => {
+    setAbsence: async (username, active, substituteUsername, visible = false, fromMs = null, untilMs = null) => {
         const users = await Store.getUsers();
         const target = users.find(u => u.username === username);
         if (!target) return;
-        const wasActive = !!target.absence?.active;
-        target.absence = active ? { active: true, substitute: substituteUsername || null, since: Utils.nowISO() } : { active: false, substitute: null, since: null };
-        await Store.saveUsers(users);
-
-        if (active && !wasActive) {
-            const tickets = await Store.getTickets();
-            const openTickets = tickets.filter(t => t.owner === username && t.status !== 'Geschlossen' && !t.archived);
-            const substitute = substituteUsername ? users.find(u => u.username === substituteUsername) : null;
-            for (const t of openTickets) {
-                if (substitute) {
-                    t.owner = substitute.username;
-                    t.assignees = [...new Set([...(t.assignees || []).filter(a => a !== username), substitute.username])];
-                    t.participants = [...new Set([...(t.participants || []), substitute.username])];
-                    await Store.addLog(t, `Hauptverantwortlicher wegen Abwesenheit geändert: ${target.name || username} → ${substitute.name || substitute.username}`);
-                } else {
-                    t.owner = '';
-                    t.assignees = (t.assignees || []).filter(a => a !== username);
-                    await Store.addLog(t, `Ticket wegen Abwesenheit von ${target.name || username} zurück ins Team gelegt`);
-                }
-            }
-            if (openTickets.length) {
-                await Store.saveTickets(tickets);
-                await Store.addGlobalLog('Abwesenheit aktiviert', `Benutzer: ${target.name || username}, ${openTickets.length} Ticket(s) ${substitute ? 'an ' + (substitute.name || substitute.username) + ' übergeben' : 'zurück ins Team gelegt'}`);
-            }
-            UI.toast(`${openTickets.length} Ticket(s) ${substitute ? 'übergeben' : 'zurück ins Team gelegt'}.`);
-        } else if (!active && wasActive) {
-            await Store.addGlobalLog('Abwesenheit beendet', `Benutzer: ${target.name || username}`);
-            UI.toast('Abwesenheit beendet.');
+        if (!active) {
+            await AdminBoard.endAbsence(target, users);
+            await AdminBoard.render();
+            return;
         }
+        const now = Date.now();
+        const substitute = substituteUsername ? users.find(u => u.username === substituteUsername) : null;
+        const fmt = ms => new Date(ms).toLocaleDateString('de-DE');
+        if (fromMs && fromMs > now) {
+            target.absence = { active: false, pending: true, substitute: substitute?.username || null, visible: !!visible, fromMs, untilMs: untilMs || null, transferredIds: [], returnPending: target.absence?.returnPending || [] };
+            await Store.saveUsers(users);
+            await Store.addGlobalLog('Abwesenheit geplant', `Benutzer: ${target.name || username}, von ${fmt(fromMs)} bis ${untilMs ? fmt(untilMs) : 'offen'}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, Anzeige für andere Admins: ${visible ? 'ja' : 'nein'}`);
+            UI.toast(`Abwesenheit geplant ab ${fmt(fromMs)}.`);
+            await AdminBoard.render();
+            return;
+        }
+        if (target.absence?.active) {
+            target.absence = { ...target.absence, substitute: substitute?.username || null, visible: !!visible, untilMs: untilMs || target.absence.untilMs || null };
+            await Store.saveUsers(users);
+            await Store.addGlobalLog('Abwesenheit geändert', `Benutzer: ${target.name || username}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, bis ${untilMs ? fmt(untilMs) : 'offen'}, Anzeige: ${visible ? 'ja' : 'nein'}`);
+            UI.toast('Abwesenheit aktualisiert.');
+            await AdminBoard.render();
+            return;
+        }
+
+        const tickets = await Store.getTickets();
+        const openTickets = tickets.filter(t => t.owner === username && t.status !== 'Geschlossen' && !t.archived);
+        const transferred = [];
+        const addedAsParticipant = [];
+        const transferredIds = [];
+        for (const t of openTickets) {
+            if (substitute) {
+                if (!(t.participants || []).includes(substitute.username) && t.owner !== substitute.username) addedAsParticipant.push(t);
+                t.owner = substitute.username;
+                t.assignees = [...new Set([...(t.assignees || []).filter(a => a !== username), substitute.username])];
+                t.participants = [...new Set([...(t.participants || []), substitute.username])];
+                await Store.addLog(t, `Hauptverantwortlicher wegen Abwesenheit geändert: ${target.name || username} → ${substitute.name || substitute.username}`);
+                transferred.push(t);
+                transferredIds.push(t.id);
+            } else {
+                t.owner = '';
+                t.assignees = (t.assignees || []).filter(a => a !== username);
+                await Store.addLog(t, `Ticket wegen Abwesenheit von ${target.name || username} zurück ins Team gelegt`);
+            }
+        }
+        target.absence = { active: true, pending: false, substitute: substitute?.username || null, visible: !!visible, since: Utils.nowISO(), fromMs: fromMs || null, untilMs: untilMs || null, transferredIds, returnPending: target.absence?.returnPending || [] };
+        await Store.saveUsers(users);
+        if (openTickets.length) {
+            await Store.saveTickets(tickets);
+            const ticketLines = openTickets.map(t => `${t.ticketNumber || t.id} „${t.title}“: Hauptverantwortlicher ${target.name || username} → ${substitute ? (substitute.name || substitute.username) : 'Team (keiner)'}`);
+            await Store.addGlobalLog('Abwesenheit aktiviert', `Benutzer: ${target.name || username}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, bis ${untilMs ? fmt(untilMs) : 'offen'}, ${openTickets.length} Ticket(s)\n${ticketLines.join('\n')}`);
+        } else {
+            await Store.addGlobalLog('Abwesenheit aktiviert', `Benutzer: ${target.name || username}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, bis ${untilMs ? fmt(untilMs) : 'offen'}, keine offenen Tickets`);
+        }
+        if (substitute) await AdminBoard.notifySubstituteAbsence(substitute, target, transferred, addedAsParticipant);
+        UI.toast(`${openTickets.length} Ticket(s) ${substitute ? 'übergeben' : 'zurück ins Team gelegt'}.`);
         await AdminBoard.render();
+    },
+
+    endAbsence: async (target, users) => {
+        const absence = target.absence || {};
+        const tickets = await Store.getTickets();
+        const returnIds = absence.active ? (absence.transferredIds || []) : [];
+        const lines = tickets.filter(t => returnIds.includes(t.id)).map(t => `${t.ticketNumber || t.id} „${t.title}“ · Status: ${Lang.status(t.status)} · Hauptverantwortlicher jetzt: ${t.owner || '–'}`);
+        target.absence = {
+            active: false,
+            pending: false,
+            substitute: null,
+            visible: false,
+            since: null,
+            fromMs: null,
+            untilMs: null,
+            transferredIds: [],
+            returnPending: [...new Set([...(absence.returnPending || []), ...returnIds])]
+        };
+        await Store.saveUsers(users);
+        await Store.addGlobalLog('Abwesenheit beendet', `Benutzer: ${target.name || target.username}${lines.length ? '\n' + lines.join('\n') : '\nKeine Tickets zu übernehmen.'}`);
+        UI.toast('Abwesenheit beendet.');
+    },
+
+    processAbsences: async () => {
+        const now = Date.now();
+        const users = await Store.getUsers();
+        for (const u of users) {
+            const a = u.absence || {};
+            if (a.pending && a.fromMs && a.fromMs <= now) {
+                await AdminBoard.setAbsence(u.username, true, a.substitute, a.visible, a.fromMs, a.untilMs);
+            } else if (a.active && a.untilMs && a.untilMs < now) {
+                const fresh = await Store.getUsers();
+                await AdminBoard.endAbsence(fresh.find(x => x.username === u.username), fresh);
+            }
+        }
+    },
+
+    returnTickets: async (absentUsername, ticketIds) => {
+        const users = await Store.getUsers();
+        const absent = users.find(u => u.username === absentUsername);
+        const tickets = await Store.getTickets();
+        const byFrom = new Map();
+        for (const id of ticketIds) {
+            const t = tickets.find(x => x.id === id);
+            if (!t || t.archived || t.owner === absentUsername) continue;
+            const fromUser = t.owner;
+            t.owner = absentUsername;
+            t.assignees = [...new Set([...(t.assignees || []).filter(a => a !== fromUser), absentUsername])];
+            await Store.addLog(t, `Ticket von ${absent?.name || absentUsername} zurückgeholt (vorher Vertretung: ${fromUser || '–'})`);
+            if (fromUser) byFrom.set(fromUser, [...(byFrom.get(fromUser) || []), t]);
+        }
+        if (absent) absent.absence = { ...(absent.absence || {}), returnPending: [] };
+        await Store.saveUsers(users);
+        if (byFrom.size) await Store.saveTickets(tickets);
+        const notifications = await Store.getNotifications();
+        for (const [fromUser, list] of byFrom) {
+            notifications.push({
+                id: Utils.uid(),
+                recipient: fromUser,
+                ticketId: null,
+                ticketNumber: 'Vertretung',
+                title: `${absent?.name || absentUsername} · Tickets zurückgeholt`,
+                message: `${absent?.name || absentUsername} hat ${list.length} Ticket(s) zurückgeholt:\n` + list.map(t => `${t.ticketNumber || t.id} „${t.title}“ · Status: ${Lang.status(t.status)}`).join('\n'),
+                date: Utils.nowISO(),
+                read: false,
+                type: 'absence'
+            });
+            await Store.addGlobalLog('Vertretung über Rückholung informiert', `Vertretung: ${fromUser}, Tickets: ${list.map(t => t.ticketNumber || t.id).join(', ')}`);
+        }
+        await Store.saveNotifications(notifications.slice(-2000));
+        await Notifications.refresh();
+        if (ticketIds.length) UI.toast(`${ticketIds.length} Ticket(s) zurückgeholt.`);
+    },
+
+    openAbsenceReturnPopup: async (user) => {
+        if (!user) return;
+        const me = (await Store.getUsers()).find(u => u.username === user.username);
+        const ids = me?.absence?.returnPending || [];
+        q('#absence-return-popup')?.remove();
+        if (!ids.length) return;
+        const users = await Store.getUsers();
+        const tickets = (await Store.getTickets()).filter(t => ids.includes(t.id) && !t.archived);
+        if (!tickets.length) {
+            await AdminBoard.returnTickets(user.username, []);
+            return;
+        }
+        const modal = document.createElement('div');
+        modal.id = 'absence-return-popup';
+        modal.className = 'modal-overlay modal-top';
+        modal.innerHTML = `
+            <div class="modal modal-md substitute-popup">
+                <div class="modal-header">
+                    <h3>${Icon('plane', 20)}Abwesenheit beendet – Tickets zurückholen?</h3>
+                </div>
+                <div class="modal-body">
+                    <p class="hint">Diese Tickets lagen während deiner Abwesenheit bei deiner Vertretung. Wähle aus, welche du zurückholen möchtest.</p>
+                    <div class="checkbox-list">${tickets.map(t => {
+                        const owner = users.find(u => u.username === t.owner);
+                        return `<label class="check-row"><input type="checkbox" value="${Utils.esc(t.id)}" checked>
+                            <span class="check-text"><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span>Status: ${Utils.esc(Lang.status(t.status))} · Aktuell bei: ${Utils.esc(owner?.name || t.owner || 'niemandem')}</span></span>
+                        </label>`;
+                    }).join('')}</div>
+                </div>
+                <div class="modal-footer modal-footer-visible">
+                    <button class="btn-secondary" id="arp-keep">Nicht zurückholen</button>
+                    <button class="btn-primary" id="arp-return">${Icon('undo-2', 16)}Ausgewählte zurückholen</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#arp-keep').onclick = async () => {
+            modal.remove();
+            await AdminBoard.returnTickets(user.username, []);
+        };
+        modal.querySelector('#arp-return').onclick = async () => {
+            const chosen = [...modal.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+            modal.remove();
+            await AdminBoard.returnTickets(user.username, chosen);
+            await AdminBoard.render();
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
+    openSubstituteNoticePopups: async (user) => {
+        if (!user) return;
+        const all = await Store.getNotifications();
+        const pending = all.filter(n => n.recipient === user.username && n.type === 'absence' && !n.read);
+        q('#substitute-popup')?.remove();
+        if (!pending.length) return;
+        const modal = document.createElement('div');
+        modal.id = 'substitute-popup';
+        modal.className = 'modal-overlay modal-top';
+        modal.innerHTML = `
+            <div class="modal modal-md substitute-popup">
+                <div class="modal-header">
+                    <h3>${Icon('plane', 20)}Du bist als Vertretung eingetragen</h3>
+                </div>
+                <div class="modal-body substitute-popup-body">${pending.map(n => Utils.esc(n.message)).join('\n\n')}</div>
+                <div class="modal-footer modal-footer-visible">
+                    <button class="btn-primary" id="substitute-popup-ok">${Icon('check', 16)}Verstanden</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#substitute-popup-ok').onclick = async () => {
+            const notifications = await Store.getNotifications();
+            notifications.forEach(n => { if (pending.some(p => p.id === n.id)) n.read = true; });
+            await Store.saveNotifications(notifications);
+            modal.remove();
+            await Notifications.refresh();
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
+    applyArchiveConsequences: async (target, restoring) => {
+        const tickets = await Store.getTickets();
+        let changed = 0;
+        if (target.role === 'user') {
+            tickets.filter(t => t.author === target.username && !t.archived && t.status !== 'Geschlossen').forEach(t => {
+                t.authorArchived = !restoring;
+                changed++;
+            });
+            if (!restoring) await Store.addGlobalLog('Ticket-Ersteller archiviert', `Benutzer: ${target.username}, offene Tickets: ${changed}`);
+        } else if (!restoring) {
+            tickets.filter(t => t.owner === target.username && !t.archived && t.status !== 'Geschlossen').forEach(t => {
+                t.owner = '';
+                t.assignees = (t.assignees || []).filter(a => a !== target.username);
+                t.participants = (t.participants || []).filter(a => a !== target.username);
+                changed++;
+            });
+            if (changed) await Store.addGlobalLog('Admin archiviert – Tickets zurück ins Team', `Benutzer: ${target.username}, Tickets: ${changed}`);
+        }
+        if (changed) await Store.saveTickets(tickets);
+    },
+
+    // Offene Tickets eines archivierten Benutzers: Hauptverantwortliche entscheidet pro Ticket.
+    openArchivedAuthorDecisions: async (user) => {
+        if (!user || !(user.role === 'admin' || user.role === 'superadmin')) return;
+        const tickets = await Store.getTickets();
+        const open = tickets.filter(t => t.owner === user.username && t.authorArchived && !t.archived && t.status !== 'Geschlossen');
+        q('#archived-author-modal')?.remove();
+        if (!open.length) return;
+        const users = await Store.getUsers();
+        const admins = users.filter(u => (u.role === 'admin' || u.role === 'superadmin') && !u.accountArchived && u.username !== user.username);
+        const modal = document.createElement('div');
+        modal.id = 'archived-author-modal';
+        modal.className = 'modal-overlay modal-top';
+        modal.innerHTML = `
+            <div class="modal modal-md">
+                <div class="modal-header">
+                    <h3>${Icon('archive', 18)}Ticket-Ersteller archiviert</h3>
+                </div>
+                <div class="modal-body" id="aa-body"></div>
+            </div>`;
+        document.body.appendChild(modal);
+        const body = modal.querySelector('#aa-body');
+        body.innerHTML = `<p class="hint">Der Ersteller dieser Tickets wurde archiviert und kann nicht mehr antworten. Entscheide je Ticket, wie es weitergeht.</p>` + open.map(t => {
+            const author = users.find(u => u.username === t.author);
+            return `
+                <div class="absence-overview-row aa-row" data-id="${Utils.esc(t.id)}">
+                    <div><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span class="hint">Ersteller: ${Utils.esc(author?.name || t.author)}</span></div>
+                    <div class="aa-actions">
+                        <select class="aa-assign"><option value="">Zuordnen an…</option>${admins.map(a => `<option value="${Utils.esc(a.username)}">${Utils.esc(a.name || a.username)}</option>`).join('')}</select>
+                        <button class="btn-secondary btn-sm aa-assign-btn" type="button">Zuordnen</button>
+                        <button class="btn-secondary btn-sm aa-keep" type="button">Weiter bearbeiten</button>
+                        <button class="btn-secondary btn-sm aa-archive" type="button">Archivieren</button>
+                    </div>
+                </div>`;
+        }).join('');
+        const close = () => { modal.remove(); };
+        let updateQueue = Promise.resolve();
+        const updateTicket = (id, mutate, logText) => {
+            updateQueue = updateQueue.then(async () => {
+                const all = await Store.getTickets();
+                const t = all.find(x => x.id === id);
+                if (!t) return;
+                mutate(t);
+                t.authorArchived = false;
+                await Store.addLog(t, logText);
+                await Store.saveTickets(all);
+                modal.querySelector(`.aa-row[data-id="${id}"]`)?.remove();
+                if (!modal.querySelector('.aa-row')) close();
+                await AdminBoard.render();
+            });
+            return updateQueue;
+        };
+        modal.classList.add('open');
+        body.querySelectorAll('.aa-row').forEach(row => {
+            const id = row.dataset.id;
+            row.querySelector('.aa-assign-btn').onclick = () => {
+                const newOwner = row.querySelector('.aa-assign').value;
+                if (!newOwner) return UI.toast('Bitte einen Benutzer auswählen.');
+                updateTicket(id, t => {
+                    t.owner = newOwner;
+                    t.assignees = [...new Set([...(t.assignees || []).filter(a => a !== user.username), newOwner])];
+                    t.participants = [...new Set([...(t.participants || []).filter(a => a !== user.username), newOwner])];
+                }, `Ticket nach Archivierung des Erstellers neu zugeordnet an ${newOwner}`);
+            };
+            row.querySelector('.aa-keep').onclick = () => updateTicket(id, () => {}, 'Ticket nach Archivierung des Erstellers weiter bearbeitet (Ersteller kann nicht antworten)');
+            row.querySelector('.aa-archive').onclick = () => UI.confirm('Ticket archivieren?', () => updateTicket(id, t => { t.archived = true; }, 'Ticket nach Archivierung des Erstellers archiviert'));
+        });
+        if (window.lucide) lucide.createIcons();
+    },
+
+    renderAbsenceBanner: async (user) => {
+        q('#absence-banner')?.remove();
+        if (!user || !(user.role === 'admin' || user.role === 'superadmin')) return;
+        const me = (await Store.getUsers()).find(u => u.id === user.id);
+        if (!me?.absence?.active) return;
+        const users = await Store.getUsers();
+        const sub = me.absence.substitute ? users.find(u => u.username === me.absence.substitute) : null;
+        const banner = document.createElement('div');
+        banner.id = 'absence-banner';
+        banner.className = 'absence-banner';
+        banner.innerHTML = `
+            <div class="absence-banner-text">
+                <strong>${Icon('plane', 14)}Du bist als abwesend markiert</strong>
+                <span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Tickets liegen im Team'}</span>
+            </div>
+            <button class="btn-secondary btn-sm" id="absence-banner-end">Abwesenheit beenden</button>`;
+        document.body.appendChild(banner);
+        banner.querySelector('#absence-banner-end').onclick = async () => {
+            await AdminBoard.setAbsence(me.username, false, null, false);
+            await AdminBoard.openAbsenceReturnPopup(user);
+        };
+        if (window.lucide) lucide.createIcons();
+    },
+
+    openAbsenceOverview: async () => {
+        const users = await Store.getUsers();
+        const absent = users.filter(u => u.absence?.active && u.absence?.visible);
+        q('#absence-overview-modal')?.remove();
+        const modal = AdminBoard.createGenericModal();
+        modal.id = 'absence-overview-modal';
+        modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
+        modal.querySelector('.modal-header h3').textContent = 'Abwesenheiten';
+        modal.querySelector('.modal-body').innerHTML = absent.length ? absent.map(u => {
+            const sub = u.absence.substitute ? users.find(x => x.username === u.absence.substitute) : null;
+            return `<div class="absence-overview-row"><strong>${Utils.esc(u.name || u.username)}</strong><span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Team'}</span></div>`;
+        }).join('') : '<div class="empty-state compact">Aktuell ist niemand abwesend.</div>';
+        modal.querySelector('.modal-body').insertAdjacentHTML('beforeend', `
+            <div class="setting-row" style="margin-top:var(--space-3);">
+                <button type="button" class="btn-primary btn-sm" id="abs-overview-own">${Icon('plane', 15)}Meine Abwesenheit einstellen</button>
+            </div>`);
+        modal.querySelector('#abs-overview-own').onclick = () => {
+            modal.classList.remove('open');
+            Settings.openModal();
+        };
+        modal.querySelector('.modal-footer')?.remove();
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
+    notifySubstituteAbsence: async (substitute, absentUser, transferred, addedAsParticipant) => {
+        const absentName = absentUser.name || absentUser.username;
+        const lines = [];
+        if (transferred.length) {
+            lines.push(`Als Hauptverantwortlicher übernommen (${transferred.length}): ` + transferred.map(t => `${t.ticketNumber || t.id} ${t.title}`).join('; '));
+        }
+        if (addedAsParticipant.length) {
+            lines.push(`Als Beteiligter hinzugefügt (${addedAsParticipant.length}): ` + addedAsParticipant.map(t => `${t.ticketNumber || t.id} ${t.title}`).join('; '));
+        }
+        const todos = transferred.flatMap(t => (t.todos || []).filter(todo => !todo.done).map(todo => `${t.ticketNumber || t.id}: ${todo.title}`));
+        if (todos.length) lines.push(`Offene Teilaufgaben: ` + todos.join('; '));
+        const message = `${absentName} hat dich als Vertretung hinterlegt.\n` + (lines.length ? lines.join('\n') : 'Aktuell sind keine offenen Tickets betroffen.');
+        const notifications = await Store.getNotifications();
+        notifications.push({
+            id: Utils.uid(),
+            recipient: substitute.username,
+            ticketId: null,
+            ticketNumber: 'Vertretung',
+            title: `${absentName} · Abwesenheit`,
+            message,
+            date: Utils.nowISO(),
+            read: false,
+            type: 'absence'
+        });
+        await Store.saveNotifications(notifications.slice(-2000));
+        await Store.addGlobalLog('Vertretung benachrichtigt', `Vertretung: ${substitute.name || substitute.username}, für: ${absentName}\n${message}`);
+        await Notifications.refresh();
     },
 
     // Admin legt ein Ticket im Namen einer anderen Person an (Telefonanruf, am Schalter, etc.)
@@ -6806,10 +7668,10 @@ const AdminBoard = {
     },
 
     openIncidentCreateModal: async () => {
-        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        q('#generic-modal')?.remove();
+        const modal = AdminBoard.createGenericModal();
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
         modal.querySelector('.modal-header h3').textContent = Lang.t('createIncident');
-        AdminBoard.makeModalFooterVisible(modal);
         const settings = await Store.getSettings();
         const categories = settings.categories && settings.categories.length ? settings.categories : ['Allgemein'];
         modal.querySelector('.modal-body').innerHTML = `
@@ -7010,10 +7872,10 @@ const AdminBoard = {
             });
             return;
         }
-        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        q('#generic-modal')?.remove();
+        const modal = AdminBoard.createGenericModal();
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
         modal.querySelector('.modal-header h3').textContent = 'Als Störung markieren';
-        AdminBoard.makeModalFooterVisible(modal);
         modal.querySelector('.modal-body').innerHTML = `
             <div class="field">
                 <label>Sichtbarer Hinweis für Benutzer</label>
@@ -7021,7 +7883,6 @@ const AdminBoard = {
             </div>
             <p class="hint">Diese Störung wird Benutzern beim Erstellen eines Tickets angeboten.</p>
         `;
-        modal.querySelector('.modal-footer .btn-primary').textContent = 'Speichern';
         modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
             const notice = q('#incident-existing-notice').value.trim();
             if (!notice) return UI.toast('Bitte einen Hinweis eintragen.');
@@ -7144,6 +8005,12 @@ const AdminBoard = {
             <div class="p-entry"><strong>${Utils.esc(nameFor(e.username))}</strong> <span>${Utils.esc(Utils.fmtDate(e.date))} – ${fmtMinutesPrint(e.minutes)}</span>
             ${e.note ? `<p>${Utils.esc(e.note)}</p>` : ''}</div>`).join('') : '';
         const participants = [...new Set([t.owner, ...(t.participants || [])].filter(Boolean))].map(nameFor).join(', ') || '-';
+        const incidentOf = t.linkedIncidentId ? tickets.find(x => x.id === t.linkedIncidentId) : null;
+        const linkedToIncident = t.isMajorIncident ? tickets.filter(x => x.linkedIncidentId === t.id && !x.archived) : [];
+        const incidentSection = t.isMajorIncident ? `<h2>Großstörung</h2>
+            <p class="desc">${Utils.esc(t.incidentNotice || '')}</p>
+            <div class="grid"><div><strong>Zugeordnete Tickets</strong>${linkedToIncident.length}</div></div>
+            ${linkedToIncident.length ? `<ul>${linkedToIncident.map(x => `<li>${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)} – ${Utils.esc(nameFor(x.author) || x.author || '-')} – ${Utils.esc(x.status)}</li>`).join('')}</ul>` : '<p class="desc">Keine Tickets zugeordnet.</p>'}` : incidentOf ? `<h2>Großstörung</h2><p class="desc">Zugeordnet zu ${Utils.esc(incidentOf.ticketNumber || incidentOf.id)} · ${Utils.esc(incidentOf.title)}</p>` : '';
         const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>${Utils.esc(t.ticketNumber || t.id)}</title>
             <style>
                 body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px;max-width:800px;margin:0 auto;}
@@ -7179,7 +8046,8 @@ const AdminBoard = {
             </div>
             <h2>Beschreibung</h2>
             <p class="desc">${Utils.esc(t.desc || 'Keine Beschreibung')}</p>
-            ${todos ? `<h2>Teilaufgaben</h2><ul>${todos}</ul>` : ''}
+            ${incidentSection}
+            ${todos ?`<h2>Teilaufgaben</h2><ul>${todos}</ul>` : ''}
             ${adminChatEntries ? `<h2>Admin-Chat</h2>${adminChatEntries}` : ''}
             ${solutionEntries ? `<h2>Lösungsweg</h2>${solutionEntries}` : ''}
             ${chat ? `<h2>Chat-Verlauf</h2>${chat}` : ''}
@@ -7236,6 +8104,19 @@ const AdminBoard = {
                 btnIncident.onclick = () => AdminBoard.toggleMajorIncident(t.id);
             }
 
+            const btnAssignIncident = q('#btn-assign-incident');
+            if (btnAssignIncident) {
+                const activeIncidents = tickets.filter(x => x.isMajorIncident && !x.archived && x.status !== 'Geschlossen' && x.id !== t.id);
+                btnAssignIncident.style.display = (t.archived || t.isMajorIncident || t.linkedIncidentId || !activeIncidents.length) ? 'none' : '';
+                btnAssignIncident.onclick = async () => {
+                    const choice = await UI.askIncidentLink(activeIncidents, { title: 'Ticket einer Störung zuordnen', confirmLabel: 'Zuordnen' });
+                    if (choice) {
+                        await AdminBoard.linkTicketToIncident(t.id, choice);
+                        await AdminBoard.openModal(t.id);
+                    }
+                };
+            }
+
             // Archive/Re-activate logic integration
             let btnReact = q('#btn-reactivate-ticket');
             if (!btnReact && btnArch) {
@@ -7289,8 +8170,8 @@ const AdminBoard = {
             });
             if (q('#m-admin-new-comment')) q('#m-admin-new-comment').disabled = t.archived;
             if (q('#btn-add-admin-comment')) q('#btn-add-admin-comment').disabled = t.archived;
-            if (chatInput) chatInput.disabled = t.archived;
-            if (chatSend) chatSend.disabled = t.archived;
+            if (chatInput) chatInput.disabled = t.archived || !!t.authorArchived;
+            if (chatSend) chatSend.disabled = t.archived || !!t.authorArchived;
 
             // Metadata
             if (q('#m-author')) q('#m-author').textContent = t.authorName || t.author;
@@ -7463,17 +8344,24 @@ const AdminBoard = {
         const content = sidebar.querySelector('.sidebar-content');
         if (!content) return;
 
-        const query = searchInput.value.toLowerCase();
+        const renderToken = AdminBoard.historyRenderToken = (AdminBoard.historyRenderToken || 0) + 1;
+        const words = searchInput.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
         content.innerHTML = '';
 
         const tickets = (await Store.getTickets())
             .filter(x => x.author === username)
             .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        if (renderToken !== AdminBoard.historyRenderToken) return;
 
-        const filtered = tickets.filter(t => Utils.matchesSearch(query, t));
+        const haystackOf = t => [
+            t.ticketNumber, t.id, t.title, t.desc, Lang.status(t.status), t.status,
+            ...(Array.isArray(t.category) ? t.category : [t.category]),
+            t.authorName, Utils.fmtDate(t.createdAt)
+        ].filter(Boolean).join(' ').toLowerCase();
+        const filtered = tickets.filter(t => words.every(word => haystackOf(t).includes(word)));
 
         if (filtered.length === 0) {
-            content.innerHTML = `<div class="empty-state">${query ? 'Keine Treffer' : 'Keine Historie vorhanden'}</div>`;
+            content.innerHTML = `<div class="empty-state">${words.length ? 'Keine Treffer' : 'Keine Historie vorhanden'}</div>`;
             return;
         }
 
@@ -8386,6 +9274,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 UI.toast(`Willkommen ${user.name}`);
                 setTimeout(() => window.location.href = (user.role === 'admin' || user.role === 'superadmin') ? 'admin.html' : 'dashboard.html', 500);
+            } else if (Auth.lastError === 'archived') {
+                UI.toast('Dieses Konto ist archiviert. Bitte wende dich an den Support.');
+            } else if (Auth.lastError === 'locked') {
+                UI.toast('Dieses Konto ist gesperrt. Bitte wende dich an den Support.');
+            } else if (Auth.lastError === 'tempLocked') {
+                UI.toast(`Zu viele Fehlversuche. Erneut versuchen ab ${new Date(Auth.lockedUntil).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr.`);
             } else {
                 UI.toast('Login fehlgeschlagen');
             }

@@ -179,17 +179,28 @@ Ein Stil für alles Kleine: `.badge` (Aliase: `.status-badge`, `.prio-pill`, `.t
 ### 4.6 Modals
 
 ```
+Speichern-Dialog (Standard):
 ┌──────────────────────────────────────────────┐
-│ [Icon] Titel                  [Aktionen] [×] │  .modal-header + .modal-actions
+│ [Icon] Titel                  [💾] [×]       │  .modal-header + .modal-actions
 ├──────────────────────────────────────────────┤
-│ Inhalt (scrollt)                             │  .modal-body  (.flush für Listen)
+│ Inhalt (scrollt)                             │  .modal-body
+└──────────────────────────────────────────────┘
+
+Auswahl-Dialog (nur wenn der Nutzer zwischen klar benannten Aktionen wählt):
+┌──────────────────────────────────────────────┐
+│ [Icon] Titel                          [×]    │
 ├──────────────────────────────────────────────┤
-│                  [Abbrechen] [Hauptaktion]   │  .modal-footer
+│ Inhalt (scrollt)                             │
+├──────────────────────────────────────────────┤
+│        [Abbrechen] [Hauptaktion]             │  .modal-footer.modal-footer-visible
 └──────────────────────────────────────────────┘
 ```
 
+- **Speichern über das Diskettensymbol im Kopf**, nie über einen Button im Fuß. Das Icon steht links vom Schließen-Kreuz (`#generic-save-head` in `createGenericModal()`). Es ruft den Hauptbutton des Modals auf. Ein Dialog mit reiner Speichern-Aktion hat keine sichtbare Fußzeile (`.action-footer` bleibt versteckt).
+- Ein Modal, das die Fußzeile braucht, wird frisch über `createGenericModal()` aufgebaut und bekommt `.modal-footer.modal-footer-visible`. Es darf nicht das geteilte `#generic-modal` umbauen, weil sonst das Speichern-Icon verloren geht.
+- Fußzeile nur für Auswahl-Dialoge mit benannten Aktionen (z. B. „Zurückholen“ / „Nicht zurückholen“, „Zuordnen“ / „Abbrechen“). Dann stehen Abbrechen links und die Hauptaktion rechts.
 - Breiten nur über Klassen: `.modal-sm` 420 (Bestätigung, 2FA, Dialoge), `.modal-md` 600 (Ticket, Protokoll, Benutzerverwaltung), `.modal-lg` 720 (Formulare, Einstellungen), `.modal-xl` 900 (Systemeinstellungen, System-Protokoll).
-- Schließen immer oben rechts als `.btn-ghost.btn-icon` mit `x`, zusätzlich im Fuß „Schließen“ / „Abbrechen“ als `.btn-secondary`.
+- Schließen immer oben rechts als `.btn-ghost.btn-icon` mit `x`.
 - Modals über anderen Modals (Bestätigung, 2FA, Ticket-Protokoll): `.modal-top`.
 - Kopfdaten eines Tickets: `.meta-grid` mit `.meta-item` (Label `<strong>` + Wert oder Feld).
 - Zwischenüberschriften: `.section-title` (12 px, uppercase, Icon in Akzentfarbe).
@@ -197,12 +208,15 @@ Ein Stil für alles Kleine: `.badge` (Aliase: `.status-badge`, `.prio-pill`, `.t
 ### 4.7 Kanban
 
 - Spalte = Panel mit `.col-header` (Icon, Titel, Zähler-Badge). Jede Spalte hat eine feste Höhe (`height: calc(100vh - 260px)`, nicht `max-height`), damit ihre `.ticket-list` intern scrollt statt die Karten zusammenzudrücken. **Wichtig:** `.ticket-card` braucht `flex-shrink: 0` — sonst behandelt Flexbox eine Karte mit `overflow: hidden` als beliebig auf 0 schrumpfbar, sobald die Liste nicht mehr in die Spalte passt (bei vielen Tickets sonst ein Stapel fast leerer Streifen statt einer scrollenden Liste).
-- Karte `.ticket-card` – kompakt gehalten, damit auch 50+ Tickets pro Spalte scanbar bleiben:
-  - `.t-head`: Prioritäts-Badge links, Kategorien rechts.
-  - `.t-title`: zweizeilig geclampt (`-webkit-line-clamp: 2`), lange Titel brechen nicht die Kartenhöhe auf.
-  - `.t-sub` (Klasse von `.t-meta`): eine Zeile mit Ersteller + Datum (`.t-author`, mit `flex:1 1 auto; min-width:0;` zum Kürzen) links, Nachrichten-/Notiz-Zähler (`.t-counts`) rechts.
-  - `.ticket-card-ops`: eine Zeile mit drei Chips – Hauptverantwortlicher (`.ticket-card-owner`, `flex:1 1 auto; overflow:hidden;` kürzt lange Namen statt die Zeile zu sprengen; ohne Zuweisung zusätzlich `.is-unassigned`, gestrichelt in `--warning`), Beteiligte und offene Teilaufgaben (beide `flex:0 0 auto`, nur Icon + Zahl, Name/Text im `title`-Attribut).
-  - `.ticket-card-activity.has-user-update`: **nur** rendern, wenn die zuletzt gesendete Chat-Nachricht vom Kunden stammt (Antwort steht aus). Bei jeder anderen Aktivität (Status geändert, Ticket erstellt …) wird die Zeile komplett weggelassen statt einen generischen Verlaufseintrag zu zeigen – sonst trägt jede Karte eine Zeile, die bei vielen Tickets nur Rauschen ist.
+- Karte `.ticket-card.card-v2` – vier Zeilen, immer gleich hoch, gleicher Abstand (6 px) zwischen allen Zeilen, keine Innenränder in den Zeilen selbst:
+  1. **Metazeile** (11 px, `--text-sec`): Ticketnummer · Kategorie · Datum. Mehr als zwei Kategorien werden zu „+N“ gekürzt, die volle Liste steht im `title`. Einzeilig mit Auslassung.
+  2. **Titel** (14 px, 600, max. zwei Zeilen, `line-height` 18 px).
+  3. **Frist + Priorität**: Frist links in Statusfarbe (`.sla-text-danger|warning|success`), Priorität rechts als `.card-prio-outline` (nur Rahmen, keine Füllung).
+  4. **Verantwortlicher**: Icon + Name, klein und grau. Warte- und Antwort-Hinweis als kleine Icons davor. Großstörung als einziges Badge (`.card-incident-badge`) am rechten Ende.
+  - Die Metadaten (Nachrichten, Notizen, Anhänge, Teilaufgaben) stehen immer sichtbar unter den vier Zeilen (`.card-hover-meta`). Sie werden nicht erst beim Hover eingeblendet.
+  - Rand: Überfällig rot links (3 px), Großstörung lila links (3 px), Kritisch orange links (3 px), Normal ohne farbigen Rand. Keine farbigen Badge-Füllungen auf der Karte.
+  - Für Ansicht und Kanban gilt: eine Karte zeigt höchstens ein Sonderstatus-Badge.
+- Hinweis zur Antwort: `.ticket-card-activity` gibt es auf der Karte nicht mehr. Die Antwort-Erwartung ist ein kleines Icon in der Verantwortlichen-Zeile.
   - Flex-Item, das kürzen soll statt zu sprengen: **immer** `flex: 1 1 auto; min-width: 0; overflow: hidden;` auf dem Container plus `overflow:hidden; text-overflow:ellipsis; white-space:nowrap;` auf dem Text. `flex: 1 1 0` (Basis 0) NICHT für sowas verwenden – der Schrumpf-Faktor wird dann `flexShrink × flexBasis = 0`, das Element schrumpft trotz `flex-shrink:1` nie und sprengt die Zeile.
 - Hover: `--sel-border`, `--shadow-float`, −2 px. Ablagefläche beim Ziehen: `.drag-over`.
 - Kontoanfrage: `.ticket-card.request-card` (Rahmen `--warning`) mit `.btn-sm`-Aktionen.
@@ -271,6 +285,8 @@ Lucide über `Icon(name, size)`, **ohne** eigene Abstände. Größen: 12 (Badges
 - [ ] Bestehendes Bauteil verwendet (Button, Badge, Zeile, Modal-Aufbau), kein neues erfunden.
 - [ ] Alles in einer Zeile hat dieselbe Höhe.
 - [ ] Abbrechen/Schließen = `.btn-secondary`, Hauptaktion = `.btn-primary`, rechts.
+- [ ] Speichern-Dialog: Icon im Kopf, keine Fußzeile (siehe 4.6).
+- [ ] Ausgeblendete Elemente tragen das Attribut `hidden`. Die globale Regel `[hidden] { display: none !important }` in `style.css` verhindert, dass eine Klasse mit eigenem `display` sie wieder einblendet.
 - [ ] Getestet in Dunkel **und** Hell sowie mit zwei Akzentfarben.
 - [ ] Getestet bei 768 px und schmaler.
 - [ ] `lucide.createIcons()` nach dynamischem Markup; Nutzertexte über `Utils.esc()`.
