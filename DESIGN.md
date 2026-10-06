@@ -133,6 +133,9 @@ Alle Buttons teilen **Radius, Schrift (14/600), Icon-Abstand (8 px), Übergang, 
 - Labels: 11 px, 600, GROSSBUCHSTABEN per CSS, ohne Doppelpunkt.
 - Mehrspaltig mit `.form-grid` (2 Spalten, `.field-wide` über beide). Gilt für Einstellungen, Benutzerformular, Systemeinstellungen und Ticket-Formular.
 - 2FA-Code: `.code-input` (52 px, zentriert, gesperrt).
+- **Datum** (`UI.dateFieldMarkup()` + `UI.bindDateField()`): Textfeld im Format `dd.mm.jjjj`, das beim Tippen automatisch Punkte setzt (`UI.bindDateInput()`), daneben ein Kalender-Icon. Beides schreibt in dasselbe Feld. Der Kalender zeigt nur Tage (kein Uhrzeitteil).
+- **Datum und Uhrzeit** (Frist): Datum wie oben, Uhrzeit als Textfeld `hh:mm`, das den Doppelpunkt automatisch setzt (`UI.bindTimeInput()`). Der Kalender mit Uhrzeit nutzt kompakte Spalten (52 px breit, 24 px Zeilen).
+- Vollständige Datumsangaben immer mit Kalender-Icon und Tippfeld, nie nur eines von beiden.
 
 ### 4.3 Auswahl
 

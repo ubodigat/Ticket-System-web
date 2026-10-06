@@ -28,14 +28,22 @@ Ein schlankes Helpdesk- und Ticketsystem, das komplett im Browser läuft – ohn
 - Bereits beim Erstellen mehrere Dateianhänge hinzufügen
 - Priorität auf **Niedrig**, **Normal** oder **Hoch** beschränkt; Ticketnummer und Status in der Liste sehen
 - Eigene Tickets als Liste mit Status, Datum und Priorität; geschlossene und archivierte Tickets einblendbar
+- Bei einer aktiven Großstörung wird beim Absenden gefragt, ob das Ticket dazugehört (nur wenn es eine Störung gibt)
+- Eigenes Konto in den Einstellungen: Name, E-Mail und Abteilung – nur die Felder, die der Superadmin freigegeben hat, sind änderbar; die übrigen werden angezeigt, aber gesperrt
+- Nach mehreren falschen Passwörtern kann das Konto gesperrt oder vorübergehend gesperrt werden; gesperrte oder archivierte Konten können sich nicht anmelden
 - Chat mit dem Support inklusive Formatierung, sicheren Links, bearbeitbaren eigenen Nachrichten und Dateianhängen
 - Benachrichtigungen bei Statusänderungen und neuen Chatnachrichten; Vorschau für PDF, Bilder, Text/CSV/JSON, Audio/Video sowie DOCX-, XLSX- und PPTX-Inhalte
 - Persönliche Einstellungen: helles/dunkles Theme, Akzentfarbe, Sprache (Deutsch/Englisch), Hintergrund (animiert, Verlauf oder eigenes Bild)
 - Zwei-Faktor-Authentifizierung (TOTP, z. B. Google Authenticator) selbst einrichten
 
 ### Für Admins (`admin.html`)
-- **Kanban-Board** mit den Spalten *Neu*, *In Bearbeitung* und *Geschlossen* – Tickets per Drag & Drop verschieben
+- **Kanban-Board** mit den Spalten *Neu*, *In Bearbeitung*, *Wartet* und *Geschlossen* – Tickets per Drag & Drop verschieben. Kartenaufbau: Metazeile, Titel, Frist mit Priorität, Verantwortlicher; Überfällige Tickets rot, Kritische orange und Großstörungen lila am linken Rand
+- Oben Banner für **Konto-Anfragen** und **Überfällige Tickets** sowie die Schaltflächen *Neues Ticket* und *Störung erstellen* – in Board- und Listenansicht gleich
+- **Großstörungen**: Eine Störung erscheint als eigenes Ticket mit Anzahl der zugeordneten Tickets. Verknüpfte Tickets stehen nur in der Störung, übernehmen deren Status automatisch und lassen sich per Drag & Drop oder über „Einer Störung zuordnen“ hinzufügen. Die Suche nach einer Ticketnummer in einer Störung zeigt die Störung.
 - Suche nach Ticketnummer, Titel, Beschreibung, Benutzer und Ticketinhalt; eindeutige lesbare Ticketnummern
+- **Frist** und **Abwesenheitszeitraum**: Datum tippen mit automatischer Formatierung (`TT.MM.JJJJ`), Uhrzeit (`hh:mm`), zusätzlich Kalender-Icon. Die Liste der überfälligen Tickets nennt den Hauptverantwortlichen
+- **Abwesenheit und Vertretung**: Eigene Abwesenheit mit optionalem Zeitraum (automatischer Start und Ende) und wählbarer Vertretung; die Vertretung wird Hauptverantwortlicher der offenen Tickets und bekommt beim Anmelden ein Popup mit allen Tickets, Teilaufgaben und der Dauer der Abwesenheit. Beim Ende können die Tickets zurückgeholt werden. Mehrere Abwesende mit derselben Vertretung erscheinen als eigene Reiter. Abwesend-Übersicht im Kopf (nur für Personen, die ihre Abwesenheit sichtbar gemacht haben). Die Angabe zeigt Zeitraum und Sichtbarkeit (Badge in der Benutzerliste, Banner, Übersicht, Vertretungs-Popup)
+- **Archivierte Benutzer** verschwinden aus den Auswahllisten; offene Tickets archivierter Ersteller bekommen ein Entscheidungs-Popup für den Hauptverantwortlichen
 - Ticketnummernformat in den Unternehmenseinstellungen anpassbar, mit optionalen Vorlagen pro Kategorie und den Platzhaltern `{prefix}`, `{category}` und `{number}`
 - **Ticket-Detail** mit
   - Titel, Beschreibung, Status, Priorität und Kategorien direkt bearbeiten
@@ -48,10 +56,12 @@ Ein schlankes Helpdesk- und Ticketsystem, das komplett im Browser läuft – ohn
 - **Archiv** mit Volltextsuche (Titel, Autor, Inhalt) und Reaktivierung
 - **Automatische Archivierung**: geschlossene Tickets nach 3 Tagen; höchstens 10 geschlossene Tickets bleiben auf dem Board
 - **Kontoanfragen** von der Startseite annehmen oder ablehnen
-- **Benutzerverwaltung**: Benutzer, Benutzergruppen und Kategorien anlegen und bearbeiten, 2FA zurücksetzen, CSV-Export und -Import
-- **System-Logs**: globales Protokoll (Anmeldungen, Änderungen, Löschungen) mit Text- und Datum/Uhrzeitbereichssuche
+- **Benutzerverwaltung**: Benutzer, Benutzergruppen (Auswahl mit Suche) und Kategorien anlegen und bearbeiten, sperren, entsperren, archivieren und reaktivieren, 2FA zurücksetzen, CSV-Export und -Import
+- **Kontoanfragen** mit Entsperren bzw. Reaktivieren, wenn zum Anfragenden bereits ein gesperrtes oder archiviertes Konto existiert
+- **System-Logs**: globales Protokoll mit detaillierten Einträgen für jede Änderung an Tickets, Benutzern, Gruppen, Anfragen und Einstellungen (alter und neuer Wert, betroffene Ticketnummern), mit Text- und Datum/Uhrzeitbereichssuche
 - **Benachrichtigungen**: einzelne Einträge löschen, alle als gelesen markieren oder alle eigenen Einträge gesammelt löschen
-- **Systemeinstellungen** (Superadmin): E-Mail/SMTP, Benachrichtigungen, Sicherheit (2FA-Pflicht), LDAP, Outlook, allgemeine Vorgaben wie Portalname, Standardpriorität und Standardkategorien
+- **Systemeinstellungen** (Superadmin): E-Mail/SMTP, Benachrichtigungen, Sicherheit (2FA-Pflicht, Fehlversuche und was danach passiert, Sperrdauer), Konto-Selbstverwaltung (welche Felder Benutzer ändern dürfen), LDAP, Outlook, allgemeine Vorgaben wie Portalname, Standardpriorität und Standardkategorien, Geschäftszeiten für Fristen
+- Superadmins sehen und ändern alle Abwesenheiten und Vertretungen in der Benutzerverwaltung
 
 ### Startseite (`index.html`)
 - Anmeldung mit optionaler 2FA-Abfrage
@@ -112,7 +122,7 @@ Für Icons, Schrift und 2FA ist daher eine Internetverbindung nötig.
 | Rolle | Rechte |
 |---|---|
 | **Benutzer** (`user`) | Eigene Tickets erstellen, einsehen und dazu chatten |
-| **Admin** (`admin`) | Kanban-Board und Archiv; sieht Tickets der zugeordneten Kategorien sowie direkt zugewiesene Tickets. Zusätzliche Rechte einzeln vergebbar: *Kontoanfragen verwalten*, *Benutzerverwaltung (nur Benutzer)*, *System-Logs anzeigen*, *2FA von Benutzern zurücksetzen* |
+| **Admin** (`admin`) | Kanban-Board und Archiv; sieht Tickets der zugeordneten Kategorien sowie direkt zugewiesene und nicht zugewiesene Tickets. Kann eigene Abwesenheit mit Vertretung einstellen. Zusätzliche Rechte einzeln vergebbar: *Kontoanfragen verwalten*, *Benutzerverwaltung (nur Benutzer)*, *System-Logs anzeigen*, *2FA von Benutzern zurücksetzen* |
 | **Superadmin** (`superadmin`) | Alle Rechte, inklusive Systemeinstellungen, Admin-Verwaltung, CSV-Import und 2FA-Reset |
 
 Der Zugriff auf die Seiten wird über `data-guard` am `<body>` geprüft (`Auth.checkGuard`).
@@ -162,13 +172,13 @@ Gespeichert wird im `localStorage` unter folgenden Schlüsseln:
 
 | Schlüssel | Inhalt |
 |---|---|
-| `users` | Benutzer: `username`, `password`, `name`, `email`, `role`, `dept` (Kategorien), Rechte, 2FA-Status |
+| `users` | Benutzer: `username`, `password`, `name`, `email`, `department`, `role`, `dept` (Kategorien), Rechte, 2FA-Status, `accountLocked`, `lockedUntil`, `failedLogins`, `accountArchived`, `absence` (Zeitraum, Vertretung, Sichtbarkeit, übertragene und zurückzuholende Tickets) |
 | `user_groups` | Gruppen mit `name`, `description`, `members` |
 | `tickets` | Tickets (siehe unten) |
 | `account_requests` | Offene Kontoanfragen |
 | `app_settings` | Persönliche und Systemeinstellungen |
 | `global_logs` | Systemweites Protokoll |
-| `notifications` | Lokale In-App-Benachrichtigungen je Benutzer |
+| `notifications` | Lokale In-App-Benachrichtigungen je Benutzer (Vertretungen mit `sections` für die Listen im Popup) |
 | `currentUser` | Benutzername der aktiven Sitzung |
 
 Ein Ticket enthält unter anderem:
@@ -184,7 +194,11 @@ Ein Ticket enthält unter anderem:
   chat: [],                       // Nachrichten mit dem Ersteller (inkl. Anhänge als Base64)
   comments: [],                   // interne Einträge mit channel 'admin-chat' oder 'solution'
   logs: [],                       // Änderungsprotokoll
-  archived, archivedAt
+  archived, archivedAt,
+  isMajorIncident, incidentNotice,  // Großstörung
+  linkedIncidentId,                 // Zuordnung zu einer Großstörung
+  authorArchived,                   // Ersteller ist archiviert
+  customDueAt                       // manuell gesetzte Frist
 }
 ```
 
@@ -211,7 +225,7 @@ Das Projekt ist als Frontend-Prototyp gebaut. Vor einem echten Einsatz sind folg
 - **Standardpasswort:** `admin` / `123` wird beim Start immer angelegt.
 - **Speicherlimit:** Anhänge werden im Browser gespeichert (mit IndexedDB-Auslagerung bei Bedarf); der `localStorage` bleibt meist auf etwa 5 MB begrenzt.
 - **E-Mail, LDAP, Outlook:** Die Einstellungen werden gespeichert, aber nicht ausgeführt. E-Mails erscheinen nur in der Browser-Konsole.
-- **Nur gespeichert, nicht ausgewertet:** Session-Timeout, maximale Login-Fehlversuche und die Tage für die Auto-Archivierung. Die Auto-Archivierung verwendet fest 3 Tage bzw. maximal 10 geschlossene Tickets.
+- **Nur gespeichert, nicht ausgewertet:** Session-Timeout und die Tage für die Auto-Archivierung. Die Auto-Archivierung verwendet fest 3 Tage bzw. maximal 10 geschlossene Tickets. Die Login-Fehlversuche werden ausgewertet, aber nur im Browser, also ohne serverseitigen Schutz.
 - **Externer Dienst:** Der QR-Code für die 2FA wird über `api.qrserver.com` erzeugt; dabei wird das Secret an diesen Dienst übertragen.
 
 Für einen produktiven Betrieb wäre ein Backend mit Datenbank, gehashten Passwörtern, serverseitiger Rechteprüfung und einem Mail-Dienst nötig. Die asynchrone `Store`-API ist der vorgesehene Anknüpfungspunkt.

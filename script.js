@@ -2333,7 +2333,47 @@ const UI = {
             </div>
         </div>`,
 
-    createDateTimePicker: (root, { value = null, onChange = null, anchor = null } = {}) => {
+    formatDateText: value => {
+        const digits = String(value).replace(/\D/g, '').slice(0, 8);
+        let out = digits.slice(0, 2);
+        if (digits.length > 2) out += '.' + digits.slice(2, 4);
+        if (digits.length > 4) out += '.' + digits.slice(4, 8);
+        return out;
+    },
+    formatTimeText: value => {
+        const digits = String(value).replace(/\D/g, '').slice(0, 4);
+        return digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits;
+    },
+    bindDateInput: input => input.addEventListener('input', () => { input.value = UI.formatDateText(input.value); }),
+    bindTimeInput: input => input.addEventListener('input', () => { input.value = UI.formatTimeText(input.value); }),
+    dateFieldMarkup: (id, value = '', dtpId = `${id}-dtp`) => `
+        <div class="date-input-row">
+            <input id="${id}" type="text" inputmode="numeric" placeholder="dd.mm.jjjj" value="${Utils.esc(value)}">
+            <button type="button" class="btn-ghost btn-icon" id="${id}-cal" title="Kalender öffnen" aria-label="Kalender öffnen">${Icon('calendar', 16)}</button>
+        </div>
+        <div id="${id}-host" hidden>${UI.dateTimePickerMarkup(dtpId)}</div>`,
+    bindDateField: (id, { initialMs = null, onChange = null } = {}) => {
+        const input = q(`#${id}`);
+        const btn = q(`#${id}-cal`);
+        UI.bindDateInput(input);
+        const picker = UI.createDateTimePicker(q(`#${id}-host .dtp-field`), {
+            value: initialMs,
+            anchor: btn,
+            dateOnly: true,
+            onChange: ms => {
+                input.value = ms ? Utils.fmtDateOnly(new Date(ms)) : '';
+                if (onChange) onChange(ms);
+            }
+        });
+        input.addEventListener('change', () => {
+            const ms = Utils.parseGermanDateTime(input.value.trim(), '00:00');
+            picker.setValue(ms);
+        });
+        btn.onclick = () => picker.open();
+        return picker;
+    },
+
+    createDateTimePicker: (root, { value = null, onChange = null, anchor = null, dateOnly = false } = {}) => {
         const trigger = root.querySelector('.dtp-trigger');
         const valueLabel = root.querySelector('.dtp-value');
         const monthLabel = root.querySelector('.dtp-month-label');
@@ -2394,8 +2434,8 @@ const UI = {
             grid.querySelectorAll('.dtp-day').forEach(btn => {
                 btn.onclick = () => {
                     const picked = new Date(btn.dataset.date);
-                    const h = selected ? selected.getHours() : new Date().getHours();
-                    const m = selected ? selected.getMinutes() : new Date().getMinutes();
+                    const h = dateOnly ? 0 : (selected ? selected.getHours() : new Date().getHours());
+                    const m = dateOnly ? 0 : (selected ? selected.getMinutes() : new Date().getMinutes());
                     selected = new Date(picked.getFullYear(), picked.getMonth(), picked.getDate(), h, m);
                     viewDate = new Date(selected.getFullYear(), selected.getMonth(), 1);
                     hourVal = h;
@@ -2426,9 +2466,11 @@ const UI = {
             renderGrid();
             if (onChange) onChange(null);
         };
+        if (dateOnly) root.querySelector('.dtp-time-row').hidden = true;
         root.querySelector('.dtp-today').onclick = () => {
             const now = new Date();
-            selected = selected ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), selected.getHours(), selected.getMinutes()) : now;
+            if (dateOnly) selected = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            else selected = selected ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), selected.getHours(), selected.getMinutes()) : now;
             viewDate = new Date(selected.getFullYear(), selected.getMonth(), 1);
             hourVal = selected.getHours();
             minuteVal = selected.getMinutes();
@@ -2823,13 +2865,18 @@ const Settings = {
         <div class="form-grid">
             <div class="field">
                 <label for="${prefix}-from">Von (TT.MM.JJJJ, leer = sofort)</label>
-                <input id="${prefix}-from" type="text" inputmode="numeric" placeholder="dd.mm.jjjj" value="${absence.fromMs ? Utils.fmtDateOnly(new Date(absence.fromMs)) : ''}">
+                ${UI.dateFieldMarkup(`${prefix}-from`, absence.fromMs ? Utils.fmtDateOnly(new Date(absence.fromMs)) : '', `${prefix}-from-dtp`)}
             </div>
             <div class="field">
                 <label for="${prefix}-until">Bis (TT.MM.JJJJ, leer = offen)</label>
-                <input id="${prefix}-until" type="text" inputmode="numeric" placeholder="dd.mm.jjjj" value="${absence.untilMs ? Utils.fmtDateOnly(new Date(absence.untilMs)) : ''}">
+                ${UI.dateFieldMarkup(`${prefix}-until`, absence.untilMs ? Utils.fmtDateOnly(new Date(absence.untilMs)) : '', `${prefix}-until-dtp`)}
             </div>
         </div>`,
+
+    bindAbsencePeriod: (prefix = 'abs', absence = {}) => {
+        UI.bindDateField(`${prefix}-from`, { initialMs: absence.fromMs || null });
+        UI.bindDateField(`${prefix}-until`, { initialMs: absence.untilMs || null });
+    },
 
     readAbsencePeriod: (prefix = 'abs') => {
         const fromRaw = q(`#${prefix}-from`)?.value.trim() || '';
@@ -2867,6 +2914,7 @@ const Settings = {
             <div class="setting-row"><span class="hint">${absence.pending ? `Geplant ab ${new Date(absence.fromMs).toLocaleDateString('de-DE')}.` : 'Beim Start wird die Vertretung Hauptverantwortlicher aller offenen Tickets. Am Ende kannst du sie zurückholen.'}</span>
                 <button class="btn-primary btn-sm" id="btn-save-absence">${Icon('save', 15)}Abwesenheit speichern</button>
             </div>`;
+        Settings.bindAbsencePeriod('s-abs', absence);
         q('#btn-save-absence').onclick = async () => {
             let period;
             try { period = Settings.readAbsencePeriod('s-abs'); } catch (error) { return UI.toast(error.message); }
@@ -3922,8 +3970,11 @@ const AdminBoard = {
             Store.isTicketOverdue(ticket, settings)
         ).sort((a, b) => Store.ticketSlaDueAt(a, settings) - Store.ticketSlaDueAt(b, settings));
         const list = q('#sla-overdue-list');
+        const users = await Store.getUsers();
         list.innerHTML = tickets.length ? tickets.map(ticket => {
             const deadline = Store.ticketSlaDueAt(ticket, settings);
+            const owner = ticket.owner ? users.find(u => u.username === ticket.owner) : null;
+            const ownerLabel = owner ? (owner.name || owner.username) : (ticket.owner || Lang.t('unassigned'));
             const overdueMinutes = Math.max(1, Math.floor((Date.now() - deadline) / 60000));
             const overdueDuration = overdueMinutes >= 1440 ? `${Math.floor(overdueMinutes / 1440)} ${Lang.t('dayShort')}` :
                 overdueMinutes >= 60 ? `${Math.floor(overdueMinutes / 60)} ${Lang.t('hourShort')}` : `${overdueMinutes} ${Lang.t('minuteShort')}`;
@@ -3934,6 +3985,7 @@ const AdminBoard = {
                     <span class="sla-overdue-copy">
                         <strong>${Utils.esc(ticket.ticketNumber || ticket.id)} · ${Utils.esc(ticket.title)}</strong>
                         <span>${Lang.prio(ticket.prio)} · Frist ${Utils.fmtDate(new Date(deadline).toISOString())}</span>
+                        <span>Hauptverantwortlicher: ${Utils.esc(ownerLabel)}</span>
                         <time>${overdueText}</time>
                     </span>
                 </button>`;
@@ -4426,7 +4478,13 @@ const AdminBoard = {
         const allUsers = await Store.getUsers();
         const allGroups = await Store.getGroups();
 
-        tickets.filter(t => !t.linkedIncidentId).forEach(t => {
+        let boardTickets = tickets.filter(t => !t.linkedIncidentId);
+        if (query.trim()) {
+            const incidentIds = new Set(tickets.filter(t => t.linkedIncidentId).map(t => t.linkedIncidentId));
+            const incidentsWithHits = rawTickets.filter(t => incidentIds.has(t.id) && !t.archived && !boardTickets.some(b => b.id === t.id));
+            boardTickets = boardTickets.concat(incidentsWithHits);
+        }
+        boardTickets.forEach(t => {
             const boardStatus = String(t.status).startsWith('Warten auf') ? 'Warten' : t.status;
             if (!cols[boardStatus]) {
                 if (cols['Neu']) cols['Neu'].appendChild(createCard(t, allUsers));
@@ -4869,7 +4927,8 @@ const AdminBoard = {
                     <div class="group-chip-row">
                         <span class="badge">${Utils.esc(roleInfo)}</span>
                         ${userGroups.map(name => `<span class="group-chip">${Icon('users-round', 12)}${Utils.esc(name)}</span>`).join('')}
-                        ${u.absence?.active ? `<span class="badge badge-accent" title="Vertretung aktiv">${Icon('plane', 12)}Abwesend${u.absence.substitute ? ' → ' + Utils.esc((users.find(x => x.username === u.absence.substitute)?.name) || u.absence.substitute) : ' → zurück ins Team'}</span>` : ''}
+                        ${u.absence?.active ? `<span class="badge badge-accent" title="${Utils.esc(AdminBoard.absenceInfoText(u.absence))}">${Icon('plane', 12)}Abwesend${u.absence.substitute ? ' → ' + Utils.esc((users.find(x => x.username === u.absence.substitute)?.name) || u.absence.substitute) : ' → zurück ins Team'} · ${Utils.esc(AdminBoard.absenceInfoText(u.absence).split(' · ')[0])}</span>` : ''}
+                        ${u.absence?.pending ? `<span class="badge" title="${Utils.esc(AdminBoard.absenceInfoText(u.absence))}">${Icon('plane', 12)}Geplant · ${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span>` : ''}
                     </div>
                 </div>
                 <div class="user-manager-actions">
@@ -7070,6 +7129,7 @@ const AdminBoard = {
                 </select>
             </div>
             <p class="hint">Beim Aktivieren werden alle offenen Tickets, bei denen ${Utils.esc(target.name || target.username)} Hauptverantwortlicher ist, sofort an die Vertretung übergeben – oder ohne Vertretung dem Team zur erneuten Verteilung zurückgegeben.</p>`;
+        Settings.bindAbsencePeriod('abm', target.absence || {});
         modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
             const active = q('#abs-active').checked;
             const substitute = q('#abs-substitute').value || null;
@@ -7207,6 +7267,8 @@ const AdminBoard = {
                 ticketNumber: 'Vertretung',
                 title: `${absent?.name || absentUsername} · Tickets zurückgeholt`,
                 message: `${absent?.name || absentUsername} hat ${list.length} Ticket(s) zurückgeholt:\n` + list.map(t => `${t.ticketNumber || t.id} „${t.title}“ · Status: ${Lang.status(t.status)}`).join('\n'),
+                sections: [{ title: `Zurückgeholt (${list.length})`, items: list.map(t => ({ ticket: t.ticketNumber || t.id, text: `${t.title} · ${Lang.status(t.status)}` })) }],
+                absentUsername,
                 date: Utils.nowISO(),
                 read: false,
                 type: 'absence'
@@ -7267,12 +7329,72 @@ const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    sectionsFromMessage: message => {
+        const [, ...lines] = String(message || '').split('\n');
+        return lines.map(line => {
+            const head = line.match(/^(.*?):\s(.*)$/);
+            if (!head) return null;
+            const items = head[2].split('; ').filter(Boolean).map(entry => {
+                const parts = entry.match(/^(\S+?):?\s+(.*)$/);
+                return parts ? { ticket: parts[1], text: parts[2] } : { ticket: '', text: entry };
+            });
+            return { title: head[1], items, checklist: /^Offene Teilaufgaben/.test(head[1]) };
+        }).filter(section => section && section.items.length);
+    },
+
+    absenceInfoText: absence => {
+        const fmt = ms => new Date(ms).toLocaleDateString('de-DE');
+        const period = absence.fromMs && absence.untilMs ? `von ${fmt(absence.fromMs)} bis ${fmt(absence.untilMs)}`
+            : absence.untilMs ? `bis ${fmt(absence.untilMs)}`
+            : absence.fromMs ? `ab ${fmt(absence.fromMs)}, unbefristet`
+            : 'unbefristet';
+        const visibility = absence.visible ? 'für andere Admins sichtbar' : 'nur für dich sichtbar';
+        return `${period} · ${visibility}`;
+    },
+
+    renderSubstituteNotice: n => {
+        const [lead, ...rest] = String(n.message || '').split('\n');
+        const sectionList = n.sections || AdminBoard.sectionsFromMessage(n.message);
+        const sections = sectionList.map(section => `
+            <section class="substitute-section">
+                <h4>${Utils.esc(section.title)}</h4>
+                <ul class="substitute-list">
+                    ${section.items.map(item => `
+                        <li${section.checklist ? ' class="is-check"' : ''}>
+                            <span class="substitute-ticket">${Utils.esc(item.ticket)}</span>
+                            <span>${Utils.esc(item.text)}</span>
+                        </li>`).join('')}
+                </ul>
+            </section>`).join('');
+        return `
+            <div class="substitute-notice">
+                <p class="substitute-lead">${Utils.esc(lead)}</p>
+                ${sections || rest.map(line => `<p class="substitute-line">${Utils.esc(line)}</p>`).join('')}
+            </div>`;
+    },
+
     openSubstituteNoticePopups: async (user) => {
         if (!user) return;
         const all = await Store.getNotifications();
         const pending = all.filter(n => n.recipient === user.username && n.type === 'absence' && !n.read);
         q('#substitute-popup')?.remove();
         if (!pending.length) return;
+        const users = await Store.getUsers();
+        const absentUsers = users.filter(u => u.absence && (u.absence.active || u.absence.pending) && u.absence.substitute === user.username);
+        const nameOf = u => u.name || u.username;
+        const belongs = (n, u) => n.absentUsername
+            ? n.absentUsername === u.username
+            : (n.message || '').startsWith(`${nameOf(u)} hat dich`) || (n.title || '').startsWith(`${nameOf(u)} ·`);
+        const groups = absentUsers.map(u => ({ user: u, items: pending.filter(n => belongs(n, u)) }));
+        const orphans = pending.filter(n => !groups.some(g => g.items.includes(n)));
+        if (orphans.length || !groups.length) groups.push({ user: null, items: orphans.length ? orphans : pending });
+        const panel = g => `
+            ${g.user ? `<div class="substitute-absence"><span>${Utils.esc(nameOf(g.user))} ist abwesend: ${Utils.esc(AdminBoard.absenceInfoText(g.user.absence))}</span></div>` : ''}
+            ${g.items.map(AdminBoard.renderSubstituteNotice).join('')}`;
+        const body = groups.length > 1
+            ? `<div class="tabs substitute-tabs">${groups.map((g, i) => `<button type="button" class="tab-btn${i === 0 ? ' active' : ''}" data-idx="${i}">${Utils.esc(g.user ? nameOf(g.user) : 'Weitere')}</button>`).join('')}</div>
+               ${groups.map((g, i) => `<div class="substitute-panel" data-idx="${i}"${i ? ' hidden' : ''}>${panel(g)}</div>`).join('')}`
+            : panel(groups[0]);
         const modal = document.createElement('div');
         modal.id = 'substitute-popup';
         modal.className = 'modal-overlay modal-top';
@@ -7281,12 +7403,18 @@ const AdminBoard = {
                 <div class="modal-header">
                     <h3>${Icon('plane', 20)}Du bist als Vertretung eingetragen</h3>
                 </div>
-                <div class="modal-body substitute-popup-body">${pending.map(n => Utils.esc(n.message)).join('\n\n')}</div>
+                <div class="modal-body substitute-popup-body">${body}</div>
                 <div class="modal-footer modal-footer-visible">
                     <button class="btn-primary" id="substitute-popup-ok">${Icon('check', 16)}Verstanden</button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
+        modal.querySelectorAll('.substitute-tabs .tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                modal.querySelectorAll('.substitute-tabs .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+                modal.querySelectorAll('.substitute-panel').forEach(p => { p.hidden = p.dataset.idx !== btn.dataset.idx; });
+            });
+        });
         modal.querySelector('#substitute-popup-ok').onclick = async () => {
             const notifications = await Store.getNotifications();
             notifications.forEach(n => { if (pending.some(p => p.id === n.id)) n.read = true; });
@@ -7402,6 +7530,7 @@ const AdminBoard = {
             <div class="absence-banner-text">
                 <strong>${Icon('plane', 14)}Du bist als abwesend markiert</strong>
                 <span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Tickets liegen im Team'}</span>
+                <span>${Utils.esc(AdminBoard.absenceInfoText(me.absence))}</span>
             </div>
             <button class="btn-secondary btn-sm" id="absence-banner-end">Abwesenheit beenden</button>`;
         document.body.appendChild(banner);
@@ -7422,7 +7551,7 @@ const AdminBoard = {
         modal.querySelector('.modal-header h3').textContent = 'Abwesenheiten';
         modal.querySelector('.modal-body').innerHTML = absent.length ? absent.map(u => {
             const sub = u.absence.substitute ? users.find(x => x.username === u.absence.substitute) : null;
-            return `<div class="absence-overview-row"><strong>${Utils.esc(u.name || u.username)}</strong><span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Team'}</span></div>`;
+            return `<div class="absence-overview-row"><div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span></div><span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Team'}</span></div>`;
         }).join('') : '<div class="empty-state compact">Aktuell ist niemand abwesend.</div>';
         modal.querySelector('.modal-body').insertAdjacentHTML('beforeend', `
             <div class="setting-row" style="margin-top:var(--space-3);">
@@ -7439,6 +7568,13 @@ const AdminBoard = {
 
     notifySubstituteAbsence: async (substitute, absentUser, transferred, addedAsParticipant) => {
         const absentName = absentUser.name || absentUser.username;
+        const ticketLabel = t => `${t.ticketNumber || t.id}`;
+        const todoItems = transferred.flatMap(t => (t.todos || []).filter(todo => !todo.done).map(todo => ({ ticket: ticketLabel(t), text: todo.title })));
+        const sections = [
+            { title: `Als Hauptverantwortlicher übernommen (${transferred.length})`, items: transferred.map(t => ({ ticket: ticketLabel(t), text: t.title })) },
+            { title: `Als Beteiligter hinzugefügt (${addedAsParticipant.length})`, items: addedAsParticipant.map(t => ({ ticket: ticketLabel(t), text: t.title })) },
+            { title: `Offene Teilaufgaben (${todoItems.length})`, items: todoItems, checklist: true }
+        ].filter(section => section.items.length);
         const lines = [];
         if (transferred.length) {
             lines.push(`Als Hauptverantwortlicher übernommen (${transferred.length}): ` + transferred.map(t => `${t.ticketNumber || t.id} ${t.title}`).join('; '));
@@ -7457,12 +7593,14 @@ const AdminBoard = {
             ticketNumber: 'Vertretung',
             title: `${absentName} · Abwesenheit`,
             message,
+            sections,
+            absentUsername: absentUser.username,
             date: Utils.nowISO(),
             read: false,
             type: 'absence'
         });
         await Store.saveNotifications(notifications.slice(-2000));
-        await Store.addGlobalLog('Vertretung benachrichtigt', `Vertretung: ${substitute.name || substitute.username}, für: ${absentName}\n${message}`);
+        await Store.addGlobalLog('Vertretung benachrichtigt',`Vertretung: ${substitute.name || substitute.username}, für: ${absentName}\n${message}`);
         await Notifications.refresh();
     },
 
@@ -7831,6 +7969,12 @@ const AdminBoard = {
             }
         });
         q('#custom-due-calendar-btn').onclick = () => dtpPicker.open();
+        UI.bindDateInput(q('#custom-due-date'));
+        UI.bindTimeInput(q('#custom-due-time'));
+        q('#custom-due-date').addEventListener('change', () => {
+            const dateMs = Utils.parseGermanDateTime(q('#custom-due-date').value.trim(), '00:00');
+            if (dateMs) dtpPicker.setValue(Utils.parseGermanDateTime(q('#custom-due-date').value.trim(), q('#custom-due-time').value.trim() || '00:00') || dateMs);
+        });
         modal.querySelector('.modal-footer .btn-primary').textContent = 'Speichern';
         const resetBtn = q('#custom-due-reset');
         if (resetBtn) resetBtn.onclick = async () => {
