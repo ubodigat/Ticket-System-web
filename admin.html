@@ -40,6 +40,7 @@
             <div class="archive-header">
                 <h3><i data-lucide="archive"></i>Archivierte Tickets</h3>
                 <input type="text" id="archive-search" class="section-search" placeholder="Suche im Archiv (Titel, Autor, Inhalt)...">
+                <div id="archive-filters" class="archive-filters"></div>
                 <button id="btn-back-kanban" class="btn-secondary"><i data-lucide="arrow-left"></i>Zurück zur Übersicht</button>
             </div>
             <div id="archive-list" class="archived-list"></div>
@@ -352,6 +353,10 @@
         <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="waiting-status-title">
             <div class="modal-header">
                 <h3 id="waiting-status-title"><i data-lucide="pause-circle"></i>Worauf wird gewartet?</h3>
+                <div class="modal-actions">
+                    <button class="btn-ghost btn-icon" id="waiting-status-confirm" type="button" disabled title="Übernehmen" aria-label="Übernehmen"><i data-lucide="save"></i></button>
+                    <button class="btn-ghost btn-icon" id="waiting-status-cancel" type="button" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                </div>
             </div>
             <div class="modal-body">
                 <div class="field" id="waiting-status-reason-field">
@@ -367,10 +372,6 @@
                     <label for="waiting-user-message">Nachricht an den Benutzer</label>
                     <textarea id="waiting-user-message" rows="4" placeholder="Was wird vom Benutzer benötigt?"></textarea>
                 </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn-secondary" id="waiting-status-cancel" type="button">Abbrechen</button>
-                <button class="btn-primary" id="waiting-status-confirm" type="button" disabled>Übernehmen</button>
             </div>
         </div>
     </div>

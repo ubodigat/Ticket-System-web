@@ -73,6 +73,66 @@ const Utils = {
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/\n/g, '<br>');
     },
+    // Rendert den in den Notiz-/Textfeldern verwendeten Markdown-Dialekt (fett, kursiv, Code, Links,
+    // Listen, Tabellen) als HTML. Wird von internen Notizen und der Wissensdatenbank gemeinsam genutzt.
+    renderMarkdown: (value = '') => {
+        const lines = Utils.esc(value).replace(/\r/g, '').split('\n');
+        const inline = text => text
+            .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/gi, (match, label, href) =>
+                `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`)
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>');
+        const cellsFrom = line => {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('|')) return null;
+            return trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+        };
+        const isTableSeparator = cells => cells?.length > 1 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
+        const output = [];
+        let listType = '';
+        const closeList = () => {
+            if (listType) output.push(`</${listType}>`);
+            listType = '';
+        };
+        for (let index = 0; index < lines.length;) {
+            const header = cellsFrom(lines[index]);
+            const separator = cellsFrom(lines[index + 1] || '');
+            if (header?.length > 1 && isTableSeparator(separator)) {
+                closeList();
+                const rows = [];
+                let rowIndex = index + 2;
+                while (rowIndex < lines.length) {
+                    const cells = cellsFrom(lines[rowIndex]);
+                    if (!cells) break;
+                    rows.push(cells);
+                    rowIndex++;
+                }
+                output.push(`<div class="note-table-wrap"><table class="note-markdown-table"><thead><tr>${header.map(cell => `<th>${inline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${header.map((_, column) => `<td>${inline(row[column] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+                index = rowIndex;
+                continue;
+            }
+            const bullet = lines[index].match(/^\s*-\s+(.*)$/);
+            const numbered = lines[index].match(/^\s*\d+[.)]\s+(.*)$/);
+            const listItem = bullet || numbered;
+            if (listItem) {
+                const nextType = bullet ? 'ul' : 'ol';
+                if (listType !== nextType) {
+                    closeList();
+                    listType = nextType;
+                    output.push(`<${listType}>`);
+                }
+                output.push(`<li>${inline(listItem[1])}</li>`);
+                index++;
+                continue;
+            }
+            closeList();
+            output.push(lines[index] ? `${inline(lines[index])}<br>` : '<br>');
+            index++;
+        }
+        closeList();
+        return output.join('');
+    },
     read: (key, fallback) => {
         try {
             return JSON.parse(localStorage.getItem(key)) ?? fallback;
@@ -1913,6 +1973,35 @@ const UI = {
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
     },
+    bindFileDrop: (el, onFiles) => {
+        if (!el || el.dataset.dropBound) return;
+        el.dataset.dropBound = '1';
+        ['dragenter', 'dragover'].forEach(evt => el.addEventListener(evt, e => {
+            if (!e.dataTransfer?.types?.includes('Files')) return;
+            e.preventDefault();
+            el.classList.add('drag-over');
+        }));
+        el.addEventListener('dragleave', e => {
+            if (!el.contains(e.relatedTarget)) el.classList.remove('drag-over');
+        });
+        el.addEventListener('drop', e => {
+            el.classList.remove('drag-over');
+            if (e.defaultPrevented || !e.dataTransfer?.files?.length) return;
+            e.preventDefault();
+            onFiles(Array.from(e.dataTransfer.files));
+        });
+    },
+    bindPasteFiles: (el, onFiles) => {
+        if (!el || el.dataset.pasteBound) return;
+        el.dataset.pasteBound = '1';
+        el.addEventListener('paste', e => {
+            const files = Array.from(e.clipboardData?.files || []);
+            if (!files.length) return;
+            e.preventDefault();
+            onFiles(files);
+        });
+    },
+
     askIncidentLink: (incidents, opts = {}) => new Promise(resolve => {
         let modal = q('#incident-link-modal');
         if (!modal) {
@@ -2589,10 +2678,14 @@ const UI = {
         return { values, missing };
     },
 
-    createMultiSelect: (container, options, initialValues = [], onChange = null) => {
+    createMultiSelect: (container, options, initialValues = [], onChange = null, config = {}) => {
         // Mehrfachauswahl im selben Look wie <select> (Stile in style.css, Abschnitt "Auswahllisten")
+        // config.single: Einfachauswahl mit Suche statt eines nativen <select> (z.B. Vorgesetzte Person, Kategorien)
+        const single = !!config.single;
+        const emptyLabel = config.emptyLabel || (single ? 'Keine' : 'Bitte wählen...');
         container.innerHTML = '';
         container.classList.add('multi-select-container');
+        if (single) container.classList.add('single-select-container');
         container.classList.remove('open');
 
         const header = document.createElement('div');
@@ -2608,16 +2701,24 @@ const UI = {
         dropdown.setAttribute('aria-multiselectable', 'true');
 
         const inputs = [];
+        const radioName = single ? `ss-${Utils.uid()}` : null;
 
         const updateHeader = () => {
             const selected = inputs.filter(i => i.checked);
-            let text = 'Bitte wählen...';
-            if (selected.length > 2) text = `${selected.length} ausgewählt`;
+            let text = emptyLabel;
+            if (single) {
+                if (selected.length) text = selected[0].dataset.label || selected[0].value;
+            } else if (selected.length > 2) text = `${selected.length} ausgewählt`;
             else if (selected.length) text = selected.map(i => i.dataset.label || i.value).join(', ');
             header.innerHTML = `<span class="ms-text${selected.length ? '' : ' is-placeholder'}">${Utils.esc(text)}</span><span class="ms-arrow" aria-hidden="true"></span>`;
         };
 
-        options.forEach(opt => {
+        const singleValue = () => single ? (inputs.find(i => i.checked)?.value || '') : null;
+        const emit = () => onChange && onChange(single ? singleValue() : inputs.filter(i => i.checked).map(i => i.value));
+
+        const effectiveOptions = single && !options.some(o => (typeof o === 'object' ? o.value : o) === '')
+            ? [{ value: '', label: emptyLabel }, ...options] : options;
+        effectiveOptions.forEach(opt => {
             const isObj = typeof opt === 'object';
             const val = isObj ? opt.value : opt;
             const label = isObj ? opt.label : opt;
@@ -2626,13 +2727,15 @@ const UI = {
             row.className = 'ms-row';
 
             const box = document.createElement('input');
-            box.type = 'checkbox';
+            box.type = single ? 'radio' : 'checkbox';
+            if (single) box.name = radioName;
             box.value = val;
             box.dataset.label = label;
-            box.checked = initialValues.includes(val);
+            box.checked = single ? initialValues === val : initialValues.includes(val);
             box.onchange = () => {
                 updateHeader();
-                if (onChange) onChange(inputs.filter(i => i.checked).map(i => i.value));
+                emit();
+                if (single) close();
             };
             inputs.push(box);
 
@@ -2644,7 +2747,7 @@ const UI = {
             dropdown.appendChild(row);
         });
 
-        if (options.length > 6) {
+        {
             const search = document.createElement('input');
             search.type = 'search';
             search.className = 'ms-search';
@@ -2702,12 +2805,13 @@ const UI = {
         window.addEventListener('click', container._msOutside);
 
         return {
-            getValue: () => inputs.filter(i => i.checked).map(i => i.value),
+            getValue: () => single ? singleValue() : inputs.filter(i => i.checked).map(i => i.value),
             setDisabled: (off) => container.classList.toggle('is-disabled', !!off),
             setValue: (vals) => {
-                inputs.forEach(i => i.checked = vals.includes(i.value));
+                if (single) inputs.forEach(i => i.checked = i.value === (vals || ''));
+                else inputs.forEach(i => i.checked = vals.includes(i.value));
                 updateHeader();
-                if (onChange) onChange(inputs.filter(i => i.checked).map(i => i.value));
+                emit();
             }
         };
     }
@@ -2918,9 +3022,11 @@ const Settings = {
         q('#btn-save-absence').onclick = async () => {
             let period;
             try { period = Settings.readAbsencePeriod('s-abs'); } catch (error) { return UI.toast(error.message); }
-            await AdminBoard.setAbsence(user.username, q('#s-abs-active').checked, q('#s-abs-sub').value || null, q('#s-abs-visible').checked, period.fromMs, period.untilMs);
+            const stillActive = q('#s-abs-active').checked;
+            await AdminBoard.setAbsence(user.username, stillActive, q('#s-abs-sub').value || null, q('#s-abs-visible').checked, period.fromMs, period.untilMs);
             UI.toast('Abwesenheit gespeichert.');
             Settings.renderAbsenceArea(user);
+            if (!stillActive) await AdminBoard.openAbsenceReturnPopup(user);
         };
     },
 
@@ -3299,6 +3405,30 @@ const UserDash = {
             }
         }
 
+        // Jede Person kann Vorgesetzte/r sein – zeige den Button, sobald offene Genehmigungen anstehen
+        if (user) {
+            const pending = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => a.approver === user.username && a.status === 'pending'));
+            const rightNav = q('.topbar-right');
+            if (rightNav) {
+                let btn = q('#btn-user-approvals');
+                if (!btn && pending.length) {
+                    btn = document.createElement('button');
+                    btn.id = 'btn-user-approvals';
+                    btn.className = 'btn-ghost btn-icon';
+                    btn.title = 'Genehmigungen';
+                    btn.setAttribute('aria-label', 'Genehmigungen');
+                    btn.innerHTML = `${Icon('badge-check', 18)}<span class="notification-count"></span>`;
+                    btn.onclick = () => AdminBoard.openApprovals();
+                    rightNav.insertBefore(btn, rightNav.firstChild);
+                }
+                if (btn) {
+                    btn.hidden = pending.length === 0;
+                    const countEl = btn.querySelector('.notification-count');
+                    if (countEl) countEl.textContent = String(pending.length);
+                }
+            }
+        }
+
         if (!q('#btn-create-ticket')) return;
         const btn = q('#btn-create-ticket');
         btn.onclick = async () => {
@@ -3377,8 +3507,14 @@ const UserDash = {
                 newTicket.team = autoTeam.id;
                 newTicket.assignees = [...new Set([...(newTicket.assignees || []), ...autoTeam.members])];
             }
+            const approvalCfg = settings.approvalConfig || {};
+            const authorRecord = (await Store.getUsers()).find(u => u.username === user.username);
+            if (approvalCfg.enabled && (approvalCfg.priorities || []).includes(prio) && authorRecord?.supervisor) {
+                newTicket.approvals = [{ id: Utils.uid(), approver: authorRecord.supervisor, requestedBy: user.username, requestedByName: user.name || user.username, status: 'pending', requestedAt: Utils.nowISO(), note: 'Automatisch angefordert' }];
+                await Store.addNotifications([authorRecord.supervisor], newTicket, `${user.name || user.username} hat ein Ticket mit Priorität ${prio} angelegt – bitte genehmigen.`, user.username, 'newMessage');
+            }
             tickets.push(newTicket);
-            await Store.addLog(newTicket, autoTeam ? `Ticket erstellt und automatisch Team "${autoTeam.name}" zugewiesen` : 'Ticket erstellt');
+            await Store.addLog(newTicket, autoTeam ?`Ticket erstellt und automatisch Team "${autoTeam.name}" zugewiesen` : 'Ticket erstellt');
             await Store.addGlobalLog('Neues Ticket erstellt', `Titel: ${newTicket.title}`);
             await Store.saveTickets(tickets);
             const admins = (await Store.getUsers()).filter(person => person.role === 'admin' || person.role === 'superadmin');
@@ -3433,6 +3569,12 @@ const UserDash = {
         q('#t-title').onkeydown = (e) => {
             if (e.key === 'Enter') q('#btn-create-ticket').click();
         };
+        const addCreateFiles = files => {
+            UserDash.createFiles.push(...files);
+            UserDash.renderCreateFilePreview();
+        };
+        UI.bindFileDrop(q('#t-title')?.closest('.card'), addCreateFiles);
+        UI.bindPasteFiles(q('#t-desc'), addCreateFiles);
 
         // Populate Categories dynamically with Custom Multi-Select
         const catContainer = q('#u-cat-container');
@@ -3597,6 +3739,27 @@ const UserDash = {
         const uChatSend = q('#u-chat-send');
         if (uChatInput) uChatInput.disabled = t.archived;
         if (uChatSend) uChatSend.disabled = t.archived;
+
+        const resolveBtn = q('#u-m-resolve');
+        if (resolveBtn) {
+            resolveBtn.hidden = t.archived || t.status === 'Geschlossen';
+            resolveBtn.onclick = () => UI.confirm('Ticket als gelöst schließen? Wenn du später noch einmal antwortest, wird es automatisch wieder geöffnet.', async () => {
+                const all = await Store.getTickets();
+                const ticket = all.find(x => x.id === t.id);
+                if (!ticket || ticket.status === 'Geschlossen') return;
+                ticket.status = 'Geschlossen';
+                ticket.slaPausedSince = null;
+                await Store.addLog(ticket, 'Vom Benutzer als gelöst geschlossen');
+                await Store.saveTickets(all);
+                const actor = await Store.currentUser();
+                const admins = (await Store.getUsers()).filter(u => u.role === 'admin' || u.role === 'superadmin').map(u => u.username);
+                await Store.addNotifications(admins, ticket, `${actor?.name || actor?.username}: Ticket wurde vom Benutzer als gelöst geschlossen.`, actor?.username, 'ticketClosed');
+                await Notifications.refresh();
+                UI.toast('Ticket geschlossen.');
+                await UserDash.openModal(t.id);
+                await UserDash.renderList();
+            });
+        }
 
         // Metadata
         if (q('#u-m-status')) {
@@ -3832,19 +3995,81 @@ async function insertMarkdownLink(area) {
     area.selectionEnd = area.selectionStart;
 }
 
+// Öffnet einen Tabellen-Editor (echte Zellen statt roher |-Syntax) und fügt das Ergebnis als
+// Markdown-Tabelle an der Cursorposition im übergebenen Textfeld ein.
 function insertMarkdownTable(area) {
-    const table = '| Überschrift 1 | Überschrift 2 |\n| --- | --- |\n| Eintrag | Eintrag |';
-    const start = area.selectionStart;
-    const end = area.selectionEnd;
-    const before = area.value.slice(0, start);
-    const after = area.value.slice(end);
-    const prefix = before && !before.endsWith('\n') ? '\n' : '';
-    const suffix = after && !after.startsWith('\n') ? '\n' : '';
-    area.setRangeText(`${prefix}${table}${suffix}`, start, end, 'end');
-    area.focus();
-    area.dispatchEvent(new Event('input', {
-        bubbles: true
-    }));
+    const rows = [['Überschrift 1', 'Überschrift 2'], ['Eintrag', 'Eintrag']];
+    const insert = () => {
+        const header = rows[0];
+        const lines = [header, header.map(() => '---'), ...rows.slice(1)].map(r => `| ${r.join(' | ')} |`);
+        const markdown = lines.join('\n');
+        const start = area.selectionStart ?? area.value.length;
+        const end = area.selectionEnd ?? area.value.length;
+        const before = area.value.slice(0, start);
+        const after = area.value.slice(end);
+        const prefix = before && !before.endsWith('\n') ? '\n' : '';
+        const suffix = after && !after.startsWith('\n') ? '\n' : '';
+        area.setRangeText(`${prefix}${markdown}${suffix}`, start, end, 'end');
+        area.focus();
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const modal = AdminBoard.openDialog({
+        id: 'table-builder-modal',
+        title: 'Tabelle einfügen',
+        icon: 'table',
+        size: 'md',
+        body: `<div class="table-builder-toolbar">
+                   <button type="button" class="btn-secondary btn-sm" id="tbld-add-row">${Icon('plus', 14)}Zeile</button>
+                   <button type="button" class="btn-secondary btn-sm" id="tbld-add-col">${Icon('plus', 14)}Spalte</button>
+               </div>
+               <div class="table-builder-wrap"><table class="table-builder" id="tbld-table"></table></div>`,
+        onSave: (m) => { insert(); m.remove(); }
+    });
+    const render = () => {
+        const table = modal.querySelector('#tbld-table');
+        table.innerHTML = '';
+        rows.forEach((row, rIdx) => {
+            const tr = document.createElement('tr');
+            row.forEach((val, cIdx) => {
+                const cell = document.createElement(rIdx === 0 ? 'th' : 'td');
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = val;
+                input.placeholder = rIdx === 0 ? `Überschrift ${cIdx + 1}` : '';
+                input.oninput = () => { rows[rIdx][cIdx] = input.value; };
+                cell.appendChild(input);
+                if (rIdx === 0 && row.length > 1) {
+                    const removeCol = document.createElement('button');
+                    removeCol.type = 'button';
+                    removeCol.className = 'btn-ghost btn-icon btn-xs btn-danger tbld-col-remove';
+                    removeCol.title = 'Spalte entfernen';
+                    removeCol.setAttribute('aria-label', 'Spalte entfernen');
+                    removeCol.innerHTML = Icon('x', 12);
+                    removeCol.onclick = () => { rows.forEach(r => r.splice(cIdx, 1)); render(); };
+                    cell.appendChild(removeCol);
+                }
+                tr.appendChild(cell);
+            });
+            const actionCell = document.createElement(rIdx === 0 ? 'th' : 'td');
+            actionCell.className = 'tbld-row-actions';
+            if (rIdx > 0 && rows.length > 2) {
+                const removeRow = document.createElement('button');
+                removeRow.type = 'button';
+                removeRow.className = 'btn-ghost btn-icon btn-xs btn-danger';
+                removeRow.title = 'Zeile entfernen';
+                removeRow.setAttribute('aria-label', 'Zeile entfernen');
+                removeRow.innerHTML = Icon('x', 13);
+                removeRow.onclick = () => { rows.splice(rIdx, 1); render(); };
+                actionCell.appendChild(removeRow);
+            }
+            tr.appendChild(actionCell);
+            table.appendChild(tr);
+        });
+        if (window.lucide) lucide.createIcons();
+    };
+    modal.querySelector('#tbld-add-row').onclick = () => { rows.push(new Array(rows[0].length).fill('')); render(); };
+    modal.querySelector('#tbld-add-col').onclick = () => { rows.forEach(r => r.push('')); render(); };
+    render();
 }
 
 // --- Admin Kanban Logic ---
@@ -4158,6 +4383,8 @@ const AdminBoard = {
             actionsForAbsence.insertBefore(btn, q('#theme-toggle') || q('#btn-settings') || q('#logout'));
         }
         await AdminBoard.processAbsences();
+        await AdminBoard.processWaitingTickets();
+        await AdminBoard.processRecurring();
         AdminBoard.renderAbsenceBanner(user);
         await AdminBoard.openAbsenceReturnPopup(user);
         AdminBoard.openArchivedAuthorDecisions(user);
@@ -4209,6 +4436,7 @@ const AdminBoard = {
             if (event.target === q('#requests-modal')) q('#requests-modal').classList.remove('open');
         };
 
+        AdminBoard.groupTopbarMenu(user);
         await AdminBoard.render();
         AdminBoard.setupDrag();
         if (!AdminBoard.slaRefreshTimer) AdminBoard.slaRefreshTimer = window.setInterval(() => AdminBoard.render(), 60000);
@@ -4224,6 +4452,7 @@ const AdminBoard = {
                 viewKanban.style.display = 'none';
                 viewArchive.style.display = 'block';
                 q('#list-view').style.display = 'none';
+                q('.board-banners').hidden = true;
                 setListViewButtonState(false);
                 AdminBoard.renderArchive();
             };
@@ -4231,6 +4460,7 @@ const AdminBoard = {
                 viewArchive.style.display = 'none';
                 viewKanban.style.display = 'block';
                 q('#list-view').style.display = 'none';
+                q('.board-banners').hidden = false;
                 AdminBoard.render();
             };
         }
@@ -4246,6 +4476,7 @@ const AdminBoard = {
             btnListView.onclick = async () => {
                 const isListActive = q('#list-view').style.display === 'block';
                 viewArchive.style.display = 'none';
+                q('.board-banners').hidden = false;
                 if (isListActive) {
                     q('#list-view').style.display = 'none';
                     viewKanban.style.display = 'block';
@@ -4351,7 +4582,16 @@ const AdminBoard = {
                 };
                 const tableButton = q(`#${prefix}-table`);
                 if (tableButton) tableButton.onclick = () => insertMarkdownTable(noteInput);
+                UI.bindPasteFiles(noteInput, files => {
+                    files.forEach(file => AdminBoard.noteFiles[channel].push(file));
+                    AdminBoard.renderNoteFilePreview(channel);
+                });
             }
+            const composer = noteInput?.closest('.internal-note-composer');
+            if (composer) UI.bindFileDrop(composer, files => {
+                files.forEach(file => AdminBoard.noteFiles[channel].push(file));
+                AdminBoard.renderNoteFilePreview(channel);
+            });
             const search = q(`#${prefix}-search`);
             if (search) search.oninput = async () => {
                 const tickets = await Store.getTickets();
@@ -4369,6 +4609,12 @@ const AdminBoard = {
                 AdminBoard.renderFilePreview();
                 fileAdmin.value = '';
             };
+        const addAdminChatFiles = files => {
+            AdminBoard.selectedFiles.push(...files);
+            AdminBoard.renderFilePreview();
+        };
+        UI.bindPasteFiles(q('#m-chat-input'), addAdminChatFiles);
+        UI.bindFileDrop(q('#m-chat-input')?.closest('.chat-composer') || q('#m-chat-input')?.parentElement, addAdminChatFiles);
         }
 
         // Formatting Buttons
@@ -4622,11 +4868,17 @@ const AdminBoard = {
                         <label>Von ${UI.dateTimePickerMarkup('gl-from')}</label>
                         <label>Bis ${UI.dateTimePickerMarkup('gl-to')}</label>
                     </div>
+                    <div class="log-term-filters">
+                        <label><span>Enthält</span><input type="text" id="gl-include" placeholder="Begriffe, mit Komma trennen"></label>
+                        <label><span>Enthält nicht</span><input type="text" id="gl-exclude" placeholder="Begriffe, mit Komma trennen"></label>
+                    </div>
                     <div class="modal-body flush" id="gl-body"></div>
                 </div>`;
             document.body.appendChild(modal);
 
             q('#gl-search').oninput = () => AdminBoard.renderGlobalLogs();
+            q('#gl-include').oninput = () => AdminBoard.renderGlobalLogs();
+            q('#gl-exclude').oninput = () => AdminBoard.renderGlobalLogs();
             AdminBoard.glFromMs = null;
             AdminBoard.glToMs = null;
             UI.createDateTimePicker(q('#gl-from'), { onChange: (ms) => { AdminBoard.glFromMs = ms; AdminBoard.renderGlobalLogs(); } });
@@ -4651,9 +4903,16 @@ const AdminBoard = {
         const search = q('#gl-search')?.value.toLowerCase().trim() || '';
         const from = AdminBoard.glFromMs ?? -Infinity;
         const to = AdminBoard.glToMs ? AdminBoard.glToMs + 59999 : Infinity;
+        const terms = value => String(value || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+        const include = terms(q('#gl-include')?.value);
+        const exclude = terms(q('#gl-exclude')?.value);
         const filtered = logs.filter(log => {
             const timestamp = new Date(log.date).getTime();
-            return Utils.matchesSearch(search, log) && timestamp >= from && timestamp <= to;
+            const text = `${log.user || ''} ${log.action || ''} ${log.details || ''}`.toLowerCase();
+            return Utils.matchesSearch(search, log)
+                && timestamp >= from && timestamp <= to
+                && include.every(term => text.includes(term))
+                && !exclude.some(term => text.includes(term));
         });
         return filtered.slice().reverse();
     },
@@ -4829,10 +5088,12 @@ const AdminBoard = {
                         <span class="badge">${(g.members || []).length} ${(g.members || []).length === 1 ? 'Mitglied' : 'Mitglieder'}</span>
                     </div>
                     <div class="user-manager-actions">
+                        <button class="btn-ghost btn-icon members-g" title="Mitglieder anzeigen" aria-label="Mitglieder anzeigen">${Icon('list', 16)}</button>
                         <button class="btn-ghost btn-icon edit-g" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>
                         <button class="btn-ghost btn-icon btn-danger del-g" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
                     </div>
                 `;
+                el.querySelector('.members-g').onclick = () => AdminBoard.openGroupMembers(g);
                 el.querySelector('.edit-g').onclick = () => AdminBoard.openEditGroupModal(g);
                 el.querySelector('.del-g').onclick = () => {
                     UI.confirm(`Gruppe "${g.name}" löschen?`, async () => {
@@ -5220,6 +5481,37 @@ const AdminBoard = {
         };
     },
 
+    openGroupMembers: async (group) => {
+        const users = await Store.getUsers();
+        const members = users.filter(u => (group.members || []).includes(u.username));
+        const modal = AdminBoard.openDialog({
+            id: 'group-members-modal',
+            title: `Mitglieder · ${group.name}`,
+            icon: 'users-round',
+            size: 'sm',
+            body: `<div class="report-toolbar"><div></div><button type="button" class="btn-secondary btn-sm" id="gm-print">${Icon('printer', 15)}Drucken</button></div>
+                   <div id="gm-list">${members.length ? members.map(u => `
+                       <div class="absence-overview-row"><div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(u.username)}${u.email ? ' · ' + Utils.esc(u.email) : ''} · ${Utils.esc(u.role)}</span></div></div>`).join('')
+                : '<div class="empty-state compact">Keine Mitglieder.</div>'}</div>`
+        });
+        modal.querySelector('#gm-print').onclick = async () => {
+            const settings = await Store.getSettings();
+            const company = settings.companyConfig || {};
+            const actor = await Store.currentUser();
+            UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Mitglieder · ${Utils.esc(group.name)}</title>
+                <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}
+                .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;border-bottom:1px solid #ccc;padding-bottom:12px}
+                .print-head img{max-height:48px;max-width:180px;object-fit:contain}.print-head h1{font-size:20px;margin:0 0 4px}.print-head .meta{color:#555;font-size:12px}
+                table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}</style></head>
+                <body><div class="print-head"><div><h1>${Utils.esc(company.name || 'Support Portal')} · Gruppe ${Utils.esc(group.name)}</h1>
+                <div class="meta">${members.length} Mitglieder &middot; Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div></div>
+                ${company.logoUrl ? `<img src="${Utils.esc(company.logoUrl)}" alt="Logo">` : ''}</div>
+                <table><thead><tr><th>Name</th><th>Benutzername</th><th>E-Mail</th><th>Rolle</th></tr></thead><tbody>
+                ${members.map(u => `<tr><td>${Utils.esc(u.name || '-')}</td><td>${Utils.esc(u.username)}</td><td>${Utils.esc(u.email || '-')}</td><td>${Utils.esc(u.role)}</td></tr>`).join('')}
+                </tbody></table></body></html>`);
+        };
+    },
+
     openEditGroupModal: async (group) => {
         const modal = q('#generic-modal') || AdminBoard.createGenericModal();
         const title = modal.querySelector('h3');
@@ -5315,14 +5607,31 @@ const AdminBoard = {
                             <label>Benutzergruppen</label>
                             <div id="ue-groups-list" class="checkbox-list"></div>
                         </div>
+                        <div class="field field-wide">
+                            <label>Vorgesetzte Person</label>
+                            <div id="ue-supervisor"></div>
+                        </div>
                         <div class="field field-wide" id="ue-man-box" style="display:none">
-                            <label>Berechtigungen</label>
-                            <div class="checkbox-list">
+                            <label>Verwaltung</label>
+                            <div class="perm-grid">
                                 <label class="check-row"><input type="checkbox" id="ue-can-manage-req"><span>Kontoanfragen verwalten</span></label>
                                 <label class="check-row"><input type="checkbox" id="ue-can-manage-users"><span>Benutzerverwaltung (nur User)</span></label>
                                 <label class="check-row"><input type="checkbox" id="ue-can-view-logs"><span>Systemlogs anzeigen</span></label>
                                 <label class="check-row"><input type="checkbox" id="ue-can-manage-2fa"><span>2FA von Benutzern zurücksetzen</span></label>
                             </div>
+                            <label>Zusatzfunktionen</label>
+                            <div class="perm-grid">
+                                <label class="check-row"><input type="checkbox" data-perm="textBlocks"><span>Textbausteine verwalten</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="reports"><span>Auswertung ansehen</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="approvals"><span>Genehmigungen entscheiden</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="recurring"><span>Wiederkehrende Tickets verwalten</span></label>
+                            </div>
+                            <label for="ue-kb">Wissensdatenbank</label>
+                            <select id="ue-kb">
+                                <option value="none">Kein Zugriff</option>
+                                <option value="read">Nur lesen</option>
+                                <option value="edit">Lesen und bearbeiten</option>
+                            </select>
                          </div>
                     </div>
                     <div class="modal-footer action-footer">
@@ -5365,6 +5674,16 @@ const AdminBoard = {
         if (manUsersCheck) manUsersCheck.checked = user ? !!user.canManageUsers : false;
         if (viewLogsCheck) viewLogsCheck.checked = user ? !!user.canViewLogs : false;
         if (man2FACheck) man2FACheck.checked = user ? !!user.canManage2FA : false;
+        document.querySelectorAll('#ue-man-box [data-perm]').forEach(box => { box.checked = !!user?.permissions?.[box.dataset.perm]; });
+        q('#ue-kb').value = user?.permissions?.kb || 'none';
+        const supervisorBox = q('#ue-supervisor');
+        let supervisorPicker = null;
+        if (supervisorBox) {
+            const allUsers = await Store.getUsers();
+            const choices = allUsers.filter(u => u.username !== user?.username && !u.accountArchived)
+                .map(u => ({ value: u.username, label: u.name || u.username }));
+            supervisorPicker = UI.createMultiSelect(supervisorBox, choices, user?.supervisor || '', null, { single: true, emptyLabel: 'Keine' });
+        }
 
         const updateUI = () => {
             const r = roleSel.value;
@@ -5379,7 +5698,6 @@ const AdminBoard = {
         if (!settings.categories) settings.categories = ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
 
         const list = q('#ue-dept-list');
-        list.innerHTML = '';
 
         // Normalize user.dept to array
         let userDepts = [];
@@ -5387,22 +5705,7 @@ const AdminBoard = {
             userDepts = Array.isArray(user.dept) ? user.dept : [user.dept];
         }
 
-        settings.categories.forEach(c => {
-            const row = document.createElement('label');
-            row.className = 'check-row';
-
-            const chk = document.createElement('input');
-            chk.type = 'checkbox';
-            chk.value = c;
-            chk.checked = userDepts.includes(c);
-
-            const txt = document.createElement('span');
-            txt.textContent = c;
-
-            row.appendChild(chk);
-            row.appendChild(txt);
-            list.appendChild(row);
-        });
+        UI.createMultiSelect(list, settings.categories, userDepts);
 
         const groupList = q('#ue-groups-list');
         if (groupList) {
@@ -5464,7 +5767,9 @@ const AdminBoard = {
                     canManageRequests: rVal === 'admin' ? q('#ue-can-manage-req').checked : false,
                     canManageUsers: rVal === 'admin' ? q('#ue-can-manage-users').checked : false,
                     canViewLogs: rVal === 'admin' ? q('#ue-can-view-logs').checked : false,
-                    canManage2FA: rVal === 'admin' ? q('#ue-can-manage-2fa').checked : false
+                    canManage2FA: rVal === 'admin' ? q('#ue-can-manage-2fa').checked : false,
+                    permissions: rVal === 'admin' ? { ...Object.fromEntries([...document.querySelectorAll('#ue-man-box [data-perm]')].map(b => [b.dataset.perm, b.checked])), kb: q('#ue-kb').value } : {},
+                    supervisor: supervisorPicker?.getValue() || null
                 };
                 users.push(newUser);
                 await Store.addGlobalLog('Benutzer erstellt', `Name: ${newUser.name || newUser.username}, Rolle: ${newUser.role}`);
@@ -5482,7 +5787,12 @@ const AdminBoard = {
                         target.canManageUsers = rVal === 'admin' ? q('#ue-can-manage-users').checked : false;
                         target.canViewLogs = rVal === 'admin' ? q('#ue-can-view-logs').checked : false;
                         target.canManage2FA = rVal === 'admin' ? q('#ue-can-manage-2fa').checked : false;
+                        target.permissions = {
+                            ...Object.fromEntries([...document.querySelectorAll('#ue-man-box [data-perm]')].map(b => [b.dataset.perm, b.checked])),
+                            kb: q('#ue-kb').value
+                        };
                     }
+                    target.supervisor = supervisorPicker?.getValue() || null;
                     target.dept = target.role === 'admin' ? dVal : undefined;
                     target.groups = gVal;
                     await Store.addGlobalLog('Benutzer bearbeitet', `Name: ${target.name || target.username}, Rolle: ${target.role}`);
@@ -5802,6 +6112,20 @@ const AdminBoard = {
                             <div class="callout">Lege fest, welches Team ein neues Ticket automatisch bekommt, wenn es zu einer bestimmten Kategorie passt. Ohne passende Regel bleibt das Ticket unzugewiesen und muss von Hand verteilt werden. Teams werden unter Benutzerverwaltung → Gruppen gepflegt.</div>
                             <div id="sys-assignment-rules" class="assignment-rules"></div>
                             <button type="button" class="btn-secondary btn-sm" id="sys-assignment-add">${Icon('plus', 15)}Regel hinzufügen</button>
+                            <div class="settings-section-title">Genehmigungen durch Vorgesetzte</div>
+                            <div class="hint">Wenn ein Mitarbeiter mit hinterlegter Vorgesetzter Person ein Ticket mit einer der gewählten Prioritäten anlegt, wird die Genehmigung automatisch angefordert.</div>
+                            <label class="check-row"><input type="checkbox" id="sys-appr-enabled"><span><strong>Genehmigungsworkflow aktivieren</strong></span></label>
+                            <div class="perm-grid">
+                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Niedrig"><span>Niedrig</span></label>
+                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Normal"><span>Normal</span></label>
+                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Hoch"><span>Hoch</span></label>
+                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Kritisch"><span>Kritisch</span></label>
+                            </div>
+                            <div class="settings-section-title">Warten auf Benutzer</div>
+                            <div class="form-grid">
+                                <div class="field"><label for="sys-wait-remind">Erinnerung nach (Tage)</label><input id="sys-wait-remind" type="number" min="1" placeholder="2"></div>
+                                <div class="field"><label for="sys-wait-close">Automatisch schließen nach (Tage)</label><input id="sys-wait-close" type="number" min="1" placeholder="7"></div>
+                            </div>
                         </div>
                     </div>
                     </div>
@@ -5873,6 +6197,12 @@ const AdminBoard = {
         q('#sys-max-login-attempts').value = sec.maxLoginAttempts || 0;
         q('#sys-lockout-action').value = sec.lockoutAction || 'lock';
         q('#sys-lockout-minutes').value = sec.lockoutMinutes || 15;
+        const waitCfg = settings.waitingConfig || {};
+        q('#sys-wait-remind').value = waitCfg.reminderDays ?? 2;
+        q('#sys-wait-close').value = waitCfg.autoCloseDays ?? 7;
+        const appr = settings.approvalConfig || {};
+        q('#sys-appr-enabled').checked = !!appr.enabled;
+        document.querySelectorAll('.sys-appr-prio').forEach(cb => { cb.checked = (appr.priorities || ['Kritisch']).includes(cb.value); });
         const accEditable = settings.accountConfig?.editable || {};
         q('#sys-acc-name').checked = accEditable.name !== false;
         q('#sys-acc-email').checked = accEditable.email !== false;
@@ -6023,6 +6353,14 @@ const AdminBoard = {
                 maxLoginAttempts: parseInt(q('#sys-max-login-attempts').value) || 0,
                 lockoutAction: q('#sys-lockout-action').value,
                 lockoutMinutes: Math.max(1, parseInt(q('#sys-lockout-minutes').value) || 15),
+            };
+            newSettings.waitingConfig = {
+                reminderDays: Math.max(1, parseInt(q('#sys-wait-remind').value) || 2),
+                autoCloseDays: Math.max(1, parseInt(q('#sys-wait-close').value) || 7)
+            };
+            newSettings.approvalConfig = {
+                enabled: q('#sys-appr-enabled').checked,
+                priorities: [...document.querySelectorAll('.sys-appr-prio:checked')].map(cb => cb.value)
             };
             newSettings.accountConfig = {
                 editable: {
@@ -6395,7 +6733,34 @@ const AdminBoard = {
         if (!list) return;
 
         const query = (q('#archive-search')?.value || '').toLowerCase().trim();
-        let archived = (await Store.getTickets()).filter(t => t.archived);
+        const allArchived = (await Store.getTickets()).filter(t => t.archived);
+        const filterBox = q('#archive-filters');
+        if (filterBox && !q('#archive-filter-author')) {
+            filterBox.innerHTML = `
+                <select id="archive-filter-author" aria-label="Benutzer filtern"><option value="">Alle Benutzer</option></select>
+                <span class="archive-filter-label">Archiviert von</span>
+                ${UI.dateFieldMarkup('archive-from', '', 'archive-from-dtp')}
+                <span class="archive-filter-label">bis</span>
+                ${UI.dateFieldMarkup('archive-until', '', 'archive-until-dtp')}`;
+            UI.bindDateField('archive-from', { onChange: () => AdminBoard.renderArchive() });
+            UI.bindDateField('archive-until', { onChange: () => AdminBoard.renderArchive() });
+            q('#archive-from').addEventListener('change', () => AdminBoard.renderArchive());
+            q('#archive-until').addEventListener('change', () => AdminBoard.renderArchive());
+        }
+        const authorSel = q('#archive-filter-author');
+        if (authorSel) {
+            const current = authorSel.value;
+            const authors = [...new Map(allArchived.map(t => [t.author, t.authorName || t.author])).entries()].filter(([u]) => u);
+            authorSel.innerHTML = '<option value="">Alle Benutzer</option>' + authors.map(([u, n]) => `<option value="${Utils.esc(u)}">${Utils.esc(n)}</option>`).join('');
+            authorSel.value = current;
+            authorSel.onchange = () => AdminBoard.renderArchive();
+        }
+        const fromMs = Utils.parseGermanDateTime(q('#archive-from')?.value.trim() || '', '00:00');
+        const untilMs = Utils.parseGermanDateTime(q('#archive-until')?.value.trim() || '', '23:59');
+        let archived = allArchived;
+        if (authorSel?.value) archived = archived.filter(t => t.author === authorSel.value);
+        if (fromMs) archived = archived.filter(t => new Date(t.archivedAt || 0).getTime() >= fromMs);
+        if (untilMs) archived = archived.filter(t => new Date(t.archivedAt || 0).getTime() <= untilMs);
 
         if (query) {
             archived = archived.filter(t => Utils.matchesSearch(query, t));
@@ -7016,6 +7381,7 @@ const AdminBoard = {
                 <label>
                     <input type="checkbox" ${todo.done ? 'checked' : ''} ${t.archived ? 'disabled' : ''}>
                     <span>${esc(todo.title)}</span>
+                    ${todo.done && todo.doneAt ? `<time class="todo-done-at">erledigt am ${esc(Utils.fmtDate(todo.doneAt))}</time>` : ''}
                 </label>
                 <div class="todo-meta">
                     ${todo.assignee ? `<span class="badge">${Icon('user-round', 12)}${esc(getName(todo.assignee))}</span>` : '<span class="badge">Nicht zugewiesen</span>'}
@@ -7031,6 +7397,7 @@ const AdminBoard = {
                 const todo = t.todos.find(x => x.id === row.dataset.id);
                 if (!todo) return;
                 todo.done = chk.checked;
+                todo.doneAt = todo.done ? Utils.nowISO() : null;
                 await Store.addLog(t, `Teilaufgabe ${todo.done ? 'erledigt' : 'wieder geöffnet'}`, todo.title);
                 await Store.saveTickets(tickets);
                 AdminBoard.renderTicketTodos(t, users, tickets);
@@ -7227,6 +7594,33 @@ const AdminBoard = {
         UI.toast('Abwesenheit beendet.');
     },
 
+    processWaitingTickets: async () => {
+        const waitingCfg = (await Store.getSettings()).waitingConfig || {};
+        const REMINDER_MS = (waitingCfg.reminderDays ?? 2) * 86400000;
+        const AUTO_CLOSE_MS = (waitingCfg.autoCloseDays ?? 7) * 86400000;
+        const tickets = await Store.getTickets();
+        const now = Date.now();
+        let changed = false;
+        for (const t of tickets) {
+            if (t.archived || !String(t.status).startsWith('Warten auf Benutzer') || !t.slaPausedSince) continue;
+            const waitingFor = now - new Date(t.slaPausedSince).getTime();
+            if (waitingFor >= AUTO_CLOSE_MS) {
+                t.status = 'Geschlossen';
+                t.slaPausedSince = null;
+                delete t.waitingMessage;
+                changed = true;
+                await Store.addLog(t, 'Automatisch geschlossen: keine Antwort des Benutzers innerhalb der eingestellten Frist');
+                await Store.addNotifications([t.author], t, 'Dein Ticket wurde geschlossen, weil wir keine Antwort erhalten haben. Du kannst jederzeit wieder antworten.', 'System', 'ticketClosed');
+            } else if (waitingFor >= REMINDER_MS && !t.waitingReminderSent) {
+                t.waitingReminderSent = true;
+                changed = true;
+                await Store.addLog(t, 'Erinnerung an den Benutzer gesendet: Antwort steht aus');
+                await Store.addNotifications([t.author], t, `Erinnerung: Wir warten noch auf deine Antwort. ${t.waitingMessage || ''}`.trim(), 'System', 'statusChange');
+            }
+        }
+        if (changed) await Store.saveTickets(tickets);
+    },
+
     processAbsences: async () => {
         const now = Date.now();
         const users = await Store.getUsers();
@@ -7350,6 +7744,684 @@ const AdminBoard = {
             : 'unbefristet';
         const visibility = absence.visible ? 'für andere Admins sichtbar' : 'nur für dich sichtbar';
         return `${period} · ${visibility}`;
+    },
+
+    can: (user, key) => {
+        if (!user) return false;
+        if (user.role === 'superadmin') return true;
+        if (key === 'kb') return ['read', 'edit'].includes(user.permissions?.kb);
+        return !!user.permissions?.[key];
+    },
+
+    groupTopbarMenu: (user) => {
+        const right = q('.topbar-right');
+        if (!right || q('#topbar-admin-menu')) return;
+        const items = ['btn-archive', 'btn-global-logs', 'btn-manage-users', 'btn-sys-settings'].map(id => q(`#${id}`)).filter(Boolean);
+        if (!items.length) return;
+        const menu = document.createElement('details');
+        menu.id = 'topbar-admin-menu';
+        menu.className = 'topbar-menu';
+        menu.innerHTML = `<summary class="btn-ghost">${Icon('layout-grid', 16)}Verwaltung</summary><div class="topbar-menu-body"></div>`;
+        right.insertBefore(menu, items[0]);
+        const body = menu.querySelector('.topbar-menu-body');
+        items.forEach(item => body.appendChild(item));
+        const extras = [
+            ['btn-textblocks', 'message-square-plus', 'Textbausteine', 'textBlocks', () => AdminBoard.openTextBlocks()],
+            ['btn-reports', 'chart-column', 'Auswertung', 'reports', () => AdminBoard.openReports()],
+            ['btn-kb', 'book-open', 'Wissensdatenbank', 'kb', () => AdminBoard.openKnowledgeBase()],
+            ['btn-approvals', 'badge-check', 'Genehmigungen', 'approvals', () => AdminBoard.openApprovals()],
+            ['btn-recurring', 'repeat', 'Wiederkehrende Tickets', 'recurring', () => AdminBoard.openRecurring()]
+        ];
+        extras.filter(([, , , perm]) => AdminBoard.can(user, perm)).forEach(([id, icon, label, , handler]) => {
+            const btn = document.createElement('button');
+            btn.id = id;
+            btn.type = 'button';
+            btn.className = 'btn-ghost';
+            btn.innerHTML = `${Icon(icon, 16)}${label}`;
+            btn.onclick = handler;
+            body.appendChild(btn);
+        });
+        body.addEventListener('click', e => { if (e.target.closest('button')) menu.open = false; });
+        AdminBoard.bindTextBlockButton();
+        if (window.lucide) lucide.createIcons();
+    },
+
+    openDialog: ({ id, title, icon = 'layout-grid', body, size = 'md', onSave = null }) => {
+        q(`#${id}`)?.remove();
+        const modal = document.createElement('div');
+        modal.id = id;
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal modal-${size}">
+                <div class="modal-header">
+                    <h3>${Icon(icon, 18)}${Utils.esc(title)}</h3>
+                    <div class="modal-actions">
+                        ${onSave ? `<button class="btn-ghost btn-icon" data-dialog-save title="Speichern" aria-label="Speichern">${Icon('save', 16)}</button>` : ''}
+                        <button class="btn-ghost btn-icon" data-dialog-close title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                    </div>
+                </div>
+                <div class="modal-body">${body}</div>
+            </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('[data-dialog-close]').onclick = () => modal.remove();
+        modal.onclick = e => { if (e.target === modal) modal.remove(); };
+        if (onSave) modal.querySelector('[data-dialog-save]').onclick = () => onSave(modal);
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+        return modal;
+    },
+
+    insertTextAtCursor: (input, text) => {
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? input.value.length;
+        input.value = input.value.slice(0, start) + text + input.value.slice(end);
+        input.focus();
+        input.selectionStart = input.selectionEnd = start + text.length;
+    },
+
+    bindTextBlockButton: () => {
+        const link = q('#m-chat-link');
+        if (!link || q('#m-chat-blocks')) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'm-chat-blocks';
+        btn.className = 'btn-ghost btn-icon';
+        btn.title = 'Textbaustein einfügen';
+        btn.setAttribute('aria-label', 'Textbaustein einfügen');
+        btn.innerHTML = Icon('message-square-plus', 16);
+        btn.onclick = () => AdminBoard.pickTextBlock('#m-chat-input');
+        link.before(btn);
+        if (window.lucide) lucide.createIcons();
+    },
+
+    openTextBlocks: async () => {
+        const modal = AdminBoard.openDialog({
+            id: 'textblocks-modal',
+            title: 'Textbausteine',
+            icon: 'message-square-plus',
+            size: 'md',
+            body: `
+                <div id="tb-list"></div>
+                <div class="field"><label for="tb-title">Titel</label><input id="tb-title" type="text" placeholder="z. B. Rückfrage Gerätetyp"></div>
+                <div class="field"><label for="tb-text">Text</label><textarea id="tb-text" rows="4" placeholder="Der Text, der im Chat eingefügt wird"></textarea></div>
+                <div class="setting-row"><span class="hint">Die Bausteine stehen im Chat über das Symbol neben den Formatierungsoptionen bereit.</span>
+                    <button class="btn-primary btn-sm" id="tb-add" type="button">${Icon('plus', 15)}Hinzufügen</button>
+                </div>`
+        });
+        const render = async () => {
+            const list = (await Store.getSettings()).textBlocks || [];
+            modal.querySelector('#tb-list').innerHTML = list.length ? list.map(b => `
+                <div class="absence-overview-row">
+                    <div><strong>${Utils.esc(b.title)}</strong><span class="hint">${Utils.esc(b.text)}</span></div>
+                    <button class="btn-ghost btn-icon btn-danger tb-del" type="button" data-id="${Utils.esc(b.id)}" title="Löschen" aria-label="Löschen">${Icon('trash-2', 16)}</button>
+                </div>`).join('') : '<div class="empty-state compact">Noch keine Textbausteine.</div>';
+            modal.querySelectorAll('.tb-del').forEach(btn => btn.onclick = async () => {
+                const s = await Store.getSettings();
+                s.textBlocks = (s.textBlocks || []).filter(x => x.id !== btn.dataset.id);
+                await Store.saveSettings(s);
+                await render();
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        modal.querySelector('#tb-add').onclick = async () => {
+            const title = modal.querySelector('#tb-title').value.trim();
+            const text = modal.querySelector('#tb-text').value.trim();
+            if (!title || !text) return UI.toast('Bitte Titel und Text eingeben.');
+            const s = await Store.getSettings();
+            s.textBlocks = [...(s.textBlocks || []), { id: Utils.uid(), title, text }];
+            await Store.saveSettings(s);
+            modal.querySelector('#tb-title').value = '';
+            modal.querySelector('#tb-text').value = '';
+            await render();
+        };
+        await render();
+    },
+
+    pickTextBlock: async (inputSelector) => {
+        const list = (await Store.getSettings()).textBlocks || [];
+        const modal = AdminBoard.openDialog({
+            id: 'textblock-pick-modal',
+            title: 'Textbaustein einfügen',
+            icon: 'message-square',
+            size: 'sm',
+            body: list.length ? `${list.length > 5 ? '<input type="search" id="tb-pick-search" class="section-search" placeholder="Textbaustein suchen...">' : ''}<div class="checkbox-list" id="tb-pick-list">${list.map(b => `
+                <button type="button" class="btn-secondary tb-pick" data-id="${Utils.esc(b.id)}" data-search="${Utils.esc(`${b.title} ${b.text}`.toLowerCase())}" style="justify-content:flex-start;width:100%">${Utils.esc(b.title)}</button>`).join('')}</div>`
+                : '<div class="empty-state compact">Noch keine Textbausteine. Lege sie unter Verwaltung → Textbausteine an.</div>'
+        });
+        const search = modal.querySelector('#tb-pick-search');
+        if (search) search.oninput = () => {
+            const term = search.value.toLowerCase().trim();
+            modal.querySelectorAll('.tb-pick').forEach(btn => { btn.hidden = !!term && !btn.dataset.search.includes(term); });
+        };
+        modal.querySelectorAll('.tb-pick').forEach(btn => btn.onclick = () => {
+            const block = list.find(b => b.id === btn.dataset.id);
+            const input = q(inputSelector);
+            if (block && input) AdminBoard.insertTextAtCursor(input, block.text);
+            modal.remove();
+        });
+    },
+
+    openReports: async () => {
+        const modal = AdminBoard.openDialog({
+            id: 'reports-modal',
+            title: 'Auswertung',
+            icon: 'chart-column',
+            size: 'lg',
+            body: `
+                <div class="report-toolbar">
+                    <div class="field"><label for="rep-range">Zeitraum</label>
+                        <select id="rep-range"><option value="30">Letzte 30 Tage</option><option value="90">Letzte 90 Tage</option><option value="365">Letzte 12 Monate</option></select>
+                    </div>
+                    <div id="rep-personal-toggle"></div>
+                    <button type="button" class="btn-secondary btn-sm" id="rep-print">${Icon('printer', 15)}Drucken</button>
+                </div>
+                <div id="rep-body"></div>`
+        });
+        modal.querySelector('#rep-print').onclick = async () => {
+            const html = modal.querySelector('#rep-body').innerHTML;
+            const settings = await Store.getSettings();
+            const company = settings.companyConfig || {};
+            const actor = await Store.currentUser();
+            const rangeLabel = modal.querySelector('#rep-range').selectedOptions[0]?.textContent || '';
+            UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Auswertung</title>
+                <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}h4{margin:20px 0 8px;font-size:13px;text-transform:uppercase;color:#555}
+                .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;border-bottom:1px solid #ccc;padding-bottom:12px}
+                .print-head img{max-height:48px;max-width:180px;object-fit:contain}
+                .print-head h1{font-size:20px;margin:0 0 4px}
+                .print-head .meta{color:#555;font-size:12px}
+                .report-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.report-kpi{border:1px solid #ccc;border-radius:6px;padding:10px}
+                .report-kpi span{display:block;font-size:11px;color:#555}.report-kpi strong{font-size:18px}
+                table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}
+                .report-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eee;font-size:13px}</style></head>
+                <body>
+                <div class="print-head">
+                    <div>
+                        <h1>${Utils.esc(company.name || 'Support Portal')} · Auswertung</h1>
+                        <div class="meta">Zeitraum: ${Utils.esc(rangeLabel)} &middot; Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div>
+                    </div>
+                    ${company.logoUrl ? `<img src="${Utils.esc(company.logoUrl)}" alt="Logo">` : ''}
+                </div>
+                ${html}</body></html>`);
+        };
+        const user = await Store.currentUser();
+        const render = async () => {
+            const range = Number(modal.querySelector('#rep-range').value);
+            const settings = await Store.getSettings();
+            const users = await Store.getUsers();
+            const personalAllowed = settings.reportingConfig?.personal !== false;
+            const since = Date.now() - range * 86400000;
+            const all = await Store.getTickets();
+            const created = all.filter(t => new Date(t.createdAt).getTime() >= since);
+            const closedAt = t => {
+                const entry = (t.logs || []).find(l => /zu Geschlossen|als gelöst geschlossen|Automatisch geschlossen/.test(l.msg || ''));
+                return entry ? new Date(entry.date).getTime() : null;
+            };
+            const firstResponse = t => {
+                const times = [...(t.chat || []).filter(c => c.role !== 'user'), ...(t.comments || [])].map(c => new Date(c.date).getTime()).sort((a, b) => a - b);
+                return times.length ? times[0] - new Date(t.createdAt).getTime() : null;
+            };
+            const closed = all.map(t => ({ t, c: closedAt(t) })).filter(x => x.c && x.c >= since);
+            const avg = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+            const fmtDuration = ms => ms == null ? '–' : ms >= 86400000 ? `${(ms / 86400000).toFixed(1)} Tg.` : `${(ms / 3600000).toFixed(1)} Std.`;
+            const responses = created.map(firstResponse).filter(v => v != null);
+            const resolutions = closed.map(x => x.c - new Date(x.t.createdAt).getTime());
+            const withDue = closed.map(x => ({ ...x, due: Store.ticketSlaDueAt(x.t, settings) })).filter(x => x.due);
+            const dueMet = withDue.length ? Math.round(100 * withDue.filter(x => x.c <= x.due).length / withDue.length) : null;
+            const byCategory = {};
+            created.forEach(t => (Array.isArray(t.category) ? t.category : [t.category || '–']).forEach(c => { byCategory[c] = (byCategory[c] || 0) + 1; }));
+            const byStatus = {};
+            created.forEach(t => { byStatus[t.status] = (byStatus[t.status] || 0) + 1; });
+
+            modal.querySelector('#rep-personal-toggle').innerHTML = user?.role === 'superadmin'
+                ? `<label class="check-row compact"><input type="checkbox" id="rep-personal" ${personalAllowed ? 'checked' : ''}><span>Personenbezogene Auswertung erlauben</span></label>`
+                : '';
+            const toggle = modal.querySelector('#rep-personal');
+            if (toggle) toggle.onchange = async () => {
+                const s = await Store.getSettings();
+                s.reportingConfig = { ...(s.reportingConfig || {}), personal: toggle.checked };
+                await Store.saveSettings(s);
+                render();
+            };
+
+            let personal = '';
+            if (personalAllowed) {
+                const admins = users.filter(u => u.role === 'admin' || u.role === 'superadmin');
+                personal = `<h4 class="section-title">Pro Mitarbeiter</h4><table class="list-view-table"><thead><tr><th>Name</th><th>Tickets (Verantwortlich)</th><th>Geschlossen</th><th>Ø Erstreaktion</th></tr></thead><tbody>${admins.map(a => {
+                    const owned = created.filter(t => t.owner === a.username);
+                    const ownedClosed = closed.filter(x => x.t.owner === a.username).length;
+                    const responseTimes = owned.map(firstResponse).filter(v => v != null);
+                    return `<tr><td>${Utils.esc(a.name || a.username)}</td><td>${owned.length}</td><td>${ownedClosed}</td><td>${fmtDuration(avg(responseTimes))}</td></tr>`;
+                }).join('')}</tbody></table>`;
+            }
+            const kpi = (label, value) => `<div class="report-kpi"><span>${Utils.esc(label)}</span><strong>${Utils.esc(String(value))}</strong></div>`;
+            modal.querySelector('#rep-body').innerHTML = `
+                <div class="report-kpis">
+                    ${kpi('Tickets erstellt', created.length)}
+                    ${kpi('Geschlossen', closed.length)}
+                    ${kpi('Ø Erstreaktion', fmtDuration(avg(responses)))}
+                    ${kpi('Ø Lösungszeit', fmtDuration(avg(resolutions)))}
+                    ${kpi('Fristen eingehalten', dueMet == null ? '–' : dueMet + ' %')}
+                </div>
+                <h4 class="section-title">Nach Status</h4>
+                <div class="report-list">${Object.entries(byStatus).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="report-row"><span>${Utils.esc(Lang.status(k))}</span><strong>${v}</strong></div>`).join('') || '<div class="empty-state compact">Keine Daten.</div>'}</div>
+                <h4 class="section-title">Nach Kategorie</h4>
+                <div class="report-list">${Object.entries(byCategory).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="report-row"><span>${Utils.esc(k)}</span><strong>${v}</strong></div>`).join('') || '<div class="empty-state compact">Keine Daten.</div>'}</div>
+                ${personal}`;
+        };
+        modal.querySelector('#rep-range').onchange = render;
+        await render();
+    },
+
+    kbFiles: [],
+
+    renderKbFilePreview: (modal) => {
+        const pan = modal.querySelector('#kb-file-preview');
+        if (!pan) return;
+        pan.innerHTML = '';
+        pan.style.display = AdminBoard.kbFiles.length ? 'flex' : 'none';
+        AdminBoard.kbFiles.forEach((f, idx) => {
+            const tag = document.createElement('div');
+            tag.className = 'file-chip';
+            tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
+            tag.querySelector('button').onclick = () => {
+                AdminBoard.kbFiles.splice(idx, 1);
+                AdminBoard.renderKbFilePreview(modal);
+            };
+            pan.appendChild(tag);
+        });
+        if (window.lucide) lucide.createIcons();
+    },
+
+    openKnowledgeBase: async () => {
+        const user = await Store.currentUser();
+        const canEdit = user?.role === 'superadmin' || user?.permissions?.kb === 'edit';
+        const isAdmin = canEdit;
+        AdminBoard.kbFiles = [];
+        const modal = AdminBoard.openDialog({
+            id: 'kb-modal',
+            title: 'Wissensdatenbank',
+            icon: 'book-open',
+            size: 'md',
+            body: `<input type="search" id="kb-search" class="section-search" placeholder="Artikel durchsuchen...">
+                   <div id="kb-list" style="margin-top:var(--space-3)"></div>
+                   ${canEdit ? `<div class="kb-editor">
+                       <h4 class="section-title">Neuer Artikel</h4>
+                       <div class="field"><label for="kb-new-title">Titel</label><input id="kb-new-title" type="text"></div>
+                       <div class="field">
+                           <label for="kb-new-body">Inhalt</label>
+                           <div class="note-toolbar">
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-bold" title="Fett" aria-label="Fett">${Icon('bold', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-italic" title="Kursiv" aria-label="Kursiv">${Icon('italic', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-list" title="Liste" aria-label="Liste">${Icon('list', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-numbered" title="Nummerierte Liste" aria-label="Nummerierte Liste">${Icon('list-ordered', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-table" title="Tabelle einfügen" aria-label="Tabelle einfügen">${Icon('table', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-link" title="Link einfügen" aria-label="Link einfügen">${Icon('link', 15)}</button>
+                               <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen">${Icon('paperclip', 15)}<input type="file" id="kb-file-input" style="display:none" multiple></label>
+                           </div>
+                           <textarea id="kb-new-body" rows="5" placeholder="Unterstützt **fett**, *kursiv*, Listen, Tabellen und Links."></textarea>
+                           <div id="kb-file-preview" class="file-preview"></div>
+                       </div>
+                   </div>` : ''}`,
+            onSave: canEdit ? async (m) => {
+                const title = m.querySelector('#kb-new-title').value.trim();
+                const body = m.querySelector('#kb-new-body').value.trim();
+                if (!title || !body) return UI.toast('Bitte Titel und Inhalt eingeben.');
+                let attachments = [];
+                if (AdminBoard.kbFiles.length) {
+                    try {
+                        attachments = await Promise.all(AdminBoard.kbFiles.map(f => Store.saveAttachment(f)));
+                    } catch (e) {
+                        console.error(e);
+                        UI.toast(e.message === 'ATTACHMENT_TOO_LARGE' ? 'Anhang ist zu groß (max. 15 MB).' : 'Fehler beim Dateiladen');
+                        return;
+                    }
+                }
+                const s = await Store.getSettings();
+                s.knowledgeBase = [...(s.knowledgeBase || []), { id: Utils.uid(), title, body, attachments, source: 'manuell', createdAt: Utils.nowISO() }];
+                await Store.saveSettings(s);
+                m.querySelector('#kb-new-title').value = '';
+                m.querySelector('#kb-new-body').value = '';
+                AdminBoard.kbFiles = [];
+                AdminBoard.renderKbFilePreview(m);
+                UI.toast('Artikel gespeichert.');
+                await render();
+            } : null
+        });
+        if (canEdit) {
+            const bodyInput = modal.querySelector('#kb-new-body');
+            modal.querySelector('#kb-fmt-bold').onclick = () => insertMarkdownText(bodyInput, '**');
+            modal.querySelector('#kb-fmt-italic').onclick = () => insertMarkdownText(bodyInput, '*');
+            modal.querySelector('#kb-fmt-list').onclick = () => {
+                const start = bodyInput.selectionStart, end = bodyInput.selectionEnd;
+                const selected = bodyInput.value.substring(start, end) || 'Punkt';
+                bodyInput.setRangeText(selected.split('\n').map(line => `- ${line}`).join('\n'), start, end, 'end');
+                bodyInput.focus();
+            };
+            modal.querySelector('#kb-fmt-numbered').onclick = () => {
+                const start = bodyInput.selectionStart, end = bodyInput.selectionEnd;
+                const selected = bodyInput.value.substring(start, end) || 'Punkt';
+                bodyInput.setRangeText(selected.split('\n').map((line, index) => `${index + 1}. ${line}`).join('\n'), start, end, 'end');
+                bodyInput.focus();
+            };
+            modal.querySelector('#kb-fmt-table').onclick = () => insertMarkdownTable(bodyInput);
+            modal.querySelector('#kb-fmt-link').onclick = () => insertMarkdownLink(bodyInput);
+            modal.querySelector('#kb-file-input').onchange = (e) => {
+                Array.from(e.target.files).forEach(file => AdminBoard.kbFiles.push(file));
+                AdminBoard.renderKbFilePreview(modal);
+                e.target.value = '';
+            };
+            UI.bindFileDrop(modal.querySelector('.kb-editor'), files => {
+                files.forEach(file => AdminBoard.kbFiles.push(file));
+                AdminBoard.renderKbFilePreview(modal);
+            });
+            UI.bindPasteFiles(bodyInput, files => {
+                files.forEach(file => AdminBoard.kbFiles.push(file));
+                AdminBoard.renderKbFilePreview(modal);
+            });
+        }
+        const render = async () => {
+            const term = modal.querySelector('#kb-search').value.toLowerCase().trim();
+            const articles = ((await Store.getSettings()).knowledgeBase || []).filter(a => !term || `${a.title} ${a.body}`.toLowerCase().includes(term));
+            modal.querySelector('#kb-list').innerHTML = articles.length ? articles.map(a => `
+                <details class="kb-article">
+                    <summary><strong>${Utils.esc(a.title)}</strong> <span class="hint">${Utils.esc(a.source || '')} · ${Utils.fmtDate(a.createdAt)}</span></summary>
+                    <div class="desc-text">${Utils.renderMarkdown(a.body)}</div>
+                    ${(a.attachments || []).length ? `<div class="file-preview">${a.attachments.map((f, idx) => `<button type="button" class="file-chip kb-att" data-article="${Utils.esc(a.id)}" data-idx="${idx}">${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span></button>`).join('')}</div>` : ''}
+                    ${isAdmin ? `<button class="btn-ghost btn-sm kb-del" type="button" data-id="${Utils.esc(a.id)}">${Icon('trash-2', 14)}Löschen</button>` : ''}
+                </details>`).join('') : '<div class="empty-state compact">Keine Artikel gefunden.</div>';
+            modal.querySelectorAll('.kb-del').forEach(btn => btn.onclick = async () => {
+                const s = await Store.getSettings();
+                s.knowledgeBase = (s.knowledgeBase || []).filter(x => x.id !== btn.dataset.id);
+                await Store.saveSettings(s);
+                await render();
+            });
+            modal.querySelectorAll('.kb-att').forEach(btn => btn.onclick = async () => {
+                const article = articles.find(x => x.id === btn.dataset.article);
+                const file = article?.attachments?.[Number(btn.dataset.idx)];
+                if (file) AdminBoard.openAttachmentPreview(file);
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        modal.querySelector('#kb-search').oninput = render;
+        await render();
+    },
+
+    addSolutionToKnowledgeBase: async (t) => {
+        const solution = (t.comments || []).filter(c => (c.channel || 'solution') === 'solution');
+        if (!solution.length) return UI.toast('Es gibt noch keinen Lösungsweg in diesem Ticket.');
+        const title = await UI.promptText({ title: 'Wissensartikel', label: 'Titel des Artikels', value: t.title, saveLabel: 'Speichern' });
+        if (!title || !title.trim()) return;
+        const body = solution.map(c => `${c.text || ''}`).join('\n\n');
+        const s = await Store.getSettings();
+        s.knowledgeBase = [...(s.knowledgeBase || []), { id: Utils.uid(), title: title.trim(), body, source: t.ticketNumber || t.id, createdAt: Utils.nowISO() }];
+        await Store.saveSettings(s);
+        await Store.addLog(t, 'Lösungsweg als Wissensartikel übernommen', title.trim());
+        const tickets = await Store.getTickets();
+        const current = tickets.find(x => x.id === t.id);
+        if (current) { current.logs = t.logs; await Store.saveTickets(tickets); }
+        UI.toast('Als Wissensartikel gespeichert.');
+    },
+
+    openRecurring: async () => {
+        const settings = await Store.getSettings();
+        const categories = settings.categories || ['Allgemein'];
+        const weekdays = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+        const modal = AdminBoard.openDialog({
+            id: 'recurring-modal',
+            title: 'Wiederkehrende Tickets',
+            icon: 'repeat',
+            size: 'md',
+            body: `
+                <div id="rec-list"></div>
+                <div class="field"><label for="rec-title">Betreff</label><input id="rec-title" type="text" placeholder="z. B. Backup prüfen"></div>
+                <div class="field"><label for="rec-desc">Beschreibung</label><textarea id="rec-desc" rows="3"></textarea></div>
+                <div class="form-grid">
+                    <div class="field"><label for="rec-cat">Kategorie</label><select id="rec-cat">${categories.map(c => `<option value="${Utils.esc(c)}">${Utils.esc(c)}</option>`).join('')}</select></div>
+                    <div class="field"><label for="rec-prio">Priorität</label><select id="rec-prio"><option>Niedrig</option><option selected>Normal</option><option>Hoch</option><option>Kritisch</option></select></div>
+                    <div class="field"><label for="rec-interval">Wiederholung</label><select id="rec-interval"><option value="monthly">Monatlich</option><option value="weekly">Wöchentlich</option></select></div>
+                    <div class="field"><label for="rec-day">Tag</label><select id="rec-day"></select></div>
+                </div>
+                <div class="setting-row"><span class="hint">Am gewählten Tag wird automatisch ein Ticket angelegt, sobald ein Admin den Bereich öffnet.</span>
+                    <button class="btn-primary btn-sm" id="rec-add" type="button">${Icon('plus', 15)}Hinzufügen</button>
+                </div>`
+        });
+        const fillDays = () => {
+            const interval = modal.querySelector('#rec-interval').value;
+            modal.querySelector('#rec-day').innerHTML = interval === 'monthly'
+                ? Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}">${i + 1}. des Monats</option>`).join('')
+                : weekdays.map((d, i) => `<option value="${i}">${d}</option>`).join('');
+        };
+        modal.querySelector('#rec-interval').onchange = fillDays;
+        fillDays();
+        const render = async () => {
+            const list = (await Store.getSettings()).recurringTickets || [];
+            modal.querySelector('#rec-list').innerHTML = list.length ? list.map(r => `
+                <div class="absence-overview-row">
+                    <div><strong>${Utils.esc(r.title)}</strong><span class="hint">${r.interval === 'monthly' ? `Monatlich am ${r.day}.` : `Wöchentlich ${weekdays[r.day]}`} · ${Utils.esc(r.category)} · ${Utils.esc(r.prio)}</span></div>
+                    <button class="btn-ghost btn-icon btn-danger rec-del" type="button" data-id="${Utils.esc(r.id)}" title="Löschen" aria-label="Löschen">${Icon('trash-2', 16)}</button>
+                </div>`).join('') : '<div class="empty-state compact">Keine wiederkehrenden Tickets.</div>';
+            modal.querySelectorAll('.rec-del').forEach(btn => btn.onclick = async () => {
+                const s = await Store.getSettings();
+                s.recurringTickets = (s.recurringTickets || []).filter(x => x.id !== btn.dataset.id);
+                await Store.saveSettings(s);
+                await render();
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        modal.querySelector('#rec-add').onclick = async () => {
+            const title = modal.querySelector('#rec-title').value.trim();
+            if (!title) return UI.toast('Bitte einen Betreff eingeben.');
+            const s = await Store.getSettings();
+            s.recurringTickets = [...(s.recurringTickets || []), {
+                id: Utils.uid(),
+                title,
+                desc: modal.querySelector('#rec-desc').value.trim(),
+                category: modal.querySelector('#rec-cat').value,
+                prio: modal.querySelector('#rec-prio').value,
+                interval: modal.querySelector('#rec-interval').value,
+                day: Number(modal.querySelector('#rec-day').value),
+                lastRun: null
+            }];
+            await Store.saveSettings(s);
+            modal.querySelector('#rec-title').value = '';
+            modal.querySelector('#rec-desc').value = '';
+            await render();
+        };
+        await render();
+    },
+
+    processRecurring: async () => {
+        const settings = await Store.getSettings();
+        const list = settings.recurringTickets || [];
+        if (!list.length) return;
+        const now = new Date();
+        const todayKey = now.toISOString().slice(0, 10);
+        const monthKey = todayKey.slice(0, 7);
+        const actor = await Store.currentUser();
+        const tickets = await Store.getTickets();
+        let changed = false;
+        for (const r of list) {
+            const due = r.interval === 'monthly' ? now.getDate() === r.day && r.lastRun !== monthKey : now.getDay() === r.day && r.lastRun !== todayKey;
+            if (!due) continue;
+            let numbers;
+            try { numbers = Store.nextTicketNumber(tickets, [r.category], settings); } catch { continue; }
+            tickets.push({
+                id: Utils.uid(),
+                ticketNumber: numbers.ticketNumber,
+                ticketNumberSequence: numbers.ticketNumberSequence,
+                title: r.title,
+                desc: r.desc || '',
+                prio: r.prio,
+                category: [r.category],
+                status: 'Neu',
+                author: actor?.username || 'admin',
+                authorName: actor?.name || actor?.username || 'Administrator',
+                createdAt: Utils.nowISO(),
+                comments: [],
+                chat: [],
+                attachments: [],
+                archived: false,
+                assignees: [],
+                participants: [],
+                owner: '',
+                todos: [],
+                logs: []
+            });
+            await Store.addLog(tickets[tickets.length - 1], 'Wiederkehrendes Ticket angelegt', r.title);
+            r.lastRun = r.interval === 'monthly' ? monthKey : todayKey;
+            changed = true;
+        }
+        if (changed) {
+            await Store.saveTickets(tickets);
+            await Store.saveSettings({ ...settings, recurringTickets: list });
+        }
+    },
+
+    openApprovals: async () => {
+        const me = await Store.currentUser();
+        const modal = AdminBoard.openDialog({ id: 'approvals-modal', title: 'Genehmigungen', icon: 'badge-check', size: 'md', body: '<div id="apr-list"></div>' });
+        const render = async () => {
+            const tickets = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => a.approver === me.username && a.status === 'pending'));
+            modal.querySelector('#apr-list').innerHTML = tickets.length ? tickets.map(t => {
+                const a = t.approvals.find(x => x.approver === me.username && x.status === 'pending');
+                return `<div class="absence-overview-row" data-id="${Utils.esc(t.id)}">
+                    <div><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span class="hint">Angefragt von ${Utils.esc(a.requestedByName || a.requestedBy)} · ${Utils.fmtDate(a.requestedAt)}${a.note ? ' · ' + Utils.esc(a.note) : ''}</span></div>
+                    <div class="aa-actions">
+                        <button class="btn-primary btn-sm apr-yes" type="button">${Icon('check', 14)}Freigeben</button>
+                        <button class="btn-secondary btn-sm apr-no" type="button">${Icon('x', 14)}Ablehnen</button>
+                    </div></div>`;
+            }).join('') : '<div class="empty-state compact">Keine offenen Genehmigungen.</div>';
+            modal.querySelectorAll('.absence-overview-row').forEach(row => {
+                const decide = async status => {
+                    const all = await Store.getTickets();
+                    const t = all.find(x => x.id === row.dataset.id);
+                    if (!t) return;
+                    const a = t.approvals.find(x => x.approver === me.username && x.status === 'pending');
+                    if (!a) return;
+                    a.status = status;
+                    a.decidedAt = Utils.nowISO();
+                    await Store.addLog(t, `Genehmigung ${status === 'approved' ? 'erteilt' : 'abgelehnt'} von ${me.name || me.username}`);
+                    await Store.saveTickets(all);
+                    await Store.addNotifications([a.requestedBy], t, `${me.name || me.username} hat die Genehmigung ${status === 'approved' ? 'erteilt' : 'abgelehnt'}.`, me.username, 'statusChange');
+                    await Notifications.refresh();
+                    await render();
+                    await AdminBoard.render();
+                };
+                row.querySelector('.apr-yes').onclick = () => decide('approved');
+                row.querySelector('.apr-no').onclick = () => decide('rejected');
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        await render();
+    },
+
+    requestApproval: async (t) => {
+        const me = await Store.currentUser();
+        const approvers = (await Store.getUsers()).filter(u => u.username !== me.username && !u.accountArchived);
+        if (!approvers.length) return UI.toast('Keine weiteren Personen zum Genehmigen vorhanden.');
+        const modal = AdminBoard.openDialog({
+            id: 'approval-request-modal',
+            title: 'Genehmigung anfordern',
+            icon: 'badge-check',
+            size: 'sm',
+            body: `<div class="field"><label>Genehmigende Person</label><div id="apr-approver"></div></div>
+                   <div class="field"><label for="apr-note">Hinweis</label><textarea id="apr-note" rows="3" placeholder="Was soll genehmigt werden?"></textarea></div>`,
+            onSave: async (m) => {
+                const approver = approverPicker.getValue();
+                const note = m.querySelector('#apr-note').value.trim();
+                if (!approver) return UI.toast('Bitte eine genehmigende Person wählen.');
+                const all = await Store.getTickets();
+                const ticket = all.find(x => x.id === t.id);
+                if (!ticket) return;
+                ticket.approvals = [...(ticket.approvals || []), { id: Utils.uid(), approver, requestedBy: me.username, requestedByName: me.name || me.username, status: 'pending', requestedAt: Utils.nowISO(), note }];
+                await Store.addLog(ticket, 'Genehmigung angefordert', approver);
+                await Store.saveTickets(all);
+                await Store.addNotifications([approver], ticket, `${me.name || me.username} bittet dich um eine Genehmigung${note ? ': ' + note : '.'}`, me.username, 'newMessage');
+                await Notifications.refresh();
+                m.remove();
+                UI.toast('Genehmigung angefordert.');
+                await AdminBoard.openModal(t.id);
+            }
+        });
+        const owner = (await Store.getUsers()).find(u => u.username === t.author);
+        const preselect = (owner?.supervisor && approvers.some(u => u.username === owner.supervisor)) ? owner.supervisor : (approvers[0]?.username || '');
+        const approverPicker = UI.createMultiSelect(modal.querySelector('#apr-approver'), approvers.map(u => ({ value: u.username, label: u.name || u.username })), preselect, null, { single: true, emptyLabel: 'Bitte wählen...' });
+        return modal;
+    },
+
+    linkRelatedTicket: async (t) => {
+        const all = await Store.getTickets();
+        const candidates = all.filter(x => x.id !== t.id && !x.archived && !(t.relatedIds || []).includes(x.id));
+        const modal = AdminBoard.openDialog({
+            id: 'related-modal',
+            title: 'Verwandtes Ticket verknüpfen',
+            icon: 'link',
+            size: 'md',
+            body: `<input type="search" id="rel-search" class="section-search" placeholder="Ticket-Nr oder Titel suchen...">
+                   <div class="checkbox-list" id="rel-list" style="margin-top:var(--space-3)">${candidates.map(x => `
+                        <label class="check-row" data-search="${Utils.esc(`${x.ticketNumber || ''} ${x.title}`.toLowerCase())}"><input type="checkbox" value="${Utils.esc(x.id)}">
+                            <span class="check-text"><strong>${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)}</strong></span></label>`).join('')}</div>`,
+            onSave: async (m) => {
+                const ids = [...m.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+                if (!ids.length) return UI.toast('Bitte mindestens ein Ticket auswählen.');
+                const tickets = await Store.getTickets();
+                const me = tickets.find(x => x.id === t.id);
+                ids.forEach(id => {
+                    const other = tickets.find(x => x.id === id);
+                    if (!me || !other) return;
+                    me.relatedIds = [...new Set([...(me.relatedIds || []), id])];
+                    other.relatedIds = [...new Set([...(other.relatedIds || []), me.id])];
+                });
+                if (me) await Store.addLog(me, 'Verwandte Tickets verknüpft', ids.map(id => tickets.find(x => x.id === id)?.ticketNumber || id).join(', '));
+                await Store.saveTickets(tickets);
+                m.remove();
+                UI.toast('Verknüpft.');
+                await AdminBoard.openModal(t.id);
+            }
+        });
+        modal.querySelector('#rel-search').oninput = () => {
+            const term = modal.querySelector('#rel-search').value.toLowerCase().trim();
+            modal.querySelectorAll('#rel-list .check-row').forEach(row => { row.hidden = !!term && !row.dataset.search.includes(term); });
+        };
+    },
+
+    mergeTicketInto: async (t) => {
+        const all = await Store.getTickets();
+        const candidates = all.filter(x => x.id !== t.id && !x.archived);
+        const modal = AdminBoard.openDialog({
+            id: 'merge-modal',
+            title: 'Ticket zusammenführen',
+            icon: 'git-merge',
+            size: 'md',
+            body: `<p class="hint">Chat, Notizen, Teilaufgaben, Zeiten und Anhänge von <strong>${Utils.esc(t.ticketNumber || t.id)}</strong> werden in das gewählte Ticket übernommen. Das Ursprungsticket wird archiviert.</p>
+                   <div class="field"><label for="merge-target">Zielticket</label>
+                       <select id="merge-target">${candidates.map(x => `<option value="${Utils.esc(x.id)}">${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)}</option>`).join('')}</select></div>`,
+            onSave: async (m) => {
+                const targetId = m.querySelector('#merge-target').value;
+                if (!targetId) return;
+                const tickets = await Store.getTickets();
+                const source = tickets.find(x => x.id === t.id);
+                const target = tickets.find(x => x.id === targetId);
+                if (!source || !target) return;
+                const note = `Zusammengeführt aus ${source.ticketNumber || source.id} „${source.title}“`;
+                target.chat = [...(target.chat || []), ...(source.chat || [])];
+                target.comments = [...(target.comments || []), ...(source.comments || []), { text: note, author: 'System', date: Utils.nowISO(), channel: 'solution', type: 'Analyse', pinned: false, resolution: false, files: [] }];
+                target.todos = [...(target.todos || []), ...(source.todos || [])];
+                target.timeEntries = [...(target.timeEntries || []), ...(source.timeEntries || [])];
+                target.attachments = [...(target.attachments || []), ...(source.attachments || [])];
+                target.participants = [...new Set([...(target.participants || []), ...(source.participants || [])])];
+                source.archived = true;
+                source.archivedAt = Utils.nowISO();
+                source.mergedInto = target.id;
+                await Store.addLog(source, 'Zusammengeführt in ' + (target.ticketNumber || target.id));
+                await Store.addLog(target, note);
+                await Store.saveTickets(tickets);
+                m.remove();
+                UI.toast('Tickets zusammengeführt.');
+                await AdminBoard.render();
+            }
+        });
+        return modal;
     },
 
     renderSubstituteNotice: n => {
@@ -7549,6 +8621,7 @@ const AdminBoard = {
         modal.id = 'absence-overview-modal';
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
         modal.querySelector('.modal-header h3').textContent = 'Abwesenheiten';
+        modal.querySelector('#generic-save-head')?.remove();
         modal.querySelector('.modal-body').innerHTML = absent.length ? absent.map(u => {
             const sub = u.absence.substitute ? users.find(x => x.username === u.absence.substitute) : null;
             return `<div class="absence-overview-row"><div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span></div><span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Team'}</span></div>`;
@@ -7727,6 +8800,12 @@ const AdminBoard = {
             AdminBoard.createTicketFiles.push(...Array.from(e.dataTransfer?.files || []));
             renderActFilePreview();
         });
+        const addActFiles = files => {
+            AdminBoard.createTicketFiles.push(...files);
+            renderActFilePreview();
+        };
+        UI.bindFileDrop(q('#admin-create-ticket-modal .modal'), addActFiles);
+        UI.bindPasteFiles(q('#act-desc'), addActFiles);
         const settings = await Store.getSettings();
         const categories = settings.categories && settings.categories.length ? settings.categories : ['Allgemein'];
         const refreshActCustomFields = (selectedCats) => {
@@ -8133,7 +9212,7 @@ const AdminBoard = {
         const company = settings.companyConfig || {};
         const actor = await Store.currentUser();
         const slaCountdown = Store.formatSlaCountdown(t, settings);
-        const todos = opts.todos ? (t.todos || []).map(d => `<li>${d.done ? '☑' : '☐'} ${Utils.esc(d.title)}${d.assignee ? ' – ' + Utils.esc(nameFor(d.assignee)) : ''}</li>`).join('') : '';
+        const todos = opts.todos ? (t.todos || []).map(d => `<li>${d.done ? '☑' : '☐'} ${Utils.esc(d.title)}${d.assignee ? ' – ' + Utils.esc(nameFor(d.assignee)) : ''}${d.done && d.doneAt ? ` – erledigt am ${Utils.esc(Utils.fmtDate(d.doneAt))}` : ''}</li>`).join('') : '';
         const entryRow = (c) => `
             <div class="p-entry"><strong>${Utils.esc(c.author)}</strong> <span>${Utils.esc(Utils.fmtDate(c.date))}</span>
             <p>${Utils.esc(c.text || '')}</p></div>`;
@@ -8246,6 +9325,45 @@ const AdminBoard = {
                 btnIncident.innerHTML = t.isMajorIncident ? `${Icon('siren', 16)}Großstörung aufheben` : `${Icon('siren', 16)}Als Großstörung markieren`;
                 btnIncident.classList.toggle('btn-danger', !!t.isMajorIncident);
                 btnIncident.onclick = () => AdminBoard.toggleMajorIncident(t.id);
+            }
+
+            const actionsRow = q('#ticket-modal .actions-row');
+            if (actionsRow) {
+                let extra = q('#m-extra-actions');
+                if (!extra) {
+                    extra = document.createElement('div');
+                    extra.id = 'm-extra-actions';
+                    extra.className = 'actions-row';
+                    actionsRow.after(extra);
+                }
+                let related = q('#m-related');
+                if (!related) {
+                    related = document.createElement('div');
+                    related.id = 'm-related';
+                    related.className = 'incident-linked-list';
+                    extra.after(related);
+                }
+                extra.innerHTML = t.archived ? '' : `
+                    <button class="btn-secondary" id="m-link-related" type="button">${Icon('link', 16)}Verwandt verknüpfen</button>
+                    <button class="btn-secondary" id="m-merge" type="button">${Icon('git-merge', 16)}Zusammenführen</button>
+                    <button class="btn-secondary" id="m-request-approval" type="button">${Icon('badge-check', 16)}Genehmigung anfordern</button>
+                    <button class="btn-secondary" id="m-kb-add" type="button">${Icon('book-open', 16)}Als Wissensartikel übernehmen</button>`;
+                const bindAction = (sel, fn) => { const el = q(sel); if (el) el.onclick = () => fn(t); };
+                bindAction('#m-link-related', AdminBoard.linkRelatedTicket);
+                bindAction('#m-merge', AdminBoard.mergeTicketInto);
+                bindAction('#m-request-approval', AdminBoard.requestApproval);
+                bindAction('#m-kb-add', AdminBoard.addSolutionToKnowledgeBase);
+                const relatedTickets = (t.relatedIds || []).map(id => tickets.find(x => x.id === id)).filter(Boolean);
+                related.hidden = !relatedTickets.length;
+                related.innerHTML = relatedTickets.length ? `
+                    <h4 class="section-title">${Icon('link', 15)} Verwandte Tickets</h4>
+                    <div class="incident-linked-table">${relatedTickets.map(x => `
+                        <button type="button" class="incident-linked-row" data-ticket-id="${Utils.esc(x.id)}">
+                            <span><strong>${Utils.esc(x.ticketNumber || x.id)}</strong>${Utils.esc(x.title)}</span>
+                            <span>${Utils.esc(x.authorName || x.author || '-')}</span>
+                            <span>${Lang.status(x.status)}</span>
+                        </button>`).join('')}</div>` : '';
+                related.querySelectorAll('.incident-linked-row').forEach(row => { row.onclick = () => AdminBoard.openModal(row.dataset.ticketId); });
             }
 
             const btnAssignIncident = q('#btn-assign-incident');
@@ -8551,64 +9669,7 @@ const AdminBoard = {
             box.innerHTML = `<div class="empty-state compact">${channel === 'admin-chat' ? 'Noch keine Admin-Nachrichten.' : 'Noch keine Lösungsversuche dokumentiert.'}</div>`;
             return;
         }
-        const renderText = (value = '') => {
-            const lines = Utils.esc(value).replace(/\r/g, '').split('\n');
-            const inline = text => text
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                .replace(/`([^`]+)`/g, '<code>$1</code>');
-            const cellsFrom = line => {
-                const trimmed = line.trim();
-                if (!trimmed.startsWith('|')) return null;
-                return trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
-            };
-            const isTableSeparator = cells => cells?.length > 1 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
-            const output = [];
-            let listType = '';
-            const closeList = () => {
-                if (listType) output.push(`</${listType}>`);
-                listType = '';
-            };
-
-            for (let index = 0; index < lines.length;) {
-                const header = cellsFrom(lines[index]);
-                const separator = cellsFrom(lines[index + 1] || '');
-                if (header?.length > 1 && isTableSeparator(separator)) {
-                    closeList();
-                    const rows = [];
-                    let rowIndex = index + 2;
-                    while (rowIndex < lines.length) {
-                        const cells = cellsFrom(lines[rowIndex]);
-                        if (!cells) break;
-                        rows.push(cells);
-                        rowIndex++;
-                    }
-                    output.push(`<div class="note-table-wrap"><table class="note-markdown-table"><thead><tr>${header.map(cell => `<th>${inline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${header.map((_, column) => `<td>${inline(row[column] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
-                    index = rowIndex;
-                    continue;
-                }
-
-                const bullet = lines[index].match(/^\s*-\s+(.*)$/);
-                const numbered = lines[index].match(/^\s*\d+[.)]\s+(.*)$/);
-                const listItem = bullet || numbered;
-                if (listItem) {
-                    const nextType = bullet ? 'ul' : 'ol';
-                    if (listType !== nextType) {
-                        closeList();
-                        listType = nextType;
-                        output.push(`<${listType}>`);
-                    }
-                    output.push(`<li>${inline(listItem[1])}</li>`);
-                    index++;
-                    continue;
-                }
-                closeList();
-                output.push(lines[index] ? `${inline(lines[index])}<br>` : '<br>');
-                index++;
-            }
-            closeList();
-            return output.join('');
-        };
+        const renderText = (value = '') => Utils.renderMarkdown(value);
         const query = (searchInput?.value || '').toLowerCase().trim();
         const comments = [...commentsRaw]
             .map(comment => ({
@@ -9114,6 +10175,17 @@ const AdminBoard = {
         }
 
         t.chat.push(msg);
+        if (role === 'user' && t.status === 'Geschlossen' && !t.archived) {
+            t.status = 'In Bearbeitung';
+            await Store.addLog(t, 'Ticket durch Antwort des Benutzers wiedereröffnet');
+        }
+        if (role === 'user' && String(t.status).startsWith('Warten auf Benutzer')) {
+            t.status = 'In Bearbeitung';
+            delete t.waitingMessage;
+            t.slaPausedMs = (t.slaPausedMs || 0) + (t.slaPausedSince ? Date.now() - new Date(t.slaPausedSince).getTime() : 0);
+            t.slaPausedSince = null;
+            await Store.addLog(t, 'Benutzer hat auf die Anfrage geantwortet – Status auf In Bearbeitung gesetzt');
+        }
         await Store.addLog(t, 'Nachricht gesendet', txt);
         await Store.saveTickets(tickets);
         await Store.addGlobalLog('Nachricht gesendet', `Ticket: ${t.title}\nInhalt: ${txt.substring(0, 100)}${txt.length > 100 ? '...' : ''}`);

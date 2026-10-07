@@ -593,6 +593,72 @@ body[data-guard="admin"] .topbar {
 }
 
 /* Zwischenüberschrift innerhalb von Karten und Modals */
+.table-builder-toolbar {
+    display: flex;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+.table-builder-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-control);
+}
+
+.table-builder {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table-builder th,
+.table-builder td {
+    border: 1px solid var(--border);
+    padding: 0;
+}
+
+.table-builder th {
+    background: var(--field-bg);
+}
+
+.table-builder input {
+    width: 100%;
+    min-width: 110px;
+    border: 0;
+    background: transparent;
+    padding: 8px 10px;
+    color: var(--text);
+    font: inherit;
+    font-weight: inherit;
+}
+
+.table-builder input:focus {
+    outline: 2px solid var(--primary-solid);
+    outline-offset: -2px;
+}
+
+.table-builder th {
+    position: relative;
+}
+
+.table-builder .tbld-col-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+}
+
+.table-builder .tbld-row-actions {
+    width: 1%;
+    white-space: nowrap;
+    text-align: center;
+    background: transparent;
+}
+
+.kb-editor {
+    margin-top: var(--space-5);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border);
+}
+
 .section-title {
     display: flex;
     align-items: center;
@@ -834,6 +900,14 @@ input[type="file"] {
     border-color: var(--primary-solid);
     background: var(--sel-bg);
     color: var(--text);
+}
+
+/* Allgemeines Feedback für jede Drag&Drop-Zone ohne eigene .drag-over-Regel (z. B. Wissensdatenbank-Editor, interne Notizen) */
+.drag-over {
+    outline: 2px dashed var(--primary-solid);
+    outline-offset: -2px;
+    background: var(--sel-bg);
+    border-radius: var(--radius-control);
 }
 
 .dropzone strong {
@@ -1284,14 +1358,38 @@ option {
 }
 
 .custom-field-row {
-    display: grid;
-    grid-template-columns: 1.5fr 1fr 1.5fr auto auto;
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-control);
     background: var(--field-bg);
+}
+
+.custom-field-row .cf-label {
+    flex: 1 1 160px;
+    min-width: 0;
+}
+
+.custom-field-row .cf-type {
+    flex: 1 1 110px;
+    min-width: 0;
+}
+
+.custom-field-row .cf-options {
+    flex: 1 1 160px;
+    min-width: 0;
+}
+
+.custom-field-row .check-row.compact {
+    flex: 0 0 auto;
+}
+
+.custom-field-row .cf-remove {
+    flex: 0 0 auto;
+    margin-left: auto;
 }
 
 /* Dynamisch eingeblendete eigene Felder im Ticket-Erstellen-Formular */
@@ -2973,7 +3071,7 @@ button:disabled {
     color: #888;
 }
 
-.card-v2 .card-meta-line > span {
+.card-v2 .card-meta-line>span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -3725,6 +3823,46 @@ button:disabled {
     white-space: nowrap;
 }
 
+.topbar-menu {
+    position: relative;
+}
+
+.topbar-menu>summary {
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: var(--icon-btn);
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-control);
+    cursor: pointer;
+}
+
+.topbar-menu>summary::-webkit-details-marker {
+    display: none;
+}
+
+.topbar-menu-body {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: var(--z-dropdown);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 220px;
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg2);
+    box-shadow: var(--shadow-float);
+}
+
+.topbar-menu-body>button {
+    justify-content: flex-start;
+    width: 100%;
+}
+
 .lv-more {
     position: relative;
 }
@@ -3891,6 +4029,190 @@ button:disabled {
 .substitute-line {
     margin: 0;
     font-size: var(--fs-sm);
+}
+
+.log-term-filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border);
+}
+
+.log-term-filters label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.log-term-filters label>span {
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--text-sec);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.log-term-filters input {
+    width: 100%;
+    min-width: 0;
+}
+
+.archive-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.archive-filters>select {
+    width: auto;
+    min-width: 200px;
+}
+
+.archive-filters .date-input-row {
+    width: 170px;
+}
+
+.archive-filter-label {
+    font-size: var(--fs-xs);
+    color: var(--text-sec);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.archive-header {
+    flex-wrap: wrap;
+}
+
+.archive-header .section-search {
+    min-width: 220px;
+    flex: 1 1 240px;
+}
+
+.report-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+.report-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.report-kpi {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--card-bg);
+}
+
+.report-kpi span {
+    font-size: var(--fs-xs);
+    color: var(--text-sec);
+}
+
+.report-kpi strong {
+    font-size: var(--fs-lg);
+}
+
+.report-list {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: var(--space-4);
+}
+
+.report-row {
+    display: flex;
+    justify-content: space-between;
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+    font-size: var(--fs-sm);
+}
+
+#reports-modal .modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+#textblocks-modal .modal-body,
+#textblock-pick-modal .modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.perm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--space-2);
+}
+
+.todo-done-at {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--fs-xs);
+    color: var(--text-sec);
+}
+
+#iam-search {
+    margin-bottom: var(--space-3);
+}
+
+.absence-overview-row {
+    font-size: var(--fs-sm);
+    align-items: center;
+}
+
+.absence-overview-row strong {
+    display: block;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+}
+
+.absence-overview-row .hint {
+    display: block;
+    margin: 0;
+    font-size: var(--fs-sm);
+}
+
+.aa-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+}
+
+.aa-row>div:first-child {
+    flex: 1 1 220px;
+    min-width: 0;
+}
+
+.aa-row .hint {
+    display: block;
+    margin-top: 2px;
+}
+
+.aa-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.aa-actions .aa-assign {
+    min-width: 180px;
 }
 
 .absence-overview-row {
@@ -5075,13 +5397,13 @@ button:disabled {
     background: var(--field-bg);
 }
 
-.setting-row > .hint {
+.setting-row>.hint {
     flex: 1 1 auto;
     min-width: 0;
     margin: 0;
 }
 
-.setting-row > button {
+.setting-row>button {
     flex-shrink: 0;
     white-space: nowrap;
 }
