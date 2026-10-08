@@ -73,6 +73,35 @@ const Utils = {
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/\n/g, '<br>');
     },
+    // Säubert HTML aus einem contenteditable-Editor, bevor es gespeichert/erneut angezeigt wird:
+    // entfernt script/style/iframe & Co. sowie Event-Handler- und javascript:-Attribute.
+    // Erkennt "@Vollständiger Name" (neu, direkt beim Tippen eingesetzt) genauso wie das ältere
+    // "@benutzername" in gespeicherten Notizen - eine einzige Stelle für Erkennung und Hervorhebung.
+    buildMentionRegex: (users) => {
+        const names = [];
+        users.forEach(u => {
+            if (u.name) names.push(u.name);
+            if (u.username) names.push(u.username);
+        });
+        const unique = [...new Set(names)].filter(Boolean).sort((a, b) => b.length - a.length);
+        if (!unique.length) return null;
+        const escaped = unique.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        return new RegExp(`@(${escaped.join('|')})(?!\\w)`, 'g');
+    },
+    sanitizeRichHtml: (html = '') => {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        doc.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach(el => el.remove());
+        doc.body.querySelectorAll('*').forEach(el => {
+            [...el.attributes].forEach(attr => {
+                const name = attr.name.toLowerCase();
+                if (name.startsWith('on') || ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(attr.value))) {
+                    el.removeAttribute(attr.name);
+                }
+            });
+            if (el.tagName === 'A') { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
+        });
+        return doc.body.innerHTML.trim();
+    },
     // Rendert den in den Notiz-/Textfeldern verwendeten Markdown-Dialekt (fett, kursiv, Code, Links,
     // Listen, Tabellen) als HTML. Wird von internen Notizen und der Wissensdatenbank gemeinsam genutzt.
     renderMarkdown: (value = '') => {
@@ -1008,6 +1037,17 @@ const Store = {
     // Countdown-Badge für ein Ticket: Ampel-Farbe (success/warning/danger) nach dem
     // üblichen Muster aus Helpdesk-Tools (z. B. Zendesk/Freshdesk) – grün = genug Zeit,
     // gelb = letztes Viertel der Frist oder unter 2 Std., rot = überschritten.
+    // Menschenlesbarer Name der genehmigenden Person/Gruppe einer offenen Genehmigung
+    // (gemeinsam genutzt von Admin- und Benutzer-Ticketansicht).
+    describeApprover: async (approval) => {
+        if (approval.approvers?.length) {
+            const groups = await Store.getGroups();
+            const group = groups.find(g => (g.members || []).length && approval.approvers.every(m => (g.members || []).includes(m)));
+            return group ? `die Gruppe ${group.name}` : 'mehrere mögliche Personen';
+        }
+        const users = await Store.getUsers();
+        return users.find(u => u.username === approval.approver)?.name || approval.approver;
+    },
     formatSlaCountdown: (ticket, settings, now = Date.now()) => {
         if (!ticket || ticket.archived || ticket.status === 'Geschlossen') return null;
         const dueAt = Store.ticketSlaDueAt(ticket, settings);
@@ -1019,7 +1059,10 @@ const Store = {
         const duration = minutes >= 1440 ? `${Math.floor(minutes / 1440)} ${Lang.t('dayShort')}` :
             minutes >= 60 ? `${Math.floor(minutes / 60)} ${Lang.t('hourShort')}` : `${minutes} ${Lang.t('minuteShort')}`;
         const totalMs = Math.max(1, dueAt - createdAt);
-        const urgent = !overdue && diffMs <= Math.max(totalMs * 0.25, 2 * 60 * 60 * 1000);
+        // Dringlichkeitsfenster: mindestens 2 Std., bei sehr langen Fristen aber höchstens 3 Tage –
+        // sonst gilt bei einer 90-Tage-Frist schon "noch 22 Tage" fälschlich als dringend (gelb).
+        const urgencyWindow = Math.min(Math.max(totalMs * 0.25, 2 * 60 * 60 * 1000), 3 * 24 * 60 * 60 * 1000);
+        const urgent = !overdue && diffMs <= urgencyWindow;
         return {
             overdue,
             dueAt,
@@ -1924,6 +1967,83 @@ const UI = {
         window.addEventListener('scroll', () => UI.hideTooltip(), true);
         document.addEventListener('mousedown', () => UI.hideTooltip());
     },
+    // Kontextmenü (Rechtsklick): items = [{ label, icon, shortcut, danger, disabled, title, submenu, separator, run }]
+    contextMenu: (items, x, y) => {
+        document.querySelectorAll('.context-menu-root').forEach(m => m.remove());
+        const cleanups = [];
+        const close = () => {
+            document.querySelectorAll('.context-menu-root').forEach(m => m.remove());
+            cleanups.forEach(fn => fn());
+            cleanups.length = 0;
+        };
+        const buildList = (list, isSub) => {
+            const box = document.createElement('div');
+            box.className = 'context-menu' + (isSub ? ' is-sub' : '');
+            box.setAttribute('role', 'menu');
+            list.forEach(item => {
+                if (item.separator) {
+                    const sep = document.createElement('div');
+                    sep.className = 'context-menu-sep';
+                    box.appendChild(sep);
+                    return;
+                }
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'context-menu-item' + (item.danger ? ' is-danger' : '') + (item.disabled ? ' is-disabled' : '');
+                row.setAttribute('role', 'menuitem');
+                if (item.disabled) row.disabled = true;
+                if (item.title) row.title = item.title;
+                row.innerHTML = `${item.icon ? Icon(item.icon, 15) : '<span class="context-menu-icon-slot"></span>'}<span class="context-menu-label">${Utils.esc(item.label)}</span>${item.shortcut ? `<span class="context-menu-shortcut">${Utils.esc(item.shortcut)}</span>` : ''}${item.submenu ? Icon('chevron-right', 13) : ''}`;
+                if (item.submenu && !item.disabled) {
+                    row.onmouseenter = () => {
+                        box.querySelectorAll(':scope > .context-menu.is-sub').forEach(s => s.remove());
+                        const sub = buildList(item.submenu, true);
+                        box.appendChild(sub);
+                        const rowRect = row.getBoundingClientRect();
+                        sub.style.top = `${rowRect.top}px`;
+                        const openLeft = rowRect.right + 220 > window.innerWidth;
+                        if (openLeft) { sub.style.right = `${window.innerWidth - rowRect.left}px`; } else { sub.style.left = `${rowRect.right}px`; }
+                        if (window.lucide) lucide.createIcons();
+                    };
+                } else {
+                    // Ein Wechsel auf eine Zeile ohne eigenes Untermenü muss das zuvor geöffnete schließen,
+                    // sonst bleibt es nach dem Weghovern stehen.
+                    row.onmouseenter = () => { box.querySelectorAll(':scope > .context-menu.is-sub').forEach(s => s.remove()); };
+                    if (!item.disabled) row.onclick = () => { close(); item.run?.(); };
+                }
+                box.appendChild(row);
+            });
+            // Verlässt die Maus den ganzen Bereich (inkl. eines offenen Untermenüs), wird das Untermenü geschlossen
+            box.addEventListener('mouseleave', () => { box.querySelectorAll(':scope > .context-menu.is-sub').forEach(s => s.remove()); });
+            return box;
+        };
+        const root = buildList(items, false);
+        root.classList.add('context-menu-root');
+        document.body.appendChild(root);
+        if (window.lucide) lucide.createIcons();
+        const rect = root.getBoundingClientRect();
+        let left = x, top = y;
+        if (left + rect.width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - rect.width - 8);
+        if (top + rect.height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - rect.height - 8);
+        root.style.left = `${left}px`;
+        root.style.top = `${top}px`;
+        const onOutside = e => { if (!e.target.closest('.context-menu')) close(); };
+        const onKey = e => { if (e.key === 'Escape') close(); };
+        setTimeout(() => {
+            window.addEventListener('click', onOutside);
+            window.addEventListener('contextmenu', onOutside);
+            window.addEventListener('keydown', onKey);
+            window.addEventListener('scroll', close, true);
+            window.addEventListener('resize', close);
+            cleanups.push(() => {
+                window.removeEventListener('click', onOutside);
+                window.removeEventListener('contextmenu', onOutside);
+                window.removeEventListener('keydown', onKey);
+                window.removeEventListener('scroll', close, true);
+                window.removeEventListener('resize', close);
+            });
+        }, 0);
+    },
     confirm: (msg, onYes) => {
         let modal = q('#confirm-modal');
         if (!modal) {
@@ -1989,6 +2109,32 @@ const UI = {
             if (e.defaultPrevented || !e.dataTransfer?.files?.length) return;
             e.preventDefault();
             onFiles(Array.from(e.dataTransfer.files));
+        });
+    },
+    // Enter setzt eine Liste automatisch fort ("- " bzw. "1. "); Enter auf einem leeren Punkt beendet sie.
+    bindListContinuation: (area) => {
+        if (!area || area.dataset.listContinueBound) return;
+        area.dataset.listContinueBound = '1';
+        area.addEventListener('keydown', e => {
+            if (e.key !== 'Enter' || e.shiftKey) return;
+            const pos = area.selectionStart;
+            if (pos !== area.selectionEnd) return;
+            const lineStart = area.value.lastIndexOf('\n', pos - 1) + 1;
+            const line = area.value.slice(lineStart, pos);
+            const bullet = line.match(/^(\s*)-\s(.*)$/);
+            const numbered = line.match(/^(\s*)(\d+)([.)])\s(.*)$/);
+            if (!bullet && !numbered) return;
+            e.preventDefault();
+            const indent = (bullet || numbered)[1];
+            const content = bullet ? bullet[2] : numbered[4];
+            if (!content.trim()) {
+                // Leerer Punkt + Enter -> Liste beenden
+                area.setRangeText('\n', lineStart, pos, 'end');
+            } else {
+                const marker = bullet ? `${indent}- ` : `${indent}${Number(numbered[2]) + 1}${numbered[3]} `;
+                area.setRangeText(`\n${marker}`, pos, pos, 'end');
+            }
+            area.dispatchEvent(new Event('input', { bubbles: true }));
         });
     },
     bindPasteFiles: (el, onFiles) => {
@@ -2768,17 +2914,29 @@ const UI = {
 
         const close = () => {
             container.classList.remove('open');
+            dropdown.classList.remove('open');
             header.setAttribute('aria-expanded', 'false');
+            // Zurück in den Container legen, statt es dauerhaft an <body> hängen zu lassen
+            // (verhindert verwaiste Elemente, falls der umgebende Dialog währenddessen geschlossen wird)
+            container.appendChild(dropdown);
         };
 
-        // Wie <select>: immer nach unten, Höhe passt sich dem Platz an
+        // Das Dropdown wird beim Öffnen an <body> angehängt (fixed positioniert über dem Feld) --
+        // sonst schneidet ein scrollbarer/überlaufverborgener Vorfahre (z. B. .modal-body in kleinen
+        // Dialogen) die Liste ab, obwohl eigentlich genug Platz auf dem Bildschirm wäre.
         const open = () => {
-            document.querySelectorAll('.multi-select-container.open').forEach(c => {
-                if (c !== container) c.classList.remove('open');
+            document.querySelectorAll('.multi-select-dropdown.open').forEach(d => {
+                if (d !== dropdown) { d.classList.remove('open'); d.closest('.multi-select-container')?.classList.remove('open'); }
             });
-            UI.ensureSpaceBelow(header, Math.min(dropdown.scrollHeight, 260) + 18);
-            dropdown.style.maxHeight = `${UI.dropdownMaxHeight(header)}px`;
+            document.body.appendChild(dropdown);
+            const rect = header.getBoundingClientRect();
+            dropdown.style.position = 'fixed';
+            dropdown.style.left = `${rect.left}px`;
+            dropdown.style.width = `${rect.width}px`;
+            dropdown.style.top = `${rect.bottom + 6}px`;
+            dropdown.style.maxHeight = `${Math.max(120, Math.min(260, window.innerHeight - rect.bottom - 18))}px`;
             container.classList.add('open');
+            dropdown.classList.add('open');
             header.setAttribute('aria-expanded', 'true');
         };
 
@@ -2800,7 +2958,7 @@ const UI = {
         // Klick außerhalb schließt – Listener nur einmal pro Container
         if (container._msOutside) window.removeEventListener('click', container._msOutside);
         container._msOutside = (e) => {
-            if (!container.contains(e.target)) close();
+            if (!container.contains(e.target) && !dropdown.contains(e.target)) close();
         };
         window.addEventListener('click', container._msOutside);
 
@@ -3390,6 +3548,33 @@ const UserDash = {
     createFiles: [],
     activeIncident: null,
 
+    // Zeigt/aktualisiert das Genehmigungs-Icon in der Topbar (für jede Person, nicht nur Admins).
+    // Wird beim Laden der Seite UND jedes Mal nach einer Genehmigungs-Entscheidung neu aufgerufen,
+    // damit die Zahl nie veraltet stehen bleibt.
+    refreshApprovalBadge: async () => {
+        const user = await Store.currentUser();
+        if (!user) return;
+        const pending = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => isPendingApprover(a, user.username)));
+        const rightNav = q('.topbar-right');
+        if (!rightNav) return;
+        let btn = q('#btn-user-approvals');
+        if (!btn && pending.length) {
+            btn = document.createElement('button');
+            btn.id = 'btn-user-approvals';
+            btn.className = 'btn-ghost btn-icon notification-button';
+            btn.title = 'Genehmigungen';
+            btn.setAttribute('aria-label', 'Genehmigungen');
+            btn.innerHTML = `${Icon('badge-check', 18)}<span class="notification-count"></span>`;
+            btn.onclick = () => AdminBoard.openApprovals();
+            rightNav.insertBefore(btn, rightNav.firstChild);
+        }
+        if (btn) {
+            btn.hidden = pending.length === 0;
+            const countEl = btn.querySelector('.notification-count');
+            if (countEl) countEl.textContent = String(pending.length);
+        }
+    },
+
     init: async () => {
         // Admin Button Injection if on dashboard (for superadmin/admin)
         const user = await Store.currentUser();
@@ -3406,28 +3591,7 @@ const UserDash = {
         }
 
         // Jede Person kann Vorgesetzte/r sein – zeige den Button, sobald offene Genehmigungen anstehen
-        if (user) {
-            const pending = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => a.approver === user.username && a.status === 'pending'));
-            const rightNav = q('.topbar-right');
-            if (rightNav) {
-                let btn = q('#btn-user-approvals');
-                if (!btn && pending.length) {
-                    btn = document.createElement('button');
-                    btn.id = 'btn-user-approvals';
-                    btn.className = 'btn-ghost btn-icon';
-                    btn.title = 'Genehmigungen';
-                    btn.setAttribute('aria-label', 'Genehmigungen');
-                    btn.innerHTML = `${Icon('badge-check', 18)}<span class="notification-count"></span>`;
-                    btn.onclick = () => AdminBoard.openApprovals();
-                    rightNav.insertBefore(btn, rightNav.firstChild);
-                }
-                if (btn) {
-                    btn.hidden = pending.length === 0;
-                    const countEl = btn.querySelector('.notification-count');
-                    if (countEl) countEl.textContent = String(pending.length);
-                }
-            }
-        }
+        await UserDash.refreshApprovalBadge();
 
         if (!q('#btn-create-ticket')) return;
         const btn = q('#btn-create-ticket');
@@ -3508,10 +3672,28 @@ const UserDash = {
                 newTicket.assignees = [...new Set([...(newTicket.assignees || []), ...autoTeam.members])];
             }
             const approvalCfg = settings.approvalConfig || {};
-            const authorRecord = (await Store.getUsers()).find(u => u.username === user.username);
-            if (approvalCfg.enabled && (approvalCfg.priorities || []).includes(prio) && authorRecord?.supervisor) {
-                newTicket.approvals = [{ id: Utils.uid(), approver: authorRecord.supervisor, requestedBy: user.username, requestedByName: user.name || user.username, status: 'pending', requestedAt: Utils.nowISO(), note: 'Automatisch angefordert' }];
-                await Store.addNotifications([authorRecord.supervisor], newTicket, `${user.name || user.username} hat ein Ticket mit Priorität ${prio} angelegt – bitte genehmigen.`, user.username, 'newMessage');
+            const allUsersForApproval = await Store.getUsers();
+            const authorRecord = allUsersForApproval.find(u => u.username === user.username);
+            if (approvalCfg.enabled && (approvalCfg.priorities || []).includes(prio)) {
+                // Niemand genehmigt die eigene Anfrage: Vorgesetzter des Erstellers, sonst eine Ersatzperson/-gruppe
+                let approver = (authorRecord?.supervisor && authorRecord.supervisor !== user.username) ? authorRecord.supervisor : null;
+                let approvers = null;
+                if (!approver) {
+                    const fallbackValue = approvalCfg.fallbackApprover || '';
+                    if (fallbackValue.startsWith('g:')) {
+                        const group = (await Store.getGroups()).find(g => g.id === fallbackValue.slice(2));
+                        approvers = (group?.members || []).filter(m => m !== user.username && allUsersForApproval.some(u => u.username === m && !u.accountArchived));
+                    } else {
+                        const username = fallbackValue.startsWith('u:') ? fallbackValue.slice(2) : fallbackValue;
+                        const fallback = allUsersForApproval.find(u => u.username === username && u.username !== user.username && !u.accountArchived)
+                            || allUsersForApproval.find(u => u.role === 'superadmin' && u.username !== user.username && !u.accountArchived);
+                        approver = fallback?.username || null;
+                    }
+                }
+                if (approver || approvers?.length) {
+                    newTicket.approvals = [{ id: Utils.uid(), approver: approver || undefined, approvers: approvers?.length ? approvers : undefined, requestedBy: user.username, requestedByName: user.name || user.username, status: 'pending', requestedAt: Utils.nowISO(), note: 'Automatisch angefordert' }];
+                    await Store.addNotifications(approver ? [approver] : approvers, newTicket, `${user.name || user.username} hat ein Ticket mit Priorität ${prio} angelegt – bitte genehmigen.`, user.username, 'newMessage');
+                }
             }
             tickets.push(newTicket);
             await Store.addLog(newTicket, autoTeam ?`Ticket erstellt und automatisch Team "${autoTeam.name}" zugewiesen` : 'Ticket erstellt');
@@ -3717,6 +3899,8 @@ const UserDash = {
         const tickets = await Store.getTickets();
         const t = tickets.find(x => x.id === id);
         if (!t) return;
+        const viewer = await Store.currentUser();
+        const isOwnTicket = viewer && t.author === viewer.username;
 
         if (q('#u-m-title')) q('#u-m-title').textContent = `${t.ticketNumber || t.id} · ${t.title}${t.archived ? ` (${Lang.t('archived')})` : ''}`;
         if (q('#u-m-desc')) q('#u-m-desc').textContent = t.desc || Lang.t('noDescription');
@@ -3742,7 +3926,9 @@ const UserDash = {
 
         const resolveBtn = q('#u-m-resolve');
         if (resolveBtn) {
-            resolveBtn.hidden = t.archived || t.status === 'Geschlossen';
+            // Wer ein Ticket nur zur Genehmigung einsieht (nicht der/die Erstellende), darf es nicht
+            // selbst als gelöst schließen können.
+            resolveBtn.hidden = t.archived || t.status === 'Geschlossen' || !isOwnTicket;
             resolveBtn.onclick = () => UI.confirm('Ticket als gelöst schließen? Wenn du später noch einmal antwortest, wird es automatisch wieder geöffnet.', async () => {
                 const all = await Store.getTickets();
                 const ticket = all.find(x => x.id === t.id);
@@ -3770,6 +3956,31 @@ const UserDash = {
             const showRequest = t.status === 'Warten auf Benutzer' && !!t.waitingMessage;
             waitingRequest.hidden = !showRequest;
             q('#u-waiting-message').textContent = showRequest ? t.waitingMessage : '';
+        }
+        const pendingApproval = (t.approvals || []).find(a => a.status === 'pending');
+        const pendingBox = q('#u-approval-pending');
+        if (pendingBox) {
+            pendingBox.hidden = !pendingApproval;
+            if (pendingApproval) {
+                const approverName = await Store.describeApprover(pendingApproval);
+                q('#u-approval-pending-text').textContent = `Wartet auf Genehmigung durch ${approverName} (seit ${Utils.fmtDate(pendingApproval.requestedAt)})`;
+            }
+        }
+        const rejectedBox = q('#u-approval-rejected');
+        if (rejectedBox) {
+            rejectedBox.hidden = !t.rejectedApproval;
+            if (t.rejectedApproval) {
+                q('#u-approval-rejected-text').textContent = `${t.rejectedApproval.byName || t.rejectedApproval.by} hat diese Anfrage abgelehnt: ${t.rejectedApproval.reason || '-'}`;
+                q('#u-approval-reuse').onclick = () => {
+                    q('#u-ticket-modal').classList.remove('open');
+                    q('#t-title').value = t.title || '';
+                    q('#t-desc').value = t.desc || '';
+                    if (q('#t-prio')) q('#t-prio').value = t.prio || 'Normal';
+                    if (UserDash.categoryInstance) UserDash.categoryInstance.setValue(t.category || []);
+                    UI.toast('Angaben übernommen – bitte prüfen und erneut absenden.');
+                    q('#t-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                };
+            }
         }
         if (q('#u-m-date')) q('#u-m-date').textContent = Utils.fmtDate(t.createdAt);
 
@@ -3801,11 +4012,12 @@ const UserDash = {
         if (q('#u-m-prio')) q('#u-m-prio').innerHTML = `<span class="prio-pill prio-${t.prio}">${Lang.prio(t.prio)}</span>`;
         if (q('#u-m-cat')) q('#u-m-cat').textContent = (Array.isArray(t.category) ? t.category.join(', ') : t.category) || '-';
 
-        // Support Multiple Assignees in User View
+        // Bearbeiter = Hauptverantwortlicher + Beteiligte Personen (der Hauptverantwortliche fehlte hier bisher)
         if (q('#u-m-assignee')) {
             const allUsers = await Store.getUsers();
-            if (t.assignees && t.assignees.length > 0) {
-                const names = t.assignees.map(u => {
+            const handlers = [...new Set([t.owner, ...(t.assignees || [])].filter(Boolean))];
+            if (handlers.length > 0) {
+                const names = handlers.map(u => {
                     const found = allUsers.find(x => x.username === u);
                     return found ? (found.name || found.username) : u;
                 });
@@ -3920,18 +4132,27 @@ const UserDash = {
                 const catBadges = cats.map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('');
                 const archivedBadge = t.archived ? `<span class="archive-badge">${Icon('archive', 12)}${Lang.t('archived')}</span>` : '';
                 const overdueBadge = isOverdue ? `<span class="sla-overdue-icon sla-badge-muted" title="Frist überschritten">${Icon('timer', 11)}</span>` : '';
+                const pendingApproval = (t.approvals || []).some(a => a.status === 'pending');
+                const approvalBadge = pendingApproval ? `<span class="approval-badge" title="Wartet auf Genehmigung">${Icon('hourglass', 12)}Genehmigung</span>` : '';
 
                 el.innerHTML = `
                     <span class="status-dot" style="--dot:${getStatusColor(t.status)}" title="${Utils.esc(Lang.status(t.status))}"></span>
                     <div class="ticket-row-main">
                         <div class="row-title" title="${Utils.esc(t.title)}">${Utils.esc(t.title)}</div>
-                        <div class="ticket-row-cats"><span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>${catBadges}${archivedBadge}${overdueBadge}</div>
+                        <div class="ticket-row-cats"><span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>${catBadges}${archivedBadge}${overdueBadge}${approvalBadge}</div>
                     </div>
-                    <div class="ticket-row-status${String(t.status).startsWith('Warten auf') ? ' is-waiting' : ''}"><span class="status-badge">${Lang.status(t.status)}</span></div>
+                    <div class="ticket-row-status${String(t.status).startsWith('Warten auf') ? ' is-waiting' : ''}"><span class="status-badge">${pendingApproval ? 'Wartet auf Genehmigung' : Lang.status(t.status)}</span></div>
                     <div class="ticket-row-date date">${Utils.fmtDate(t.createdAt)}</div>
                     <div class="ticket-row-prio"><span class="prio-pill prio-${t.prio}">${Lang.prio(t.prio)}</span></div>
                 `;
-                el.onclick = () => UserDash.openModal(t.id);
+                el.addEventListener('click', async () => {
+                    try {
+                        await UserDash.openModal(t.id);
+                    } catch (err) {
+                        console.error(err);
+                        UI.toast('Ticket konnte nicht geöffnet werden.');
+                    }
+                });
                 list.appendChild(el);
             });
             if (window.lucide) lucide.createIcons();
@@ -3958,6 +4179,12 @@ function getPrioValue(p) {
     if (p === 'Hoch') return 2;
     if (p === 'Normal') return 1;
     return 0;
+}
+
+// Eine Genehmigung kann an eine einzelne Person (approver) oder an eine ganze Gruppe
+// (approvers, Modus "eine Person reicht") gehen - diese Prüfung deckt beides ab.
+function isPendingApprover(approval, username) {
+    return approval.status === 'pending' && (approval.approver === username || (approval.approvers || []).includes(username));
 }
 
 function insertMarkdownText(area, marker) {
@@ -3997,8 +4224,13 @@ async function insertMarkdownLink(area) {
 
 // Öffnet einen Tabellen-Editor (echte Zellen statt roher |-Syntax) und fügt das Ergebnis als
 // Markdown-Tabelle an der Cursorposition im übergebenen Textfeld ein.
-function insertMarkdownTable(area) {
-    const rows = [['Überschrift 1', 'Überschrift 2'], ['Eintrag', 'Eintrag']];
+function insertMarkdownTable(area, existingTable = null) {
+    const isRichEditor = !!area.isContentEditable;
+    // Bei einem contenteditable-Feld geht die Selektion beim Öffnen des Dialogs verloren -> vorher merken
+    const sel = isRichEditor ? window.getSelection() : null;
+    const savedRange = (isRichEditor && sel && sel.rangeCount && area.contains(sel.anchorNode)) ? sel.getRangeAt(0).cloneRange() : null;
+    const rowsFromExisting = existingTable ? [...existingTable.rows].map(tr => [...tr.cells].map(cell => cell.textContent)) : null;
+    const rows = rowsFromExisting && rowsFromExisting.length ? rowsFromExisting : [['Überschrift 1', 'Überschrift 2'], ['Eintrag', 'Eintrag']];
     const insert = () => {
         const header = rows[0];
         const lines = [header, header.map(() => '---'), ...rows.slice(1)].map(r => `| ${r.join(' | ')} |`);
@@ -4013,9 +4245,28 @@ function insertMarkdownTable(area) {
         area.focus();
         area.dispatchEvent(new Event('input', { bubbles: true }));
     };
+    const buildTableHtml = () => {
+        const [header, ...body] = rows;
+        return `<table><thead><tr>${header.map(h => `<th>${Utils.esc(h)}</th>`).join('')}</tr></thead><tbody>${body.map(r => `<tr>${r.map(c => `<td>${Utils.esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    };
+    const insertRich = () => {
+        if (existingTable) {
+            existingTable.outerHTML = buildTableHtml();
+            area.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+        }
+        const html = `${buildTableHtml()}<p><br></p>`;
+        area.focus();
+        const sel2 = window.getSelection();
+        sel2.removeAllRanges();
+        if (savedRange) sel2.addRange(savedRange);
+        else { const r = document.createRange(); r.selectNodeContents(area); r.collapse(false); sel2.addRange(r); }
+        document.execCommand('insertHTML', false, html);
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+    };
     const modal = AdminBoard.openDialog({
         id: 'table-builder-modal',
-        title: 'Tabelle einfügen',
+        title: existingTable ? 'Tabelle bearbeiten' : 'Tabelle einfügen',
         icon: 'table',
         size: 'md',
         body: `<div class="table-builder-toolbar">
@@ -4023,7 +4274,7 @@ function insertMarkdownTable(area) {
                    <button type="button" class="btn-secondary btn-sm" id="tbld-add-col">${Icon('plus', 14)}Spalte</button>
                </div>
                <div class="table-builder-wrap"><table class="table-builder" id="tbld-table"></table></div>`,
-        onSave: (m) => { insert(); m.remove(); }
+        onSave: (m) => { isRichEditor ? insertRich() : insert(); m.remove(); }
     });
     const render = () => {
         const table = modal.querySelector('#tbld-table');
@@ -4285,7 +4536,9 @@ const AdminBoard = {
             option.textContent = `${user.name || user.username} (@${user.username})`;
             option.setAttribute('aria-selected', String(index === 0));
             option.onclick = () => {
-                input.setRangeText(`@${user.username} `, AdminBoard.mentionStart, AdminBoard.mentionEnd, 'end');
+                // Direkt den Namen einsetzen statt des Benutzernamens, damit es im Textfeld schon so
+                // aussieht wie später in der Anzeige (Hervorhebung erfolgt dann beim Rendern).
+                input.setRangeText(`@${user.name || user.username} `, AdminBoard.mentionStart, AdminBoard.mentionEnd, 'end');
                 menu.hidden = true;
                 input.focus();
                 input.dispatchEvent(new Event('input', {
@@ -4330,7 +4583,7 @@ const AdminBoard = {
     },
 
     renderTicketAttachments: (ticket, selector) => {
-        const container = q(selector);
+        const container = typeof selector === 'string' ? q(selector) : selector;
         if (!container) return;
         const attachments = ticket.attachments || [];
         container.innerHTML = '';
@@ -4437,6 +4690,7 @@ const AdminBoard = {
         };
 
         AdminBoard.groupTopbarMenu(user);
+        await UserDash.refreshApprovalBadge();
         await AdminBoard.render();
         AdminBoard.setupDrag();
         if (!AdminBoard.slaRefreshTimer) AdminBoard.slaRefreshTimer = window.setInterval(() => AdminBoard.render(), 60000);
@@ -4582,6 +4836,7 @@ const AdminBoard = {
                 };
                 const tableButton = q(`#${prefix}-table`);
                 if (tableButton) tableButton.onclick = () => insertMarkdownTable(noteInput);
+                UI.bindListContinuation(noteInput);
                 UI.bindPasteFiles(noteInput, files => {
                     files.forEach(file => AdminBoard.noteFiles[channel].push(file));
                     AdminBoard.renderNoteFilePreview(channel);
@@ -4756,6 +5011,7 @@ const AdminBoard = {
             card.className = `ticket-card ${statusClass}${isOverdue ? ' is-overdue' : ''}`;
             card.draggable = true;
             card.dataset.id = t.id;
+            card.dataset.ctx = 'ticket';
 
             const ownerUsername = t.owner || (Array.isArray(t.assignees) ? t.assignees[0] : t.assignee);
             const owner = ownerUsername ? usersList.find(x => x.username === ownerUsername) : null;
@@ -4774,7 +5030,8 @@ const AdminBoard = {
             const categoryText = catList.length ? catList.slice(0, 2).join(', ') + (catList.length > 2 ? ` +${catList.length - 2}` : '') : '-';
             const sla = Store.formatSlaCountdown(t, slaSettings);
             const attachmentCount = (t.attachments || []).length;
-            const tone = isOverdue ? 'overdue' : t.isMajorIncident ? 'incident' : t.prio === 'Kritisch' ? 'critical' : '';
+            const pendingApproval = (t.approvals || []).some(a => a.status === 'pending');
+            const tone = pendingApproval ? 'approval' : isOverdue ? 'overdue' : t.isMajorIncident ? 'incident' : t.prio === 'Kritisch' ? 'critical' : '';
             card.classList.add('card-v2');
             if (tone) card.classList.add(`card-tone-${tone}`);
             card.innerHTML = `
@@ -4783,7 +5040,7 @@ const AdminBoard = {
                 </div>
                 <div class="card-title">${Utils.esc(t.title)}</div>
                 <div class="card-line card-deadline-row">
-                    ${sla ? `<span class="card-deadline sla-text-${sla.tone}" title="Frist: ${Utils.esc(sla.dueDateLabel)}">${Icon(sla.overdue ? 'triangle-alert' : 'timer', 11)}${Utils.esc(sla.label)}</span>` : '<span></span>'}
+                    ${pendingApproval ? `<span class="card-deadline approval-badge" title="Wartet auf Genehmigung">${Icon('hourglass', 11)}Genehmigung</span>` : sla ? `<span class="card-deadline sla-text-${sla.tone}" title="Frist: ${Utils.esc(sla.dueDateLabel)}">${Icon(sla.overdue ? 'triangle-alert' : 'timer', 11)}${Utils.esc(sla.label)}</span>` : '<span></span>'}
                     <span class="card-prio-outline prio-${t.prio}">${Lang.prio(t.prio)}</span>
                 </div>
                 <div class="card-line card-owner-line${ownerUsername ? '' : ' is-unassigned'}">
@@ -5324,23 +5581,7 @@ const AdminBoard = {
         const confirmBtn = modal.querySelector('.btn-primary');
 
         const admins = (await Store.getUsers()).filter(u => u.role === 'admin' || u.role === 'superadmin');
-
-        let adminListHtml = `
-            <div class="field">
-                <label>Admins dieser Kategorie</label>
-                <div id="cat-admin-list" class="checkbox-list">
-        `;
-
-        admins.forEach(a => {
-            const hasCat = catName && Array.isArray(a.dept) && a.dept.includes(catName);
-            adminListHtml += `
-                <label class="check-row">
-                    <input type="checkbox" value="${a.username}" ${hasCat ? 'checked' : ''} class="cat-admin-check">
-                    <span>${Utils.esc(a.name || a.username)}</span>
-                </label>
-            `;
-        });
-        adminListHtml += '</div></div>';
+        const checkedAdminUsernames = admins.filter(a => catName && Array.isArray(a.dept) && a.dept.includes(catName)).map(a => a.username);
 
         title.textContent = catName ? 'Kategorie bearbeiten' : 'Neue Kategorie';
         content.innerHTML = `
@@ -5348,7 +5589,10 @@ const AdminBoard = {
                 <label>Name</label>
                 <input type="text" id="g-input" value="${Utils.esc(catName || '')}" placeholder="z. B. Technik">
             </div>
-            ${adminListHtml}
+            <div class="field">
+                <label>Admins dieser Kategorie</label>
+                <div id="cat-admin-list"></div>
+            </div>
             <div class="field field-wide">
                 <label>Eigene Felder für diese Kategorie</label>
                 <p class="hint">Zusätzliche Angaben, die beim Erstellen eines Tickets in dieser Kategorie abgefragt werden, z. B. Standort, Raum, Gerätenummer oder Kostenstelle.</p>
@@ -5356,6 +5600,7 @@ const AdminBoard = {
                 <button type="button" class="btn-secondary btn-sm" id="cat-add-field">${Icon('plus', 15)}Feld hinzufügen</button>
             </div>
         `;
+        const adminPicker = UI.createMultiSelect(q('#cat-admin-list'), admins.map(a => ({ value: a.username, label: a.name || a.username })), checkedAdminUsernames);
 
         const allSettingsForFields = await Store.getSettings();
         const existingFields = (catName && allSettingsForFields.customFields?.[catName]) ? allSettingsForFields.customFields[catName].slice() : [];
@@ -5369,25 +5614,52 @@ const AdminBoard = {
                 existingFields[idx].label = row.querySelector('.cf-label').value;
                 existingFields[idx].type = row.querySelector('.cf-type').value;
                 existingFields[idx].required = row.querySelector('.cf-required').checked;
-                existingFields[idx].options = row.querySelector('.cf-options').value.split(',').map(s => s.trim()).filter(Boolean);
+                existingFields[idx].options = [...row.querySelectorAll('.cf-option-input')].map(i => i.value);
+            });
+        };
+        const renderOptionsList = (row, f, i) => {
+            const list = row.querySelector('.cf-options-list');
+            list.innerHTML = (f.options || []).map((opt, oi) => `
+                <div class="cf-option-row" data-opt-index="${oi}">
+                    <input type="text" class="cf-option-input" placeholder="Option" value="${Utils.esc(opt)}">
+                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-option-remove" title="Option entfernen" aria-label="Option entfernen">${Icon('x', 13)}</button>
+                </div>`).join('') || '<div class="hint">Noch keine Optionen.</div>';
+            list.querySelectorAll('.cf-option-input').forEach((input, oi) => {
+                input.oninput = () => { f.options[oi] = input.value; };
+            });
+            list.querySelectorAll('.cf-option-remove').forEach((btn, oi) => {
+                btn.onclick = () => { f.options.splice(oi, 1); renderOptionsList(row, f, i); };
             });
         };
         const renderFieldRows = () => {
             fieldsContainer.innerHTML = existingFields.length ? existingFields.map((f, i) => `
                 <div class="custom-field-row" data-index="${i}">
-                    <input type="text" class="cf-label" placeholder="Feldname (z. B. Standort)" value="${Utils.esc(f.label || '')}">
-                    <select class="cf-type">
-                        <option value="text" ${f.type === 'text' ? 'selected' : ''}>Text</option>
-                        <option value="number" ${f.type === 'number' ? 'selected' : ''}>Zahl</option>
-                        <option value="select" ${f.type === 'select' ? 'selected' : ''}>Auswahl</option>
-                    </select>
-                    <input type="text" class="cf-options" placeholder="Optionen, kommagetrennt" value="${Utils.esc((f.options || []).join(', '))}" style="${f.type === 'select' ? '' : 'display:none;'}">
-                    <label class="check-row compact"><input type="checkbox" class="cf-required" ${f.required ? 'checked' : ''}>Pflicht</label>
-                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-remove" title="Feld entfernen" aria-label="Feld entfernen">${Icon('x', 14)}</button>
+                    <div class="custom-field-row-main">
+                        <input type="text" class="cf-label" placeholder="Feldname (z. B. Standort)" value="${Utils.esc(f.label || '')}">
+                        <select class="cf-type">
+                            <option value="text" ${f.type === 'text' ? 'selected' : ''}>Text</option>
+                            <option value="number" ${f.type === 'number' ? 'selected' : ''}>Zahl</option>
+                            <option value="select" ${f.type === 'select' ? 'selected' : ''}>Auswahl</option>
+                        </select>
+                        <label class="check-row compact"><input type="checkbox" class="cf-required" ${f.required ? 'checked' : ''}>Pflicht</label>
+                        <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-remove" title="Feld entfernen" aria-label="Feld entfernen">${Icon('x', 14)}</button>
+                    </div>
+                    <div class="cf-options-editor" style="${f.type === 'select' ? '' : 'display:none;'}">
+                        <div class="cf-options-list"></div>
+                        <button type="button" class="btn-ghost btn-sm cf-add-option">${Icon('plus', 13)}Option hinzufügen</button>
+                    </div>
                 </div>`).join('') : '<div class="empty-state compact">Keine eigenen Felder definiert.</div>';
-            fieldsContainer.querySelectorAll('.cf-type').forEach(sel => {
-                sel.onchange = () => {
-                    sel.closest('.custom-field-row').querySelector('.cf-options').style.display = sel.value === 'select' ? '' : 'none';
+            fieldsContainer.querySelectorAll('.custom-field-row').forEach(row => {
+                const i = Number(row.dataset.index);
+                const f = existingFields[i];
+                renderOptionsList(row, f, i);
+                row.querySelector('.cf-type').onchange = (e) => {
+                    row.querySelector('.cf-options-editor').style.display = e.target.value === 'select' ? '' : 'none';
+                };
+                row.querySelector('.cf-add-option').onclick = () => {
+                    syncFieldsFromDOM();
+                    f.options = [...(f.options || []), ''];
+                    renderOptionsList(row, f, i);
                 };
             });
             fieldsContainer.querySelectorAll('.cf-remove').forEach(btn => {
@@ -5416,7 +5688,7 @@ const AdminBoard = {
             const settings = await Store.getSettings();
             if (!settings.categories) settings.categories = ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
             const allUsers = await Store.getUsers();
-            const checkedAdmins = Array.from(modal.querySelectorAll('.cat-admin-check:checked')).map(cb => cb.value);
+            const checkedAdmins = adminPicker.getValue();
 
             if (catName) {
                 // Rename logic
@@ -5466,7 +5738,7 @@ const AdminBoard = {
                 label: row.querySelector('.cf-label').value.trim(),
                 type: row.querySelector('.cf-type').value,
                 required: row.querySelector('.cf-required').checked,
-                options: row.querySelector('.cf-type').value === 'select' ? row.querySelector('.cf-options').value.split(',').map(s => s.trim()).filter(Boolean) : []
+                options: row.querySelector('.cf-type').value === 'select' ? [...row.querySelectorAll('.cf-option-input')].map(i => i.value.trim()).filter(Boolean) : []
             })).filter(f => f.label);
             settings.customFields = settings.customFields || {};
             if (catName && catName !== val) delete settings.customFields[catName];
@@ -5482,22 +5754,70 @@ const AdminBoard = {
     },
 
     openGroupMembers: async (group) => {
-        const users = await Store.getUsers();
-        const members = users.filter(u => (group.members || []).includes(u.username));
         const modal = AdminBoard.openDialog({
             id: 'group-members-modal',
             title: `Mitglieder · ${group.name}`,
             icon: 'users-round',
             size: 'sm',
-            body: `<div class="report-toolbar"><div></div><button type="button" class="btn-secondary btn-sm" id="gm-print">${Icon('printer', 15)}Drucken</button></div>
-                   <div id="gm-list">${members.length ? members.map(u => `
-                       <div class="absence-overview-row"><div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(u.username)}${u.email ? ' · ' + Utils.esc(u.email) : ''} · ${Utils.esc(u.role)}</span></div></div>`).join('')
-                : '<div class="empty-state compact">Keine Mitglieder.</div>'}</div>`
+            headerButtons: [
+                { id: 'gm-add', icon: 'user-plus', title: 'Mitglied hinzufügen' },
+                { id: 'gm-print', icon: 'printer', title: 'Drucken' }
+            ],
+            body: `<input type="search" id="gm-search" class="section-search" placeholder="Mitglied suchen...">
+                   <div id="gm-list" style="margin-top:var(--space-3)"></div>`
         });
+        const render = async () => {
+            const groups = await Store.getGroups();
+            const current = groups.find(g => g.id === group.id) || group;
+            group.members = current.members || [];
+            const users = await Store.getUsers();
+            const term = modal.querySelector('#gm-search').value.toLowerCase().trim();
+            const members = users.filter(u => (group.members || []).includes(u.username) && (!term || Utils.matchesSearch(term, u.name, u.username, u.email)));
+            modal.querySelector('#gm-list').innerHTML = members.length ? members.map(u => `
+                <div class="absence-overview-row" data-username="${Utils.esc(u.username)}">
+                    <div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(u.username)}${u.email ? ' · ' + Utils.esc(u.email) : ''} · ${Utils.esc(u.role)}</span></div>
+                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger gm-remove" title="Aus Gruppe entfernen" aria-label="Aus Gruppe entfernen">${Icon('x', 14)}</button>
+                </div>`).join('') : '<div class="empty-state compact">Keine Mitglieder.</div>';
+            modal.querySelectorAll('.gm-remove').forEach(btn => btn.onclick = async () => {
+                const username = btn.closest('[data-username]').dataset.username;
+                const allGroups = await Store.getGroups();
+                const g = allGroups.find(x => x.id === group.id);
+                if (g) { g.members = (g.members || []).filter(m => m !== username); await Store.saveGroups(allGroups); }
+                await render();
+                AdminBoard.renderUserManager('groups');
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        modal.querySelector('#gm-search').oninput = render;
+        modal.querySelector('#gm-add').onclick = async () => {
+            const users = await Store.getUsers();
+            const candidates = users.filter(u => !(group.members || []).includes(u.username) && !u.accountArchived);
+            if (!candidates.length) return UI.toast('Alle Benutzer sind bereits Mitglied.');
+            const addModal = AdminBoard.openDialog({
+                id: 'group-members-add-modal',
+                title: 'Mitglieder hinzufügen',
+                icon: 'user-plus',
+                size: 'sm',
+                body: `<div class="field"><label>Personen auswählen</label><div id="gma-picker"></div></div>`,
+                onSave: async (m) => {
+                    const chosen = picker.getValue();
+                    if (!chosen.length) return UI.toast('Bitte mindestens eine Person wählen.');
+                    const allGroups = await Store.getGroups();
+                    const g = allGroups.find(x => x.id === group.id);
+                    if (g) { g.members = [...new Set([...(g.members || []), ...chosen])]; await Store.saveGroups(allGroups); }
+                    m.remove();
+                    await render();
+                    AdminBoard.renderUserManager('groups');
+                }
+            });
+            const picker = UI.createMultiSelect(addModal.querySelector('#gma-picker'), candidates.map(u => ({ value: u.username, label: u.name || u.username })), []);
+        };
         modal.querySelector('#gm-print').onclick = async () => {
             const settings = await Store.getSettings();
             const company = settings.companyConfig || {};
             const actor = await Store.currentUser();
+            const users = await Store.getUsers();
+            const members = users.filter(u => (group.members || []).includes(u.username));
             UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Mitglieder · ${Utils.esc(group.name)}</title>
                 <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}
                 .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;border-bottom:1px solid #ccc;padding-bottom:12px}
@@ -5510,6 +5830,7 @@ const AdminBoard = {
                 ${members.map(u => `<tr><td>${Utils.esc(u.name || '-')}</td><td>${Utils.esc(u.username)}</td><td>${Utils.esc(u.email || '-')}</td><td>${Utils.esc(u.role)}</td></tr>`).join('')}
                 </tbody></table></body></html>`);
         };
+        await render();
     },
 
     openEditGroupModal: async (group) => {
@@ -5852,6 +6173,7 @@ const AdminBoard = {
     },
 
     openSystemSettings: async () => {
+        let apprFallbackPicker;
         let modal = q('#sys-settings-modal');
         if (!modal) {
             modal = document.createElement('div');
@@ -6121,6 +6443,11 @@ const AdminBoard = {
                                 <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Hoch"><span>Hoch</span></label>
                                 <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Kritisch"><span>Kritisch</span></label>
                             </div>
+                            <div class="field">
+                                <label>Ersatzperson ohne Vorgesetzte(n)</label>
+                                <p class="hint">Wird verwendet, wenn der/die Erstellende keine Vorgesetzte Person hinterlegt hat. Ohne Auswahl springt die Anfrage an eine beliebige Superadmin-Person.</p>
+                                <div id="sys-appr-fallback"></div>
+                            </div>
                             <div class="settings-section-title">Warten auf Benutzer</div>
                             <div class="form-grid">
                                 <div class="field"><label for="sys-wait-remind">Erinnerung nach (Tage)</label><input id="sys-wait-remind" type="number" min="1" placeholder="2"></div>
@@ -6203,6 +6530,17 @@ const AdminBoard = {
         const appr = settings.approvalConfig || {};
         q('#sys-appr-enabled').checked = !!appr.enabled;
         document.querySelectorAll('.sys-appr-prio').forEach(cb => { cb.checked = (appr.priorities || ['Kritisch']).includes(cb.value); });
+        // Ersatzperson ODER -gruppe: Werte mit Präfix "g:" (Gruppe) bzw. "u:" (Person) unterscheiden;
+        // ein alter, unpräfixter Wert (nur Benutzername) wird weiterhin als Person verstanden.
+        const apprFallbackGroups = await Store.getGroups();
+        const apprFallbackUsers = (await Store.getUsers()).filter(u => !u.accountArchived);
+        const apprFallbackChoices = [
+            ...apprFallbackGroups.map(g => ({ value: `g:${g.id}`, label: `${g.name} (Gruppe)` })),
+            ...apprFallbackUsers.map(u => ({ value: `u:${u.username}`, label: u.name || u.username }))
+        ];
+        const legacyFallback = appr.fallbackApprover || '';
+        const normalizedFallback = !legacyFallback ? '' : /^[ug]:/.test(legacyFallback) ? legacyFallback : `u:${legacyFallback}`;
+        apprFallbackPicker = UI.createMultiSelect(q('#sys-appr-fallback'), apprFallbackChoices, normalizedFallback, null, { single: true, emptyLabel: 'Keine (Superadmin automatisch)' });
         const accEditable = settings.accountConfig?.editable || {};
         q('#sys-acc-name').checked = accEditable.name !== false;
         q('#sys-acc-email').checked = accEditable.email !== false;
@@ -6360,7 +6698,8 @@ const AdminBoard = {
             };
             newSettings.approvalConfig = {
                 enabled: q('#sys-appr-enabled').checked,
-                priorities: [...document.querySelectorAll('.sys-appr-prio:checked')].map(cb => cb.value)
+                priorities: [...document.querySelectorAll('.sys-appr-prio:checked')].map(cb => cb.value),
+                fallbackApprover: apprFallbackPicker?.getValue() || null
             };
             newSettings.accountConfig = {
                 editable: {
@@ -6695,11 +7034,12 @@ const AdminBoard = {
             const team = t.team ? groups.find(g => g.id === t.team) : null;
             const countdown = Store.formatSlaCountdown(t, settings);
             const checked = AdminBoard.listViewState.selected.has(t.id) ? 'checked' : '';
-            return `<tr data-id="${Utils.esc(t.id)}" class="lv-row">
+            const pendingApproval = (t.approvals || []).some(a => a.status === 'pending');
+            return `<tr data-id="${Utils.esc(t.id)}" data-ctx="ticket" class="lv-row">
                 <td><input type="checkbox" data-id="${Utils.esc(t.id)}" ${checked}></td>
                 <td>${Utils.esc(t.ticketNumber || t.id)}</td>
                 <td class="lv-title" title="${Utils.esc(t.title)}">${t.isMajorIncident ? `<span class="t-incident-badge lv-incident-icon" title="${Lang.t('majorIncident')}">${Icon('siren', 12)}</span> ` : ''}${Utils.esc(t.title)}</td>
-                <td><span class="status-badge">${Utils.esc(Lang.status(t.status))}</span></td>
+                <td>${pendingApproval ? `<span class="approval-badge" title="Wartet auf Genehmigung">${Icon('hourglass', 12)}Genehmigung</span>` : `<span class="status-badge">${Utils.esc(Lang.status(t.status))}</span>`}</td>
                 <td><span class="t-tag prio-${t.prio}">${Utils.esc(Lang.prio(t.prio))}</span></td>
                 <td>${Utils.esc((Array.isArray(t.category) ? t.category : [t.category]).filter(Boolean).join(', ') || '-')}${team ? ` <span class="t-team">${Icon('route', 10)}${Utils.esc(team.name)}</span>` : ''}</td>
                 <td>${Utils.esc(nameFor(t.owner))}</td>
@@ -6875,8 +7215,8 @@ const AdminBoard = {
             reasonField.querySelector('label').textContent = 'Waiting reason';
             messageField.querySelector('label').textContent = 'Message to the user';
             messageInput.placeholder = 'Describe what you need from the user.';
-            confirm.textContent = 'Apply';
-            cancel.textContent = 'Cancel';
+            confirm.title = confirm.ariaLabel = 'Apply';
+            cancel.title = cancel.ariaLabel = 'Cancel';
         } else {
             select.options[0].textContent = 'Bitte auswählen';
             select.options[1].textContent = 'Auf Benutzer';
@@ -6886,8 +7226,8 @@ const AdminBoard = {
             reasonField.querySelector('label').textContent = 'Wartegrund';
             messageField.querySelector('label').textContent = 'Nachricht an den Benutzer';
             messageInput.placeholder = 'Was wird vom Benutzer benötigt?';
-            confirm.textContent = 'Übernehmen';
-            cancel.textContent = 'Abbrechen';
+            confirm.title = confirm.ariaLabel = 'Übernehmen';
+            cancel.title = cancel.ariaLabel = 'Abbrechen';
         }
 
         select.value = fixedStatus;
@@ -6941,6 +7281,10 @@ const AdminBoard = {
         if (!ticket || ticket.archived || ticket.status === newStatus) return false;
         if (newStatus === 'Warten auf Benutzer' && !waitingMessage.trim()) {
             UI.toast('Bitte beschreiben, was vom Benutzer benötigt wird.');
+            return false;
+        }
+        if (newStatus !== 'Geschlossen' && (ticket.approvals || []).some(a => a.status === 'pending')) {
+            UI.toast('Dieses Ticket wartet noch auf eine Genehmigung.');
             return false;
         }
         const oldStatus = ticket.status;
@@ -7072,8 +7416,10 @@ const AdminBoard = {
     // Modal Logic
     currentTicketId: null,
 
-    getTodoAssigneeOptions: (ticket, users) => {
-        const allowed = new Set([ticket.owner, ...(ticket.participants || [])].filter(Boolean));
+    getTodoAssigneeOptions: (ticket, users, currentUsername) => {
+        // Wer eine Teilaufgabe anlegt, muss sie sich auch selbst zuweisen können, auch wenn er
+        // (noch) nicht Hauptverantwortlicher oder Beteiligte Person dieses Tickets ist.
+        const allowed = new Set([ticket.owner, ...(ticket.participants || []), currentUsername].filter(Boolean));
         return users.filter(user => allowed.has(user.username));
     },
 
@@ -7094,6 +7440,7 @@ const AdminBoard = {
         if (!details) return;
 
         const staff = users.filter(u => (u.role === 'admin' || u.role === 'superadmin') && !u.accountArchived);
+        const actor = await Store.currentUser();
         if (!Array.isArray(t.assignees)) t.assignees = t.assignee ? [t.assignee] : [];
         if (!Array.isArray(t.participants)) t.participants = [...t.assignees];
         if (!Array.isArray(t.todos)) t.todos = [];
@@ -7126,7 +7473,7 @@ const AdminBoard = {
                     <input id="todo-title" type="text" placeholder="Neue Teilaufgabe">
                     <select id="todo-assignee">
                         <option value="">Ohne Zuweisung</option>
-                        ${AdminBoard.getTodoAssigneeOptions(t, staff).map(u => `<option value="${Utils.esc(u.username)}">${Utils.esc(u.name || u.username)}</option>`).join('')}
+                        ${AdminBoard.getTodoAssigneeOptions(t, staff, actor?.username).map(u => `<option value="${Utils.esc(u.username)}"${u.username === actor?.username ? ' selected' : ''}>${Utils.esc(u.name || u.username)}</option>`).join('')}
                     </select>
                     <button class="btn-primary" id="todo-add" type="button">${Icon('plus', 16)}Hinzufügen</button>
                 </div>
@@ -7156,6 +7503,7 @@ const AdminBoard = {
             await AdminBoard.syncTodoAssignees(t);
             await Store.addLog(t, 'Hauptverantwortlicher geändert', `Alt: ${old} -> Neu: ${t.owner || 'Nicht zugewiesen'}`);
             await Store.saveTickets(tickets);
+            await AdminBoard.notifyIfAbsentAssignee(t, t.owner, (await Store.currentUser())?.username);
             await AdminBoard.ensureResponsibilitySection(t, users, tickets);
             await AdminBoard.setupMentionAutocomplete(t);
             await AdminBoard.render();
@@ -7171,6 +7519,7 @@ const AdminBoard = {
         const participantValues = (t.participants || []).filter(username => username !== t.owner);
         t.participants = participantValues;
         UI.createMultiSelect(participantsMulti, participantOptions, participantValues, async (newParticipants) => {
+            const previouslyIn = new Set(t.participants || []);
             t.participants = newParticipants.filter(username => username !== t.owner);
             t.assignees = [...t.participants];
             await AdminBoard.syncTodoAssignees(t);
@@ -7180,6 +7529,10 @@ const AdminBoard = {
             }).join(', ') || 'Niemand';
             await Store.addLog(t, 'Beteiligte Personen geändert', `Neu: ${names}`);
             await Store.saveTickets(tickets);
+            const actorUsername = (await Store.currentUser())?.username;
+            for (const username of t.participants) {
+                if (!previouslyIn.has(username)) await AdminBoard.notifyIfAbsentAssignee(t, username, actorUsername);
+            }
             await AdminBoard.setupMentionAutocomplete(t);
             await AdminBoard.render();
         });
@@ -7327,16 +7680,18 @@ const AdminBoard = {
             <h4 class="section-title">${Icon('list-tree', 15)} ${Lang.t('linkedTickets')}</h4>
             ${linked.length ? `<div class="incident-linked-table">
                 ${linked.map(item => `
-                    <button type="button" class="incident-linked-row" data-ticket-id="${Utils.esc(item.id)}">
-                        <span><strong>${Utils.esc(item.ticketNumber || item.id)}</strong>${Utils.esc(item.title)}</span>
-                        <span>${Utils.esc(item.authorName || item.author || '-')}</span>
-                        <span>${Lang.status(item.status)}</span>
-                    </button>
+                    <div class="incident-linked-row" data-ticket-id="${Utils.esc(item.id)}">
+                        <button type="button" class="incident-linked-open">
+                            <span><strong>${Utils.esc(item.ticketNumber || item.id)}</strong>${Utils.esc(item.title)}</span>
+                            <span>${Utils.esc(item.authorName || item.author || '-')}</span>
+                            <span>${Lang.status(item.status)}</span>
+                        </button>
+                    </div>
                 `).join('')}
             </div>` : '<div class="empty-state compact">Noch keine Tickets zugeordnet.</div>'}
         `;
-        box.querySelectorAll('.incident-linked-row').forEach(row => {
-            row.onclick = () => AdminBoard.openModal(row.dataset.ticketId);
+        box.querySelectorAll('.incident-linked-open').forEach(btn => {
+            btn.onclick = () => AdminBoard.openModal(btn.closest('[data-ticket-id]').dataset.ticketId);
         });
         const addBtn = document.createElement('button');
         addBtn.type = 'button';
@@ -7746,6 +8101,22 @@ const AdminBoard = {
         return `${period} · ${visibility}`;
     },
 
+    // Wird eine abwesende Person einem Ticket zugewiesen/markiert, bekommen sowohl sie als auch ihre
+    // Vertretung sofort einen Hinweis, damit nichts liegen bleibt, bis die Person zurück ist.
+    notifyIfAbsentAssignee: async (ticket, username, actorUsername) => {
+        if (!username || username === actorUsername) return;
+        const users = await Store.getUsers();
+        const person = users.find(u => u.username === username);
+        if (!person?.absence?.active) return false;
+        UI.toast(`${person.name || person.username} ist aktuell abwesend${person.absence.substitute ? ' – Vertretung: ' + (users.find(u => u.username === person.absence.substitute)?.name || person.absence.substitute) : ' – keine Vertretung hinterlegt'}.`);
+        await Store.addNotifications([username], ticket, `Dir wurde ein Ticket zugewiesen, während du als abwesend markiert bist: ${ticket.title}`, actorUsername, 'newTicket');
+        if (person.absence.substitute) {
+            await Store.addNotifications([person.absence.substitute], ticket, `${person.name || person.username} ist abwesend und hat ein neues Ticket bekommen – bitte übernehmen: ${ticket.title}`, actorUsername, 'newTicket');
+        }
+        await Notifications.refresh();
+        return true;
+    },
+
     can: (user, key) => {
         if (!user) return false;
         if (user.role === 'superadmin') return true;
@@ -7786,7 +8157,8 @@ const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    openDialog: ({ id, title, icon = 'layout-grid', body, size = 'md', onSave = null }) => {
+    openDialog: ({ id, title, icon = 'layout-grid', body, size = 'md', onSave = null, headerButtons = [] }) => {
+        // headerButtons: weitere Kopf-Icons neben Speichern/Schließen, z. B. [{id, icon, title, onClick}] (Drucken, …)
         q(`#${id}`)?.remove();
         const modal = document.createElement('div');
         modal.id = id;
@@ -7796,6 +8168,7 @@ const AdminBoard = {
                 <div class="modal-header">
                     <h3>${Icon(icon, 18)}${Utils.esc(title)}</h3>
                     <div class="modal-actions">
+                        ${headerButtons.map(b => `<button class="btn-ghost btn-icon" id="${Utils.esc(b.id)}" title="${Utils.esc(b.title)}" aria-label="${Utils.esc(b.title)}">${Icon(b.icon, 16)}</button>`).join('')}
                         ${onSave ? `<button class="btn-ghost btn-icon" data-dialog-save title="Speichern" aria-label="Speichern">${Icon('save', 16)}</button>` : ''}
                         <button class="btn-ghost btn-icon" data-dialog-close title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
                     </div>
@@ -7806,6 +8179,7 @@ const AdminBoard = {
         modal.querySelector('[data-dialog-close]').onclick = () => modal.remove();
         modal.onclick = e => { if (e.target === modal) modal.remove(); };
         if (onSave) modal.querySelector('[data-dialog-save]').onclick = () => onSave(modal);
+        headerButtons.forEach(b => { if (b.onClick) modal.querySelector(`#${b.id}`).onclick = () => b.onClick(modal); });
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
         return modal;
@@ -7907,13 +8281,13 @@ const AdminBoard = {
             title: 'Auswertung',
             icon: 'chart-column',
             size: 'lg',
+            headerButtons: [{ id: 'rep-print', icon: 'printer', title: 'Drucken' }],
             body: `
                 <div class="report-toolbar">
                     <div class="field"><label for="rep-range">Zeitraum</label>
                         <select id="rep-range"><option value="30">Letzte 30 Tage</option><option value="90">Letzte 90 Tage</option><option value="365">Letzte 12 Monate</option></select>
                     </div>
                     <div id="rep-personal-toggle"></div>
-                    <button type="button" class="btn-secondary btn-sm" id="rep-print">${Icon('printer', 15)}Drucken</button>
                 </div>
                 <div id="rep-body"></div>`
         });
@@ -8022,8 +8396,12 @@ const AdminBoard = {
         AdminBoard.kbFiles.forEach((f, idx) => {
             const tag = document.createElement('div');
             tag.className = 'file-chip';
-            tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
-            tag.querySelector('button').onclick = () => {
+            tag.innerHTML = `<button type="button" class="file-chip-preview">${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span></button><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
+            tag.querySelector('.file-chip-preview').onclick = async () => {
+                const data = await Store.readFile(f);
+                AdminBoard.openAttachmentPreview({ name: f.name, type: f.type, data });
+            };
+            tag.querySelector('.remove-file').onclick = () => {
                 AdminBoard.kbFiles.splice(idx, 1);
                 AdminBoard.renderKbFilePreview(modal);
             };
@@ -8058,14 +8436,15 @@ const AdminBoard = {
                                <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-link" title="Link einfügen" aria-label="Link einfügen">${Icon('link', 15)}</button>
                                <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen">${Icon('paperclip', 15)}<input type="file" id="kb-file-input" style="display:none" multiple></label>
                            </div>
-                           <textarea id="kb-new-body" rows="5" placeholder="Unterstützt **fett**, *kursiv*, Listen, Tabellen und Links."></textarea>
+                           <div id="kb-new-body" class="rich-editor" contenteditable="true" data-placeholder="Schreibe wie in einem Textverarbeitungsprogramm: Formatierungen, Listen und Tabellen direkt bearbeiten."></div>
                            <div id="kb-file-preview" class="file-preview"></div>
                        </div>
                    </div>` : ''}`,
             onSave: canEdit ? async (m) => {
                 const title = m.querySelector('#kb-new-title').value.trim();
-                const body = m.querySelector('#kb-new-body').value.trim();
-                if (!title || !body) return UI.toast('Bitte Titel und Inhalt eingeben.');
+                const bodyEl = m.querySelector('#kb-new-body');
+                const body = Utils.sanitizeRichHtml(bodyEl.innerHTML);
+                if (!title || !bodyEl.textContent.trim()) return UI.toast('Bitte Titel und Inhalt eingeben.');
                 let attachments = [];
                 if (AdminBoard.kbFiles.length) {
                     try {
@@ -8077,10 +8456,10 @@ const AdminBoard = {
                     }
                 }
                 const s = await Store.getSettings();
-                s.knowledgeBase = [...(s.knowledgeBase || []), { id: Utils.uid(), title, body, attachments, source: 'manuell', createdAt: Utils.nowISO() }];
+                s.knowledgeBase = [...(s.knowledgeBase || []), { id: Utils.uid(), title, body, format: 'html', attachments, source: 'manuell', createdAt: Utils.nowISO() }];
                 await Store.saveSettings(s);
                 m.querySelector('#kb-new-title').value = '';
-                m.querySelector('#kb-new-body').value = '';
+                bodyEl.innerHTML = '';
                 AdminBoard.kbFiles = [];
                 AdminBoard.renderKbFilePreview(m);
                 UI.toast('Artikel gespeichert.');
@@ -8089,22 +8468,28 @@ const AdminBoard = {
         });
         if (canEdit) {
             const bodyInput = modal.querySelector('#kb-new-body');
-            modal.querySelector('#kb-fmt-bold').onclick = () => insertMarkdownText(bodyInput, '**');
-            modal.querySelector('#kb-fmt-italic').onclick = () => insertMarkdownText(bodyInput, '*');
-            modal.querySelector('#kb-fmt-list').onclick = () => {
-                const start = bodyInput.selectionStart, end = bodyInput.selectionEnd;
-                const selected = bodyInput.value.substring(start, end) || 'Punkt';
-                bodyInput.setRangeText(selected.split('\n').map(line => `- ${line}`).join('\n'), start, end, 'end');
-                bodyInput.focus();
-            };
-            modal.querySelector('#kb-fmt-numbered').onclick = () => {
-                const start = bodyInput.selectionStart, end = bodyInput.selectionEnd;
-                const selected = bodyInput.value.substring(start, end) || 'Punkt';
-                bodyInput.setRangeText(selected.split('\n').map((line, index) => `${index + 1}. ${line}`).join('\n'), start, end, 'end');
-                bodyInput.focus();
-            };
+            // Verhindert, dass ein Klick auf die Werkzeugleiste den Fokus/die Auswahl im Editor verliert
+            modal.querySelectorAll('.kb-editor .note-toolbar button').forEach(btn => { btn.onmousedown = e => e.preventDefault(); });
+            modal.querySelector('#kb-fmt-bold').onclick = () => { bodyInput.focus(); document.execCommand('bold'); };
+            modal.querySelector('#kb-fmt-italic').onclick = () => { bodyInput.focus(); document.execCommand('italic'); };
+            modal.querySelector('#kb-fmt-list').onclick = () => { bodyInput.focus(); document.execCommand('insertUnorderedList'); };
+            modal.querySelector('#kb-fmt-numbered').onclick = () => { bodyInput.focus(); document.execCommand('insertOrderedList'); };
             modal.querySelector('#kb-fmt-table').onclick = () => insertMarkdownTable(bodyInput);
-            modal.querySelector('#kb-fmt-link').onclick = () => insertMarkdownLink(bodyInput);
+            modal.querySelector('#kb-fmt-link').onclick = async () => {
+                const sel = window.getSelection();
+                const savedRange = (sel && sel.rangeCount && bodyInput.contains(sel.anchorNode)) ? sel.getRangeAt(0).cloneRange() : null;
+                const selectedText = savedRange ? savedRange.toString() : '';
+                const href = await UI.promptText({ title: 'Link einfügen', label: 'Link-Adresse', value: '', placeholder: 'https://example.com oder mailto:name@example.com', saveLabel: 'Link einfügen' });
+                if (!href || !href.trim()) return;
+                if (!/^(https?:\/\/|mailto:)/i.test(href.trim())) return UI.toast('Nur http-, https- und mailto-Links sind erlaubt.');
+                bodyInput.focus();
+                const sel2 = window.getSelection();
+                sel2.removeAllRanges();
+                if (savedRange) sel2.addRange(savedRange);
+                if (selectedText) document.execCommand('createLink', false, href.trim());
+                else document.execCommand('insertHTML', false, `<a href="${Utils.esc(href.trim())}" target="_blank" rel="noopener noreferrer">${Utils.esc(href.trim())}</a>`);
+                bodyInput.dispatchEvent(new Event('input', { bubbles: true }));
+            };
             modal.querySelector('#kb-file-input').onchange = (e) => {
                 Array.from(e.target.files).forEach(file => AdminBoard.kbFiles.push(file));
                 AdminBoard.renderKbFilePreview(modal);
@@ -8125,7 +8510,7 @@ const AdminBoard = {
             modal.querySelector('#kb-list').innerHTML = articles.length ? articles.map(a => `
                 <details class="kb-article">
                     <summary><strong>${Utils.esc(a.title)}</strong> <span class="hint">${Utils.esc(a.source || '')} · ${Utils.fmtDate(a.createdAt)}</span></summary>
-                    <div class="desc-text">${Utils.renderMarkdown(a.body)}</div>
+                    <div class="desc-text rich-content">${a.format === 'html' ? a.body : Utils.renderMarkdown(a.body)}</div>
                     ${(a.attachments || []).length ? `<div class="file-preview">${a.attachments.map((f, idx) => `<button type="button" class="file-chip kb-att" data-article="${Utils.esc(a.id)}" data-idx="${idx}">${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span></button>`).join('')}</div>` : ''}
                     ${isAdmin ? `<button class="btn-ghost btn-sm kb-del" type="button" data-id="${Utils.esc(a.id)}">${Icon('trash-2', 14)}Löschen</button>` : ''}
                 </details>`).join('') : '<div class="empty-state compact">Keine Artikel gefunden.</div>';
@@ -8277,38 +8662,92 @@ const AdminBoard = {
         }
     },
 
+    // Entscheidet eine ausstehende Genehmigung (freigeben/ablehnen) - genutzt von der Genehmigungs-Übersicht
+    // und direkt aus dem Ticket heraus, falls die aktuell angemeldete Person selbst genehmigen darf.
+    // Öffnet ein Ticket unabhängig davon, ob gerade das Admin-Board oder das Benutzer-Dashboard
+    // geladen ist (z. B. aus der Genehmigungsansicht, die beide Seiten erreichen können).
+    openTicketForCurrentPage: async (id) => {
+        if (q('#ticket-modal')) await AdminBoard.openModal(id);
+        else if (q('#u-ticket-modal')) await UserDash.openModal(id);
+    },
+
+    decideApproval: async (ticketId, status, reason) => {
+        const me = await Store.currentUser();
+        const all = await Store.getTickets();
+        const ticket = all.find(x => x.id === ticketId);
+        if (!ticket) return false;
+        const a = ticket.approvals?.find(x => isPendingApprover(x, me.username));
+        if (!a) return false;
+        a.status = status;
+        a.decidedAt = Utils.nowISO();
+        a.decidedBy = me.username;
+        a.decidedByName = me.name || me.username;
+        if (reason) a.comment = reason;
+        if (status === 'rejected') {
+            ticket.status = 'Geschlossen';
+            ticket.rejectedApproval = { reason, by: me.username, byName: me.name || me.username, at: Utils.nowISO() };
+            await Store.addLog(ticket, `Genehmigung abgelehnt von ${me.name || me.username}`, reason);
+        } else {
+            await Store.addLog(ticket, `Genehmigung erteilt von ${me.name || me.username}`);
+        }
+        await Store.saveTickets(all);
+        await Store.addNotifications([a.requestedBy], ticket, `${me.name || me.username} hat die Genehmigung ${status === 'approved' ? 'erteilt' : 'abgelehnt'}${reason ? ': ' + reason : '.'}`, me.username, 'statusChange');
+        await Notifications.refresh();
+        await UserDash.refreshApprovalBadge();
+        if (q('#user-tickets')) await UserDash.renderList();
+        return true;
+    },
+
     openApprovals: async () => {
         const me = await Store.currentUser();
-        const modal = AdminBoard.openDialog({ id: 'approvals-modal', title: 'Genehmigungen', icon: 'badge-check', size: 'md', body: '<div id="apr-list"></div>' });
+        const settings = await Store.getSettings();
+        const modal = AdminBoard.openDialog({ id: 'approvals-modal', title: 'Genehmigungen', icon: 'badge-check', size: 'lg', body: '<div id="apr-list"></div>' });
         const render = async () => {
-            const tickets = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => a.approver === me.username && a.status === 'pending'));
-            modal.querySelector('#apr-list').innerHTML = tickets.length ? tickets.map(t => {
-                const a = t.approvals.find(x => x.approver === me.username && x.status === 'pending');
-                return `<div class="absence-overview-row" data-id="${Utils.esc(t.id)}">
-                    <div><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span class="hint">Angefragt von ${Utils.esc(a.requestedByName || a.requestedBy)} · ${Utils.fmtDate(a.requestedAt)}${a.note ? ' · ' + Utils.esc(a.note) : ''}</span></div>
+            const tickets = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => isPendingApprover(a, me.username)));
+            const box = modal.querySelector('#apr-list');
+            box.innerHTML = tickets.length ? tickets.map(t => {
+                const a = t.approvals.find(x => isPendingApprover(x, me.username));
+                const fields = Store.getCustomFieldsForCategories(t.category, settings.customFields || {});
+                const groupHint = a.approvers?.length > 1 ? ' · an die Gruppe angefragt, eine Person reicht' : '';
+                return `<details class="kb-article apr-row" open data-id="${Utils.esc(t.id)}">
+                    <summary>
+                        <strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong>
+                        <span class="hint">Angefragt von ${Utils.esc(a.requestedByName || a.requestedBy)} · ${Utils.fmtDate(a.requestedAt)}${a.note ? ' · ' + Utils.esc(a.note) : ''}${groupHint}</span>
+                    </summary>
+                    <div class="meta-grid">
+                        <div class="meta-item"><strong>Priorität</strong><span class="meta-value">${Utils.esc(t.prio)}</span></div>
+                        <div class="meta-item"><strong>Kategorie</strong><span class="meta-value">${Utils.esc((t.category || []).join(', ') || '-')}</span></div>
+                    </div>
+                    <h4 class="section-title">Beschreibung</h4>
+                    <p class="desc-text">${Utils.esc(t.desc || '-')}</p>
+                    ${fields.length ? `<div class="apr-fields"></div>` : ''}
+                    <div class="apr-attachments"></div>
                     <div class="aa-actions">
+                        <button class="btn-secondary btn-sm apr-open" type="button">${Icon('external-link', 14)}Ticket öffnen</button>
                         <button class="btn-primary btn-sm apr-yes" type="button">${Icon('check', 14)}Freigeben</button>
-                        <button class="btn-secondary btn-sm apr-no" type="button">${Icon('x', 14)}Ablehnen</button>
-                    </div></div>`;
-            }).join('') : '<div class="empty-state compact">Keine offenen Genehmigungen.</div>';
-            modal.querySelectorAll('.absence-overview-row').forEach(row => {
-                const decide = async status => {
-                    const all = await Store.getTickets();
-                    const t = all.find(x => x.id === row.dataset.id);
-                    if (!t) return;
-                    const a = t.approvals.find(x => x.approver === me.username && x.status === 'pending');
-                    if (!a) return;
-                    a.status = status;
-                    a.decidedAt = Utils.nowISO();
-                    await Store.addLog(t, `Genehmigung ${status === 'approved' ? 'erteilt' : 'abgelehnt'} von ${me.name || me.username}`);
-                    await Store.saveTickets(all);
-                    await Store.addNotifications([a.requestedBy], t, `${me.name || me.username} hat die Genehmigung ${status === 'approved' ? 'erteilt' : 'abgelehnt'}.`, me.username, 'statusChange');
-                    await Notifications.refresh();
+                        <button class="btn-secondary btn-sm btn-danger apr-no" type="button">${Icon('x', 14)}Ablehnen</button>
+                    </div></details>`;
+            }).join('') : '<div class="empty-state compact">Keine offenen Genehmigungen. Hier erscheinen Anfragen, die deine Zustimmung brauchen.</div>';
+            box.querySelectorAll('.apr-row').forEach(row => {
+                const t = tickets.find(x => x.id === row.dataset.id);
+                const fieldsBox = row.querySelector('.apr-fields');
+                if (fieldsBox) UI.renderCustomFieldsDisplay(fieldsBox, Store.getCustomFieldsForCategories(t.category, settings.customFields || {}), t.customFieldValues || {});
+                AdminBoard.renderTicketAttachments(t, row.querySelector('.apr-attachments'));
+                row.querySelector('.apr-open').onclick = async () => {
+                    modal.remove();
+                    await AdminBoard.openTicketForCurrentPage(t.id);
+                };
+                const decide = async (status, reason) => {
+                    if (!(await AdminBoard.decideApproval(row.dataset.id, status, reason))) return;
                     await render();
                     await AdminBoard.render();
                 };
                 row.querySelector('.apr-yes').onclick = () => decide('approved');
-                row.querySelector('.apr-no').onclick = () => decide('rejected');
+                row.querySelector('.apr-no').onclick = async () => {
+                    const reason = await UI.promptText({ title: 'Genehmigung ablehnen', label: 'Warum lehnst du diese Anfrage ab? Die Begründung sieht die antragstellende Person.', saveLabel: 'Ablehnen' });
+                    if (!reason || !reason.trim()) return UI.toast('Bitte eine Begründung angeben.');
+                    await decide('rejected', reason.trim());
+                };
             });
             if (window.lucide) lucide.createIcons();
         };
@@ -8317,7 +8756,8 @@ const AdminBoard = {
 
     requestApproval: async (t) => {
         const me = await Store.currentUser();
-        const approvers = (await Store.getUsers()).filter(u => u.username !== me.username && !u.accountArchived);
+        // Niemand genehmigt die eigene Anfrage: weder die anfragende noch die antragstellende Person
+        const approvers = (await Store.getUsers()).filter(u => u.username !== me.username && u.username !== t.author && !u.accountArchived);
         if (!approvers.length) return UI.toast('Keine weiteren Personen zum Genehmigen vorhanden.');
         const modal = AdminBoard.openDialog({
             id: 'approval-request-modal',
@@ -8341,6 +8781,7 @@ const AdminBoard = {
                 m.remove();
                 UI.toast('Genehmigung angefordert.');
                 await AdminBoard.openModal(t.id);
+                await AdminBoard.render();
             }
         });
         const owner = (await Store.getUsers()).find(u => u.username === t.author);
@@ -8351,18 +8792,16 @@ const AdminBoard = {
 
     linkRelatedTicket: async (t) => {
         const all = await Store.getTickets();
-        const candidates = all.filter(x => x.id !== t.id && !x.archived && !(t.relatedIds || []).includes(x.id));
         const modal = AdminBoard.openDialog({
             id: 'related-modal',
             title: 'Verwandtes Ticket verknüpfen',
             icon: 'link',
             size: 'md',
             body: `<input type="search" id="rel-search" class="section-search" placeholder="Ticket-Nr oder Titel suchen...">
-                   <div class="checkbox-list" id="rel-list" style="margin-top:var(--space-3)">${candidates.map(x => `
-                        <label class="check-row" data-search="${Utils.esc(`${x.ticketNumber || ''} ${x.title}`.toLowerCase())}"><input type="checkbox" value="${Utils.esc(x.id)}">
-                            <span class="check-text"><strong>${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)}</strong></span></label>`).join('')}</div>`,
+                   <label class="check-row compact" style="margin-top:var(--space-2)"><input type="checkbox" id="rel-show-archived"><span>Auch geschlossene/archivierte Tickets anzeigen</span></label>
+                   <div class="checkbox-list" id="rel-list" style="margin-top:var(--space-3)"></div>`,
             onSave: async (m) => {
-                const ids = [...m.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+                const ids = [...m.querySelectorAll('input[type="checkbox"].rel-pick:checked')].map(cb => cb.value);
                 if (!ids.length) return UI.toast('Bitte mindestens ein Ticket auswählen.');
                 const tickets = await Store.getTickets();
                 const me = tickets.find(x => x.id === t.id);
@@ -8379,26 +8818,35 @@ const AdminBoard = {
                 await AdminBoard.openModal(t.id);
             }
         });
-        modal.querySelector('#rel-search').oninput = () => {
+        const list = modal.querySelector('#rel-list');
+        const renderList = () => {
+            const showArchived = modal.querySelector('#rel-show-archived').checked;
+            const candidates = all.filter(x => x.id !== t.id && (showArchived || !x.archived) && !(t.relatedIds || []).includes(x.id));
+            list.innerHTML = candidates.map(x => `
+                <label class="check-row" data-search="${Utils.esc(`${x.ticketNumber || ''} ${x.title}`.toLowerCase())}"><input type="checkbox" class="rel-pick" value="${Utils.esc(x.id)}">
+                    <span class="check-text"><strong>${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)}</strong>${x.archived ? ' <span class="hint">(archiviert)</span>' : ''}</span></label>`).join('')
+                || '<div class="empty-state compact">Keine Tickets gefunden.</div>';
             const term = modal.querySelector('#rel-search').value.toLowerCase().trim();
-            modal.querySelectorAll('#rel-list .check-row').forEach(row => { row.hidden = !!term && !row.dataset.search.includes(term); });
+            list.querySelectorAll('.check-row').forEach(row => { row.hidden = !!term && !row.dataset.search.includes(term); });
         };
+        modal.querySelector('#rel-search').oninput = renderList;
+        modal.querySelector('#rel-show-archived').onchange = renderList;
+        renderList();
     },
 
     mergeTicketInto: async (t) => {
         const all = await Store.getTickets();
-        const candidates = all.filter(x => x.id !== t.id && !x.archived);
         const modal = AdminBoard.openDialog({
             id: 'merge-modal',
             title: 'Ticket zusammenführen',
             icon: 'git-merge',
             size: 'md',
             body: `<p class="hint">Chat, Notizen, Teilaufgaben, Zeiten und Anhänge von <strong>${Utils.esc(t.ticketNumber || t.id)}</strong> werden in das gewählte Ticket übernommen. Das Ursprungsticket wird archiviert.</p>
-                   <div class="field"><label for="merge-target">Zielticket</label>
-                       <select id="merge-target">${candidates.map(x => `<option value="${Utils.esc(x.id)}">${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)}</option>`).join('')}</select></div>`,
+                   <label class="check-row compact"><input type="checkbox" id="merge-show-archived"><span>Auch geschlossene/archivierte Tickets anzeigen</span></label>
+                   <div class="field"><label>Zielticket</label><div id="merge-target"></div></div>`,
             onSave: async (m) => {
-                const targetId = m.querySelector('#merge-target').value;
-                if (!targetId) return;
+                const targetId = mergeTargetPicker.getValue();
+                if (!targetId) return UI.toast('Bitte ein Zielticket wählen.');
                 const tickets = await Store.getTickets();
                 const source = tickets.find(x => x.id === t.id);
                 const target = tickets.find(x => x.id === targetId);
@@ -8421,6 +8869,15 @@ const AdminBoard = {
                 await AdminBoard.render();
             }
         });
+        let mergeTargetPicker;
+        const renderTargetPicker = () => {
+            const showArchived = modal.querySelector('#merge-show-archived').checked;
+            const candidates = all.filter(x => x.id !== t.id && (showArchived || !x.archived));
+            const current = mergeTargetPicker?.getValue();
+            mergeTargetPicker = UI.createMultiSelect(modal.querySelector('#merge-target'), candidates.map(x => ({ value: x.id, label: `${x.ticketNumber || x.id} · ${x.title}${x.archived ? ' (archiviert)' : ''}` })), current && candidates.some(c => c.id === current) ? current : '', null, { single: true, emptyLabel: 'Bitte wählen...' });
+        };
+        modal.querySelector('#merge-show-archived').onchange = renderTargetPicker;
+        renderTargetPicker();
         return modal;
     },
 
@@ -8433,6 +8890,7 @@ const AdminBoard = {
                 <ul class="substitute-list">
                     ${section.items.map(item => `
                         <li${section.checklist ? ' class="is-check"' : ''}>
+                            ${section.checklist ? Icon('square', 14) : ''}
                             <span class="substitute-ticket">${Utils.esc(item.ticket)}</span>
                             <span>${Utils.esc(item.text)}</span>
                         </li>`).join('')}
@@ -9219,7 +9677,7 @@ const AdminBoard = {
         const adminChatEntries = opts.adminChat ? (t.comments || []).filter(c => (c.channel || 'solution') === 'admin-chat').map(entryRow).join('') : '';
         const solutionEntries = opts.solution ? (t.comments || []).filter(c => (c.channel || 'solution') === 'solution').map(entryRow).join('') : '';
         const chat = opts.chat ? (t.chat || []).map(entryRow).join('') : '';
-        const logEntries = opts.log ? (t.logs || []).map(l => `
+        const logEntries = opts.log ? (t.logs || []).slice().reverse().map(l => `
             <div class="p-entry"><strong>${Utils.esc(l.user || '-')}</strong> <span>${Utils.esc(Utils.fmtDate(l.date))}</span>
             <p>${Utils.esc(l.action || '')}${l.details ? ' – ' + Utils.esc(l.details) : ''}</p></div>`).join('') : '';
         const fmtMinutesPrint = (mins) => mins >= 60 ? `${(mins / 60).toFixed(mins % 60 === 0 ? 0 : 1)} Std.` : `${mins} Min.`;
@@ -9301,6 +9759,47 @@ const AdminBoard = {
             AdminBoard.renderTicketAttachments(t, '#m-ticket-attachments');
             AdminBoard.renderIncidentLinkedTickets(t, tickets);
 
+            const pendingApproval = (t.approvals || []).find(a => a.status === 'pending');
+            const approvalPendingBox = q('#m-approval-pending');
+            if (approvalPendingBox) {
+                approvalPendingBox.hidden = !pendingApproval;
+                const approvalActions = q('#m-approval-actions');
+                if (pendingApproval) {
+                    const approverName = await Store.describeApprover(pendingApproval);
+                    q('#m-approval-pending-text').textContent = `Wartet auf Genehmigung durch ${approverName} (seit ${Utils.fmtDate(pendingApproval.requestedAt)})`;
+                    // Darf die aktuell angemeldete Person selbst entscheiden, direkt hier Freigeben/Ablehnen anbieten
+                    const canDecideHere = isPendingApprover(pendingApproval, user.username);
+                    if (approvalActions) approvalActions.hidden = !canDecideHere;
+                    if (canDecideHere) {
+                        q('#m-approval-yes').onclick = async () => {
+                            if (await AdminBoard.decideApproval(t.id, 'approved')) {
+                                UI.toast('Genehmigung erteilt.');
+                                await AdminBoard.openModal(t.id);
+                                await AdminBoard.render();
+                            }
+                        };
+                        q('#m-approval-no').onclick = async () => {
+                            const reason = await UI.promptText({ title: 'Genehmigung ablehnen', label: 'Warum lehnst du diese Anfrage ab? Die Begründung sieht die antragstellende Person.', saveLabel: 'Ablehnen' });
+                            if (!reason || !reason.trim()) return UI.toast('Bitte eine Begründung angeben.');
+                            if (await AdminBoard.decideApproval(t.id, 'rejected', reason.trim())) {
+                                UI.toast('Genehmigung abgelehnt.');
+                                await AdminBoard.openModal(t.id);
+                                await AdminBoard.render();
+                            }
+                        };
+                    }
+                } else if (approvalActions) {
+                    approvalActions.hidden = true;
+                }
+            }
+            const approvalRejectedBox = q('#m-approval-rejected');
+            if (approvalRejectedBox) {
+                approvalRejectedBox.hidden = !t.rejectedApproval;
+                if (t.rejectedApproval) {
+                    q('#m-approval-rejected-text').textContent = `${t.rejectedApproval.byName || t.rejectedApproval.by} hat diese Anfrage abgelehnt: ${t.rejectedApproval.reason || '-'}`;
+                }
+            }
+
             // Elements
             const prioSel = q('#m-prio-edit');
             const statusSel = q('#m-status-edit');
@@ -9358,12 +9857,33 @@ const AdminBoard = {
                 related.innerHTML = relatedTickets.length ? `
                     <h4 class="section-title">${Icon('link', 15)} Verwandte Tickets</h4>
                     <div class="incident-linked-table">${relatedTickets.map(x => `
-                        <button type="button" class="incident-linked-row" data-ticket-id="${Utils.esc(x.id)}">
-                            <span><strong>${Utils.esc(x.ticketNumber || x.id)}</strong>${Utils.esc(x.title)}</span>
-                            <span>${Utils.esc(x.authorName || x.author || '-')}</span>
-                            <span>${Lang.status(x.status)}</span>
-                        </button>`).join('')}</div>` : '';
-                related.querySelectorAll('.incident-linked-row').forEach(row => { row.onclick = () => AdminBoard.openModal(row.dataset.ticketId); });
+                        <div class="incident-linked-row" data-ticket-id="${Utils.esc(x.id)}">
+                            <button type="button" class="incident-linked-open">
+                                <span><strong>${Utils.esc(x.ticketNumber || x.id)}</strong>${Utils.esc(x.title)}</span>
+                                <span>${Utils.esc(x.authorName || x.author || '-')}</span>
+                                <span>${Lang.status(x.status)}</span>
+                            </button>
+                            <button type="button" class="btn-ghost btn-icon btn-xs btn-danger incident-linked-unlink" title="Verknüpfung aufheben" aria-label="Verknüpfung aufheben">${Icon('link-2-off', 14)}</button>
+                        </div>`).join('')}</div>` : '';
+                related.querySelectorAll('.incident-linked-open').forEach(btn => { btn.onclick = () => AdminBoard.openModal(btn.closest('[data-ticket-id]').dataset.ticketId); });
+                related.querySelectorAll('.incident-linked-unlink').forEach(btn => {
+                    btn.onclick = (e) => {
+                        e.stopPropagation();
+                        const otherId = btn.closest('[data-ticket-id]').dataset.ticketId;
+                        const other = tickets.find(x => x.id === otherId);
+                        UI.confirm(`Verknüpfung zwischen diesem Ticket und "${other?.ticketNumber || otherId} · ${other?.title || ''}" aufheben?`, async () => {
+                            const all = await Store.getTickets();
+                            const me = all.find(x => x.id === t.id);
+                            const partner = all.find(x => x.id === otherId);
+                            if (me) me.relatedIds = (me.relatedIds || []).filter(id => id !== otherId);
+                            if (partner) partner.relatedIds = (partner.relatedIds || []).filter(id => id !== t.id);
+                            await Store.addLog(me, 'Verknüpfung zu verwandtem Ticket aufgehoben', partner?.ticketNumber || otherId);
+                            await Store.saveTickets(all);
+                            UI.toast('Verknüpfung aufgehoben.');
+                            await AdminBoard.openModal(t.id);
+                        });
+                    };
+                });
             }
 
             const btnAssignIncident = q('#btn-assign-incident');
@@ -9648,11 +10168,19 @@ const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    renderInternalComments: (t, channel = 'solution') => {
+    renderInternalComments: async (t, channel = 'solution') => {
         const prefix = channel === 'admin-chat' ? 'm-admin-note' : 'm-note';
         const box = q(channel === 'admin-chat' ? '#m-admin-comments' : '#m-comments');
         if (!box) return;
         box.innerHTML = '';
+        // @erwähnte Personen sollen mit ihrem Namen und sichtbar hervorgehoben erscheinen – erkennt sowohl
+        // neu eingesetzte "@Vollständiger Name" als auch ältere "@benutzername"-Erwähnungen.
+        const mentionUsers = await Store.getUsers();
+        const mentionRegex = Utils.buildMentionRegex(mentionUsers);
+        const highlightMentions = (html) => mentionRegex ? html.replace(mentionRegex, (full, matched) => {
+            const found = mentionUsers.find(u => u.username === matched || u.name === matched);
+            return found ? `<span class="mention">@${Utils.esc(found.name || found.username)}</span>` : full;
+        }) : html;
         const searchWrap = q(`#${prefix}-search-wrap`);
         const searchInput = q(`#${prefix}-search`);
         const commentsRaw = (t.comments || [])
@@ -9669,7 +10197,7 @@ const AdminBoard = {
             box.innerHTML = `<div class="empty-state compact">${channel === 'admin-chat' ? 'Noch keine Admin-Nachrichten.' : 'Noch keine Lösungsversuche dokumentiert.'}</div>`;
             return;
         }
-        const renderText = (value = '') => Utils.renderMarkdown(value);
+        const renderText = (value = '') => highlightMentions(Utils.renderMarkdown(value));
         const query = (searchInput?.value || '').toLowerCase().trim();
         const comments = [...commentsRaw]
             .map(comment => ({
@@ -9813,11 +10341,19 @@ const AdminBoard = {
         }
         await Store.saveTickets(tickets);
         await Store.addGlobalLog(isEditing ? 'Interne Notiz bearbeitet' : 'Interne Notiz hinzugefügt', `Ticket: ${t.title}\nNotiz: ${txt.substring(0, 100)}${txt.length > 100 ? '...' : ''}`);
-        const mentionedUsers = new Set([...txt.matchAll(/@([a-zA-Z0-9_.-]+)/g)].map(match => match[1].toLowerCase()));
-        const mentionedAdmins = channel === 'admin-chat' ? (await Store.getUsers()).filter(person =>
+        // Erkennt sowohl "@Vollständiger Name" (neu direkt eingesetzt) als auch "@benutzername" (älter)
+        const allUsersForMentions = await Store.getUsers();
+        const mentionRegexForNotify = Utils.buildMentionRegex(allUsersForMentions);
+        const mentionedUsernames = new Set(mentionRegexForNotify
+            ? [...txt.matchAll(mentionRegexForNotify)].map(match => {
+                const found = allUsersForMentions.find(u => u.username === match[1] || u.name === match[1]);
+                return found?.username.toLowerCase();
+            }).filter(Boolean)
+            : []);
+        const mentionedAdmins = channel === 'admin-chat' ? allUsersForMentions.filter(person =>
             person.username !== user.username &&
             AdminBoard.canAccessTicket(person, t) &&
-            mentionedUsers.has(person.username.toLowerCase())
+            mentionedUsernames.has(person.username.toLowerCase())
         ) : [];
         await Store.addNotifications(mentionedAdmins.map(person => person.username), t, `${user.name || user.username} hat dich in einem internen Kommentar erwähnt.`, user.username, 'mention');
         const mentionSettings = await Store.getSettings();
@@ -10439,6 +10975,126 @@ const AdminBoard = {
         UI.toast('Benutzer erfolgreich erstellt!');
     }
 };
+
+// --- Kontextmenü (Rechtsklick) -----------------------------------------------
+// Ein zentraler Handler statt verstreuter contextmenu-Listener: Elemente markieren sich
+// mit data-ctx="<bereich>" (und meist data-id="..."), ContextMenu.providers liefert dazu
+// die Einträge. Jede Aktion muss auch anderswo erreichbar sein (siehe DESIGN.md).
+const ContextMenu = { providers: {} };
+
+ContextMenu.providers.ticket = async (el) => {
+    const id = el.dataset.id;
+    const tickets = await Store.getTickets();
+    const t = tickets.find(x => x.id === id);
+    if (!t || t.archived) return null;
+    const user = await Store.currentUser();
+    const pendingApproval = (t.approvals || []).some(a => a.status === 'pending');
+    const statusOptions = ['Neu', 'In Bearbeitung', 'Warten auf Benutzer', 'Geschlossen'];
+    const prioOptions = ['Niedrig', 'Normal', 'Hoch', 'Kritisch'];
+    const copy = async (text, label) => {
+        try { await navigator.clipboard.writeText(text); UI.toast(`${label} kopiert.`); }
+        catch { UI.toast('Kopieren nicht möglich.'); }
+    };
+    const setStatus = async (status) => {
+        if (status === 'Warten auf Benutzer') {
+            const choice = await AdminBoard.chooseWaitingStatus();
+            if (!choice) return;
+            await AdminBoard.changeStatus(t.id, choice.status, choice.message);
+        } else {
+            await AdminBoard.changeStatus(t.id, status);
+        }
+        await AdminBoard.render();
+    };
+    return [
+        { label: 'Öffnen', icon: 'external-link', shortcut: 'Enter', run: () => AdminBoard.openModal(t.id) },
+        { separator: true },
+        {
+            label: 'Status', icon: 'circle-dot',
+            disabled: pendingApproval, title: pendingApproval ? 'Wartet noch auf Genehmigung' : undefined,
+            submenu: statusOptions.map(s => ({ label: Lang.status(s), disabled: t.status === s, run: () => setStatus(s) }))
+        },
+        {
+            label: 'Priorität', icon: 'flag',
+            submenu: prioOptions.map(p => ({
+                label: p, disabled: t.prio === p,
+                run: async () => {
+                    const all = await Store.getTickets();
+                    const ticket = all.find(x => x.id === t.id);
+                    if (!ticket) return;
+                    ticket.prio = p;
+                    await Store.addLog(ticket, 'Priorität geändert', p);
+                    await Store.saveTickets(all);
+                    await AdminBoard.render();
+                }
+            }))
+        },
+        {
+            label: 'Mir zuweisen', icon: 'user-check', disabled: (t.assignees || []).includes(user?.username),
+            run: async () => {
+                const all = await Store.getTickets();
+                const ticket = all.find(x => x.id === t.id);
+                if (!ticket || !user) return;
+                ticket.owner = user.username;
+                ticket.assignees = [...new Set([...(ticket.assignees || []), user.username])];
+                await Store.addLog(ticket, 'Zugewiesen an sich selbst');
+                await Store.saveTickets(all);
+                await AdminBoard.render();
+            }
+        },
+        {
+            label: 'Genehmigung anfordern', icon: 'badge-check',
+            disabled: pendingApproval, title: pendingApproval ? 'Es läuft bereits eine Genehmigung' : undefined,
+            run: () => AdminBoard.requestApproval(t)
+        },
+        { separator: true },
+        { label: 'Ticketnummer kopieren', icon: 'copy', run: () => copy(t.ticketNumber || t.id, 'Ticketnummer') },
+        { label: 'Drucken / PDF', icon: 'printer', run: () => AdminBoard.printTicket(t.id) },
+        { separator: true },
+        { label: 'Archivieren', icon: 'archive', danger: true, run: () => UI.confirm(`Ticket "${t.ticketNumber || t.id}" archivieren?`, async () => {
+            const all = await Store.getTickets();
+            const ticket = all.find(x => x.id === t.id);
+            if (!ticket) return;
+            ticket.archived = true;
+            ticket.archivedAt = Utils.nowISO();
+            await Store.addLog(ticket, 'Archiviert (Kontextmenü)');
+            await Store.saveTickets(all);
+            UI.toast('Ticket archiviert.');
+            await AdminBoard.render();
+        }) }
+    ];
+};
+
+document.addEventListener('contextmenu', (e) => {
+    if (e.shiftKey) return; // Shift+Rechtsklick erzwingt weiterhin das native Menü
+
+    // Ausnahme von der Regel "kein eigenes Menü in Textfeldern": Rechtsklick auf eine
+    // eingefügte Tabelle im Rich-Text-Editor darf sie erneut bearbeiten/löschen lassen.
+    const table = e.target.closest('.rich-editor table');
+    if (table) {
+        e.preventDefault();
+        const area = table.closest('.rich-editor');
+        UI.contextMenu([
+            { label: 'Tabelle bearbeiten', icon: 'table', run: () => insertMarkdownTable(area, table) },
+            { separator: true },
+            { label: 'Tabelle löschen', icon: 'trash-2', danger: true, run: () => UI.confirm('Diese Tabelle löschen?', () => {
+                table.remove();
+                area.dispatchEvent(new Event('input', { bubbles: true }));
+            }) }
+        ], e.clientX, e.clientY);
+        return;
+    }
+
+    if (e.target.closest('input, textarea, [contenteditable], a')) return;
+    if (window.getSelection()?.toString()) return;
+    const target = e.target.closest('[data-ctx]');
+    if (!target) return;
+    const provider = ContextMenu.providers[target.dataset.ctx];
+    if (!provider) return;
+    e.preventDefault();
+    Promise.resolve(provider(target)).then(items => {
+        if (items?.length) UI.contextMenu(items, e.clientX, e.clientY);
+    });
+});
 
 // --- Main Init ---
 // --- Main Init ---

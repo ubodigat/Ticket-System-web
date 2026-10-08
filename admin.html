@@ -183,6 +183,19 @@
                             </div>
                         </div>
 
+                        <div id="m-approval-pending" class="waiting-request" hidden>
+                            <strong><i data-lucide="hourglass"></i> Wartet auf Genehmigung</strong>
+                            <p id="m-approval-pending-text"></p>
+                            <div class="aa-actions" id="m-approval-actions" hidden>
+                                <button type="button" class="btn-primary btn-sm" id="m-approval-yes"><i data-lucide="check"></i>Freigeben</button>
+                                <button type="button" class="btn-secondary btn-sm btn-danger" id="m-approval-no"><i data-lucide="x"></i>Ablehnen</button>
+                            </div>
+                        </div>
+                        <div id="m-approval-rejected" class="waiting-request is-danger" hidden>
+                            <strong><i data-lucide="circle-x"></i> Genehmigung abgelehnt</strong>
+                            <p id="m-approval-rejected-text"></p>
+                        </div>
+
                         <h4 class="section-title">Beschreibung</h4>
                         <p id="m-desc" class="desc-text"></p>
                         <div id="m-custom-fields-display" class="custom-fields-display" hidden></div>

@@ -593,6 +593,85 @@ body[data-guard="admin"] .topbar {
 }
 
 /* Zwischenüberschrift innerhalb von Karten und Modals */
+/* Kontextmenü (Rechtsklick) – ein Bauteil für alle Menüs im Stil der aufklappenden Listen */
+.context-menu {
+    position: fixed;
+    z-index: var(--z-dropdown);
+    min-width: 220px;
+    max-width: 280px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg2);
+    box-shadow: var(--shadow-float);
+}
+
+.context-menu.is-sub {
+    position: fixed;
+    min-width: 200px;
+}
+
+.context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: 36px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    text-align: left;
+    font-size: var(--fs-sm);
+    cursor: pointer;
+}
+
+.context-menu-item:hover:not(.is-disabled) {
+    background: var(--hover-bg);
+}
+
+.context-menu-item.is-disabled {
+    color: var(--text-sec);
+    cursor: not-allowed;
+}
+
+.context-menu-item.is-danger {
+    color: var(--danger);
+}
+
+.context-menu-icon-slot {
+    width: 15px;
+}
+
+.context-menu-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.context-menu-shortcut {
+    color: var(--text-sec);
+    font-size: var(--fs-xs);
+}
+
+.context-menu-sep {
+    height: 1px;
+    margin: 4px 2px;
+    background: var(--border);
+}
+
+/* @Erwähnung in internen Notizen: Name statt Benutzername, deutlich hervorgehoben */
+.mention {
+    font-weight: 700;
+    color: var(--primary-solid);
+    background: var(--sel-bg);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+}
+
 .table-builder-toolbar {
     display: flex;
     gap: var(--space-2);
@@ -651,6 +730,73 @@ body[data-guard="admin"] .topbar {
     white-space: nowrap;
     text-align: center;
     background: transparent;
+}
+
+/* Contenteditable-Editor der Wissensdatenbank: wird wie ein Textfeld, aber mit echten Elementen
+   (Fett, Listen, Tabellen) statt roher Markdown-Zeichen bearbeitet ("wie in Word"). */
+.rich-editor {
+    min-height: 140px;
+    max-height: 360px;
+    overflow-y: auto;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--field-bg);
+    color: var(--text);
+    font: inherit;
+    line-height: 1.5;
+}
+
+.rich-editor:focus {
+    outline: 2px solid var(--primary-solid);
+    outline-offset: -2px;
+}
+
+.rich-editor:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-sec);
+    pointer-events: none;
+}
+
+.rich-editor ul,
+.rich-editor ol,
+.rich-content ul,
+.rich-content ol {
+    padding-left: 22px;
+    margin: 6px 0;
+}
+
+.rich-editor p,
+.rich-content p {
+    margin: 0 0 8px;
+}
+
+.rich-editor table,
+.rich-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0;
+    font-size: var(--fs-sm);
+}
+
+.rich-editor table th,
+.rich-editor table td,
+.rich-content table th,
+.rich-content table td {
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    text-align: left;
+}
+
+.rich-editor table th,
+.rich-content table th {
+    background: var(--card-hover);
+}
+
+.rich-editor a,
+.rich-content a {
+    color: var(--primary-solid);
+    text-decoration: underline;
 }
 
 .kb-editor {
@@ -1153,9 +1299,12 @@ option {
     z-index: 1;
     width: 100%;
     margin-bottom: 6px;
+    /* Deckend statt des durchscheinenden Feld-Hintergrunds, sonst schimmern beim Scrollen
+       Zeilen durch die fixierte Suchzeile (siehe .multi-select-dropdown, gleicher Ton) */
+    background: var(--bg2);
 }
 
-.multi-select-container.open .multi-select-dropdown {
+.multi-select-dropdown.open {
     opacity: 1;
     transform: translateY(0);
     visibility: visible;
@@ -1359,13 +1508,19 @@ option {
 
 .custom-field-row {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+    flex-direction: column;
     gap: var(--space-2);
     padding: var(--space-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-control);
     background: var(--field-bg);
+}
+
+.custom-field-row-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
 }
 
 .custom-field-row .cf-label {
@@ -1378,11 +1533,6 @@ option {
     min-width: 0;
 }
 
-.custom-field-row .cf-options {
-    flex: 1 1 160px;
-    min-width: 0;
-}
-
 .custom-field-row .check-row.compact {
     flex: 0 0 auto;
 }
@@ -1390,6 +1540,30 @@ option {
 .custom-field-row .cf-remove {
     flex: 0 0 auto;
     margin-left: auto;
+}
+
+.cf-options-editor {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-top: 1px solid var(--border);
+}
+
+.cf-options-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.cf-option-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.cf-option-row .cf-option-input {
+    flex: 1 1 auto;
 }
 
 /* Dynamisch eingeblendete eigene Felder im Ticket-Erstellen-Formular */
@@ -1876,6 +2050,7 @@ button:disabled {
 .t-incident-badge,
 .sla-mini-badge,
 .archive-badge,
+.approval-badge,
 .group-chip,
 .history-badge,
 .assignee-badge,
@@ -1900,7 +2075,13 @@ button:disabled {
     text-overflow: ellipsis;
 }
 
-:is(.badge, .status-badge, .prio-pill, .t-tag, .t-category, .t-team, .t-incident-badge, .sla-mini-badge, .archive-badge, .group-chip, .history-badge, .assignee-badge, .chat-count, .count) svg {
+.approval-badge {
+    border-color: rgba(var(--warning-rgb), 0.4);
+    background: rgba(var(--warning-rgb), 0.12);
+    color: var(--warning);
+}
+
+:is(.badge, .status-badge, .prio-pill, .t-tag, .t-category, .t-team, .t-incident-badge, .sla-mini-badge, .archive-badge, .approval-badge, .group-chip, .history-badge, .assignee-badge, .chat-count, .count) svg {
     width: 12px !important;
     height: 12px !important;
     margin: 0 !important;
@@ -1985,6 +2166,30 @@ button:disabled {
 }
 
 .file-chip>span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Anhang-Name innerhalb eines Chips anklickbar machen, um eine Vorschau vor dem Speichern zu öffnen */
+.file-chip-preview {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+    border: 0;
+    background: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.file-chip-preview:hover span {
+    text-decoration: underline;
+}
+
+.file-chip-preview>span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2452,16 +2657,37 @@ button:disabled {
 }
 
 .waiting-request strong {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     margin-bottom: var(--space-1);
     color: var(--warning);
 }
 
+.waiting-request strong svg {
+    width: 15px;
+    height: 15px;
+}
+
+.waiting-request .aa-actions {
+    margin-top: var(--space-2);
+}
+
 .waiting-request p {
-    margin: 0;
+    margin: 0 0 var(--space-2);
     color: var(--text);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+.waiting-request.is-danger:not([hidden]) {
+    border-color: rgba(var(--danger-rgb), 0.4);
+    border-left-color: var(--danger);
+    background: rgba(var(--danger-rgb), 0.1);
+}
+
+.waiting-request.is-danger strong {
+    color: var(--danger);
 }
 
 #waiting-user-message-field[hidden] {
@@ -3064,6 +3290,17 @@ button:disabled {
 
 .ticket-card.card-v2.card-tone-critical {
     border-left: 3px solid #f97316;
+}
+
+.ticket-card.card-v2.card-tone-approval {
+    border-left: 3px solid var(--warning);
+}
+
+.card-deadline.approval-badge {
+    height: auto;
+    border: 0;
+    background: none;
+    padding: 0;
 }
 
 .card-v2 .card-line {
@@ -4011,9 +4248,9 @@ button:disabled {
     font-size: var(--fs-sm);
 }
 
-.substitute-list li.is-check::before {
-    content: '☐';
+.substitute-list li.is-check svg {
     color: var(--text-sec);
+    flex-shrink: 0;
 }
 
 .substitute-ticket {
@@ -4820,22 +5057,34 @@ button:disabled {
 
 .incident-linked-row {
     width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1.5fr) minmax(100px, 0.8fr) minmax(90px, 0.6fr);
-    gap: var(--space-2);
+    display: flex;
     align-items: center;
-    padding: 10px 12px;
+    gap: var(--space-2);
+    padding: 6px 6px 6px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius-control);
     background: var(--field-bg);
     color: var(--text);
-    text-align: left;
-    cursor: pointer;
 }
 
 .incident-linked-row:hover {
     background: var(--hover-bg);
     border-color: var(--hover-border);
+}
+
+.incident-linked-open {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(100px, 0.8fr) minmax(90px, 0.6fr);
+    gap: var(--space-2);
+    align-items: center;
+    padding: 4px 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
 }
 
 .incident-linked-row span {
@@ -4847,6 +5096,10 @@ button:disabled {
 
 .incident-linked-row strong {
     margin-right: var(--space-2);
+}
+
+.incident-linked-unlink {
+    flex: 0 0 auto;
 }
 
 

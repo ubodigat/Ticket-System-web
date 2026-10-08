@@ -117,6 +117,15 @@
                         <strong>Wir benötigen noch folgende Angaben</strong>
                         <p id="u-waiting-message"></p>
                     </div>
+                    <div id="u-approval-pending" class="waiting-request" hidden>
+                        <strong><i data-lucide="hourglass"></i> Wartet auf Genehmigung</strong>
+                        <p id="u-approval-pending-text"></p>
+                    </div>
+                    <div id="u-approval-rejected" class="waiting-request is-danger" hidden>
+                        <strong>Anfrage abgelehnt</strong>
+                        <p id="u-approval-rejected-text"></p>
+                        <button type="button" class="btn-secondary btn-sm" id="u-approval-reuse">Als neue Anfrage übernehmen</button>
+                    </div>
                     <h4 class="section-title">Beschreibung</h4>
                     <p id="u-m-desc" class="desc-text"></p>
                     <div id="u-m-incident" class="incident-notice" hidden></div>
