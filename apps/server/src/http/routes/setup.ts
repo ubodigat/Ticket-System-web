@@ -177,8 +177,6 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
     if (!row?.setup_completed_at) {
       return reply.redirect('/setup', 302);
     }
-    return reply
-      .type('text/plain; charset=utf-8')
-      .send('Einrichtung abgeschlossen. Login folgt in einer späteren Ausbaustufe.');
+    return reply.redirect('/app', 302);
   });
 }

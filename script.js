@@ -817,34 +817,115 @@ const Store = {
         });
         db.close();
     },
-    getUsers: async () => {
-        const stored = await Store.readRecord('users', null);
-        if (stored) return stored;
-        const legacy = Utils.read('users', null);
-        if (legacy) {
-            await Store.writeRecord('users', legacy);
-            localStorage.removeItem('users');
+    serverKeys: new Set(['users', 'app_settings', 'user_groups', 'list_views', 'tickets', 'account_requests', 'global_logs', 'notifications']),
+    readServer: async (key, fallback) => {
+        if (!Store.serverKeys.has(key) || !location.protocol.startsWith('http')) return fallback;
+        try {
+            const res = await fetch(`/api/v1/legacy-data/${encodeURIComponent(key)}`, {
+                credentials: 'same-origin'
+            });
+            if (!res.ok) return fallback;
+            const payload = await res.json();
+            return payload.value ?? fallback;
+        } catch {
+            return fallback;
+        }
+    },
+    writeServer: async (key, value) => {
+        if (!Store.serverKeys.has(key) || !location.protocol.startsWith('http')) return false;
+        try {
+            const res = await fetch(`/api/v1/legacy-data/${encodeURIComponent(key)}`, {
+                method: 'PUT',
+                credentials: 'same-origin',
+                headers: {
+                    'content-type': 'application/json'
+                },
+                body: JSON.stringify({ value })
+            });
+            return res.ok;
+        } catch {
+            return false;
+        }
+    },
+    readPersistent: async (key, fallback) => {
+        const serverValue = await Store.readServer(key, undefined);
+        if (serverValue !== undefined) return serverValue;
+        if (key === 'users' || key === 'app_settings') {
+            const stored = await Store.readRecord(key, null);
+            if (stored) return stored;
+        }
+        const legacy = Utils.read(key, null);
+        if (legacy !== null) {
+            if (await Store.writeServer(key, legacy)) {
+                localStorage.removeItem(key);
+            } else if (key === 'users' || key === 'app_settings') {
+                await Store.writeRecord(key, legacy);
+                localStorage.removeItem(key);
+            }
             return legacy;
         }
-        return [];
+        return fallback;
+    },
+    writePersistent: async (key, value) => {
+        if (await Store.writeServer(key, value)) return true;
+        if (key === 'users' || key === 'app_settings') {
+            await Store.writeRecord(key, value);
+            return true;
+        }
+        return Utils.write(key, value);
+    },
+    fetchSessionUser: async () => {
+        if (!location.protocol.startsWith('http')) return null;
+        try {
+            const res = await fetch('/api/v1/auth/me', {
+                credentials: 'same-origin'
+            });
+            if (!res.ok) return null;
+            const payload = await res.json();
+            return payload.user || null;
+        } catch {
+            return null;
+        }
+    },
+    syncingSessionUser: false,
+    syncSessionUser: async (user) => {
+        if (!user || Store.syncingSessionUser) return;
+        Store.syncingSessionUser = true;
+        try {
+            const users = await Store.readPersistent('users', []);
+            const idx = users.findIndex(x => x.username === user.username);
+            const merged = { ...(idx > -1 ? users[idx] : {}), ...user };
+            if (idx > -1) users[idx] = merged;
+            else users.push(merged);
+            await Store.writePersistent('users', users);
+        } finally {
+            Store.syncingSessionUser = false;
+        }
+    },
+    getUsers: async () => {
+        return Store.readPersistent('users', []);
     },
     saveUsers: async (users) => {
         const before = await Store.getUsers();
-        await Store.writeRecord('users', users);
+        await Store.writePersistent('users', users);
         await LogDiff.users(before, users);
     },
-    getGroups: async () => Promise.resolve(Utils.read('user_groups', [])),
+    getGroups: async () => Store.readPersistent('user_groups', []),
     saveGroups: async (groups) => {
-        const before = Utils.read('user_groups', []);
-        const result = Utils.write('user_groups', groups);
+        const before = await Store.getGroups();
+        const result = await Store.writePersistent('user_groups', groups);
         await LogDiff.groups(before, groups);
         return result;
     },
-    getListViews: async () => Promise.resolve(Utils.read('list_views', [])),
-    saveListViews: async (views) => Promise.resolve(Utils.write('list_views', views)),
-    getTickets: async () => Promise.resolve(Utils.read('tickets', [])),
+    getListViews: async () => Store.readPersistent('list_views', []),
+    saveListViews: async (views) => Store.writePersistent('list_views', views),
+    getTickets: async () => Store.readPersistent('tickets', []),
     saveTickets: async (tickets) => {
-        const before = Utils.read('tickets', []);
+        const before = await Store.getTickets();
+        if (await Store.writePersistent('tickets', tickets)) {
+            await LogDiff.tickets(before, tickets);
+            return;
+        }
         try {
             Utils.write('tickets', tickets);
         } catch (e) {
@@ -862,33 +943,47 @@ const Store = {
         }
         await LogDiff.tickets(before, tickets);
     },
-    getRequests: async () => Promise.resolve(Utils.read('account_requests', [])),
+    getRequests: async () => Store.readPersistent('account_requests', []),
     saveRequests: async (reqs) => {
-        const before = Utils.read('account_requests', []);
-        const result = Utils.write('account_requests', reqs);
+        const before = await Store.getRequests();
+        const result = await Store.writePersistent('account_requests', reqs);
         await LogDiff.requests(before, reqs);
         return result;
     },
     getSettings: async () => {
-        const stored = await Store.readRecord('app_settings', null);
-        if (stored) return stored;
-        const legacy = Utils.read('app_settings', null);
-        if (legacy) {
-            await Store.writeRecord('app_settings', legacy);
-            localStorage.removeItem('app_settings');
-            return legacy;
+        const loadedSettings = await Store.readPersistent('app_settings', Settings.defaults);
+        const settings = typeof structuredClone === 'function' ? structuredClone(loadedSettings) : JSON.parse(JSON.stringify(loadedSettings));
+        if (location.protocol.startsWith('http')) {
+            try {
+                const res = await fetch('/api/v1/public-settings', {
+                    credentials: 'same-origin'
+                });
+                if (res.ok) {
+                    const setup = await res.json();
+                    settings.generalConfig = {
+                        ...(settings.generalConfig || {}),
+                        portalName: settings.generalConfig?.portalName || setup.portalName || 'Support Portal'
+                    };
+                    settings.companyConfig = {
+                        ...(settings.companyConfig || {}),
+                        name: settings.companyConfig?.name || setup.companyName || ''
+                    };
+                }
+            } catch {
+                // Einstellungen bleiben auch ohne Public-Endpoint nutzbar.
+            }
         }
-        return Settings.defaults;
+        return settings;
     },
     saveSettings: async (settings) => {
         const before = await Store.getSettings();
-        await Store.writeRecord('app_settings', settings);
+        await Store.writePersistent('app_settings', settings);
         await LogDiff.settings(before, settings);
     },
-    getGlobalLogs: async () => Promise.resolve(Utils.read('global_logs', [])),
-    saveGlobalLogs: async (logs) => Promise.resolve(Utils.write('global_logs', logs)),
-    getNotifications: async () => Promise.resolve(Utils.read('notifications', [])),
-    saveNotifications: async (notifications) => Promise.resolve(Utils.write('notifications', notifications)),
+    getGlobalLogs: async () => Store.readPersistent('global_logs', []),
+    saveGlobalLogs: async (logs) => Store.writePersistent('global_logs', logs),
+    getNotifications: async () => Store.readPersistent('notifications', []),
+    saveNotifications: async (notifications) => Store.writePersistent('notifications', notifications),
 
     // Welche Benachrichtigungs-Ereignisse es gibt, für wen sie relevant sind, und wie sie heißen.
     notifTypeMeta: {
@@ -1271,6 +1366,30 @@ const Store = {
             size: fileLike.size || Math.round((data.length * 3) / 4),
             data
         };
+        if (location.protocol.startsWith('http')) {
+            try {
+                const res = await fetch(`/api/v1/attachments/${encodeURIComponent(record.id)}`, {
+                    method: 'PUT',
+                    credentials: 'same-origin',
+                    headers: {
+                        'content-type': 'application/json'
+                    },
+                    body: JSON.stringify(record)
+                });
+                if (res.ok) {
+                    const saved = await res.json();
+                    return {
+                        id: saved.id,
+                        attachmentId: saved.id,
+                        name: saved.name,
+                        type: saved.type,
+                        size: saved.size
+                    };
+                }
+            } catch {
+                // Dateimodus/Entwicklungsfallback nutzt IndexedDB.
+            }
+        }
         const db = await Store.openAttachmentDb();
         await new Promise((resolve, reject) => {
             const tx = db.transaction('files', 'readwrite');
@@ -1281,12 +1400,26 @@ const Store = {
         db.close();
         return {
             id: record.id,
+            attachmentId: record.id,
             name: record.name,
             type: record.type,
             size: record.size
         };
     },
     getAttachment: async (id) => {
+        if (location.protocol.startsWith('http')) {
+            try {
+                const res = await fetch(`/api/v1/attachments/${encodeURIComponent(id)}`, {
+                    credentials: 'same-origin'
+                });
+                if (res.ok) {
+                    const payload = await res.json();
+                    if (payload.value) return payload.value;
+                }
+            } catch {
+                // IndexedDB-Fallback fuer lokale Entwicklung.
+            }
+        }
         const db = await Store.openAttachmentDb();
         const record = await new Promise((resolve, reject) => {
             const tx = db.transaction('files', 'readonly');
@@ -1380,7 +1513,16 @@ const Store = {
 
     // Seed default data if empty
     init: async () => {
+        const serverMode = location.protocol.startsWith('http');
+        const sessionUser = await Store.fetchSessionUser();
+        if (sessionUser) {
+            localStorage.setItem('currentUser', sessionUser.username);
+            await Store.syncSessionUser(sessionUser);
+        } else if (serverMode) {
+            return;
+        }
         let users = await Store.getUsers();
+        if (!serverMode) {
         // Check for Admin and enforce password '123'
         const adminIdx = users.findIndex(u => u.username === 'admin');
         if (adminIdx === -1) {
@@ -1414,12 +1556,15 @@ const Store = {
         }
 
         await Store.saveUsers(users);
-        if (!Utils.read('user_groups', null)) {
-            Utils.write('user_groups', [{
+        } else if (sessionUser) {
+            users = await Store.getUsers();
+        }
+        if ((await Store.getGroups()).length === 0) {
+            await Store.saveGroups([{
                     id: Utils.uid(),
                     name: 'Admins',
                     description: 'Administrative Benutzer',
-                    members: ['admin']
+                    members: serverMode && sessionUser ? [sessionUser.username] : ['admin']
                 },
                 {
                     id: Utils.uid(),
@@ -1435,8 +1580,8 @@ const Store = {
                 }
             ]);
         }
-        if (!Utils.read('tickets', null)) Utils.write('tickets', []);
-        if (!Utils.read('account_requests', null)) Utils.write('account_requests', []);
+        if ((await Store.getTickets()).length === 0) await Store.writePersistent('tickets', []);
+        if ((await Store.getRequests()).length === 0) await Store.writePersistent('account_requests', []);
 
         // Migration: ensure 'comments', 'chat', 'archived' are set
         const tickets = await Store.getTickets();
@@ -1520,6 +1665,14 @@ const Store = {
     },
 
     currentUser: async () => {
+        if (location.protocol.startsWith('http')) {
+            const sessionUser = await Store.fetchSessionUser();
+            if (sessionUser) {
+                localStorage.setItem('currentUser', sessionUser.username);
+                await Store.syncSessionUser(sessionUser);
+                return sessionUser;
+            }
+        }
         const username = localStorage.getItem('currentUser');
         if (!username) return null;
         const users = await Store.getUsers();
@@ -1746,6 +1899,35 @@ const Auth = {
     lastError: null,
     login: async (u, p) => {
         Auth.lastError = null;
+        if (location.protocol.startsWith('http')) {
+            try {
+                const res = await fetch('/api/v1/auth/login', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'content-type': 'application/json'
+                    },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (res.ok && payload.user) {
+                    localStorage.setItem('currentUser', payload.user.username);
+                    const users = await Store.getUsers();
+                    const idx = users.findIndex(x => x.username === payload.user.username);
+                    const merged = { ...(idx > -1 ? users[idx] : {}), ...payload.user };
+                    if (idx > -1) users[idx] = merged;
+                    else users.push(merged);
+                    await Store.saveUsers(users);
+                    await Store.addGlobalLog('Anmeldung erfolgreich', `Benutzer: ${payload.user.name || payload.user.username}`);
+                    return merged;
+                }
+                Auth.lastError = payload.detail || 'invalid';
+                await Store.addGlobalLog('Anmeldung fehlgeschlagen', `Benutzerversuch: ${u}`);
+                return null;
+            } catch {
+                // Dateimodus oder noch nicht gestarteter Server faellt auf den alten lokalen Login zurueck.
+            }
+        }
         const users = await Store.getUsers();
         const candidate = users.find(x => x.username === u);
         if (candidate?.accountArchived) {
@@ -1800,15 +1982,23 @@ const Auth = {
     },
     logout: async () => {
         await Store.addGlobalLog('Abmeldung');
+        try {
+            await fetch('/api/v1/auth/logout', {
+                method: 'POST',
+                credentials: 'same-origin'
+            });
+        } catch {
+            // Ignorieren: lokale Abmeldung trotzdem ausfuehren.
+        }
         localStorage.removeItem('currentUser');
-        window.location.href = 'index.html';
+        window.location.href = location.protocol.startsWith('http') ? '/login' : 'index.html';
     },
     checkGuard: async () => {
         const user = await Store.currentUser();
         const guard = document.body.dataset.guard;
         if (!guard) return; // Public page
         if (!user) {
-            window.location.href = 'index.html';
+            window.location.href = location.protocol.startsWith('http') ? '/login' : 'index.html';
             return;
         }
         // Admin page accessible by admin AND superadmin

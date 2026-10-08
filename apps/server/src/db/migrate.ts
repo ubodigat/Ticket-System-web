@@ -6,6 +6,7 @@ import { migration_0002_key_management } from './migrations/0002_key_management.
 import { migration_0003_users_and_groups } from './migrations/0003_users_and_groups.js';
 import { migration_0004_jobs_and_rate_limit } from './migrations/0004_jobs_and_rate_limit.js';
 import { migration_0005_app_settings } from './migrations/0005_app_settings.js';
+import { migration_0006_legacy_data } from './migrations/0006_legacy_data.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -14,7 +15,8 @@ const migrations: Record<string, Migration> = {
   '0002_key_management': migration_0002_key_management,
   '0003_users_and_groups': migration_0003_users_and_groups,
   '0004_jobs_and_rate_limit': migration_0004_jobs_and_rate_limit,
-  '0005_app_settings': migration_0005_app_settings
+  '0005_app_settings': migration_0005_app_settings,
+  '0006_legacy_data': migration_0006_legacy_data
 };
 
 const provider: MigrationProvider = {

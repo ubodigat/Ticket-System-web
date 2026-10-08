@@ -103,6 +103,20 @@ export interface AppSettingsTable {
   updated_at: UpdatedAt;
 }
 
+export interface LegacyDataTable {
+  data_key: string;
+  value_json: string;
+  created_at: CreatedAt;
+  updated_at: UpdatedAt;
+}
+
+export interface LegacyAttachmentsTable {
+  id: string;
+  value_json: string;
+  created_at: CreatedAt;
+  updated_at: UpdatedAt;
+}
+
 export interface Database {
   installations: InstallationsTable;
   data_encryption_keys: DataEncryptionKeysTable;
@@ -113,4 +127,6 @@ export interface Database {
   job_dead_letter: JobDeadLetterTable;
   rate_limit_counters: RateLimitCountersTable;
   app_settings: AppSettingsTable;
+  legacy_data: LegacyDataTable;
+  legacy_attachments: LegacyAttachmentsTable;
 }

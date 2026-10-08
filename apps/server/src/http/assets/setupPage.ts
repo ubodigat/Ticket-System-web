@@ -138,7 +138,7 @@ form.addEventListener('submit', async (event) => {
       submitBtn.disabled = false;
       return;
     }
-    document.body.innerHTML = '<main class="setup-card"><h1>Fertig</h1><p class="hint">Die Einrichtung ist abgeschlossen. Der Login folgt in einer späteren Ausbaustufe.</p></main>';
+    window.location.href = '/login';
   } catch (err) {
     errorBox.textContent = 'Verbindung zum Server fehlgeschlagen.';
     errorBox.hidden = false;

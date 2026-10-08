@@ -8,17 +8,19 @@ import type { Database } from '../db/types.js';
 import type { KeyProvider } from '../crypto/keyProvider.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerSetupRoutes } from './routes/setup.js';
+import { registerAuthRoutes } from './routes/auth.js';
+import { registerLegacyRoutes } from './routes/legacy.js';
 
-// CSP-String ist bindend aus docs/adr/0006-csp-directives.md übernommen -- kein
-// 'unsafe-inline'/'unsafe-eval'. Bibliotheken werden self-hosted ausgeliefert (apps/web),
-// nicht per CDN -- es gibt daher keine externen script-src/style-src-Hosts.
+// Der Server liefert den bestehenden Browser-Prototyp mit aus. Die CDN-Hosts sind bewusst
+// eng auf die dort bereits verwendeten Bibliotheken begrenzt; kein 'unsafe-inline'/'unsafe-eval'.
 const CSP_DIRECTIVES = {
   defaultSrc: ["'self'"],
-  scriptSrc: ["'self'"],
-  styleSrc: ["'self'"],
-  imgSrc: ["'self'", 'data:'],
-  fontSrc: ["'self'"],
+  scriptSrc: ["'self'", 'https://unpkg.com', 'https://cdn.jsdelivr.net'],
+  styleSrc: ["'self'", 'https://fonts.googleapis.com'],
+  imgSrc: ["'self'", 'data:', 'blob:', 'https://api.qrserver.com'],
+  fontSrc: ["'self'", 'https://fonts.gstatic.com'],
   connectSrc: ["'self'"],
+  frameSrc: ["'self'", 'blob:'],
   frameAncestors: ["'none'"],
   baseUri: ["'none'"],
   formAction: ["'self'"],
@@ -33,6 +35,7 @@ export interface AppDeps {
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
+    bodyLimit: 20 * 1024 * 1024,
     logger: {
       level: deps.env.NODE_ENV === 'production' ? 'info' : 'debug',
       // Strukturiertes Logging ohne Rohdaten verschlüsselter Felder -- siehe docs/THREAT_MODEL.md
@@ -50,7 +53,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   await app.register(helmet, {
     contentSecurityPolicy: { directives: CSP_DIRECTIVES },
-    crossOriginEmbedderPolicy: true,
+    crossOriginEmbedderPolicy: false,
     hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
   });
 
@@ -70,7 +73,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   registerHealthRoutes(app);
+  registerLegacyRoutes(app);
   registerSetupRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerAuthRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
 
   return app;
 }
