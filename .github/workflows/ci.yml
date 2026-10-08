@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck --workspace=apps/server
+
+      - name: Unit tests
+        run: npm run test --workspace=apps/server
+
+      - name: Build
+        run: npm run build --workspace=apps/server
+
+      - name: Dependency audit (keine bekannten Schwachstellen, docs/THREAT_MODEL.md §7)
+        run: npm audit --audit-level=high

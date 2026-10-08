@@ -1,0 +1,20 @@
+{
+	# Produktions-Admin-API nicht exponiert; email für ACME wird von install.sh eingetragen.
+	email {$ACME_EMAIL:admin@example.invalid}
+}
+
+{$PUBLIC_DOMAIN:localhost} {
+	encode gzip
+
+	# /health ist nur für den internen Docker-Healthcheck/Monitoring gedacht, nicht für die
+	# allgemeine Öffentlichkeit -- docs/ARCHITECTURE.md §2. Hier dennoch über denselben Origin
+	# erreichbar, da kein separates Management-Netz in v1.0 vorgesehen ist; Zugriff kann über
+	# ein vorgelagertes Firewall-/IP-Allowlist-Regelwerk weiter eingeschränkt werden.
+	reverse_proxy app:3000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+}

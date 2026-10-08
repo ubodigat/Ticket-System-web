@@ -1,0 +1,20 @@
+{
+  "name": "ticket-system-web",
+  "private": true,
+  "version": "0.1.0-phase1",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=apps/server",
+    "dev": "npm run dev --workspace=apps/server",
+    "start": "npm run start --workspace=apps/server",
+    "migrate": "npm run migrate --workspace=apps/server",
+    "test": "npm run test --workspace=apps/server",
+    "typecheck": "npm run typecheck --workspace=apps/server",
+    "lint": "npm run lint --workspace=apps/server"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

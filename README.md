@@ -1,85 +1,209 @@
 # Support Portal – Ticketsystem
 
-Ein schlankes Helpdesk- und Ticketsystem, das komplett im Browser läuft – ohne Server, ohne Build-Schritt, ohne Installation. Benutzer erstellen Tickets und chatten mit dem Support; Admins bearbeiten sie auf einem Kanban-Board, verteilen Zuständigkeiten und verwalten Benutzer, Gruppen und Kategorien.
+Ein Helpdesk- und Ticketsystem, das gerade von einem reinen Browser-Prototyp (alles im
+`localStorage`, kein Backend) zu einer selbst-gehosteten Server-Anwendung mit MariaDB,
+serverseitiger Verschlüsselung und echter Rechteprüfung umgebaut wird.
 
-> **Status:** Prototyp / Demo. Alle Daten liegen im `localStorage` des jeweiligen Browsers. Für den produktiven Einsatz fehlen ein Backend, eine echte Authentifizierung und E-Mail-Versand – siehe [Grenzen und Sicherheit](#grenzen-und-sicherheit).
+> **Status:** Aktiver Umbau, **Phase 1 von mehreren** (Grundgerüst). Es gibt zwei getrennte
+> Dinge in diesem Repository:
+> 1. **Den alten Frontend-Prototyp** (`index.html`, `dashboard.html`, `admin.html`,
+>    `script.js`, `style.css`) – läuft weiterhin eigenständig im Browser, siehe
+>    [Alter Frontend-Prototyp](#alter-frontend-prototyp-eigenständige-demo).
+> 2. **Den neuen Server** (`apps/server/`) – noch ohne Login, Tickets oder Chat. Aktuell
+>    funktionieren nur die Installation, die Datenbankanbindung und der einmalige
+>    Einrichtungsassistent. Siehe [Neuer Server](#neuer-server-apps-server).
+>
+> Die beiden Teile sind **noch nicht verbunden**. Das alte Frontend spricht nicht mit dem
+> neuen Server; der neue Server liefert noch keine eigene Benutzeroberfläche außer dem
+> Einrichtungsassistenten.
 
 ---
 
 ## Inhalt
 
-- [Funktionen](#funktionen)
-- [Schnellstart](#schnellstart)
-- [Rollen und Rechte](#rollen-und-rechte)
-- [Projektstruktur](#projektstruktur)
-- [Architektur](#architektur)
-- [Datenmodell](#datenmodell)
-- [Anpassung](#anpassung)
-- [Grenzen und Sicherheit](#grenzen-und-sicherheit)
+- [Neuer Server (`apps/server`)](#neuer-server-apps-server)
+  - [Installation mit einem Befehl](#installation-mit-einem-befehl)
+  - [Was die Installation einrichtet](#was-die-installation-einrichtet)
+  - [Einrichtungsassistent](#einrichtungsassistent)
+  - [Sicherheitsmaßnahmen (aktueller Stand)](#sicherheitsmaßnahmen-aktueller-stand)
+  - [Projektstruktur des Servers](#projektstruktur-des-servers)
+  - [Entwicklung ohne Docker](#entwicklung-ohne-docker)
+  - [Was noch fehlt](#was-noch-fehlt-ehrlich-gesagt)
+- [Alter Frontend-Prototyp (eigenständige Demo)](#alter-frontend-prototyp-eigenständige-demo)
 - [Mitwirken](#mitwirken)
 - [Lizenz](#lizenz)
 
 ---
 
-## Funktionen
+## Neuer Server (`apps/server`)
 
-### Für Benutzer (`dashboard.html`)
-- Tickets mit Betreff, Beschreibung, Priorität und einer oder mehreren Kategorien erstellen
-- Bereits beim Erstellen mehrere Dateianhänge hinzufügen
-- Priorität auf **Niedrig**, **Normal** oder **Hoch** beschränkt; Ticketnummer und Status in der Liste sehen
-- Eigene Tickets als Liste mit Status, Datum und Priorität; geschlossene und archivierte Tickets einblendbar
-- Bei einer aktiven Großstörung wird beim Absenden gefragt, ob das Ticket dazugehört (nur wenn es eine Störung gibt)
-- Eigenes Konto in den Einstellungen: Name, E-Mail und Abteilung – nur die Felder, die der Superadmin freigegeben hat, sind änderbar; die übrigen werden angezeigt, aber gesperrt
-- Nach mehreren falschen Passwörtern kann das Konto gesperrt oder vorübergehend gesperrt werden; gesperrte oder archivierte Konten können sich nicht anmelden
-- Chat mit dem Support inklusive Formatierung, sicheren Links, bearbeitbaren eigenen Nachrichten und Dateianhängen
-- Benachrichtigungen bei Statusänderungen und neuen Chatnachrichten; Vorschau für PDF, Bilder, Text/CSV/JSON, Audio/Video sowie DOCX-, XLSX- und PPTX-Inhalte
-- Persönliche Einstellungen: helles/dunkles Theme, Akzentfarbe, Sprache (Deutsch/Englisch), Hintergrund (animiert, Verlauf oder eigenes Bild)
-- Zwei-Faktor-Authentifizierung (TOTP, z. B. Google Authenticator) selbst einrichten
+Node.js 24 + TypeScript (strict) + Fastify + MariaDB 12.3, angebunden über den typisierten
+Query-Builder Kysely (kein roher SQL-String). Ziel: eine einzige Vertrauenszone (der Server),
+die alle Geschäftslogik, Authentifizierung und Verschlüsselung übernimmt – der Browser wird
+nicht mehr vertraut.
 
-### Für Admins (`admin.html`)
-- **Kanban-Board** mit den Spalten *Neu*, *In Bearbeitung*, *Wartet* und *Geschlossen* – Tickets per Drag & Drop verschieben. Kartenaufbau: Metazeile, Titel, Frist mit Priorität, Verantwortlicher; Überfällige Tickets rot, Kritische orange und Großstörungen lila am linken Rand
-- Oben Banner für **Konto-Anfragen** und **Überfällige Tickets** sowie die Schaltflächen *Neues Ticket* und *Störung erstellen* – in Board- und Listenansicht gleich
-- **Großstörungen**: Eine Störung erscheint als eigenes Ticket mit Anzahl der zugeordneten Tickets. Verknüpfte Tickets stehen nur in der Störung, übernehmen deren Status automatisch und lassen sich per Drag & Drop oder über „Einer Störung zuordnen“ hinzufügen. Die Suche nach einer Ticketnummer in einer Störung zeigt die Störung.
-- Suche nach Ticketnummer, Titel, Beschreibung, Benutzer und Ticketinhalt; eindeutige lesbare Ticketnummern
-- **Frist** und **Abwesenheitszeitraum**: Datum tippen mit automatischer Formatierung (`TT.MM.JJJJ`), Uhrzeit (`hh:mm`), zusätzlich Kalender-Icon. Die Liste der überfälligen Tickets nennt den Hauptverantwortlichen
-- **Abwesenheit und Vertretung**: Eigene Abwesenheit mit optionalem Zeitraum (automatischer Start und Ende) und wählbarer Vertretung; die Vertretung wird Hauptverantwortlicher der offenen Tickets und bekommt beim Anmelden ein Popup mit allen Tickets, Teilaufgaben und der Dauer der Abwesenheit. Beim Ende können die Tickets zurückgeholt werden. Mehrere Abwesende mit derselben Vertretung erscheinen als eigene Reiter. Abwesend-Übersicht im Kopf (nur für Personen, die ihre Abwesenheit sichtbar gemacht haben). Die Angabe zeigt Zeitraum und Sichtbarkeit (Badge in der Benutzerliste, Banner, Übersicht, Vertretungs-Popup)
-- **Archivierte Benutzer** verschwinden aus den Auswahllisten; offene Tickets archivierter Ersteller bekommen ein Entscheidungs-Popup für den Hauptverantwortlichen
-- Ticketnummernformat in den Unternehmenseinstellungen anpassbar, mit optionalen Vorlagen pro Kategorie und den Platzhaltern `{prefix}`, `{category}` und `{number}`
-- **Ticket-Detail** mit
-  - Titel, Beschreibung, Status, Priorität und Kategorien direkt bearbeiten
-  - Warte-Status für Benutzer, externe Dienstleister und interne Rückmeldungen
-  - Zuweisung an mehrere Bearbeiter, Hauptverantwortlicher und beteiligte Personen
-  - Teilaufgaben mit erledigt/gesamt-Zähler; nachträgliche Bearbeitung, Zuweisung nur an Ticketverantwortliche/Beteiligte
-  - Chat mit dem Ersteller; Admin-Nachrichten sind farblich markiert. Interne Streams (Admin-Absprachen und Lösungsweg) haben einen eigenen Reiter.
-  - Admin-Erwähnungen mit In-App-Benachrichtigungen
-  - Protokoll aller Änderungen und Ticket-Historie des Erstellers
-- **Archiv** mit Volltextsuche (Titel, Autor, Inhalt) und Reaktivierung
-- **Automatische Archivierung**: geschlossene Tickets nach 3 Tagen; höchstens 10 geschlossene Tickets bleiben auf dem Board
-- **Kontoanfragen** von der Startseite annehmen oder ablehnen
-- **Benutzerverwaltung**: Benutzer, Benutzergruppen (Auswahl mit Suche) und Kategorien anlegen und bearbeiten, sperren, entsperren, archivieren und reaktivieren, 2FA zurücksetzen, CSV-Export und -Import
-- **Kontoanfragen** mit Entsperren bzw. Reaktivieren, wenn zum Anfragenden bereits ein gesperrtes oder archiviertes Konto existiert
-- **System-Logs**: globales Protokoll mit detaillierten Einträgen für jede Änderung an Tickets, Benutzern, Gruppen, Anfragen und Einstellungen (alter und neuer Wert, betroffene Ticketnummern), mit Text- und Datum/Uhrzeitbereichssuche
-- **Benachrichtigungen**: einzelne Einträge löschen, alle als gelesen markieren oder alle eigenen Einträge gesammelt löschen
-- **Systemeinstellungen** (Superadmin): E-Mail/SMTP, Benachrichtigungen, Sicherheit (2FA-Pflicht, Fehlversuche und was danach passiert, Sperrdauer), Konto-Selbstverwaltung (welche Felder Benutzer ändern dürfen), LDAP, Outlook, allgemeine Vorgaben wie Portalname, Standardpriorität und Standardkategorien, Geschäftszeiten für Fristen
-- Superadmins sehen und ändern alle Abwesenheiten und Vertretungen in der Benutzerverwaltung
+### Installation mit einem Befehl
 
-### Startseite (`index.html`)
-- Anmeldung mit optionaler 2FA-Abfrage
-- Formular für Kontoanfragen
+Voraussetzungen auf dem Zielserver: `docker`, `docker compose` (Plugin), `openssl`.
+
+```bash
+./install.sh
+```
+
+Für eine lokale Entwicklungsumgebung ohne öffentliches TLS-Zertifikat:
+
+```bash
+./install.sh --dev
+```
+
+Am Ende gibt das Skript die erreichbare Adresse aus (z. B. `http://localhost` im `--dev`-Modus).
+Ein erneuter Aufruf ist unschädlich: vorhandene Secrets, Schlüssel und Zertifikate werden
+wiederverwendet, nicht überschrieben.
+
+### Was die Installation einrichtet
+
+1. **Secrets**: Datenbank-Passwort, Cookie-Signierschlüssel, unveränderliche Installations-ID
+   (`ops/docker/.env`, nicht versioniert).
+2. **KEK** (Schlüsselverschlüsselungsschlüssel, `ops/secrets/app.kek`): 256-Bit-Schlüssel, mit
+   dem die eigentlichen Datenschlüssel (DEKs) in der Datenbank verschlüsselt abgelegt werden –
+   liegt ausschließlich im App-Container, nie in der Datenbank, nie im Backup.
+3. **TLS-Zertifikatskette** (`ops/tls/mariadb/`) für die verschlüsselte Verbindung zwischen App
+   und MariaDB (selbstsigniert, intern).
+4. **Docker-Stack**: `mariadb` (12.3), `app` (der Fastify-Server, läuft als nicht-root-Benutzer),
+   `caddy` (Reverse Proxy, TLS-Terminierung nach außen).
+5. **Datenbankmigrationen** (siehe `apps/server/src/db/migrations/`).
+6. **Healthcheck-Wartezeit**, danach Erfolgsmeldung mit der URL.
+
+### Einrichtungsassistent
+
+Beim ersten Öffnen der ausgegebenen Adresse erscheint automatisch `/setup` – einmalig, danach
+gesperrt (ein zweiter Versuch bekommt `409 Conflict`). Abgefragt werden:
+
+- Unternehmensname und Portalname
+- Erstes Administrator-Konto: Benutzername, vollständiger Name, E-Mail, Passwort
+  (mindestens 14 Zeichen, da dieses erste Konto automatisch **Superadmin** wird)
+
+Name und E-Mail-Adresse werden dabei bereits serverseitig AES-256-GCM-verschlüsselt
+gespeichert (nicht im Klartext), das Passwort mit Argon2id gehasht. Nach erfolgreichem
+Abschluss ist das Konto angelegt – ein Login-Bildschirm dafür existiert aktuell noch nicht
+(siehe [Was noch fehlt](#was-noch-fehlt-ehrlich-gesagt)).
+
+### Sicherheitsmaßnahmen (aktueller Stand)
+
+Was heute schon **wirklich** umgesetzt ist (nicht nur geplant):
+
+- **Serverseitige Verschlüsselung ruhender Daten**: Name/E-Mail-Adresse der Benutzer sind
+  AES-256-GCM-verschlüsselt, mit einem kanonischen Zusatzdatenfeld (AAD) aus Installations-ID,
+  Schema-Version, Tabelle, Datensatz-ID, Feldname und Schlüsselversion – verhindert, dass ein
+  verschlüsselter Wert unbemerkt in ein anderes Feld/einen anderen Datensatz kopiert werden kann.
+  (**Wichtig:** Das ist serverseitige Verschlüsselung, keine Ende-zu-Ende-Verschlüsselung – der
+  Server kann und muss die Daten zur Verarbeitung entschlüsseln können, z. B. für Suche oder
+  Admin-Ansicht.)
+- **Getrennter Blind-Index-Schlüssel** für die Suche nach E-Mail-Adressen, ohne das Feld selbst
+  entschlüsseln zu müssen.
+- **Schlüsselverwaltung**: KEK nur im App-Container, Datenschlüssel (DEKs) KEK-umwickelt in der
+  Datenbank, nie im Klartext gespeichert.
+- **Argon2id** für Passwörter, keine Standardpasswörter (die Installation erzwingt die Eingabe
+  eines eigenen Admin-Passworts im Einrichtungsassistenten).
+- **TLS zur Datenbank** (selbstsignierte interne Zertifikatskette, von `install.sh` erzeugt).
+- **Strikte Content-Security-Policy** ohne `unsafe-inline`/`unsafe-eval`; keine CDN-Abhängigkeiten
+  – alle Skripte/Styles werden vom Server selbst ausgeliefert.
+- **Rate-Limiting** (global + verschärft auf dem Einrichtungs-Endpunkt gegen Brute-Force).
+- **Keine rohen SQL-Strings**: Datenbankzugriff ausschließlich über den typisierten Query-Builder
+  Kysely.
+- **Non-root-Container**: Der App-Container läuft unter einem dedizierten, unprivilegierten
+  Benutzer.
+- **Umgebungsvalidierung**: Fehlt ein Secret oder eine Konfiguration, startet der Server gar
+  nicht erst – kein unsicherer Fallback.
+
+### Projektstruktur des Servers
+
+```
+apps/server/
+├── src/
+│   ├── config/env.ts          Validierung aller Umgebungsvariablen (zod), keine Defaults für Secrets
+│   ├── crypto/
+│   │   ├── keyProvider.ts     KEK-Verwaltung (Datei-Backend), AES-256-GCM-Wrap/Unwrap der DEKs
+│   │   ├── dekService.ts      Legt Datenschlüssel je Verwendungszweck an bzw. liest sie
+│   │   └── fieldCrypto.ts     Feldverschlüsselung mit kanonischem AAD, Blind-Index-Berechnung
+│   ├── db/
+│   │   ├── connection.ts      Kysely + mysql2, TLS-fähig
+│   │   ├── migrate.ts         Migrationsrunner
+│   │   ├── migrations/        Versionierte Schemaänderungen
+│   │   └── types.ts           Typisiertes Datenbankschema
+│   ├── http/
+│   │   ├── app.ts             Fastify-Aufbau (Helmet/CSP, Cookie, Rate-Limit)
+│   │   ├── assets/setupPage.ts HTML/CSS/JS der Einrichtungsseite
+│   │   └── routes/            health.ts (/health), setup.ts (/setup, /api/v1/setup/*)
+│   └── index.ts                Einstiegspunkt
+└── test/                        Vitest (Verschlüsselung, Umgebungsvalidierung)
+
+ops/
+├── docker/
+│   ├── docker-compose.yml      MariaDB + App + Caddy
+│   ├── Dockerfile.server       Build des App-Containers (non-root)
+│   ├── Caddyfile                Reverse-Proxy-Konfiguration
+│   ├── mariadb/conf.d/tls.cnf   Erzwingt TLS auf der MariaDB-Seite
+│   └── README.md                Betriebsanleitung (Update, Logs, Diagnose)
+├── secrets/                     Von install.sh erzeugt, NICHT versioniert
+└── tls/                         Von install.sh erzeugt, NICHT versioniert
+
+install.sh                       Ein-Befehl-Installation
+```
+
+### Entwicklung ohne Docker
+
+```bash
+npm install
+cp apps/server/.env.example apps/server/.env   # falls vorhanden, sonst Variablen aus env.ts manuell setzen
+npm run typecheck --workspace=apps/server
+npm run test --workspace=apps/server
+npm run build --workspace=apps/server
+npm run dev --workspace=apps/server
+```
+
+Für den lokalen Start ohne Docker wird trotzdem eine erreichbare MariaDB-Instanz sowie eine
+KEK-Datei benötigt (siehe `apps/server/src/config/env.ts` für alle Pflichtvariablen).
+
+### Was noch fehlt (ehrlich gesagt)
+
+Noch **nicht** implementiert, auch wenn Teile davon im alten Frontend-Prototyp schon einmal
+(unsicher, clientseitig) existierten:
+
+- Login/Session für normale Benutzer (nur die Einrichtung legt ein Konto an – es gibt noch
+  keinen Login-Bildschirm im neuen Server)
+- Tickets, Chat, Kanban-Board, Benutzerverwaltung, E-Mail-Versand, LDAP, 2FA/Passkeys
+- Verbindung zwischen dem neuen Server und dem alten Frontend (`script.js` etc.)
+- Automatisierte End-to-End-Tests gegen eine echte MariaDB (bisher nur Unit-Tests für
+  Verschlüsselung/Konfiguration)
 
 ---
 
-## Schnellstart
+## Alter Frontend-Prototyp (eigenständige Demo)
 
-Es wird nur ein aktueller Browser benötigt.
+Dieser Teil ist unverändert gegenüber dem ursprünglichen Prototyp: reines HTML/CSS/JavaScript,
+läuft komplett im Browser, **ohne Verbindung zum neuen Server**. Nützlich, um die Zielfunktionen
+und das Design anzuschauen, aber **nicht produktiv einsetzen** – siehe die Sicherheitshinweise
+am Ende dieses Abschnitts.
 
-**Variante 1 – direkt öffnen**
+### Funktionen
 
-`index.html` im Browser öffnen.
+**Für Benutzer (`dashboard.html`):** Tickets mit Betreff, Beschreibung, Priorität (Niedrig/
+Normal/Hoch) und Kategorien erstellen, Dateianhänge, eigene Ticketliste mit Status/Datum/
+Priorität, Chat mit dem Support (Formatierung, Anhänge, bearbeitbare eigene Nachrichten),
+Benachrichtigungen, persönliche Einstellungen (Theme, Akzentfarbe, Sprache, Hintergrund),
+eigene 2FA-Einrichtung (TOTP).
 
-**Variante 2 – lokaler Webserver (empfohlen)**
+**Für Admins (`admin.html`):** Kanban-Board (Neu/In Bearbeitung/Wartet/Geschlossen) mit Drag &
+Drop, Großstörungen mit verknüpften Tickets, Volltextsuche, Fristen mit Geschäftszeiten-Logik,
+Abwesenheit & Vertretung mit automatischer Ticketübergabe, Archiv mit Reaktivierung,
+automatische Archivierung geschlossener Tickets, Kontoanfragen, Benutzer-/Gruppen-/
+Kategorienverwaltung mit CSV-Import/-Export, System-Logs (Vorher/Nachher-Diff je Änderung),
+Systemeinstellungen (SMTP, LDAP, Sicherheit, Geschäftszeiten, Benachrichtigungen).
 
-Ein fester Ursprung (`http://localhost:…`) sorgt dafür, dass der `localStorage` und damit alle Daten zuverlässig erhalten bleiben.
+**Startseite (`index.html`):** Anmeldung mit optionaler 2FA, Kontoanfrage-Formular.
+
+### Schnellstart
 
 ```bash
 # Node.js
@@ -89,155 +213,79 @@ npx serve .
 python -m http.server 8080
 ```
 
-Danach `http://localhost:8080` (bzw. die angezeigte Adresse) öffnen.
+Danach `http://localhost:8080` öffnen (ein fester Ursprung sorgt dafür, dass `localStorage`
+zuverlässig erhalten bleibt). Direktes Öffnen von `index.html` per Doppelklick funktioniert
+ebenfalls, ist aber weniger zuverlässig.
 
-### Demo-Zugänge
-
-Beim ersten Start werden automatisch angelegt:
+**Demo-Zugänge** (werden beim ersten Start automatisch angelegt):
 
 | Benutzer | Passwort | Rolle |
 |---|---|---|
 | `admin` | `123` | Superadmin |
 | `user` | `123` | Benutzer |
 
-Außerdem die Gruppen *Admins*, *Verwaltung* und *Support*.
+**Daten zurücksetzen:** Entwicklertools → *Application → Local Storage* → Einträge der Seite
+löschen, neu laden.
 
-**Daten zurücksetzen:** In den Entwicklertools des Browsers unter *Application → Local Storage* die Einträge der Seite löschen und neu laden.
+**Abhängigkeiten (per CDN, benötigen Internetverbindung):** [Lucide](https://lucide.dev)
+(Icons), [OTPAuth](https://github.com/hectorm/otpauth) (2FA), [Google Fonts – Poppins](https://fonts.google.com/specimen/Poppins),
+[api.qrserver.com](https://goqr.me/api/) (QR-Code für 2FA).
 
-### Abhängigkeiten (per CDN)
-
-| Bibliothek | Zweck |
-|---|---|
-| [Lucide](https://lucide.dev) | Icons |
-| [OTPAuth](https://github.com/hectorm/otpauth) | TOTP für 2FA |
-| [Google Fonts – Poppins](https://fonts.google.com/specimen/Poppins) | Schrift |
-| [api.qrserver.com](https://goqr.me/api/) | QR-Code bei der 2FA-Einrichtung |
-
-Für Icons, Schrift und 2FA ist daher eine Internetverbindung nötig.
-
----
-
-## Rollen und Rechte
+### Rollen und Rechte
 
 | Rolle | Rechte |
 |---|---|
-| **Benutzer** (`user`) | Eigene Tickets erstellen, einsehen und dazu chatten |
-| **Admin** (`admin`) | Kanban-Board und Archiv; sieht Tickets der zugeordneten Kategorien sowie direkt zugewiesene und nicht zugewiesene Tickets. Kann eigene Abwesenheit mit Vertretung einstellen. Zusätzliche Rechte einzeln vergebbar: *Kontoanfragen verwalten*, *Benutzerverwaltung (nur Benutzer)*, *System-Logs anzeigen*, *2FA von Benutzern zurücksetzen* |
-| **Superadmin** (`superadmin`) | Alle Rechte, inklusive Systemeinstellungen, Admin-Verwaltung, CSV-Import und 2FA-Reset |
+| **Benutzer** (`user`) | Eigene Tickets erstellen, einsehen, dazu chatten |
+| **Admin** (`admin`) | Kanban-Board und Archiv der zugeordneten Kategorien; einzeln vergebbare Zusatzrechte (Kontoanfragen, Benutzerverwaltung, System-Logs, 2FA-Reset) |
+| **Superadmin** (`superadmin`) | Alle Rechte, inklusive Systemeinstellungen und Admin-Verwaltung |
 
-Der Zugriff auf die Seiten wird über `data-guard` am `<body>` geprüft (`Auth.checkGuard`).
+Seitenschutz läuft über `data-guard` am `<body>` (`Auth.checkGuard`) – **nur im Browser**, siehe
+Sicherheitshinweise.
 
----
-
-## Projektstruktur
+### Projektstruktur
 
 ```
-.
-├── index.html       Startseite: Anmeldung und Kontoanfrage
-├── dashboard.html   Benutzerbereich: Tickets erstellen und verfolgen
-├── admin.html       Adminbereich: Kanban, Archiv, Ticket-Detail
-├── script.js        Gesamte Anwendungslogik
-├── style.css        Gesamtes Styling (dunkles und helles Theme)
-├── picture/         Favicon
-├── DESIGN.md        Designkonzept und UI-Richtlinien
-└── LICENSE          MIT-Lizenz
+index.html       Startseite: Anmeldung und Kontoanfrage
+dashboard.html    Benutzerbereich
+admin.html        Adminbereich
+script.js         Gesamte Anwendungslogik (Utils, Lang, TOTP, Store, Auth, UI, Settings,
+                   UserDash, AdminBoard, ScrollToTop)
+style.css          Gesamtes Styling (dunkles und helles Theme)
+picture/           Favicon
+DESIGN.md          Designkonzept und UI-Richtlinien (weiterhin bindend für beide Teile)
 ```
 
----
+Alle `Store`-Methoden sind bereits `async` – bewusst so angelegt, damit eine spätere Anbindung
+an eine echte API (also an `apps/server`) ohne Änderung der aufrufenden Stellen möglich ist.
+Das ist der vorgesehene Anknüpfungspunkt für die eigentliche Zusammenführung der beiden
+Repository-Teile.
 
-## Architektur
+### Grenzen und Sicherheit (gilt nur für diesen alten Teil)
 
-Reines HTML, CSS und Vanilla JavaScript ohne Framework. `script.js` wird von allen drei Seiten geladen und ist in Module (Objekte) gegliedert:
+- **Keine echte Sicherheit:** Passwörter und 2FA-Secrets liegen im Klartext im `localStorage`;
+  Anmeldung und Rechteprüfung laufen nur im Browser und lassen sich umgehen.
+- **Keine gemeinsame Datenbasis:** Jeder Browser hat seine eigenen Daten.
+- **Benachrichtigungen sind lokal**, keine geräteübergreifende Zustellung, keine echte
+  E-Mail-Auslieferung.
+- **Standardpasswort** `admin`/`123` wird immer neu angelegt.
+- **Speicherlimit:** `localStorage` ca. 5 MB, Anhänge zusätzlich in IndexedDB.
+- **E-Mail/LDAP/Outlook** werden nur simuliert (Konsolenausgabe).
+- **Externer Dienst:** Der 2FA-QR-Code wird über `api.qrserver.com` erzeugt – das 2FA-Secret
+  wird dabei an diesen Dienst übertragen.
 
-| Modul | Aufgabe |
-|---|---|
-| `Utils` | IDs, Datumsformat, `localStorage`-Zugriff, Farbberechnung |
-| `Lang` | Übersetzungen (de/en) und Anwendung auf das DOM über `data-i18n` |
-| `TOTP` | Erzeugen und Prüfen von 2FA-Codes |
-| `Store` | Datenzugriff (asynchrone API über `localStorage`), Seed-Daten, Migrationen, Logs, Auto-Archivierung |
-| `Auth` | Anmeldung, Abmeldung, Seitenschutz, 2FA-Dialoge |
-| `UI` | Toast, Bestätigungsdialog, Sternenfeld, Multi-Select, Ticket-Protokoll |
-| `Settings` | Persönliche Einstellungen (Theme, Akzent, Sprache, Hintergrund) |
-| `UserDash` | Logik von `dashboard.html` |
-| `AdminBoard` | Logik von `admin.html`: Board, Modals, Benutzerverwaltung, Systemeinstellungen, CSV |
-| `ScrollToTop` | Button „nach oben“ |
-
-Alle `Store`-Methoden sind bereits `async`. Ein späterer Wechsel auf eine REST-API ist dadurch möglich, ohne die aufrufenden Stellen zu ändern.
-
----
-
-## Datenmodell
-
-Gespeichert wird im `localStorage` unter folgenden Schlüsseln:
-
-| Schlüssel | Inhalt |
-|---|---|
-| `users` | Benutzer: `username`, `password`, `name`, `email`, `department`, `role`, `dept` (Kategorien), Rechte, 2FA-Status, `accountLocked`, `lockedUntil`, `failedLogins`, `accountArchived`, `absence` (Zeitraum, Vertretung, Sichtbarkeit, übertragene und zurückzuholende Tickets) |
-| `user_groups` | Gruppen mit `name`, `description`, `members` |
-| `tickets` | Tickets (siehe unten) |
-| `account_requests` | Offene Kontoanfragen |
-| `app_settings` | Persönliche und Systemeinstellungen |
-| `global_logs` | Systemweites Protokoll |
-| `notifications` | Lokale In-App-Benachrichtigungen je Benutzer (Vertretungen mit `sections` für die Listen im Popup) |
-| `currentUser` | Benutzername der aktiven Sitzung |
-
-Ein Ticket enthält unter anderem:
-
-```js
-{
-  id, ticketNumber, title, desc, prio,
-  status,                         // inklusive definierter Warte-Status
-  category: [],                   // eine oder mehrere Kategorien
-  author, authorName, createdAt,
-  owner, participants: [],        // Hauptverantwortlicher und Beteiligte
-  todos: [],                      // Teilaufgaben
-  chat: [],                       // Nachrichten mit dem Ersteller (inkl. Anhänge als Base64)
-  comments: [],                   // interne Einträge mit channel 'admin-chat' oder 'solution'
-  logs: [],                       // Änderungsprotokoll
-  archived, archivedAt,
-  isMajorIncident, incidentNotice,  // Großstörung
-  linkedIncidentId,                 // Zuordnung zu einer Großstörung
-  authorArchived,                   // Ersteller ist archiviert
-  customDueAt                       // manuell gesetzte Frist
-}
-```
-
-Ältere Datenstände werden beim Start in `Store.init()` automatisch migriert.
-
----
-
-## Anpassung
-
-- **Design:** Farben, Größen und Radien sind CSS-Variablen in `:root` in `style.css`. Regeln und Komponenten beschreibt [DESIGN.md](DESIGN.md) – bitte vor UI-Änderungen lesen.
-- **Akzentfarbe und Theme:** pro Benutzer über das Zahnrad in der Topbar.
-- **Kategorien, Standardpriorität, Portalname:** in der Benutzerverwaltung bzw. in den Systemeinstellungen.
-- **Übersetzungen:** in `Lang.translations` in `script.js`; im HTML per `data-i18n="schlüssel"` einbinden.
-
----
-
-## Grenzen und Sicherheit
-
-Das Projekt ist als Frontend-Prototyp gebaut. Vor einem echten Einsatz sind folgende Punkte zu beachten:
-
-- **Keine echte Sicherheit:** Passwörter und 2FA-Secrets liegen im Klartext im `localStorage`; Anmeldung und Rechteprüfung laufen nur im Browser und lassen sich umgehen.
-- **Keine gemeinsame Datenbasis:** Jeder Browser hat seine eigenen Daten. Benutzer und Admins sehen sich nur, wenn sie denselben Browser auf demselben Gerät nutzen.
-- **Benachrichtigungen sind lokal:** Sie werden im `localStorage` geführt und aktualisieren sich über Browser-Tabs. Es gibt keine geräteübergreifende Zustellung oder echte E-Mail-Auslieferung ohne Backend.
-- **Standardpasswort:** `admin` / `123` wird beim Start immer angelegt.
-- **Speicherlimit:** Anhänge werden im Browser gespeichert (mit IndexedDB-Auslagerung bei Bedarf); der `localStorage` bleibt meist auf etwa 5 MB begrenzt.
-- **E-Mail, LDAP, Outlook:** Die Einstellungen werden gespeichert, aber nicht ausgeführt. E-Mails erscheinen nur in der Browser-Konsole.
-- **Nur gespeichert, nicht ausgewertet:** Session-Timeout und die Tage für die Auto-Archivierung. Die Auto-Archivierung verwendet fest 3 Tage bzw. maximal 10 geschlossene Tickets. Die Login-Fehlversuche werden ausgewertet, aber nur im Browser, also ohne serverseitigen Schutz.
-- **Externer Dienst:** Der QR-Code für die 2FA wird über `api.qrserver.com` erzeugt; dabei wird das Secret an diesen Dienst übertragen.
-
-Für einen produktiven Betrieb wäre ein Backend mit Datenbank, gehashten Passwörtern, serverseitiger Rechteprüfung und einem Mail-Dienst nötig. Die asynchrone `Store`-API ist der vorgesehene Anknüpfungspunkt.
+Genau diese Punkte sind der Grund für den Umbau in `apps/server` – siehe oben.
 
 ---
 
 ## Mitwirken
 
-1. Änderungen direkt in `index.html`, `dashboard.html`, `admin.html`, `script.js` und `style.css` vornehmen – ein Build-Schritt ist nicht nötig.
-2. UI-Änderungen folgen [DESIGN.md](DESIGN.md); die Checkliste in Abschnitt 9 vor dem Commit durchgehen.
-3. Dynamisch erzeugtes Markup mit Icons braucht danach `lucide.createIcons()`.
-4. Commit-Nachrichten im bisherigen Format: `TT.MM.JJJJ | Kurzbeschreibung`.
+- **Neuer Server:** `npm run typecheck`/`test`/`build` im Workspace `apps/server` müssen grün
+  sein. Datenbankänderungen nur über neue, versionierte Dateien in
+  `apps/server/src/db/migrations/`, nie durch Ändern bestehender Migrationen.
+- **Altes Frontend:** Änderungen direkt in `index.html`, `dashboard.html`, `admin.html`,
+  `script.js`, `style.css` – kein Build-Schritt nötig. UI-Änderungen folgen `DESIGN.md`.
+  Dynamisch erzeugtes Markup mit Icons braucht danach `lucide.createIcons()`.
+- **Commit-Nachrichten:** `TT.MM.JJJJ | Kurzbeschreibung`.
 
 ---
 

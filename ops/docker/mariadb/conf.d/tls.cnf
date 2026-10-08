@@ -1,0 +1,8 @@
+# Erzwingt TLS für Verbindungen zu MariaDB -- docs/CRYPTOGRAPHY.md §8 (App<->MariaDB
+# verschlüsselt). Zertifikate werden von install.sh in ops/tls/mariadb/ erzeugt und über das
+# docker-compose-Volume ":/etc/mysql/tls:ro" bereitgestellt.
+[mariadb]
+ssl_ca = /etc/mysql/tls/ca.pem
+ssl_cert = /etc/mysql/tls/server-cert.pem
+ssl_key = /etc/mysql/tls/server-key.pem
+require_secure_transport = ON

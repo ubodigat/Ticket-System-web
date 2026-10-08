@@ -1,0 +1,83 @@
+name: ticket-system
+
+networks:
+  internal:
+    driver: bridge
+    internal: true
+  edge:
+    driver: bridge
+
+volumes:
+  mariadb-data:
+  attachments-data:
+  caddy-data:
+  caddy-config:
+
+services:
+  mariadb:
+    image: mariadb:12.3
+    restart: unless-stopped
+    networks: [internal]
+    environment:
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ../tls/mariadb:/etc/mysql/tls:ro
+      - ./mariadb/conf.d:/etc/mysql/conf.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  app:
+    build:
+      context: ../..
+      dockerfile: ops/docker/Dockerfile.server
+    restart: unless-stopped
+    networks: [internal, edge]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3000"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSL_CA_PATH: /run/secrets/mariadb-ca.pem
+      DB_SSL_REJECT_UNAUTHORIZED: "true"
+      KEK_FILE_PATH: /run/secrets/app.kek
+      COOKIE_SECRET: ${COOKIE_SECRET}
+      INSTALLATION_ID: ${INSTALLATION_ID}
+      TRUSTED_PROXY_HOPS: "1"
+    volumes:
+      - ../secrets/app.kek:/run/secrets/app.kek:ro
+      - ../tls/mariadb/ca.pem:/run/secrets/mariadb-ca.pem:ro
+      - attachments-data:/app/attachments
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    networks: [edge]
+    depends_on: [app]
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config

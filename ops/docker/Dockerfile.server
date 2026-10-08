@@ -1,0 +1,25 @@
+# Multi-stage Build -- Node 24 LTS gemäß docs/SPEC.md §3. Läuft als dedizierte, nicht-root
+# UID/GID gemäß docs/adr/0002-key-storage-container-uids.md.
+FROM node:24-bookworm-slim AS build
+WORKDIR /build
+COPY package.json ./
+COPY apps/server/package.json apps/server/package.json
+RUN npm install --workspace=apps/server --include-workspace-root
+COPY tsconfig.base.json ./
+COPY apps/server ./apps/server
+RUN npm run build --workspace=apps/server
+
+FROM node:24-bookworm-slim AS runtime
+RUN groupadd --gid 10001 ticketapp \
+    && useradd --uid 10001 --gid ticketapp --no-create-home --shell /usr/sbin/nologin ticketapp
+WORKDIR /app
+COPY --from=build /build/apps/server/package.json ./package.json
+COPY --from=build /build/apps/server/dist ./dist
+COPY --from=build /build/node_modules ./node_modules
+RUN mkdir -p /run/secrets && chown -R ticketapp:ticketapp /app /run/secrets
+USER ticketapp:ticketapp
+ENV NODE_ENV=production
+EXPOSE 3000
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "dist/index.js"]
