@@ -2,9 +2,9 @@
 # UID/GID gemäß docs/adr/0002-key-storage-container-uids.md.
 FROM node:24-bookworm-slim AS build
 WORKDIR /build
-COPY package.json ./
+COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/package.json
-RUN npm install --workspace=apps/server --include-workspace-root
+RUN npm ci --include-workspace-root
 COPY tsconfig.base.json ./
 COPY apps/server ./apps/server
 RUN mkdir -p public

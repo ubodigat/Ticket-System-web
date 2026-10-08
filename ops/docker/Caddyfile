@@ -1,9 +1,11 @@
 {
 	# Produktions-Admin-API nicht exponiert; email für ACME wird von install.sh eingetragen.
 	email {$ACME_EMAIL:admin@example.invalid}
+	default_sni {$PUBLIC_DOMAIN:localhost}
 }
 
 {$PUBLIC_DOMAIN:localhost} {
+	tls internal
 	encode gzip
 
 	# /health ist nur für den internen Docker-Healthcheck/Monitoring gedacht, nicht für die

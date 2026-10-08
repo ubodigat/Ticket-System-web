@@ -18,7 +18,11 @@ for arg in "$@"; do
   esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+  SCRIPT_DIR="$PWD"
+fi
 
 log() {
   printf '\n==> %s\n' "$1"
@@ -65,18 +69,8 @@ ensure_docker() {
 
   ensure_apt_system
   log "Installing Docker and Docker Compose plugin"
-  run_root apt-get update
 
-  if ! command -v docker >/dev/null 2>&1; then
-    apt_install docker.io
-  fi
-
-  if ! run_root docker compose version >/dev/null 2>&1; then
-    apt_install docker-compose-plugin || true
-  fi
-
-  if ! run_root docker compose version >/dev/null 2>&1; then
-    log "Docker Compose plugin not available from the default repository; installing Docker from official script"
+  if ! command -v docker >/dev/null 2>&1 || ! run_root docker compose version >/dev/null 2>&1; then
     curl -fsSL https://get.docker.com | run_root sh
   fi
 
@@ -149,6 +143,7 @@ else
   COOKIE_SECRET="$(openssl rand -base64 48)"
   INSTALLATION_ID="$(make_uuid)"
 
+  DEFAULT_IP=$(hostname -I | awk '{print $1}')
   cat > "$ENV_FILE" <<EOF
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
@@ -157,7 +152,7 @@ COOKIE_SECRET=$COOKIE_SECRET
 INSTALLATION_ID=$INSTALLATION_ID
 HTTP_PORT=80
 HTTPS_PORT=443
-PUBLIC_DOMAIN=localhost
+PUBLIC_DOMAIN=${DEFAULT_IP:-localhost}
 ACME_EMAIL=admin@example.invalid
 EOF
   chmod 600 "$ENV_FILE"
@@ -170,6 +165,7 @@ else
   log "Generating KEK"
   openssl rand -base64 32 > "$KEK_PATH"
   chmod 600 "$KEK_PATH"
+  chown 10001 "$KEK_PATH" 2>/dev/null || true
 fi
 
 CA_KEY="$TLS_DIR/ca-key.pem"
@@ -193,6 +189,7 @@ else
   rm -f "$TLS_DIR/server.csr"
   chmod 600 "$CA_KEY" "$SERVER_KEY"
   chmod 644 "$CA_CERT" "$SERVER_CERT"
+  chown 999 "$CA_KEY" "$SERVER_KEY" 2>/dev/null || true
 fi
 
 if [[ "$DEV_MODE" == "true" ]]; then
