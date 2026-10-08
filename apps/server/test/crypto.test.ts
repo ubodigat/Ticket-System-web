@@ -36,6 +36,7 @@ describe('FileKeyProvider', () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'kek-test-'));
     const path = join(tmpDir, 'bad.kek');
     await writeFile(path, Buffer.from('too-short').toString('base64'), 'utf8');
+    if (process.platform !== 'win32') await chmod(path, 0o600);
     const provider = createFileKeyProvider(path);
 
     await expect(provider.getCurrentKek()).rejects.toThrow(/256-Bit/);

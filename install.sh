@@ -1,58 +1,153 @@
 #!/usr/bin/env bash
-# Ein-Befehl-Installation gemäß docs/SPEC.md §4. Erzeugt alle Secrets, TLS-Zertifikate für die
-# App<->MariaDB-Verbindung und die KEK, startet den Stack über docker compose, wartet auf den
-# Healthcheck und gibt am Ende eine Erfolgsmeldung mit dem Link zur Einrichtungsseite aus.
-#
-# Phase-1-Stand: deckt das Grundgerüst ab (DB-Verschlüsselung, Secrets, Healthcheck). Der
-# Einrichtungsassistent (Web-UI für Unternehmenseinstellungen/Anfangsbenutzer, docs/SPEC.md §5)
-# folgt in einer späteren Phase gemäß docs/PROGRESS.md -- dieses Skript legt dafür bereits die
-# INSTALLATION_ID und den initialen DB-Zustand an.
+# One-command installer for the ticket system.
+# Works in two modes:
+# 1. Inside a cloned repository: configure secrets, TLS and Docker stack.
+# 2. As downloaded standalone script: install base packages, clone repository, re-run from clone.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_DIR="$SCRIPT_DIR/ops/docker"
-SECRETS_DIR="$SCRIPT_DIR/ops/secrets"
-TLS_DIR="$SCRIPT_DIR/ops/tls/mariadb"
-ENV_FILE="$COMPOSE_DIR/.env"
+REPO_URL="${REPO_URL:-https://github.com/ubodigat/Ticket-System-web.git}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/ticket-system}"
 DEV_MODE=false
+ASSUME_YES=true
 
 for arg in "$@"; do
   case "$arg" in
     --dev) DEV_MODE=true ;;
-    *) echo "Unbekannte Option: $arg" >&2; exit 1 ;;
+    --no-assume-yes) ASSUME_YES=false ;;
+    *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
 
-require_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "Fehler: '$1' wird benötigt, ist aber nicht installiert." >&2
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+log() {
+  printf '\n==> %s\n' "$1"
+}
+
+run_root() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "This step needs root permissions. Run the installer as root or install sudo." >&2
     exit 1
   fi
 }
 
-require_cmd docker
-require_cmd openssl
-if ! docker compose version >/dev/null 2>&1; then
-  echo "Fehler: 'docker compose' (Plugin) wird benötigt." >&2
-  exit 1
-fi
+apt_install() {
+  if [[ "$ASSUME_YES" == "true" ]]; then
+    run_root apt-get install -y "$@"
+  else
+    run_root apt-get install "$@"
+  fi
+}
 
-mkdir -p "$SECRETS_DIR" "$TLS_DIR"
+ensure_apt_system() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "Automatic bootstrap currently supports Debian/Ubuntu systems with apt-get." >&2
+    echo "Manual path: install git, docker, docker compose and openssl, then run ./install.sh." >&2
+    exit 1
+  fi
+}
 
-# -- Secrets: nur erzeugen, wenn noch nicht vorhanden (Idempotenz, docs/SPEC.md §4.2) ----------
+ensure_base_packages() {
+  ensure_apt_system
+  log "Installing base packages"
+  run_root apt-get update
+  apt_install ca-certificates curl git openssl gnupg lsb-release
+}
+
+ensure_docker() {
+  if command -v docker >/dev/null 2>&1 && run_root docker compose version >/dev/null 2>&1; then
+    return
+  fi
+
+  ensure_apt_system
+  log "Installing Docker and Docker Compose plugin"
+  run_root apt-get update
+
+  if ! command -v docker >/dev/null 2>&1; then
+    apt_install docker.io
+  fi
+
+  if ! run_root docker compose version >/dev/null 2>&1; then
+    apt_install docker-compose-plugin || true
+  fi
+
+  if ! run_root docker compose version >/dev/null 2>&1; then
+    log "Docker Compose plugin not available from the default repository; installing Docker from official script"
+    curl -fsSL https://get.docker.com | run_root sh
+  fi
+
+  if ! run_root docker compose version >/dev/null 2>&1; then
+    echo "Docker was installed, but 'docker compose' is still unavailable." >&2
+    echo "Please install the Docker Compose plugin and run this installer again." >&2
+    exit 1
+  fi
+
+  run_root systemctl enable --now docker >/dev/null 2>&1 || true
+}
+
+rerun_from_clone_if_needed() {
+  if [[ -f "$SCRIPT_DIR/ops/docker/docker-compose.yml" && -f "$SCRIPT_DIR/package.json" ]]; then
+    return
+  fi
+
+  ensure_base_packages
+  ensure_docker
+
+  log "Cloning repository"
+  if [[ -d "$INSTALL_DIR/.git" ]]; then
+    run_root git -C "$INSTALL_DIR" pull --ff-only
+  else
+    run_root mkdir -p "$(dirname "$INSTALL_DIR")"
+    if [[ -e "$INSTALL_DIR" && ! -d "$INSTALL_DIR/.git" ]]; then
+      echo "Installation directory exists but is not a Git repository: $INSTALL_DIR" >&2
+      exit 1
+    fi
+    run_root git clone "$REPO_URL" "$INSTALL_DIR"
+  fi
+
+  run_root chown -R "$(id -u):$(id -g)" "$INSTALL_DIR" 2>/dev/null || true
+  run_root chmod +x "$INSTALL_DIR/install.sh"
+  log "Continuing installation from $INSTALL_DIR"
+  exec "$INSTALL_DIR/install.sh" "$@"
+}
+
+make_uuid() {
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    cat /proc/sys/kernel/random/uuid
+  elif command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  else
+    local hex
+    hex="$(openssl rand -hex 16)"
+    printf '%s-%s-%s-%s-%s\n' "${hex:0:8}" "${hex:8:4}" "${hex:12:4}" "${hex:16:4}" "${hex:20:12}"
+  fi
+}
+
+rerun_from_clone_if_needed "$@"
+ensure_base_packages
+ensure_docker
+
+COMPOSE_DIR="$SCRIPT_DIR/ops/docker"
+SECRETS_DIR="$SCRIPT_DIR/ops/secrets"
+TLS_DIR="$SCRIPT_DIR/ops/tls/mariadb"
+ENV_FILE="$COMPOSE_DIR/.env"
+
+run_root mkdir -p "$SECRETS_DIR" "$TLS_DIR"
+run_root chown -R "$(id -u):$(id -g)" "$SCRIPT_DIR/ops" 2>/dev/null || true
+
 if [[ -f "$ENV_FILE" ]]; then
-  echo "Vorhandene Installation gefunden ($ENV_FILE) -- bestehende Secrets werden wiederverwendet."
+  log "Existing installation found; reusing secrets"
 else
-  echo "Erzeuge neue Secrets..."
+  log "Generating installation secrets"
   DB_NAME="ticketsystem"
   DB_USER="ticketapp"
   DB_PASSWORD="$(openssl rand -base64 32)"
   COOKIE_SECRET="$(openssl rand -base64 48)"
-  INSTALLATION_ID="$(
-    if command -v uuidgen >/dev/null 2>&1; then uuidgen | tr '[:upper:]' '[:lower:]'
-    else node -e "console.log(require('crypto').randomUUID())"
-    fi
-  )"
+  INSTALLATION_ID="$(make_uuid)"
 
   cat > "$ENV_FILE" <<EOF
 DB_NAME=$DB_NAME
@@ -63,32 +158,29 @@ INSTALLATION_ID=$INSTALLATION_ID
 HTTP_PORT=80
 HTTPS_PORT=443
 PUBLIC_DOMAIN=localhost
+ACME_EMAIL=admin@example.invalid
 EOF
   chmod 600 "$ENV_FILE"
 fi
 
-# -- KEK (App-seitige Schlüsselverschlüsselungsschlüssel) --------------------------------------
-# docs/CRYPTOGRAPHY.md §1/§6, docs/adr/0002: niemals in der Datenbank, niemals im normalen
-# Backup. Datei bekommt restriktive Rechte; Container-UID/GID siehe Dockerfile.server (10001).
 KEK_PATH="$SECRETS_DIR/app.kek"
 if [[ -f "$KEK_PATH" ]]; then
-  echo "Vorhandene KEK gefunden -- wird nicht überschrieben."
+  log "Existing KEK found; keeping it"
 else
-  echo "Erzeuge neuen KEK (256 Bit)..."
+  log "Generating KEK"
   openssl rand -base64 32 > "$KEK_PATH"
   chmod 600 "$KEK_PATH"
 fi
 
-# -- TLS für App<->MariaDB (docs/CRYPTOGRAPHY.md §8) --------------------------------------------
 CA_KEY="$TLS_DIR/ca-key.pem"
 CA_CERT="$TLS_DIR/ca.pem"
 SERVER_KEY="$TLS_DIR/server-key.pem"
 SERVER_CERT="$TLS_DIR/server-cert.pem"
 
 if [[ -f "$CA_CERT" && -f "$SERVER_CERT" ]]; then
-  echo "Vorhandene MariaDB-TLS-Zertifikate gefunden -- werden nicht neu erzeugt."
+  log "Existing MariaDB TLS certificates found; keeping them"
 else
-  echo "Erzeuge selbstsignierte TLS-Zertifikatskette für die App<->MariaDB-Verbindung..."
+  log "Generating internal MariaDB TLS certificates"
   openssl genrsa -out "$CA_KEY" 4096 >/dev/null 2>&1
   openssl req -x509 -new -nodes -key "$CA_KEY" -sha256 -days 3650 \
     -subj "/CN=TicketSystem-Internal-CA" -out "$CA_CERT" >/dev/null 2>&1
@@ -104,30 +196,31 @@ else
 fi
 
 if [[ "$DEV_MODE" == "true" ]]; then
-  echo "Hinweis: --dev aktiv. ACME/öffentliches TLS für Caddy wird übersprungen (localhost)."
+  log "Development mode active; using localhost HTTP"
 fi
 
-# -- Stack starten --------------------------------------------------------------------------
-echo "Baue und starte den Stack (docker compose)..."
-docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --build
+log "Building and starting Docker stack"
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --build
 
-echo "Warte auf Healthcheck der Anwendung..."
+log "Waiting for app healthcheck"
 ATTEMPTS=0
 MAX_ATTEMPTS=40
-until docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" ps app --format json \
+until run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" ps app --format json \
   | grep -q '"Health":"healthy"'; do
   ATTEMPTS=$((ATTEMPTS + 1))
   if [[ $ATTEMPTS -ge $MAX_ATTEMPTS ]]; then
-    echo "Fehler: Die Anwendung wurde nach ${MAX_ATTEMPTS} Versuchen nicht gesund (healthy)." >&2
-    echo "Prüfe die Logs mit: docker compose -f '$COMPOSE_DIR/docker-compose.yml' logs app" >&2
+    echo "The application did not become healthy after ${MAX_ATTEMPTS} attempts." >&2
+    echo "Check logs with:" >&2
+    echo "docker compose -f '$COMPOSE_DIR/docker-compose.yml' --env-file '$ENV_FILE' logs app" >&2
     exit 1
   fi
   sleep 3
 done
 
-echo "Führe Datenbankmigrationen aus..."
-docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T app node dist/db/migrate.js
+log "Running database migrations"
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T app node dist/db/migrate.js
 
+# shellcheck disable=SC1090
 source "$ENV_FILE"
 PUBLIC_URL="https://${PUBLIC_DOMAIN}"
 if [[ "$DEV_MODE" == "true" || "$PUBLIC_DOMAIN" == "localhost" ]]; then
@@ -137,8 +230,11 @@ fi
 cat <<EOF
 
 ================================================================================
-  Installation abgeschlossen.
-  Ticket-System ist erreichbar unter: $PUBLIC_URL
-  Öffne die Adresse im Browser, um den Einrichtungsassistenten zu starten.
+  Installation completed.
+  Ticket system URL: $PUBLIC_URL
+  Open the URL in your browser and complete the setup assistant.
+
+  Install directory: $SCRIPT_DIR
+  Docker env file:   $ENV_FILE
 ================================================================================
 EOF

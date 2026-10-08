@@ -41,62 +41,61 @@ enthaelt:
 - `caddy`: Reverse Proxy fuer HTTP/HTTPS
 - Docker-Volumes fuer Datenbank, Anhaenge und Caddy-Daten
 
-### Voraussetzungen
+### Installation mit einem Befehl
 
-Auf dem Zielserver muessen installiert sein:
+Auf einem frischen Ubuntu-/Debian-Server als `root` ausfuehren:
 
-- Linux-Server mit Shell-Zugriff
+```bash
+bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; fi; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh | bash'
+```
+
+Das ist bewusst der Standardweg: Es muss vorher kein Repository geklont und kein Docker manuell
+installiert werden. Das Skript installiert fehlende Basispakete automatisch, klont das Projekt
+nach `/opt/ticket-system` und startet danach den Docker-Stack.
+
+Fuer lokale Tests ohne oeffentliche Domain kann der Entwicklungsmodus direkt mitgegeben werden:
+
+```bash
+bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; fi; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh | bash -s -- --dev'
+```
+
+### Was automatisch installiert wird
+
+Das Installationsskript richtet auf Ubuntu/Debian bei Bedarf ein:
+
+- `ca-certificates`
+- `curl`
 - `git`
-- `docker`
-- `docker compose` als Docker-Plugin
 - `openssl`
+- `gnupg`
+- `docker`
+- `docker compose` als Plugin
 
-Pruefen:
+Danach liegen die Projektdateien standardmaessig hier:
 
-```bash
-git --version
-docker --version
-docker compose version
-openssl version
+```text
+/opt/ticket-system
 ```
 
-Wenn einer der Befehle fehlt, muss die jeweilige Software zuerst auf dem Server installiert
-werden.
-
-### Repository klonen
-
-```bash
-git clone <repository-url> ticket-system
-cd ticket-system
-```
-
-Wichtig: Alle folgenden Befehle muessen im Projektordner ausgefuehrt werden, also dort, wo
-`install.sh`, `package.json`, `apps/` und `ops/` liegen.
-
-### Installation starten
+Wer das Repository bereits manuell geklont hat, kann im Projektordner weiterhin direkt starten:
 
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-Fuer lokale Tests ohne oeffentliche Domain:
-
-```bash
-./install.sh --dev
-```
-
 Das Installationsskript:
 
-1. prueft `docker`, `docker compose` und `openssl`,
-2. erzeugt `ops/docker/.env` mit Datenbankname, Datenbankbenutzer, Passwort, Cookie-Secret und
+1. installiert fehlende Systempakete,
+2. klont bei Bedarf das Repository,
+3. erzeugt `ops/docker/.env` mit Datenbankname, Datenbankbenutzer, Passwort, Cookie-Secret und
    Installations-ID,
-3. erzeugt `ops/secrets/app.kek` als Schluesselverschluesselungsschluessel,
-4. erzeugt interne TLS-Zertifikate fuer App zu MariaDB in `ops/tls/mariadb/`,
-5. baut und startet den Docker-Stack,
-6. wartet auf den App-Healthcheck,
-7. fuehrt Datenbankmigrationen aus,
-8. gibt die erreichbare URL aus.
+4. erzeugt `ops/secrets/app.kek` als Schluesselverschluesselungsschluessel,
+5. erzeugt interne TLS-Zertifikate fuer App zu MariaDB in `ops/tls/mariadb/`,
+6. baut und startet den Docker-Stack,
+7. wartet auf den App-Healthcheck,
+8. fuehrt Datenbankmigrationen aus,
+9. gibt die erreichbare URL aus.
 
 Beim ersten Oeffnen der URL erscheint `/setup`. Dort werden Unternehmensname, Portalname und das
 erste Superadmin-Konto angelegt.
