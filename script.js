@@ -380,10 +380,20 @@ const Lang = {
         if (archiveSearch) archiveSearch.placeholder = Lang.current === 'en' ? 'Search archive (title, author, content)...' : 'Suche im Archiv (Titel, Autor, Inhalt)...';
         setText('#requests-board .request-banner-title', Lang.t('requests'));
         setText('#overdue-board .request-banner-title', Lang.t('overdue'));
-        const requestCount = q('#request-count')?.parentElement;
-        if (requestCount) requestCount.innerHTML = `<b id="request-count">${q('#request-count')?.textContent || '0'}</b> ${Lang.t('open')}`;
-        const overdueCount = q('#overdue-ticket-count')?.parentElement;
-        if (overdueCount) overdueCount.innerHTML = `<b id="overdue-ticket-count" class="overdue-count">${q('#overdue-ticket-count')?.textContent || '0'}</b> ${Lang.t('tickets')}`;
+        const replaceCountLabel = (currentSelector, id, label, className = '') => {
+            const current = q(currentSelector);
+            const wrapper = current?.parentElement;
+            if (!wrapper) return;
+            const value = current.textContent || '0';
+            wrapper.textContent = '';
+            const count = document.createElement('b');
+            count.id = id;
+            if (className) count.className = className;
+            count.textContent = value;
+            wrapper.append(count, document.createTextNode(` ${label}`));
+        };
+        replaceCountLabel('#request-count', 'request-count', Lang.t('open'));
+        replaceCountLabel('#overdue-ticket-count', 'overdue-ticket-count', Lang.t('tickets'), 'overdue-count');
         setHTML('#requests-modal-title', `${Icon('user-round-plus', 18)}${Lang.t('requests')}`);
         setHTML('#col-new .col-header span:first-child', `${Icon('inbox', 16)}${Lang.t('statusNew')}`);
         setHTML('#col-doing .col-header span:first-child', `${Icon('loader', 16)}${Lang.t('statusDoing')}`);
@@ -774,12 +784,54 @@ const TOTP = {
 // --- Store ---
 // --- Store ---
 const Store = {
-    getUsers: async () => Promise.resolve(Utils.read('users', [])),
+    openDataDb: () => new Promise((resolve, reject) => {
+        const req = indexedDB.open('ticket_system_data', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('records', {
+            keyPath: 'key'
+        });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    }),
+    readRecord: async (key, fallback) => {
+        try {
+            const db = await Store.openDataDb();
+            const record = await new Promise((resolve, reject) => {
+                const tx = db.transaction('records', 'readonly');
+                const req = tx.objectStore('records').get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            db.close();
+            return record?.value ?? fallback;
+        } catch {
+            return fallback;
+        }
+    },
+    writeRecord: async (key, value) => {
+        const db = await Store.openDataDb();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction('records', 'readwrite');
+            tx.objectStore('records').put({ key, value });
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+    },
+    getUsers: async () => {
+        const stored = await Store.readRecord('users', null);
+        if (stored) return stored;
+        const legacy = Utils.read('users', null);
+        if (legacy) {
+            await Store.writeRecord('users', legacy);
+            localStorage.removeItem('users');
+            return legacy;
+        }
+        return [];
+    },
     saveUsers: async (users) => {
-        const before = Utils.read('users', []);
-        const result = Utils.write('users', users);
+        const before = await Store.getUsers();
+        await Store.writeRecord('users', users);
         await LogDiff.users(before, users);
-        return result;
     },
     getGroups: async () => Promise.resolve(Utils.read('user_groups', [])),
     saveGroups: async (groups) => {
@@ -817,12 +869,21 @@ const Store = {
         await LogDiff.requests(before, reqs);
         return result;
     },
-    getSettings: async () => Promise.resolve(Utils.read('app_settings', Settings.defaults)),
+    getSettings: async () => {
+        const stored = await Store.readRecord('app_settings', null);
+        if (stored) return stored;
+        const legacy = Utils.read('app_settings', null);
+        if (legacy) {
+            await Store.writeRecord('app_settings', legacy);
+            localStorage.removeItem('app_settings');
+            return legacy;
+        }
+        return Settings.defaults;
+    },
     saveSettings: async (settings) => {
-        const before = Utils.read('app_settings', Settings.defaults);
-        const result = Utils.write('app_settings', settings);
+        const before = await Store.getSettings();
+        await Store.writeRecord('app_settings', settings);
         await LogDiff.settings(before, settings);
-        return result;
     },
     getGlobalLogs: async () => Promise.resolve(Utils.read('global_logs', [])),
     saveGlobalLogs: async (logs) => Promise.resolve(Utils.write('global_logs', logs)),
