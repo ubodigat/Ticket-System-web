@@ -7,7 +7,10 @@ coverage/
 .env.*
 !.env.example
 secrets/
+ops/secrets/
+ops/tls/
 apps/server/secrets/
+apps/server/kek.local
 ops/docker/secrets/
 *.kek
 .DS_Store

@@ -1,294 +1,618 @@
-# Support Portal – Ticketsystem
+# Support Portal - Ticketsystem
 
-Ein Helpdesk- und Ticketsystem, das gerade von einem reinen Browser-Prototyp (alles im
-`localStorage`, kein Backend) zu einer selbst-gehosteten Server-Anwendung mit MariaDB,
-serverseitiger Verschlüsselung und echter Rechteprüfung umgebaut wird.
+Ein Helpdesk- und Ticketsystem im Umbau: Der bisherige Browser-Prototyp wird schrittweise zu
+einer selbst gehosteten Server-Anwendung mit MariaDB, serverseitiger Verschluesselung und echter
+Rechtepruefung weiterentwickelt.
 
-> **Status:** Aktiver Umbau, **Phase 1 von mehreren** (Grundgerüst). Es gibt zwei getrennte
-> Dinge in diesem Repository:
-> 1. **Den alten Frontend-Prototyp** (`index.html`, `dashboard.html`, `admin.html`,
->    `script.js`, `style.css`) – läuft weiterhin eigenständig im Browser, siehe
->    [Alter Frontend-Prototyp](#alter-frontend-prototyp-eigenständige-demo).
-> 2. **Den neuen Server** (`apps/server/`) – noch ohne Login, Tickets oder Chat. Aktuell
->    funktionieren nur die Installation, die Datenbankanbindung und der einmalige
->    Einrichtungsassistent. Siehe [Neuer Server](#neuer-server-apps-server).
+> **Aktueller Stand:** Phase 1. Das Repository enthaelt aktuell zwei getrennte Teile:
 >
-> Die beiden Teile sind **noch nicht verbunden**. Das alte Frontend spricht nicht mit dem
-> neuen Server; der neue Server liefert noch keine eigene Benutzeroberfläche außer dem
-> Einrichtungsassistenten.
+> 1. **Alter Frontend-Prototyp**: `index.html`, `dashboard.html`, `admin.html`, `script.js`,
+>    `style.css`. Laeuft komplett im Browser und nutzt `localStorage`/IndexedDB.
+> 2. **Neuer Server**: `apps/server/`. Fastify + TypeScript + MariaDB. Aktuell sind Installation,
+>    Datenbankanbindung, Migrationen und der einmalige Einrichtungsassistent vorhanden.
+>
+> Beide Teile sind noch nicht verbunden. Das alte Frontend spricht noch nicht mit dem neuen Server.
 
 ---
 
 ## Inhalt
 
-- [Neuer Server (`apps/server`)](#neuer-server-apps-server)
-  - [Installation mit einem Befehl](#installation-mit-einem-befehl)
-  - [Was die Installation einrichtet](#was-die-installation-einrichtet)
-  - [Einrichtungsassistent](#einrichtungsassistent)
-  - [Sicherheitsmaßnahmen (aktueller Stand)](#sicherheitsmaßnahmen-aktueller-stand)
-  - [Projektstruktur des Servers](#projektstruktur-des-servers)
-  - [Entwicklung ohne Docker](#entwicklung-ohne-docker)
-  - [Was noch fehlt](#was-noch-fehlt-ehrlich-gesagt)
-- [Alter Frontend-Prototyp (eigenständige Demo)](#alter-frontend-prototyp-eigenständige-demo)
+- [Schnellstart mit Docker](#schnellstart-mit-docker)
+- [Docker-Betrieb](#docker-betrieb)
+- [Lokale Entwicklung ohne Docker](#lokale-entwicklung-ohne-docker)
+- [Fehlerbehebung](#fehlerbehebung)
+- [Projektuebersicht](#projektuebersicht)
+- [Neuer Server](#neuer-server)
+- [Alter Frontend-Prototyp](#alter-frontend-prototyp)
+- [Sicherheit und wichtige Dateien](#sicherheit-und-wichtige-dateien)
+- [Tests und CI](#tests-und-ci)
 - [Mitwirken](#mitwirken)
 - [Lizenz](#lizenz)
 
 ---
 
-## Neuer Server (`apps/server`)
+## Schnellstart mit Docker
 
-Node.js 24 + TypeScript (strict) + Fastify + MariaDB 12.3, angebunden über den typisierten
-Query-Builder Kysely (kein roher SQL-String). Ziel: eine einzige Vertrauenszone (der Server),
-die alle Geschäftslogik, Authentifizierung und Verschlüsselung übernimmt – der Browser wird
-nicht mehr vertraut.
+Docker ist der empfohlene Weg fuer Testserver und spaetere Serverinstallationen. Der Stack
+enthaelt:
 
-### Installation mit einem Befehl
+- `mariadb`: MariaDB 12.3 mit internem TLS
+- `app`: Node.js 24 / Fastify / TypeScript Server
+- `caddy`: Reverse Proxy fuer HTTP/HTTPS
+- Docker-Volumes fuer Datenbank, Anhaenge und Caddy-Daten
 
-Voraussetzungen auf dem Zielserver: `docker`, `docker compose` (Plugin), `openssl`.
+### Voraussetzungen
+
+Auf dem Zielserver muessen installiert sein:
+
+- Linux-Server mit Shell-Zugriff
+- `git`
+- `docker`
+- `docker compose` als Docker-Plugin
+- `openssl`
+
+Pruefen:
 
 ```bash
+git --version
+docker --version
+docker compose version
+openssl version
+```
+
+Wenn einer der Befehle fehlt, muss die jeweilige Software zuerst auf dem Server installiert
+werden.
+
+### Repository klonen
+
+```bash
+git clone <repository-url> ticket-system
+cd ticket-system
+```
+
+Wichtig: Alle folgenden Befehle muessen im Projektordner ausgefuehrt werden, also dort, wo
+`install.sh`, `package.json`, `apps/` und `ops/` liegen.
+
+### Installation starten
+
+```bash
+chmod +x install.sh
 ./install.sh
 ```
 
-Für eine lokale Entwicklungsumgebung ohne öffentliches TLS-Zertifikat:
+Fuer lokale Tests ohne oeffentliche Domain:
 
 ```bash
 ./install.sh --dev
 ```
 
-Am Ende gibt das Skript die erreichbare Adresse aus (z. B. `http://localhost` im `--dev`-Modus).
-Ein erneuter Aufruf ist unschädlich: vorhandene Secrets, Schlüssel und Zertifikate werden
-wiederverwendet, nicht überschrieben.
+Das Installationsskript:
 
-### Was die Installation einrichtet
+1. prueft `docker`, `docker compose` und `openssl`,
+2. erzeugt `ops/docker/.env` mit Datenbankname, Datenbankbenutzer, Passwort, Cookie-Secret und
+   Installations-ID,
+3. erzeugt `ops/secrets/app.kek` als Schluesselverschluesselungsschluessel,
+4. erzeugt interne TLS-Zertifikate fuer App zu MariaDB in `ops/tls/mariadb/`,
+5. baut und startet den Docker-Stack,
+6. wartet auf den App-Healthcheck,
+7. fuehrt Datenbankmigrationen aus,
+8. gibt die erreichbare URL aus.
 
-1. **Secrets**: Datenbank-Passwort, Cookie-Signierschlüssel, unveränderliche Installations-ID
-   (`ops/docker/.env`, nicht versioniert).
-2. **KEK** (Schlüsselverschlüsselungsschlüssel, `ops/secrets/app.kek`): 256-Bit-Schlüssel, mit
-   dem die eigentlichen Datenschlüssel (DEKs) in der Datenbank verschlüsselt abgelegt werden –
-   liegt ausschließlich im App-Container, nie in der Datenbank, nie im Backup.
-3. **TLS-Zertifikatskette** (`ops/tls/mariadb/`) für die verschlüsselte Verbindung zwischen App
-   und MariaDB (selbstsigniert, intern).
-4. **Docker-Stack**: `mariadb` (12.3), `app` (der Fastify-Server, läuft als nicht-root-Benutzer),
-   `caddy` (Reverse Proxy, TLS-Terminierung nach außen).
-5. **Datenbankmigrationen** (siehe `apps/server/src/db/migrations/`).
-6. **Healthcheck-Wartezeit**, danach Erfolgsmeldung mit der URL.
-
-### Einrichtungsassistent
-
-Beim ersten Öffnen der ausgegebenen Adresse erscheint automatisch `/setup` – einmalig, danach
-gesperrt (ein zweiter Versuch bekommt `409 Conflict`). Abgefragt werden:
-
-- Unternehmensname und Portalname
-- Erstes Administrator-Konto: Benutzername, vollständiger Name, E-Mail, Passwort
-  (mindestens 14 Zeichen, da dieses erste Konto automatisch **Superadmin** wird)
-
-Name und E-Mail-Adresse werden dabei bereits serverseitig AES-256-GCM-verschlüsselt
-gespeichert (nicht im Klartext), das Passwort mit Argon2id gehasht. Nach erfolgreichem
-Abschluss ist das Konto angelegt – ein Login-Bildschirm dafür existiert aktuell noch nicht
-(siehe [Was noch fehlt](#was-noch-fehlt-ehrlich-gesagt)).
-
-### Sicherheitsmaßnahmen (aktueller Stand)
-
-Was heute schon **wirklich** umgesetzt ist (nicht nur geplant):
-
-- **Serverseitige Verschlüsselung ruhender Daten**: Name/E-Mail-Adresse der Benutzer sind
-  AES-256-GCM-verschlüsselt, mit einem kanonischen Zusatzdatenfeld (AAD) aus Installations-ID,
-  Schema-Version, Tabelle, Datensatz-ID, Feldname und Schlüsselversion – verhindert, dass ein
-  verschlüsselter Wert unbemerkt in ein anderes Feld/einen anderen Datensatz kopiert werden kann.
-  (**Wichtig:** Das ist serverseitige Verschlüsselung, keine Ende-zu-Ende-Verschlüsselung – der
-  Server kann und muss die Daten zur Verarbeitung entschlüsseln können, z. B. für Suche oder
-  Admin-Ansicht.)
-- **Getrennter Blind-Index-Schlüssel** für die Suche nach E-Mail-Adressen, ohne das Feld selbst
-  entschlüsseln zu müssen.
-- **Schlüsselverwaltung**: KEK nur im App-Container, Datenschlüssel (DEKs) KEK-umwickelt in der
-  Datenbank, nie im Klartext gespeichert.
-- **Argon2id** für Passwörter, keine Standardpasswörter (die Installation erzwingt die Eingabe
-  eines eigenen Admin-Passworts im Einrichtungsassistenten).
-- **TLS zur Datenbank** (selbstsignierte interne Zertifikatskette, von `install.sh` erzeugt).
-- **Strikte Content-Security-Policy** ohne `unsafe-inline`/`unsafe-eval`; keine CDN-Abhängigkeiten
-  – alle Skripte/Styles werden vom Server selbst ausgeliefert.
-- **Rate-Limiting** (global + verschärft auf dem Einrichtungs-Endpunkt gegen Brute-Force).
-- **Keine rohen SQL-Strings**: Datenbankzugriff ausschließlich über den typisierten Query-Builder
-  Kysely.
-- **Non-root-Container**: Der App-Container läuft unter einem dedizierten, unprivilegierten
-  Benutzer.
-- **Umgebungsvalidierung**: Fehlt ein Secret oder eine Konfiguration, startet der Server gar
-  nicht erst – kein unsicherer Fallback.
-
-### Projektstruktur des Servers
-
-```
-apps/server/
-├── src/
-│   ├── config/env.ts          Validierung aller Umgebungsvariablen (zod), keine Defaults für Secrets
-│   ├── crypto/
-│   │   ├── keyProvider.ts     KEK-Verwaltung (Datei-Backend), AES-256-GCM-Wrap/Unwrap der DEKs
-│   │   ├── dekService.ts      Legt Datenschlüssel je Verwendungszweck an bzw. liest sie
-│   │   └── fieldCrypto.ts     Feldverschlüsselung mit kanonischem AAD, Blind-Index-Berechnung
-│   ├── db/
-│   │   ├── connection.ts      Kysely + mysql2, TLS-fähig
-│   │   ├── migrate.ts         Migrationsrunner
-│   │   ├── migrations/        Versionierte Schemaänderungen
-│   │   └── types.ts           Typisiertes Datenbankschema
-│   ├── http/
-│   │   ├── app.ts             Fastify-Aufbau (Helmet/CSP, Cookie, Rate-Limit)
-│   │   ├── assets/setupPage.ts HTML/CSS/JS der Einrichtungsseite
-│   │   └── routes/            health.ts (/health), setup.ts (/setup, /api/v1/setup/*)
-│   └── index.ts                Einstiegspunkt
-└── test/                        Vitest (Verschlüsselung, Umgebungsvalidierung)
-
-ops/
-├── docker/
-│   ├── docker-compose.yml      MariaDB + App + Caddy
-│   ├── Dockerfile.server       Build des App-Containers (non-root)
-│   ├── Caddyfile                Reverse-Proxy-Konfiguration
-│   ├── mariadb/conf.d/tls.cnf   Erzwingt TLS auf der MariaDB-Seite
-│   └── README.md                Betriebsanleitung (Update, Logs, Diagnose)
-├── secrets/                     Von install.sh erzeugt, NICHT versioniert
-└── tls/                         Von install.sh erzeugt, NICHT versioniert
-
-install.sh                       Ein-Befehl-Installation
-```
-
-### Entwicklung ohne Docker
-
-```bash
-npm install
-cp apps/server/.env.example apps/server/.env   # falls vorhanden, sonst Variablen aus env.ts manuell setzen
-npm run typecheck --workspace=apps/server
-npm run test --workspace=apps/server
-npm run build --workspace=apps/server
-npm run dev --workspace=apps/server
-```
-
-Für den lokalen Start ohne Docker wird trotzdem eine erreichbare MariaDB-Instanz sowie eine
-KEK-Datei benötigt (siehe `apps/server/src/config/env.ts` für alle Pflichtvariablen).
-
-### Was noch fehlt (ehrlich gesagt)
-
-Noch **nicht** implementiert, auch wenn Teile davon im alten Frontend-Prototyp schon einmal
-(unsicher, clientseitig) existierten:
-
-- Login/Session für normale Benutzer (nur die Einrichtung legt ein Konto an – es gibt noch
-  keinen Login-Bildschirm im neuen Server)
-- Tickets, Chat, Kanban-Board, Benutzerverwaltung, E-Mail-Versand, LDAP, 2FA/Passkeys
-- Verbindung zwischen dem neuen Server und dem alten Frontend (`script.js` etc.)
-- Automatisierte End-to-End-Tests gegen eine echte MariaDB (bisher nur Unit-Tests für
-  Verschlüsselung/Konfiguration)
+Beim ersten Oeffnen der URL erscheint `/setup`. Dort werden Unternehmensname, Portalname und das
+erste Superadmin-Konto angelegt.
 
 ---
 
-## Alter Frontend-Prototyp (eigenständige Demo)
+## Docker-Betrieb
 
-Dieser Teil ist unverändert gegenüber dem ursprünglichen Prototyp: reines HTML/CSS/JavaScript,
-läuft komplett im Browser, **ohne Verbindung zum neuen Server**. Nützlich, um die Zielfunktionen
-und das Design anzuschauen, aber **nicht produktiv einsetzen** – siehe die Sicherheitshinweise
-am Ende dieses Abschnitts.
+### Wichtige Dateien und Verzeichnisse
 
-### Funktionen
+```text
+install.sh                         Ein-Befehl-Installation
+ops/docker/docker-compose.yml       Docker-Stack: mariadb, app, caddy
+ops/docker/Dockerfile.server        Multi-stage Build fuer den Server
+ops/docker/Caddyfile                Reverse Proxy und Security Header
+ops/docker/.env                     Generierte Docker-Konfiguration, nicht committen
+ops/secrets/app.kek                 Generierter KEK, nicht committen
+ops/tls/mariadb/                    Generierte interne MariaDB-TLS-Zertifikate, nicht committen
+```
 
-**Für Benutzer (`dashboard.html`):** Tickets mit Betreff, Beschreibung, Priorität (Niedrig/
-Normal/Hoch) und Kategorien erstellen, Dateianhänge, eigene Ticketliste mit Status/Datum/
-Priorität, Chat mit dem Support (Formatierung, Anhänge, bearbeitbare eigene Nachrichten),
-Benachrichtigungen, persönliche Einstellungen (Theme, Akzentfarbe, Sprache, Hintergrund),
-eigene 2FA-Einrichtung (TOTP).
+### Domain und Ports einstellen
 
-**Für Admins (`admin.html`):** Kanban-Board (Neu/In Bearbeitung/Wartet/Geschlossen) mit Drag &
-Drop, Großstörungen mit verknüpften Tickets, Volltextsuche, Fristen mit Geschäftszeiten-Logik,
-Abwesenheit & Vertretung mit automatischer Ticketübergabe, Archiv mit Reaktivierung,
-automatische Archivierung geschlossener Tickets, Kontoanfragen, Benutzer-/Gruppen-/
-Kategorienverwaltung mit CSV-Import/-Export, System-Logs (Vorher/Nachher-Diff je Änderung),
-Systemeinstellungen (SMTP, LDAP, Sicherheit, Geschäftszeiten, Benachrichtigungen).
+`install.sh` erzeugt standardmaessig:
 
-**Startseite (`index.html`):** Anmeldung mit optionaler 2FA, Kontoanfrage-Formular.
+```env
+HTTP_PORT=80
+HTTPS_PORT=443
+PUBLIC_DOMAIN=localhost
+```
 
-### Schnellstart
+Diese Werte stehen in:
 
 ```bash
-# Node.js
-npx serve .
+ops/docker/.env
+```
 
-# oder Python
+Fuer einen echten Server nach Bedarf anpassen:
+
+```env
+HTTP_PORT=80
+HTTPS_PORT=443
+PUBLIC_DOMAIN=support.example.com
+ACME_EMAIL=admin@example.com
+```
+
+Danach den Stack neu starten:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --build
+```
+
+Hinweis: Fuer oeffentliches HTTPS muss die Domain auf den Server zeigen und Port 80/443 muessen
+von aussen erreichbar sein.
+
+### Status anzeigen
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env ps
+```
+
+### Logs anzeigen
+
+Alle Logs:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs -f
+```
+
+Nur App:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs -f app
+```
+
+Nur MariaDB:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs -f mariadb
+```
+
+### Start, Stop und Neustart
+
+Starten:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d
+```
+
+Stoppen:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env stop
+```
+
+Neustarten:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env restart
+```
+
+Stoppen und Container entfernen, Daten aber behalten:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env down
+```
+
+### Updates einspielen
+
+```bash
+git pull
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --build
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env exec -T app node dist/db/migrate.js
+```
+
+Migrationen liegen in:
+
+```text
+apps/server/src/db/migrations/
+```
+
+Bestehende Migrationen sollten nicht nachtraeglich veraendert werden. Fuer Schemaaenderungen
+immer eine neue Migration anlegen.
+
+### Backup-Hinweis
+
+Aktuell gibt es noch kein fertiges Backup-Skript. Fuer einen produktiven Betrieb muessen
+mindestens diese Daten gesichert werden:
+
+- Docker-Volume `ticket-system_mariadb-data`
+- Docker-Volume `ticket-system_attachments-data`
+- `ops/docker/.env`
+- `ops/secrets/app.kek`
+- `ops/tls/mariadb/`
+
+Wichtig: Ohne `ops/secrets/app.kek` koennen verschluesselte Daten nicht wieder entschluesselt
+werden. Diese Datei gehoert nicht in Git, muss aber sicher und getrennt vom normalen
+Datenbank-Backup aufbewahrt werden.
+
+Docker-Volumes anzeigen:
+
+```bash
+docker volume ls | grep ticket-system
+```
+
+---
+
+## Lokale Entwicklung ohne Docker
+
+Diese Variante ist nur fuer Entwickler gedacht. Fuer normalen Betrieb bitte Docker verwenden.
+
+### Voraussetzungen
+
+- Node.js **24 oder neuer**
+- npm
+- Eine erreichbare MariaDB-Instanz
+- OpenSSL
+
+Pruefen:
+
+```bash
+node --version
+npm --version
+openssl version
+```
+
+Wenn `npm: command not found` erscheint, ist Node.js/npm auf diesem System nicht installiert.
+Dann zuerst Node.js 24 installieren.
+
+### Abhaengigkeiten installieren
+
+```bash
+npm install
+```
+
+### Lokale `.env` erstellen
+
+```bash
+cp apps/server/.env.example apps/server/.env
+```
+
+Danach `apps/server/.env` bearbeiten. Wichtige Werte:
+
+- `DB_HOST`
+- `DB_PORT`
+- `DB_NAME`
+- `DB_USER`
+- `DB_PASSWORD`
+- `KEK_FILE_PATH`
+- `COOKIE_SECRET`
+- `INSTALLATION_ID`
+
+Lokale Schluessel erzeugen:
+
+```bash
+openssl rand -base64 32 > apps/server/kek.local
+node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
+node -e "console.log(require('crypto').randomUUID())"
+```
+
+`KEK_FILE_PATH` kann z. B. auf `./kek.local` zeigen, wenn der Server aus `apps/server` gestartet
+wird.
+
+### Entwicklung starten
+
+```bash
+npm run dev --workspace=apps/server
+```
+
+Standard:
+
+```text
+http://127.0.0.1:3000
+```
+
+### Pruefen, testen, bauen
+
+```bash
+npm run typecheck --workspace=apps/server
+npm run test --workspace=apps/server
+npm run build --workspace=apps/server
+```
+
+Alternativ ueber die Root-Skripte:
+
+```bash
+npm run typecheck
+npm run test
+npm run build
+```
+
+---
+
+## Fehlerbehebung
+
+### `npm: command not found`
+
+Node.js/npm ist nicht installiert oder nicht im `PATH`.
+
+Pruefen:
+
+```bash
+node --version
+npm --version
+```
+
+Loesung: Node.js 24 oder neuer installieren, Shell neu oeffnen und erneut pruefen.
+
+### `cp: cannot stat 'apps/server/.env.example': No such file or directory`
+
+Die Datei existiert im Repository. Wenn dieser Fehler erscheint, ist fast immer einer dieser
+Punkte die Ursache:
+
+- Du bist nicht im Projektordner.
+- Das Repository wurde nicht vollstaendig kopiert.
+- Du befindest dich in einem Container oder Serverpfad ohne Projektdateien.
+
+Pruefen:
+
+```bash
+pwd
+ls
+ls apps/server
+```
+
+Im richtigen Ordner muessen u. a. diese Eintraege sichtbar sein:
+
+```text
+apps/
+ops/
+install.sh
+package.json
+README.md
+```
+
+### Docker: App wird nicht healthy
+
+Logs pruefen:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs app
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs mariadb
+```
+
+Haeufige Ursachen:
+
+- Datenbank ist noch nicht bereit.
+- `ops/docker/.env` fehlt oder enthaelt falsche Werte.
+- `ops/secrets/app.kek` fehlt.
+- TLS-Dateien unter `ops/tls/mariadb/` fehlen.
+
+### Docker: Ports 80 oder 443 sind belegt
+
+In `ops/docker/.env` andere Ports setzen:
+
+```env
+HTTP_PORT=8080
+HTTPS_PORT=8443
+```
+
+Danach:
+
+```bash
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d
+```
+
+### Server startet lokal, aber Datenbankverbindung schlaegt fehl
+
+Pruefe in `apps/server/.env`:
+
+- Stimmt `DB_HOST`?
+- Laeuft MariaDB?
+- Stimmen Datenbankname, Benutzer und Passwort?
+- Ist `DB_SSL_CA_PATH` gesetzt, obwohl lokal keine TLS-CA vorhanden ist?
+
+Fuer lokale Entwicklung ohne TLS kann je nach Setup gelten:
+
+```env
+DB_SSL_REJECT_UNAUTHORIZED=false
+```
+
+---
+
+## Projektuebersicht
+
+```text
+.
+  index.html                         Login und Kontoanfrage des alten Frontends
+  dashboard.html                     Benutzerbereich des alten Frontends
+  admin.html                         Adminbereich des alten Frontends
+  script.js                          Browser-Prototyp: Logik, Store, UI, AdminBoard, UserDash
+  style.css                          Styling fuer altes Frontend
+  DESIGN.md                          UI-/Designregeln
+  package.json                       npm Workspaces und Root-Skripte
+  package-lock.json                  npm Lockfile
+  tsconfig.base.json                 TypeScript-Basisconfig
+  install.sh                         Docker-Installation
+  apps/server/                       Neuer Server
+  ops/docker/                        Docker Compose, Dockerfile, Caddy
+  picture/favicon.png                Favicon
+  .github/workflows/ci.yml           GitHub Actions CI
+```
+
+Hinweis: `CHANGELOG.md` ist im aktuellen Projektordner nicht vorhanden.
+
+---
+
+## Neuer Server
+
+Der neue Server liegt in `apps/server/`.
+
+Technik:
+
+- Node.js 24+
+- TypeScript strict
+- Fastify
+- MariaDB
+- Kysely als typisierter Query-Builder
+- Argon2id fuer Passwort-Hashes
+- AES-256-GCM fuer serverseitige Feldverschluesselung
+- Blind Index fuer E-Mail-Suche
+- Vitest fuer Tests
+
+Wichtige Serverstruktur:
+
+```text
+apps/server/
+  src/
+    config/env.ts              Validierung aller Umgebungsvariablen
+    crypto/                    KEK/DEK und Feldverschluesselung
+    db/
+      connection.ts            Kysely + mysql2
+      migrate.ts               Migration Runner
+      migrations/              Versionierte Datenbankmigrationen
+      types.ts                 Typisiertes Datenbankschema
+    http/
+      app.ts                   Fastify, Helmet, Cookie, Rate-Limit
+      assets/setupPage.ts      Einrichtungsseite
+      routes/                  /health und /setup
+    index.ts                   Einstiegspunkt
+  test/                        Unit-Tests
+  package.json
+  .env.example                 Vorlage fuer lokale Entwicklung
+```
+
+Aktuell vorhanden:
+
+- `/health`
+- `/setup`
+- `/api/v1/setup/status`
+- `/api/v1/setup/complete`
+- Datenbankmigrationen
+- serverseitige Verschluesselung fuer erste Benutzerdaten
+
+Noch nicht vorhanden:
+
+- Login fuer normale Benutzer im neuen Server
+- Ticket-API im neuen Server
+- Chat, E-Mail, LDAP, Outlook-Integration im neuen Server
+- Verbindung zwischen altem Frontend und neuem Backend
+
+---
+
+## Alter Frontend-Prototyp
+
+Der alte Prototyp ist eine reine HTML/CSS/JavaScript-Demo ohne Backend.
+
+Starten:
+
+```bash
+npx serve .
+```
+
+Oder mit Python:
+
+```bash
 python -m http.server 8080
 ```
 
-Danach `http://localhost:8080` öffnen (ein fester Ursprung sorgt dafür, dass `localStorage`
-zuverlässig erhalten bleibt). Direktes Öffnen von `index.html` per Doppelklick funktioniert
-ebenfalls, ist aber weniger zuverlässig.
+Danach im Browser oeffnen:
 
-**Demo-Zugänge** (werden beim ersten Start automatisch angelegt):
+```text
+http://localhost:8080
+```
+
+Demo-Zugaenge:
 
 | Benutzer | Passwort | Rolle |
 |---|---|---|
 | `admin` | `123` | Superadmin |
 | `user` | `123` | Benutzer |
 
-**Daten zurücksetzen:** Entwicklertools → *Application → Local Storage* → Einträge der Seite
-löschen, neu laden.
+Wichtig: Dieser Prototyp ist nicht fuer den produktiven Einsatz gedacht.
 
-**Abhängigkeiten (per CDN, benötigen Internetverbindung):** [Lucide](https://lucide.dev)
-(Icons), [OTPAuth](https://github.com/hectorm/otpauth) (2FA), [Google Fonts – Poppins](https://fonts.google.com/specimen/Poppins),
-[api.qrserver.com](https://goqr.me/api/) (QR-Code für 2FA).
+Grenzen des Prototyps:
 
-### Rollen und Rechte
+- Daten liegen lokal im Browser.
+- Passwoerter und 2FA-Secrets sind fuer echte Produktion nicht sicher gespeichert.
+- Rechtepruefung findet nur clientseitig statt.
+- Jeder Browser hat seine eigene Datenbasis.
+- E-Mail, LDAP und Outlook sind nur simuliert.
 
-| Rolle | Rechte |
-|---|---|
-| **Benutzer** (`user`) | Eigene Tickets erstellen, einsehen, dazu chatten |
-| **Admin** (`admin`) | Kanban-Board und Archiv der zugeordneten Kategorien; einzeln vergebbare Zusatzrechte (Kontoanfragen, Benutzerverwaltung, System-Logs, 2FA-Reset) |
-| **Superadmin** (`superadmin`) | Alle Rechte, inklusive Systemeinstellungen und Admin-Verwaltung |
+---
 
-Seitenschutz läuft über `data-guard` am `<body>` (`Auth.checkGuard`) – **nur im Browser**, siehe
-Sicherheitshinweise.
+## Sicherheit und wichtige Dateien
 
-### Projektstruktur
+Nicht committen:
 
+- `ops/docker/.env`
+- `ops/secrets/`
+- `ops/tls/`
+- `apps/server/.env`
+- `apps/server/kek.local`
+- `*.kek`
+
+Warum das wichtig ist:
+
+- `ops/docker/.env` enthaelt Datenbankpasswort, Cookie-Secret und Installations-ID.
+- `ops/secrets/app.kek` ist fuer das Entschluesseln verschluesselter Daten erforderlich.
+- `ops/tls/mariadb/` enthaelt interne Zertifikate und private Schluessel.
+
+Der neue Server setzt bereits um:
+
+- serverseitige Feldverschluesselung
+- Argon2id fuer Passwoerter
+- getrennte Schluesselverwaltung
+- TLS fuer App zu MariaDB im Docker-Stack
+- Rate-Limiting
+- Security Header ueber Helmet und Caddy
+- Content Security Policy ohne `unsafe-inline` und ohne `unsafe-eval`
+- non-root App-Container
+- validierte Umgebungsvariablen ohne unsichere Secret-Defaults
+
+---
+
+## Tests und CI
+
+GitHub Actions liegt in:
+
+```text
+.github/workflows/ci.yml
 ```
-index.html       Startseite: Anmeldung und Kontoanfrage
-dashboard.html    Benutzerbereich
-admin.html        Adminbereich
-script.js         Gesamte Anwendungslogik (Utils, Lang, TOTP, Store, Auth, UI, Settings,
-                   UserDash, AdminBoard, ScrollToTop)
-style.css          Gesamtes Styling (dunkles und helles Theme)
-picture/           Favicon
-DESIGN.md          Designkonzept und UI-Richtlinien (weiterhin bindend für beide Teile)
+
+Die CI fuehrt aus:
+
+```bash
+npm ci
+npm run typecheck --workspace=apps/server
+npm run test --workspace=apps/server
+npm run build --workspace=apps/server
+npm audit --audit-level=high
 ```
 
-Alle `Store`-Methoden sind bereits `async` – bewusst so angelegt, damit eine spätere Anbindung
-an eine echte API (also an `apps/server`) ohne Änderung der aufrufenden Stellen möglich ist.
-Das ist der vorgesehene Anknüpfungspunkt für die eigentliche Zusammenführung der beiden
-Repository-Teile.
+Lokal vor einem Commit:
 
-### Grenzen und Sicherheit (gilt nur für diesen alten Teil)
-
-- **Keine echte Sicherheit:** Passwörter und 2FA-Secrets liegen im Klartext im `localStorage`;
-  Anmeldung und Rechteprüfung laufen nur im Browser und lassen sich umgehen.
-- **Keine gemeinsame Datenbasis:** Jeder Browser hat seine eigenen Daten.
-- **Benachrichtigungen sind lokal**, keine geräteübergreifende Zustellung, keine echte
-  E-Mail-Auslieferung.
-- **Standardpasswort** `admin`/`123` wird immer neu angelegt.
-- **Speicherlimit:** `localStorage` ca. 5 MB, Anhänge zusätzlich in IndexedDB.
-- **E-Mail/LDAP/Outlook** werden nur simuliert (Konsolenausgabe).
-- **Externer Dienst:** Der 2FA-QR-Code wird über `api.qrserver.com` erzeugt – das 2FA-Secret
-  wird dabei an diesen Dienst übertragen.
-
-Genau diese Punkte sind der Grund für den Umbau in `apps/server` – siehe oben.
+```bash
+npm run typecheck
+npm run test
+npm run build
+```
 
 ---
 
 ## Mitwirken
 
-- **Neuer Server:** `npm run typecheck`/`test`/`build` im Workspace `apps/server` müssen grün
-  sein. Datenbankänderungen nur über neue, versionierte Dateien in
-  `apps/server/src/db/migrations/`, nie durch Ändern bestehender Migrationen.
-- **Altes Frontend:** Änderungen direkt in `index.html`, `dashboard.html`, `admin.html`,
-  `script.js`, `style.css` – kein Build-Schritt nötig. UI-Änderungen folgen `DESIGN.md`.
-  Dynamisch erzeugtes Markup mit Icons braucht danach `lucide.createIcons()`.
-- **Commit-Nachrichten:** `TT.MM.JJJJ | Kurzbeschreibung`.
+Regeln:
+
+- Datenbankaenderungen nur ueber neue Migrationen in `apps/server/src/db/migrations/`.
+- Bestehende Migrationen nicht nachtraeglich veraendern.
+- UI-Aenderungen am alten Frontend direkt in `index.html`, `dashboard.html`, `admin.html`,
+  `script.js` und `style.css`.
+- Dynamisch erzeugte Icons im alten Frontend nach dem Rendern mit `lucide.createIcons()`
+  aktualisieren.
+- Commit-Nachrichten im Format: `TT.MM.JJJJ | Kurzbeschreibung`.
 
 ---
 
 ## Lizenz
 
-[MIT](LICENSE) © 2026 U:Bodigat
+[MIT](LICENSE) (c) 2026 U:Bodigat
