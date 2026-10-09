@@ -18,6 +18,15 @@ export const Icon = (name, size = 16) =>
 // --- Utils ---
 export const Utils = {
     uid: () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4),
+    // Kryptographisch sicherer Zufallswert (crypto.getRandomValues) -- NUR fuer
+    // sicherheitsrelevante Werte wie das temporaere Fallback-Passwort beim Anlegen neuer
+    // Benutzer, nie fuer DOM-IDs o.ae. (dort reicht Utils.uid). Mit Math.random() (Utils.uid)
+    // waere ein solches Passwort fuer Angreifer vorhersagbar (CWE-338).
+    secureToken: (byteLength = 24) => {
+        const bytes = new Uint8Array(byteLength);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, b => b.toString(36).padStart(2, '0')).join('');
+    },
     nowISO: () => new Date().toISOString(),
     esc: (v) => String(v ?? '').replace(/[&<>"']/g, c => ({
         '&': '&amp;',

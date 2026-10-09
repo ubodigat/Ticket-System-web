@@ -20,6 +20,10 @@
   - `apps/server/src/mail/mailer.ts`: `requireTLS: true` für STARTTLS ergänzt -- ohne diese
     Option hätte nodemailer bei einem SMTP-Server ohne STARTTLS-Unterstützung stillschweigend
     unverschlüsselt versendet (Verstoß gegen die Anforderung "E-Mail verschlüsselt").
+  - CodeQL-Fund (Insecure randomness, `js/insecure-randomness`): `js/store.js` erzeugte das
+    Fallback-Passwort neuer Benutzer mit `Utils.uid()` (`Math.random()`), vorhersagbar für
+    Angreifer (CWE-338). Neue Funktion `Utils.secureToken()` in `js/utils.js` auf Basis von
+    `crypto.getRandomValues()`, nur für diesen sicherheitsrelevanten Fall verwendet.
 - Herkunft: https://github.com/ubodigat/Ticket-System-web
 - Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
 

@@ -174,7 +174,7 @@ export const Store = {
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({
                         username: u.username,
-                        password: u.password || Utils.uid() + Utils.uid(),
+                        password: u.password || Utils.secureToken(),
                         name: u.name || u.username,
                         email: u.email || '',
                         role: u.role === 'admin' ? 'admin' : 'user',
