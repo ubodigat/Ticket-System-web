@@ -1,4 +1,5 @@
 {
+  "license": "CPAL-1.0",
   "name": "ticket-system-web",
   "private": true,
   "version": "0.1.0-phase1",

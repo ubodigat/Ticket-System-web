@@ -1,0 +1,37 @@
+/*
+The contents of this file are subject to the Common Public Attribution License Version 1.0 (the “License”); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://opensource.org/license/CPAL-1.0. The License is based on the Mozilla Public License Version 1.1 but Sections 14 and 15 have been added to cover use of software over a computer network and provide for limited attribution for the Original Developer. In addition, Exhibit A has been modified to be consistent with Exhibit B.
+Software distributed under the License is distributed on an “AS IS” basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for the specific language governing rights and limitations under the License.
+The Original Code is Ticket-System-web.
+The Original Developer is the Initial Developer: U:Bodigat.
+The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
+Contributors: see CONTRIBUTORS.md and CHANGES.md.
+*/
+// Ticket-Status als geschlossene Liste statt eines beliebigen Strings -- vorher akzeptierte
+// PATCH /api/v2/tickets/:id jeden String als Status (Business-Logic-Lücke: die Oberfläche bot
+// nur diese Werte an, aber ein direkter API-Aufruf hätte jeden beliebigen Text speichern können).
+export const TICKET_STATUSES = [
+  'Neu',
+  'In Bearbeitung',
+  'Warten auf Benutzer',
+  'Warten auf externen Dienstleister',
+  'Warten auf interne Rückmeldung',
+  'Geschlossen'
+] as const;
+
+export type TicketStatus = (typeof TICKET_STATUSES)[number];
+
+export function isValidTicketStatus(value: string): value is TicketStatus {
+  return (TICKET_STATUSES as readonly string[]).includes(value);
+}
+
+export function isWaitingStatus(status: string): boolean {
+  return status.startsWith('Warten auf');
+}
+
+// Ein geschlossenes Ticket darf wieder geöffnet werden (z.B. Benutzer antwortet erneut) --
+// die einzige harte Regel ist: aus "Geschlossen" geht es nur über eine explizite Statusänderung
+// zurück, nicht automatisch. Das ist hier bewusst keine Zustandsmaschine mit verbotenen
+// Übergängen, sondern nur die Prüfung "ist das überhaupt ein bekannter Status".
+export function isValidStatusTransition(from: string, to: string): boolean {
+  return isValidTicketStatus(to);
+}

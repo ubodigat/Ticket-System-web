@@ -9,7 +9,6 @@ networks:
 
 volumes:
   mariadb-data:
-  attachments-data:
   caddy-data:
   caddy-config:
 
@@ -61,7 +60,6 @@ services:
     volumes:
       - ../secrets/app.kek:/run/secrets/app.kek:ro
       - ../tls/mariadb/ca.pem:/run/secrets/mariadb-ca.pem:ro
-      - attachments-data:/app/attachments
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -75,8 +73,8 @@ services:
     networks: [edge]
     depends_on: [app]
     ports:
-      - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
+      - "${PUBLIC_DOMAIN:-127.0.0.1}:${HTTP_PORT:-80}:80"
+      - "${PUBLIC_DOMAIN:-127.0.0.1}:${HTTPS_PORT:-443}:443"
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}

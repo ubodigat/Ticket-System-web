@@ -1,3 +1,11 @@
+/*
+The contents of this file are subject to the Common Public Attribution License Version 1.0 (the “License”); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://opensource.org/license/CPAL-1.0. The License is based on the Mozilla Public License Version 1.1 but Sections 14 and 15 have been added to cover use of software over a computer network and provide for limited attribution for the Original Developer. In addition, Exhibit A has been modified to be consistent with Exhibit B.
+Software distributed under the License is distributed on an “AS IS” basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for the specific language governing rights and limitations under the License.
+The Original Code is Ticket-System-web.
+The Original Developer is the Initial Developer: U:Bodigat.
+The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
+Contributors: see CONTRIBUTORS.md and CHANGES.md.
+*/
 // Statische Assets der Einrichtungsseite als TS-Konstanten statt separater Dateien im Build-
 // Output -- Phase-1-Vereinfachung. Sobald apps/web über Vite eingebunden wird (docs/PROGRESS.md
 // Phase 4/5), zieht diese Seite dorthin um. Kein Inline-<script>/<style>, da die CSP aus
@@ -42,6 +50,12 @@ export const SETUP_HTML = `<!doctype html>
   </form>
 </main>
 <script src="/setup/setup.js"></script>
+<aside class="cpal-origin" role="note" aria-label="Ursprung des Ticket-Systems">
+  <div class="cpal-origin__tag">ORIGINALPROJEKT</div>
+  <div>Originalprojekt Ticket-System-web von <strong>U:Bodigat</strong></div>
+  <a href="https://github.com/ubodigat/Ticket-System-web" target="_blank" rel="noopener noreferrer">github.com/ubodigat/Ticket-System-web</a>
+  <div class="cpal-origin__copyright">Copyright © 2026 U:Bodigat · CPAL-1.0</div>
+</aside>
 </body>
 </html>`;
 
@@ -105,6 +119,23 @@ button:disabled { opacity: 0.6; cursor: default; }
   color: var(--error);
   font-size: 0.85rem;
   margin: 0 0 12px;
+}
+
+/* CPAL-1.0: sichtbare Herkunftskennzeichnung */
+.cpal-origin {
+  position: fixed; right: 16px; bottom: 16px; z-index: 10000;
+  box-sizing: border-box; width: min(350px, calc(100vw - 32px));
+  padding: 12px 15px; border: 1px solid rgba(169,198,255,.45);
+  border-radius: 14px; background: rgba(24,33,52,.97); color: #f8fafc;
+  box-shadow: 0 12px 30px rgba(0,0,0,.3);
+  font: 13px/1.45 system-ui, sans-serif; text-align: left;
+}
+.cpal-origin__tag { color: #a9c6ff; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
+.cpal-origin strong { color: #b9d0ff; }
+.cpal-origin a { display: block; margin-top: 5px; color: #9ddcff; overflow-wrap: anywhere; text-decoration: underline; }
+.cpal-origin__copyright { color: #c2cbdc; font-size: 11px; margin-top: 6px; }
+@media (max-width: 500px) {
+  .cpal-origin { right: 8px; bottom: 8px; width: calc(100vw - 16px); padding: 10px 12px; }
 }
 `;
 

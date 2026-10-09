@@ -42,9 +42,28 @@ drei Schritte zusammenfasst, ist gemäß `docs/SPEC.md` §4.3 für eine spätere
 
 ## Backup/Restore
 
-Noch nicht automatisiert in Phase 1 – siehe `docs/BACKUP_CONCEPT.md` für das verbindliche
-Konzept (3-2-1, Object-Lock, Deletion-Journal). Die Umsetzung als Tooling folgt gemäß
-`docs/PROGRESS.md` Phase 9.
+Alle Geschäftsdaten (Tickets, Benutzer, Anhänge, ...) liegen ausschließlich in MariaDB, dort
+bereits AES-256-GCM-verschlüsselt. Ein Backup braucht deshalb zwei Dinge: den Datenbank-Dump
+UND den Schlüssel (`ops/secrets/app.kek`), ohne den der Dump nicht entschlüsselbar ist.
+
+```bash
+./ops/docker/backup.sh
+```
+
+Fragt eine Passphrase ab (oder liest sie aus `BACKUP_PASSPHRASE`) und legt ein einzelnes,
+mit dieser Passphrase verschlüsseltes Archiv unter `ops/backups/` ab (DB-Dump + KEK +
+TLS-Zertifikate). Das Archiv ist ohne die Passphrase nutzlos -- auch wenn es irgendwo offen
+liegt (siehe Anforderung "Offene Backup-Dateien"). `ops/backups/` ist nicht Teil des Git-Repos
+(siehe `.gitignore`); die Datei UND die Passphrase gehören an einen anderen Ort als dieser
+Server (3-2-1-Regel: mindestens eine Kopie extern).
+
+```bash
+./ops/docker/restore.sh ops/backups/ticket-system-backup-<Zeitstempel>.tar.gz.enc
+```
+
+Überschreibt die aktuelle Datenbank und den aktuellen Schlüssel dieser Installation vollständig
+und unwiderruflich (fragt vor dem Ausführen eine Bestätigung ab) -- gedacht für Wiederherstellung
+auf einem leeren/zu ersetzenden System, nicht zum Zusammenführen mit vorhandenen Daten.
 
 ## Logs/Diagnose
 

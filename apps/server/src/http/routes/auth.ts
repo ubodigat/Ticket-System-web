@@ -1,4 +1,14 @@
+/*
+The contents of this file are subject to the Common Public Attribution License Version 1.0 (the “License”); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://opensource.org/license/CPAL-1.0. The License is based on the Mozilla Public License Version 1.1 but Sections 14 and 15 have been added to cover use of software over a computer network and provide for limited attribution for the Original Developer. In addition, Exhibit A has been modified to be consistent with Exhibit B.
+Software distributed under the License is distributed on an “AS IS” basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for the specific language governing rights and limitations under the License.
+The Original Code is Ticket-System-web.
+The Original Developer is the Initial Developer: U:Bodigat.
+The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
+Contributors: see CONTRIBUTORS.md and CHANGES.md.
+*/
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as argon2 from 'argon2';
+import { TOTP } from 'otpauth';
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Env } from '../../config/env.js';
@@ -6,6 +16,7 @@ import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { APP_JS, AUTH_CSS, LOGIN_HTML, LOGIN_JS } from '../assets/authPage.js';
+import { authenticateLdap } from '../../auth/ldap.js';
 
 const PROD_SESSION_COOKIE = '__Host-ticket_session';
 const DEV_SESSION_COOKIE = 'ticket_session';
@@ -21,6 +32,8 @@ interface AuthRouteDeps {
 
 interface SessionPayload {
   uid: string;
+  username: string;
+  role: 'user' | 'admin' | 'superadmin';
   iat: number;
 }
 
@@ -28,15 +41,60 @@ function encodeSession(payload: SessionPayload): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
+// Rolle/Benutzername werden in der SIGNIERTEN Cookie-Nutzlast mitgeführt (fastify/cookie HMAC,
+// nicht clientseitig fälschbar) -- Grund: die v2-API (session.ts) liest die Rolle direkt aus
+// dem Cookie, ohne pro Request erneut die Datenbank abzufragen. Bekannte Einschränkung: eine
+// Rollenänderung wirkt erst nach erneutem Login, nicht sofort (vgl. die in der Spezifikation
+// geforderte "sofortige Wirkung" -- das ist hier NICHT erfüllt und müsste über eine
+// serverseitige Session-Tabelle mit Invalidierung nachgerüstet werden).
 function decodeSession(value: string): SessionPayload | null {
   try {
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<SessionPayload>;
     if (!parsed.uid || typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number') return null;
     if (Date.now() - parsed.iat > 8 * 60 * 60 * 1000) return null;
-    return { uid: parsed.uid, iat: parsed.iat };
+    const role = parsed.role === 'superadmin' ? 'superadmin' : parsed.role === 'admin' ? 'admin' : 'user';
+    return { uid: parsed.uid, username: typeof parsed.username === 'string' ? parsed.username : '', role, iat: parsed.iat };
   } catch {
     return null;
   }
+}
+
+const MFA_PENDING_TTL_MS = 5 * 60 * 1000;
+
+// Kurzlebiges, signiertes Zwischentoken für den zweiten Faktor -- NICHT die normale
+// Session-Cookie-Signierung (fastify/cookie), sondern ein eigenständiges HMAC über
+// COOKIE_SECRET, da dieser Wert dem Client im Response-Body (nicht als Cookie) mitgegeben
+// wird und bis zur erfolgreichen TOTP-Prüfung ausdrücklich NICHT als Login gilt.
+function signMfaPendingToken(env: Env, uid: string): string {
+  const payload = { uid, iat: Date.now() };
+  const json = JSON.stringify(payload);
+  const mac = createHmac('sha256', env.COOKIE_SECRET).update(json).digest('base64url');
+  return Buffer.from(json, 'utf8').toString('base64url') + '.' + mac;
+}
+
+function verifyMfaPendingToken(env: Env, token: string): { uid: string } | null {
+  const [body, mac] = token.split('.');
+  if (!body || !mac) return null;
+  const json = Buffer.from(body, 'base64url').toString('utf8');
+  const expectedMac = createHmac('sha256', env.COOKIE_SECRET).update(json).digest('base64url');
+  const a = Buffer.from(mac);
+  const b = Buffer.from(expectedMac);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(json) as { uid?: unknown; iat?: unknown };
+    if (typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number') return null;
+    if (Date.now() - parsed.iat > MFA_PENDING_TTL_MS) return null;
+    return { uid: parsed.uid };
+  } catch {
+    return null;
+  }
+}
+
+function verifyTotpCode(secretBase32: string, code: string): boolean {
+  const totp = new TOTP({ secret: secretBase32, digits: 6, period: 30 });
+  // window: 1 erlaubt eine Zeitschritt-Toleranz (+-30s) für Uhrabweichungen zwischen
+  // Server und Authenticator-App, ohne die Angriffsfläche nennenswert zu vergrößern.
+  return totp.validate({ token: code, window: 1 }) !== null;
 }
 
 function isHttpsRequest(req: FastifyRequest): boolean {
@@ -117,14 +175,6 @@ async function currentUser(req: FastifyRequest, app: FastifyInstance, deps: Auth
   if (!unsigned.valid || !unsigned.value) return null;
   const session = decodeSession(unsigned.value);
   if (!session) return null;
-  if (session.uid.startsWith('legacy:')) {
-    const username = session.uid.slice('legacy:'.length);
-    const legacyUsers = await readLegacyUsers(app);
-    const user = legacyUsers.find(item => item.username === username);
-    if (!user || user.accountArchived || user.accountLocked) return null;
-    if (user.lockedUntil && Number(user.lockedUntil) > Date.now()) return null;
-    return publicLegacyUser(user);
-  }
   const user = await app.db
     .selectFrom('users')
     .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until'])
@@ -135,39 +185,38 @@ async function currentUser(req: FastifyRequest, app: FastifyInstance, deps: Auth
   return decryptUser(app, deps, user);
 }
 
-async function readLegacyUsers(app: FastifyInstance): Promise<Array<Record<string, unknown>>> {
-  const row = await app.db
-    .selectFrom('legacy_data')
-    .select('value_json')
-    .where('data_key', '=', 'users')
-    .executeTakeFirst();
-  if (!row) return [];
-  const value = typeof row.value_json === 'string' ? JSON.parse(row.value_json) : row.value_json;
-  return Array.isArray(value) ? value as Array<Record<string, unknown>> : [];
+const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
+
+// Brute-Force-Schutz (Anforderungsliste "Brute-Force-Angriffe": Hoch). Wird bei jedem
+// fehlgeschlagenen Passwort- ODER TOTP-Versuch aufgerufen; nach MAX_FAILED_LOGIN_ATTEMPTS
+// sperrt locked_until das Konto serverseitig temporär, unabhängig vom Rate-Limit pro IP.
+async function recordFailedLogin(app: FastifyInstance, userId: string, currentCount: number): Promise<void> {
+  const nextCount = currentCount + 1;
+  const updates: Record<string, unknown> = { failed_login_count: nextCount };
+  if (nextCount >= MAX_FAILED_LOGIN_ATTEMPTS) {
+    updates.locked_until = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
+    updates.failed_login_count = 0;
+  }
+  await app.db.updateTable('users').set(updates).where('id', '=', userId).execute();
 }
 
-function publicLegacyUser(user: Record<string, unknown>) {
-  return {
-    id: String(user.id || user.username || ''),
-    username: String(user.username || ''),
-    name: String(user.name || user.username || ''),
-    email: String(user.email || ''),
-    role: user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user',
-    canManageUsers: Boolean(user.canManageUsers),
-    canManage2FA: Boolean(user.canManage2FA),
-    canManageRequests: Boolean(user.canManageRequests),
-    canViewLogs: Boolean(user.canViewLogs),
-    permissions: typeof user.permissions === 'object' && user.permissions ? user.permissions : undefined
-  };
+async function resetFailedLogins(app: FastifyInstance, userId: string): Promise<void> {
+  await app.db.updateTable('users').set({ failed_login_count: 0 }).where('id', '=', userId).execute();
 }
 
-async function legacyLogin(app: FastifyInstance, username: string, password: string) {
-  const users = await readLegacyUsers(app);
-  const user = users.find(item => item.username === username);
-  if (!user || user.accountArchived || user.accountLocked) return null;
-  if (user.lockedUntil && Number(user.lockedUntil) > Date.now()) return null;
-  if (String(user.password || '') !== password) return null;
-  return publicLegacyUser(user);
+// Unzureichendes Security Logging (Anforderungsliste: Mittel) -- fehlgeschlagene Logins landen
+// im selben globalen Audit-Log wie alle anderen sicherheitsrelevanten Aktionen.
+async function logSecurityEvent(app: FastifyInstance, action: string, username: string, detail?: string): Promise<void> {
+  await app.db.insertInto('global_audit_log').values({
+    id: randomUUID(),
+    actor_user_id: null,
+    actor_username: username,
+    action,
+    target_type: 'auth',
+    target_id: null,
+    detail_json: detail ?? null
+  }).execute();
 }
 
 function authProblem(reply: FastifyReply, status: number, title: string, detail: string) {
@@ -198,32 +247,93 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const input = parsed.data;
     const user = await app.db
       .selectFrom('users')
-      .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until'])
+      .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'failed_login_count'])
       .where('username', '=', input.username)
       .executeTakeFirst();
 
     const lockedUntil = user?.locked_until ? new Date(user.locked_until).getTime() : 0;
     if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now()) {
-      const legacyUser = await legacyLogin(app, input.username, input.password);
-      if (legacyUser) {
-        reply.setCookie(sessionCookieName(req), encodeSession({ uid: `legacy:${legacyUser.username}`, iat: Date.now() }), cookieOptions(req));
-        return reply.send({ success: true, user: legacyUser });
-      }
+      // Absichtlich dieselbe Fehlermeldung wie bei falschem Passwort (kein Account-Enumeration
+      // über unterschiedliche Fehlertexte, siehe Anforderungsliste "Account Enumeration").
+      if (user) await logSecurityEvent(app, 'login.rejected_locked_or_archived', input.username);
       return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
     }
-    const ok = await argon2.verify(user.password_hash, input.password);
+    let ok = await argon2.verify(user.password_hash, input.password);
+    // LDAP ist eine ERGÄNZUNG zum lokalen Passwort, kein Ersatz: nur versucht, wenn das lokale
+    // Passwort nicht passt, und nur für ein bereits lokal existierendes Konto (siehe auth/ldap.ts).
     if (!ok) {
-      const legacyUser = await legacyLogin(app, input.username, input.password);
-      if (legacyUser) {
-        reply.setCookie(sessionCookieName(req), encodeSession({ uid: `legacy:${legacyUser.username}`, iat: Date.now() }), cookieOptions(req));
-        return reply.send({ success: true, user: legacyUser });
-      }
+      ok = await authenticateLdap({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, input.username, input.password);
+      if (ok) await logSecurityEvent(app, 'login.ldap_success', input.username);
+    }
+    if (!ok) {
+      await recordFailedLogin(app, user.id, user.failed_login_count);
+      await logSecurityEvent(app, 'login.wrong_password', input.username);
       return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
+    }
+    if (user.totp_enabled) {
+      // Noch KEIN Session-Cookie und noch KEIN Zurücksetzen der Fehlversuche -- der Login ist
+      // erst nach erfolgreicher TOTP-Prüfung abgeschlossen (siehe /api/v1/auth/mfa-verify).
+      // Ein falscher TOTP-Code zählt bewusst ebenfalls zum Sperr-Zähler, sonst wäre der zweite
+      // Faktor selbst nicht gegen Brute-Force geschützt.
+      return reply.send({ mfaRequired: true, mfaToken: signMfaPendingToken(deps.env, user.id) });
     }
 
-    reply.setCookie(sessionCookieName(req), encodeSession({ uid: user.id, iat: Date.now() }), cookieOptions(req));
+    await resetFailedLogins(app, user.id);
+    const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
+    reply.setCookie(
+      sessionCookieName(req),
+      encodeSession({ uid: user.id, username: user.username, role, iat: Date.now() }),
+      cookieOptions(req)
+    );
     return reply.send({ success: true, user: await decryptUser(app, deps, user) });
   });
+
+  app.post(
+    '/api/v1/auth/mfa-verify',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const parsed = z.object({ mfaToken: z.string().min(1), code: z.string().trim().length(6) }).safeParse(req.body);
+      if (!parsed.success) return authProblem(reply, 400, 'Ungültige Eingabe', 'Code ist erforderlich.');
+
+      const pending = verifyMfaPendingToken(deps.env, parsed.data.mfaToken);
+      if (!pending) return authProblem(reply, 401, 'Abgelaufen', 'Bitte erneut anmelden.');
+
+      const user = await app.db
+        .selectFrom('users')
+        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'totp_secret_enc', 'failed_login_count'])
+        .where('id', '=', pending.uid)
+        .executeTakeFirst();
+      const lockedUntil = user?.locked_until ? new Date(user.locked_until).getTime() : 0;
+      if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || !user.totp_enabled || !user.totp_secret_enc) {
+        return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Bitte erneut anmelden.');
+      }
+
+      const totpDek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
+      const secret = fieldCipher.decryptField(user.totp_secret_enc, totpDek.rawDek, {
+        installationId: deps.env.INSTALLATION_ID,
+        schemaVersion: deps.env.SCHEMA_VERSION,
+        tableName: 'users',
+        recordId: user.id,
+        fieldName: 'totp_secret',
+        keyVersion: totpDek.keyVersion
+      });
+
+      if (!verifyTotpCode(secret, parsed.data.code)) {
+        await recordFailedLogin(app, user.id, user.failed_login_count);
+        await logSecurityEvent(app, 'login.wrong_totp_code', user.username);
+        return authProblem(reply, 401, 'Code ungültig', 'Der eingegebene Code ist falsch oder abgelaufen.');
+      }
+      await resetFailedLogins(app, user.id);
+
+      const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
+      reply.setCookie(
+        sessionCookieName(req),
+        encodeSession({ uid: user.id, username: user.username, role, iat: Date.now() }),
+        cookieOptions(req)
+      );
+      return reply.send({ success: true, user: await decryptUser(app, deps, user) });
+    }
+  );
 
   app.post('/api/v1/auth/logout', async (_req, reply) => {
     reply.clearCookie(PROD_SESSION_COOKIE, { path: '/' });
@@ -245,11 +355,19 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     });
   });
 
+  // Es gibt aktuell noch keine neue Oberfläche (die alte Legacy-Brücke wurde bewusst entfernt,
+  // siehe README "Was noch fehlt") -- ehrlicher Platzhalter statt einer Weiterleitung auf eine
+  // nicht mehr existierende Seite.
+  // Platzhalterseite bis die eigentliche (am alten Design orientierte) Oberfläche gebaut ist --
+  // bestätigt ehrlich, dass Login/Session funktionieren, ohne eine fertige Anwendung zu simulieren.
+  // Weiterleitung auf die (als Design-Basis weiterverwendete) Oberfläche -- diese spricht
+  // inzwischen für Benutzer/Login/Sitzung die echte v2-API an (siehe script.js Store.getUsers/
+  // Auth.login). Andere Bereiche (Tickets, Gruppen, Einstellungen, ...) sind noch nicht
+  // umgestellt und funktionieren dort entsprechend noch nicht zuverlässig.
   app.get('/app', async (req, reply) => {
     if (!(await setupCompleted(app))) return reply.redirect('/setup', 302);
     const user = await currentUser(req, app, deps);
     if (!user) return reply.redirect('/login', 302);
-    await publicSettings(app);
     return reply.redirect(user.role === 'user' ? '/dashboard.html' : '/admin.html', 302);
   });
 }

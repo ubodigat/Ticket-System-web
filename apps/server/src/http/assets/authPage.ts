@@ -1,3 +1,11 @@
+/*
+The contents of this file are subject to the Common Public Attribution License Version 1.0 (the “License”); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://opensource.org/license/CPAL-1.0. The License is based on the Mozilla Public License Version 1.1 but Sections 14 and 15 have been added to cover use of software over a computer network and provide for limited attribution for the Original Developer. In addition, Exhibit A has been modified to be consistent with Exhibit B.
+Software distributed under the License is distributed on an “AS IS” basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for the specific language governing rights and limitations under the License.
+The Original Code is Ticket-System-web.
+The Original Developer is the Initial Developer: U:Bodigat.
+The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
+Contributors: see CONTRIBUTORS.md and CHANGES.md.
+*/
 export const AUTH_CSS = `
 :root {
   --bg: #0f1117;
@@ -118,6 +126,12 @@ export const LOGIN_HTML = `<!doctype html>
       <button id="login-submit" type="submit">Anmelden</button>
       <p id="login-error" class="error" role="alert" hidden></p>
     </form>
+    <form id="mfa-form" hidden>
+      <label for="mfa-code">Code aus der Authenticator-App</label>
+      <input id="mfa-code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+      <button id="mfa-submit" type="submit">Bestätigen</button>
+      <p id="mfa-error" class="error" role="alert" hidden></p>
+    </form>
   </section>
 </main>
 <script src="/auth/login.js"></script>
@@ -128,6 +142,10 @@ export const LOGIN_JS = `
 const form = document.getElementById('login-form');
 const errorBox = document.getElementById('login-error');
 const submit = document.getElementById('login-submit');
+const mfaForm = document.getElementById('mfa-form');
+const mfaError = document.getElementById('mfa-error');
+const mfaSubmit = document.getElementById('mfa-submit');
+let pendingMfaToken = null;
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
@@ -147,11 +165,44 @@ form.addEventListener('submit', async event => {
       submit.disabled = false;
       return;
     }
+    if (payload.mfaRequired) {
+      pendingMfaToken = payload.mfaToken;
+      form.hidden = true;
+      mfaForm.hidden = false;
+      document.getElementById('mfa-code').focus();
+      return;
+    }
     window.location.href = '/app';
   } catch {
     errorBox.textContent = 'Verbindung zum Server fehlgeschlagen.';
     errorBox.hidden = false;
     submit.disabled = false;
+  }
+});
+
+mfaForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  mfaError.hidden = true;
+  mfaSubmit.disabled = true;
+  const code = document.getElementById('mfa-code').value.trim();
+  try {
+    const res = await fetch('/api/v1/auth/mfa-verify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mfaToken: pendingMfaToken, code })
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      mfaError.textContent = payload.detail || 'Code ungültig.';
+      mfaError.hidden = false;
+      mfaSubmit.disabled = false;
+      return;
+    }
+    window.location.href = '/app';
+  } catch {
+    mfaError.textContent = 'Verbindung zum Server fehlgeschlagen.';
+    mfaError.hidden = false;
+    mfaSubmit.disabled = false;
   }
 });
 `;

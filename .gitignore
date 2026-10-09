@@ -12,6 +12,7 @@ ops/tls/
 apps/server/secrets/
 apps/server/kek.local
 ops/docker/secrets/
+ops/backups/
 *.kek
 .DS_Store
 Thumbs.db

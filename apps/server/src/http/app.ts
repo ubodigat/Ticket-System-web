@@ -1,3 +1,11 @@
+/*
+The contents of this file are subject to the Common Public Attribution License Version 1.0 (the “License”); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://opensource.org/license/CPAL-1.0. The License is based on the Mozilla Public License Version 1.1 but Sections 14 and 15 have been added to cover use of software over a computer network and provide for limited attribution for the Original Developer. In addition, Exhibit A has been modified to be consistent with Exhibit B.
+Software distributed under the License is distributed on an “AS IS” basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for the specific language governing rights and limitations under the License.
+The Original Code is Ticket-System-web.
+The Original Developer is the Initial Developer: U:Bodigat.
+The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
+Contributors: see CONTRIBUTORS.md and CHANGES.md.
+*/
 import Fastify, { type FastifyInstance } from 'fastify';
 import helmet from '@fastify/helmet';
 import cookie from '@fastify/cookie';
@@ -9,18 +17,26 @@ import type { KeyProvider } from '../crypto/keyProvider.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerSetupRoutes } from './routes/setup.js';
 import { registerAuthRoutes } from './routes/auth.js';
-import { registerLegacyRoutes } from './routes/legacy.js';
+import { registerTicketsV2Routes } from './routes/tickets.js';
+import { registerUsersV2Routes } from './routes/users.js';
+import { registerExtrasV2Routes } from './routes/extras.js';
+import { registerSettingsRoutes } from './routes/settings.js';
+import { registerKnowledgeRoutes } from './routes/knowledge.js';
+import { registerRecurringRoutes } from './routes/recurring.js';
+import { registerMfaRoutes } from './routes/mfa.js';
+import { registerStaticAssetRoutes } from './routes/staticAssets.js';
 
-// Der Server liefert den bestehenden Browser-Prototyp mit aus. Die CDN-Hosts sind bewusst
-// eng auf die dort bereits verwendeten Bibliotheken begrenzt; kein 'unsafe-inline'/'unsafe-eval'.
+// Strikte CSP, keine CDN-Hosts, kein 'unsafe-inline'/'unsafe-eval' (verbindlich, siehe
+// Anforderungsliste "Fehlende Content Security Policy"/"XSS"/"DOM-Based XSS"). Die alte,
+// inline-onclick-basierte Oberfläche wird NICHT mehr ausgeliefert -- genau deshalb kann diese
+// CSP wieder streng sein, statt für sie aufgeweicht zu werden.
 const CSP_DIRECTIVES = {
   defaultSrc: ["'self'"],
-  scriptSrc: ["'self'", 'https://unpkg.com', 'https://cdn.jsdelivr.net'],
-  styleSrc: ["'self'", 'https://fonts.googleapis.com'],
-  imgSrc: ["'self'", 'data:', 'blob:', 'https://api.qrserver.com'],
-  fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+  scriptSrc: ["'self'"],
+  styleSrc: ["'self'"],
+  imgSrc: ["'self'", 'data:'],
+  fontSrc: ["'self'"],
   connectSrc: ["'self'"],
-  frameSrc: ["'self'", 'blob:'],
   frameAncestors: ["'none'"],
   baseUri: ["'none'"],
   formAction: ["'self'"],
@@ -38,14 +54,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     bodyLimit: 20 * 1024 * 1024,
     logger: {
       level: deps.env.NODE_ENV === 'production' ? 'info' : 'debug',
-      // Strukturiertes Logging ohne Rohdaten verschlüsselter Felder -- siehe docs/THREAT_MODEL.md
-      // Abschnitt "App-Container" (Information Disclosure über Logs).
       redact: ['req.headers.cookie', 'req.headers.authorization']
     },
-    // Nur dem einzigen konfigurierten Proxy-Hop (Caddy) wird X-Forwarded-For vertraut --
-    // docs/ARCHITECTURE.md §3. Fastifys Typdefinitionen kennen keine Hop-Zahl, daher boolean:
-    // "vertraue dem unmittelbaren Hop" -- ausreichend für die vorgesehene Topologie mit genau
-    // einem Reverse Proxy davor.
     trustProxy: deps.env.TRUSTED_PROXY_HOPS > 0
   });
 
@@ -53,7 +63,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   await app.register(helmet, {
     contentSecurityPolicy: { directives: CSP_DIRECTIVES },
-    crossOriginEmbedderPolicy: false,
+    crossOriginEmbedderPolicy: true,
     hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
   });
 
@@ -61,11 +71,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     secret: deps.env.COOKIE_SECRET
   });
 
-  // Phase-1-Hinweis (kein stiller Mangel, sondern dokumentiert): dieser In-Memory-Store reicht
-  // für den Setup-Wizard (ein einziger App-Prozess, einmaliger Vorgang pro Installation), ist
-  // aber NICHT für die horizontal skalierenden Auth-/Schreib-Endpunkte aus Phase 2 geeignet --
-  // dafür MUSS vorher der gemeinsame, MariaDB-gestützte Store aus
-  // docs/adr/0008-rate-limit-storage.md angebunden werden, siehe docs/PROGRESS.md Phase 2.
   await app.register(rateLimit, {
     global: true,
     max: 100,
@@ -73,9 +78,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   registerHealthRoutes(app);
-  registerLegacyRoutes(app);
   registerSetupRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerAuthRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+
+  // V2 API - vollständig sicher, RBAC, normalisiert
+  registerTicketsV2Routes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerUsersV2Routes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerExtrasV2Routes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerSettingsRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerKnowledgeRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerRecurringRoutes(app);
+  registerMfaRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerStaticAssetRoutes(app);
 
   return app;
 }
