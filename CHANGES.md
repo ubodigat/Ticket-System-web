@@ -1,5 +1,22 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-10 - Genehmigungs-Entscheidung über generisches Ticket-PATCH umgehbar
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Anlass: gezielte Nachfrage, ob "nichts dem Browser vertraut, nur der Server die sichere Zone
+  ist" wirklich überall durchgesetzt wird. Dabei gefunden: `approval_status`/`approval_text`
+  standen im generischen `updateTicketSchema` von `PATCH /api/v2/tickets/:id` -- einer für JEDE
+  Admin-Person freigegebenen Route. Die dedizierte Route `POST /api/v2/tickets/:id/
+  approval-decision` prüft korrekt, dass nur die eingetragene Prüfer-Person (oder Superadmin als
+  Vertretung) entscheiden darf, aber über das generische PATCH hätte jede beliebige Admin-Person
+  (nicht nur die zuständige Prüfer-Person) eine fremde Genehmigung direkt setzen können --
+  eine serverseitige Rechteprüfungslücke, auch wenn die Oberfläche selbst diesen Weg nie nutzt
+  (`Store.saveTickets()` sendet dieses Feld nicht, nur die dedizierten Endpunkte tun es).
+- Fix: `approval_status`/`approval_text` aus `updateTicketSchema`
+  (`apps/server/src/http/routes/tickets.ts`) entfernt -- Änderungen am Genehmigungsstatus laufen
+  jetzt ausschließlich über die geprüften, dedizierten Endpunkte.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
 ## 2026-10-10 - Sicherheitsaudit: gespeicherte XSS über Anhänge, zeitunabhängiger Token-Vergleich, verzögerte Rollen-/Sperrwirkung
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Anlass: gezielte Aufforderung, alle Sicherheitslücken sofort zu beheben. Gefunden und behoben:

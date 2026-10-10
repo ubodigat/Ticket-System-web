@@ -116,8 +116,10 @@ const updateTicketSchema = z.object({
   assigned_to_username: z.string().nullable().optional(),
   sla_due_at: z.string().nullable().optional(),
   custom_due_at: z.string().nullable().optional(),
-  approval_status: z.string().nullable().optional(),
-  approval_text: z.string().nullable().optional(),
+  // approval_status/approval_text bewusst NICHT hier: sonst koennte jede Admin-Person per
+  // generischem PATCH die Genehmigung direkt setzen und damit die Pruefer-/Vertretungs-
+  // Beschraenkung von POST /tickets/:id/approval-decision umgehen. Aenderungen am
+  // Genehmigungsstatus laufen ausschliesslich ueber die dedizierten Endpunkte dort.
   type: z.enum(['ticket', 'incident']).optional(),
   incident_notice: z.string().trim().max(2000).nullable().optional(),
   archived: z.boolean().optional(),
