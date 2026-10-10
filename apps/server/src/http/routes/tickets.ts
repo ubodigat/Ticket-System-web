@@ -341,6 +341,36 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     }
   });
 
+  // GET /api/v2/tickets/first-response-times - nur Admin, nur fuer Auswertung (AdminBoard.
+  // openReports). Store.getTickets() liefert bewusst keine Chat-Nachrichten mit (N+1-Kosten fuer
+  // jeden normalen Abruf, siehe mapApiTicketToLegacy) -- "Erste Antwortzeit" blieb dadurch bisher
+  // immer leer, obwohl die Kennzahl in der Oberflaeche existierte. Eigener, schlanker Endpunkt
+  // statt die generische Ticket-Liste mit einer weiteren korrelierten Unterabfrage zu belasten,
+  // die nur dieser eine Report braucht.
+  app.get('/api/v2/tickets/first-response-times', async (req, reply) => {
+    try {
+      requireAdmin(req);
+      const { since } = req.query as { since?: string };
+      let query = app.db.selectFrom('tickets')
+        .select(eb => [
+          'id',
+          'created_at',
+          eb.selectFrom('ticket_messages')
+            .select('created_at')
+            .whereRef('ticket_messages.ticket_id', '=', 'tickets.id')
+            .where('sender_role', '!=', 'user')
+            .orderBy('created_at', 'asc')
+            .limit(1)
+            .as('first_response_at')
+        ]);
+      if (since) query = query.where('created_at', '>=', new Date(since));
+      const rows = await query.execute();
+      return reply.send({ tickets: rows });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
   // POST /api/v2/tickets - Neues Ticket erstellen
   app.post('/api/v2/tickets', async (req, reply) => {
     try {
@@ -474,7 +504,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
               }).where('id', '=', newId).execute();
               await app.db.insertInto('ticket_audit_log').values({
                 id: randomUUID(), ticket_id: newId, actor_user_id: session.uid, actor_username: session.username,
-                action: 'approval_requested', field: 'approval_status', old_value: null, new_value: 'pending'
+                action: 'approval_requested', field: 'approval_status', old_value: null, new_value: `pending (Prüfer: ${approver.username})`
               }).execute();
               await createNotification(app, deps, {
                 recipientUserId: approver.id, recipientUsername: approver.username, type: 'approvalRequested',
@@ -970,7 +1000,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       await app.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
-        action: 'approval_requested', field: 'approval_status', old_value: null, new_value: 'pending'
+        action: 'approval_requested', field: 'approval_status', old_value: null,
+        new_value: `pending (Prüfer: ${approver.username}${parsed.data.text ? `, Grund: ${parsed.data.text}` : ''})`
       }).execute();
 
       const ticketRow = await app.db.selectFrom('tickets').select(['ticket_number']).where('id', '=', id).executeTakeFirst();
@@ -1013,7 +1044,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       await app.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
-        action: 'approval_decided', field: 'approval_status', old_value: 'pending', new_value: parsed.data.decision
+        action: 'approval_decided', field: 'approval_status', old_value: 'pending',
+        new_value: parsed.data.reason ? `${parsed.data.decision}: ${parsed.data.reason}` : parsed.data.decision
       }).execute();
 
       if (ticket.approval_requested_by) {

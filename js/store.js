@@ -405,6 +405,16 @@ export const Store = {
         }).catch(() => null);
         return !!res && res.ok;
     },
+    // Nur fuer Auswertung (AdminBoard.openReports) -- liefert je Ticket den Zeitpunkt der ersten
+    // Antwort einer Admin-/Superadmin-Person, ohne dass Store.getTickets() dafuer alle
+    // Chat-Nachrichten mitladen muesste (siehe eigener Endpunkt in tickets.ts).
+    getFirstResponseTimes: async (sinceIso) => {
+        const url = sinceIso ? `/api/v2/tickets/first-response-times?since=${encodeURIComponent(sinceIso)}` : '/api/v2/tickets/first-response-times';
+        const res = await fetch(url, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return {};
+        const rows = (await res.json()).tickets || [];
+        return Object.fromEntries(rows.map(r => [r.id, r.first_response_at]));
+    },
     getTicketAuditLog: async (id) => {
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(id)}/audit-log`, { credentials: 'same-origin' });
         if (!res.ok) return [];
@@ -628,6 +638,10 @@ export const Store = {
                 ...(settings.notificationConfig || {}),
                 ...(cfg.notificationConfig || {})
             };
+            settings.notifConfig = {
+                ...(settings.notifConfig || {}),
+                ...(cfg.notifConfig || {})
+            };
             settings.emailAdvancedConfig = {
                 ...(settings.emailAdvancedConfig || {}),
                 ...(cfg.emailAdvancedConfig || {})
@@ -755,10 +769,49 @@ export const Store = {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ title, content, source_ticket_id: sourceTicketId || undefined })
         }).catch(() => null);
-        return !!res && res.ok;
+        if (!res || !res.ok) return null;
+        return (await res.json()).id || null;
     },
     deleteKbArticle: async (id) => {
         const res = await fetch(`/api/v2/kb/articles/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
+        return !!res && res.ok;
+    },
+    // Datei-Anhänge an Wissensdatenbank-Artikeln (gleiches Muster wie Ticket-Anhänge, siehe
+    // saveAttachment/getTicketAttachments) -- eigener Endpunkt, da ein KB-Artikel kein Ticket ist.
+    getKbArticleAttachments: async (articleId) => {
+        const res = await fetch(`/api/v2/kb/articles/${encodeURIComponent(articleId)}/attachments`, { credentials: 'same-origin' });
+        if (!res.ok) return [];
+        return ((await res.json()).attachments || []).map(a => ({
+            id: a.id, attachmentId: a.id, name: a.filename, type: a.mime_type, size: a.size_bytes
+        }));
+    },
+    saveKbAttachment: async (articleId, fileLike) => {
+        if (fileLike.size && fileLike.size > 15 * 1024 * 1024) {
+            throw new Error('ATTACHMENT_TOO_LARGE');
+        }
+        const dataUrl = fileLike.data || await Store.readFile(fileLike);
+        const data_b64 = String(dataUrl).split(',').pop();
+        const name = fileLike.name || 'Anhang';
+        const type = fileLike.type || 'application/octet-stream';
+        const size = fileLike.size || Math.round((data_b64.length * 3) / 4);
+        const res = await fetch(`/api/v2/kb/articles/${encodeURIComponent(articleId)}/attachments`, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ filename: name, mime_type: type, size_bytes: size, data_b64 })
+        }).catch(() => null);
+        if (!res || !res.ok) throw new Error('ATTACHMENT_UPLOAD_FAILED');
+        const saved = await res.json();
+        return { id: saved.id, attachmentId: saved.id, name: saved.filename, type: saved.mime_type, size: saved.size_bytes };
+    },
+    getKbAttachment: async (id) => {
+        const res = await fetch(`/api/v2/kb/attachments/${encodeURIComponent(id)}`, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return null;
+        const a = (await res.json()).attachment;
+        if (!a) return null;
+        return { id: a.id, name: a.filename, type: a.mime_type, size: a.size_bytes, data: `data:${a.mime_type};base64,${a.data_b64}` };
+    },
+    deleteKbAttachment: async (id) => {
+        const res = await fetch(`/api/v2/kb/attachments/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
         return !!res && res.ok;
     },
 

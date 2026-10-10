@@ -91,12 +91,15 @@ const settingsConfigSchema = z.object({
     priorities: z.array(z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch'])).default([]),
     fallbackApproverUserId: z.string().nullable().optional()
   }).optional(),
+  // Feldnamen/-werte entsprechen exakt der lokalen Version vom 07.10.2026 (vorher ein eigenes,
+  // abweichendes Feldset) -- 0 bei sessionTimeout/maxLoginAttempts bedeutet bewusst "kein
+  // Limit", siehe apps/server/src/domain/securityPolicy.ts fuer die serverseitige Auswertung.
   securityConfig: z.object({
-    passwordMinLength: z.number().int().min(8).max(128).optional(),
-    sessionTimeoutMinutes: z.number().int().min(5).max(10080).optional(),
-    maxLoginAttempts: z.number().int().min(1).max(50).optional(),
-    require2faForAdmins: z.boolean().optional(),
-    allowPermanentSessions: z.boolean().optional()
+    force2FA: z.enum(['none', 'all', 'admin', 'user']).optional(),
+    sessionTimeout: z.number().int().min(0).max(10080).optional(),
+    maxLoginAttempts: z.number().int().min(0).max(50).optional(),
+    lockoutAction: z.enum(['lock', 'temp', 'none']).optional(),
+    lockoutMinutes: z.number().int().min(1).max(10080).optional()
   }).optional(),
   // Je Ereignistyp (newTicket/mention/statusChange/...) und Rolle (user/admin): Standardwert
   // für App/E-Mail und ob die Person das selbst anpassen darf (appLocked/emailLocked) -- siehe
@@ -111,11 +114,20 @@ const settingsConfigSchema = z.object({
   emailAdvancedConfig: z.object({
     replyTo: z.string().trim().max(255).nullable().optional(),
     bccArchive: z.string().trim().max(255).nullable().optional(),
+    template: z.string().max(20000).optional(),
+    htmlEnabled: z.boolean().optional(),
     htmlSignature: z.string().max(10000).optional(),
-    transportSecurity: z.enum(['starttls', 'tls', 'none']).optional(),
-    certificateValidation: z.enum(['strict', 'opportunistic']).optional(),
+    // Werte wie in der lokalen Version vom 07.10.2026 -- "opportunistic" gehoert zur
+    // Transportverschluesselung (nicht zur Zertifikatspruefung wie zuvor hier abweichend
+    // modelliert), Zertifikatspruefung hat dort drei eigene Stufen.
+    transportSecurity: z.enum(['starttls', 'tls', 'opportunistic']).optional(),
+    certificateValidation: z.enum(['strict', 'allow-self-signed', 'disabled']).optional(),
     smimeCertificatePem: z.string().max(20000).optional(),
-    smimePrivateKeyPem: z.string().max(20000).optional()
+    smimePrivateKeyPem: z.string().max(20000).optional(),
+    smimePassphrase: z.string().max(512).optional(),
+    dkimSelector: z.string().trim().max(128).optional(),
+    dkimDomain: z.string().trim().max(255).optional(),
+    dkimPrivateKeyPem: z.string().max(20000).optional()
   }).optional(),
   outlookConfig: z.object({
     enabled: z.boolean().optional(),
@@ -131,7 +143,18 @@ const settingsConfigSchema = z.object({
     phone: z.string().trim().max(80).optional(),
     address: z.string().max(1000).optional(),
     imprintUrl: z.string().trim().max(500).optional(),
-    privacyUrl: z.string().trim().max(500).optional()
+    privacyUrl: z.string().trim().max(500).optional(),
+    // Felder aus der lokalen Version vom 07.10.2026, die bisher auf dieser Seite fehlten.
+    department: z.string().trim().max(255).optional(),
+    timezone: z.string().trim().max(100).optional(),
+    location: z.string().trim().max(255).optional(),
+    signature: z.string().max(5000).optional(),
+    htmlSignature: z.string().max(10000).optional()
+  }).optional(),
+  // "Konto genehmigt"-Automail -- bisher komplett ohne Gegenstueck im Backend (siehe
+  // account-requests.ts: die Genehmigungs-Mail ging immer unbedingt raus).
+  notifConfig: z.object({
+    accountApproved: z.boolean().optional()
   }).optional()
 }).partial();
 

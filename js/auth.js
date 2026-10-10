@@ -18,6 +18,7 @@ import { Settings } from './settings.js';
 export const Auth = {
     lastError: null,
     pendingMfaToken: null,
+    mfaSetupRequired: false,
     login: async (u, p) => {
         Auth.lastError = null;
         Auth.pendingMfaToken = null;
@@ -38,6 +39,9 @@ export const Auth = {
         }
         if (res.ok && payload.user) {
             Store._usersCache = null;
+            // "2FA erzwingen" (Systemeinstellungen > Sicherheit) betrifft diese Person, hat aber
+            // noch keine 2FA eingerichtet -- Login wird dadurch nicht blockiert, nur markiert.
+            Auth.mfaSetupRequired = !!payload.mfaSetupRequired;
             return payload.user;
         }
         Auth.lastError = res.status === 401 ? 'invalid' : (payload.detail || 'invalid');

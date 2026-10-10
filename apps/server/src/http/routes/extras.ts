@@ -292,6 +292,37 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       await app.db.updateTable('account_requests')
         .set({ status: parsed.data.status, reviewed_by_user_id: session.uid, updated_at: new Date().toISOString() })
         .where('id', '=', id).execute();
+
+      // "Konto genehmigt"-Automail (Systemeinstellungen > Benachrichtigungen) -- gab es bisher
+      // serverseitig gar nicht, nur die lokale Version vom 07.10.2026 hatte dafuer einen
+      // (dort client-seitig wirkungslosen) Schalter. Best-effort wie alle anderen Mails hier.
+      if (parsed.data.status === 'approved') {
+        const settingsRow = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+        const config = settingsRow?.config_json ? JSON.parse(settingsRow.config_json) : {};
+        if (config.notifConfig?.accountApproved) {
+          const request = await app.db.selectFrom('account_requests').selectAll().where('id', '=', id).executeTakeFirst();
+          if (request) {
+            const nameDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.name');
+            const emailDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.email');
+            const ctx = (fieldName: string, keyVersion: number) => ({
+              installationId: deps.env.INSTALLATION_ID,
+              schemaVersion: deps.env.SCHEMA_VERSION,
+              tableName: 'account_requests',
+              recordId: request.id,
+              fieldName,
+              keyVersion
+            });
+            const email = fieldCipher.decryptField(request.email, emailDek.rawDek, ctx('email', emailDek.keyVersion));
+            const name = fieldCipher.decryptField(request.name, nameDek.rawDek, ctx('name', nameDek.keyVersion));
+            await sendMailSafe(
+              { db: app.db, env: deps.env, keyProvider: deps.keyProvider },
+              email,
+              'Dein Konto wurde freigeschaltet',
+              `Hallo ${name},\n\ndein Konto wurde freigeschaltet. Du kannst dich jetzt anmelden.`
+            );
+          }
+        }
+      }
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);

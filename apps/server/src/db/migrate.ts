@@ -29,6 +29,7 @@ import { migration_0019_ldap_config } from './migrations/0019_ldap_config.js';
 import { migration_0020_ticket_relations } from './migrations/0020_ticket_relations.js';
 import { migration_0021_user_department } from './migrations/0021_user_department.js';
 import { migration_0022_ticket_archived_author_ack } from './migrations/0022_ticket_archived_author_ack.js';
+import { migration_0023_kb_article_attachments } from './migrations/0023_kb_article_attachments.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -52,7 +53,8 @@ const migrations: Record<string, Migration> = {
   '0019_ldap_config': migration_0019_ldap_config,
   '0020_ticket_relations': migration_0020_ticket_relations,
   '0021_user_department': migration_0021_user_department,
-  '0022_ticket_archived_author_ack': migration_0022_ticket_archived_author_ack
+  '0022_ticket_archived_author_ack': migration_0022_ticket_archived_author_ack,
+  '0023_kb_article_attachments': migration_0023_kb_article_attachments
 };
 
 const provider: MigrationProvider = {

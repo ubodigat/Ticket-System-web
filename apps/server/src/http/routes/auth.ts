@@ -17,6 +17,7 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { APP_JS, AUTH_CSS, LOGIN_HTML, LOGIN_JS } from '../assets/authPage.js';
 import { authenticateLdap } from '../../auth/ldap.js';
+import { loadSecurityPolicy, force2faAppliesToRole, type SecurityPolicy } from '../../domain/securityPolicy.js';
 
 const PROD_SESSION_COOKIE = '__Host-ticket_session';
 const DEV_SESSION_COOKIE = 'ticket_session';
@@ -47,11 +48,14 @@ function encodeSession(payload: SessionPayload): string {
 // Rollenänderung wirkt erst nach erneutem Login, nicht sofort (vgl. die in der Spezifikation
 // geforderte "sofortige Wirkung" -- das ist hier NICHT erfüllt und müsste über eine
 // serverseitige Session-Tabelle mit Invalidierung nachgerüstet werden).
-function decodeSession(value: string): SessionPayload | null {
+// sessionTimeoutMinutes === 0 bedeutet "kein Timeout" (Systemeinstellungen > Sicherheit, siehe
+// securityPolicy.ts) -- die Sitzung läuft dann nur über Logout/Cookie-Ablauf aus, nie über
+// dieses Alters-Limit.
+function decodeSession(value: string, sessionTimeoutMinutes: number): SessionPayload | null {
   try {
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<SessionPayload>;
     if (!parsed.uid || typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number') return null;
-    if (Date.now() - parsed.iat > 8 * 60 * 60 * 1000) return null;
+    if (sessionTimeoutMinutes > 0 && Date.now() - parsed.iat > sessionTimeoutMinutes * 60 * 1000) return null;
     const role = parsed.role === 'superadmin' ? 'superadmin' : parsed.role === 'admin' ? 'admin' : 'user';
     return { uid: parsed.uid, username: typeof parsed.username === 'string' ? parsed.username : '', role, iat: parsed.iat };
   } catch {
@@ -105,15 +109,19 @@ function sessionCookieName(req: FastifyRequest): string {
   return isHttpsRequest(req) ? PROD_SESSION_COOKIE : DEV_SESSION_COOKIE;
 }
 
-function cookieOptions(req: FastifyRequest) {
+// Browser-Cookie-maxAge in Sekunden: 0/kein Timeout wird als ein Jahr abgebildet (das echte
+// Zeitlimit prüft ohnehin decodeSession() serverseitig bei jeder Anfrage) -- ein echtes
+// "niemals abgelaufenes" Cookie unterstützt kein Browser zuverlässig.
+function cookieOptions(req: FastifyRequest, sessionTimeoutMinutes: number) {
   const secure = isHttpsRequest(req);
+  const maxAge = sessionTimeoutMinutes > 0 ? sessionTimeoutMinutes * 60 : 365 * 24 * 60 * 60;
   return {
     path: '/',
     httpOnly: true,
     sameSite: 'lax' as const,
     secure,
     signed: true,
-    maxAge: 8 * 60 * 60
+    maxAge
   };
 }
 
@@ -173,7 +181,8 @@ async function currentUser(req: FastifyRequest, app: FastifyInstance, deps: Auth
   if (!raw) return null;
   const unsigned = req.unsignCookie(raw);
   if (!unsigned.valid || !unsigned.value) return null;
-  const session = decodeSession(unsigned.value);
+  const policy = await loadSecurityPolicy(app.db);
+  const session = decodeSession(unsigned.value, policy.sessionTimeoutMinutes);
   if (!session) return null;
   const user = await app.db
     .selectFrom('users')
@@ -185,17 +194,22 @@ async function currentUser(req: FastifyRequest, app: FastifyInstance, deps: Auth
   return decryptUser(app, deps, user);
 }
 
-const MAX_FAILED_LOGIN_ATTEMPTS = 5;
-const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
-
 // Brute-Force-Schutz (Anforderungsliste "Brute-Force-Angriffe": Hoch). Wird bei jedem
-// fehlgeschlagenen Passwort- ODER TOTP-Versuch aufgerufen; nach MAX_FAILED_LOGIN_ATTEMPTS
-// sperrt locked_until das Konto serverseitig temporär, unabhängig vom Rate-Limit pro IP.
-async function recordFailedLogin(app: FastifyInstance, userId: string, currentCount: number): Promise<void> {
+// fehlgeschlagenen Passwort- ODER TOTP-Versuch aufgerufen; Schwelle, Aktion (dauerhaft sperren/
+// zeitweise sperren/nur protokollieren) und Sperrdauer kommen aus Systemeinstellungen >
+// Sicherheit (securityPolicy.ts) statt wie zuvor fest einprogrammiert zu sein.
+// maxLoginAttempts === 0 bedeutet "kein Limit" -- der Zähler läuft zu Audit-Zwecken trotzdem
+// mit, löst aber nie eine Sperre aus.
+async function recordFailedLogin(app: FastifyInstance, userId: string, currentCount: number, policy: SecurityPolicy): Promise<void> {
   const nextCount = currentCount + 1;
   const updates: Record<string, unknown> = { failed_login_count: nextCount };
-  if (nextCount >= MAX_FAILED_LOGIN_ATTEMPTS) {
-    updates.locked_until = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
+  const limitReached = policy.maxLoginAttempts > 0 && nextCount >= policy.maxLoginAttempts;
+  if (limitReached && policy.lockoutAction !== 'none') {
+    if (policy.lockoutAction === 'lock') {
+      updates.locked_permanent = true;
+    } else {
+      updates.locked_until = new Date(Date.now() + policy.lockoutMinutes * 60 * 1000).toISOString();
+    }
     updates.failed_login_count = 0;
   }
   await app.db.updateTable('users').set(updates).where('id', '=', userId).execute();
@@ -245,6 +259,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) return authProblem(reply, 400, 'Ungültige Eingabe', 'Benutzername und Passwort sind erforderlich.');
     const input = parsed.data;
+    const policy = await loadSecurityPolicy(app.db);
     const user = await app.db
       .selectFrom('users')
       .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'failed_login_count'])
@@ -266,7 +281,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       if (ok) await logSecurityEvent(app, 'login.ldap_success', input.username);
     }
     if (!ok) {
-      await recordFailedLogin(app, user.id, user.failed_login_count);
+      await recordFailedLogin(app, user.id, user.failed_login_count, policy);
       await logSecurityEvent(app, 'login.wrong_password', input.username);
       return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
     }
@@ -283,9 +298,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     reply.setCookie(
       sessionCookieName(req),
       encodeSession({ uid: user.id, username: user.username, role, iat: Date.now() }),
-      cookieOptions(req)
+      cookieOptions(req, policy.sessionTimeoutMinutes)
     );
-    return reply.send({ success: true, user: await decryptUser(app, deps, user) });
+    // "2FA erzwingen" (Systemeinstellungen > Sicherheit): betroffene Personen ohne eingerichtete
+    // 2FA werden beim Login darauf hingewiesen, der Zugang selbst wird dadurch nicht blockiert --
+    // entspricht dem Hinweistext der lokalen Version vom 07.10.2026 ("...werden beim Login
+    // aufgefordert, 2FA einzurichten, wenn sie betroffen sind").
+    const mfaSetupRequired = !user.totp_enabled && force2faAppliesToRole(policy, role);
+    return reply.send({ success: true, user: await decryptUser(app, deps, user), mfaSetupRequired });
   });
 
   app.post(
@@ -298,6 +318,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       const pending = verifyMfaPendingToken(deps.env, parsed.data.mfaToken);
       if (!pending) return authProblem(reply, 401, 'Abgelaufen', 'Bitte erneut anmelden.');
 
+      const policy = await loadSecurityPolicy(app.db);
       const user = await app.db
         .selectFrom('users')
         .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'totp_secret_enc', 'failed_login_count'])
@@ -319,7 +340,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       });
 
       if (!verifyTotpCode(secret, parsed.data.code)) {
-        await recordFailedLogin(app, user.id, user.failed_login_count);
+        await recordFailedLogin(app, user.id, user.failed_login_count, policy);
         await logSecurityEvent(app, 'login.wrong_totp_code', user.username);
         return authProblem(reply, 401, 'Code ungültig', 'Der eingegebene Code ist falsch oder abgelaufen.');
       }
@@ -329,7 +350,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       reply.setCookie(
         sessionCookieName(req),
         encodeSession({ uid: user.id, username: user.username, role, iat: Date.now() }),
-        cookieOptions(req)
+        cookieOptions(req, policy.sessionTimeoutMinutes)
       );
       return reply.send({ success: true, user: await decryptUser(app, deps, user) });
     }

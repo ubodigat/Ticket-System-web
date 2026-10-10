@@ -18,6 +18,21 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
 
+// Gleiche Blockliste wie Ticket-Anhaenge (extras.ts): image/svg+xml/.html etc. koennen beim
+// direkten Oeffnen im Browser same-origin Skripte ausfuehren (gespeicherte XSS).
+const KB_ATTACHMENT_BLOCKED_MIME = ['text/html', 'application/javascript', 'application/x-php', 'application/x-sh', 'image/svg+xml'];
+const KB_ATTACHMENT_BLOCKED_EXT = ['.exe', '.php', '.sh', '.bat', '.cmd', '.ps1', '.py', '.rb', '.js', '.html', '.svg', '.svgz', '.htm', '.xhtml'];
+
+const createKbAttachmentSchema = z.object({
+  filename: z.string().trim().min(1).max(255).refine(
+    name => !/[<>:"/\\|?*\x00-\x1F]/.test(name),
+    'Ungültiger Dateiname'
+  ),
+  mime_type: z.string().trim().min(1).max(255),
+  size_bytes: z.number().int().nonnegative().max(15 * 1024 * 1024),
+  data_b64: z.string().min(1)
+});
+
 export interface KnowledgeRouteDeps {
   env: Env;
   keyProvider: KeyProvider;
@@ -108,6 +123,90 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       requireAdmin(req);
       const { id } = req.params as { id: string };
       await app.db.deleteFrom('kb_articles').where('id', '=', id).execute();
+      return reply.send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // --- Wissensdatenbank: Datei-Anhänge (gab es lokal am 07.10.2026 bereits, server-seitig
+  // bisher komplett gefehlt) ---
+
+  app.get('/api/v2/kb/articles/:id/attachments', async (req, reply) => {
+    try {
+      requireSession(req);
+      const { id } = req.params as { id: string };
+      const rows = await app.db.selectFrom('kb_article_attachments')
+        .select(['id', 'filename', 'mime_type', 'size_bytes', 'uploaded_by_username', 'created_at'])
+        .where('kb_article_id', '=', id).orderBy('created_at', 'asc').execute();
+      const filenameDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.filename');
+      const attachments = rows.map(row => ({
+        ...row,
+        filename: fieldCipher.decryptField(row.filename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'filename', filenameDek.keyVersion))
+      }));
+      return reply.send({ attachments });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.get('/api/v2/kb/attachments/:attachmentId', async (req, reply) => {
+    try {
+      requireSession(req);
+      const { attachmentId } = req.params as { attachmentId: string };
+      const row = await app.db.selectFrom('kb_article_attachments').selectAll().where('id', '=', attachmentId).executeTakeFirst();
+      if (!row) return reply.code(404).send({ error: 'not_found' });
+      const filenameDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.filename');
+      const dataDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.data');
+      const filename = fieldCipher.decryptField(row.filename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'filename', filenameDek.keyVersion));
+      const data_b64 = fieldCipher.decryptField(row.data_b64, dataDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'data', dataDek.keyVersion));
+      return reply.send({ attachment: { ...row, filename, data_b64 } });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.post('/api/v2/kb/articles/:id/attachments', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      const { id } = req.params as { id: string };
+      const article = await app.db.selectFrom('kb_articles').select('id').where('id', '=', id).executeTakeFirst();
+      if (!article) return reply.code(404).send({ error: 'article_not_found' });
+      const parsed = createKbAttachmentSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+
+      if (KB_ATTACHMENT_BLOCKED_MIME.includes(parsed.data.mime_type.toLowerCase())) {
+        return reply.code(400).send({ error: 'blocked_mime_type' });
+      }
+      const ext = parsed.data.filename.toLowerCase().split('.').pop() ?? '';
+      if (KB_ATTACHMENT_BLOCKED_EXT.includes('.' + ext)) {
+        return reply.code(400).send({ error: 'blocked_extension' });
+      }
+
+      const attachmentId = randomUUID();
+      const filenameDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.filename');
+      const dataDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.data');
+      await app.db.insertInto('kb_article_attachments').values({
+        id: attachmentId,
+        kb_article_id: id,
+        uploaded_by_user_id: session.uid,
+        uploaded_by_username: session.username,
+        filename: fieldCipher.encryptField(parsed.data.filename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', attachmentId, 'filename', filenameDek.keyVersion)),
+        mime_type: parsed.data.mime_type,
+        size_bytes: parsed.data.size_bytes,
+        data_b64: fieldCipher.encryptField(parsed.data.data_b64, dataDek.rawDek, ctx(deps, 'kb_article_attachments', attachmentId, 'data', dataDek.keyVersion))
+      }).execute();
+      return reply.code(201).send({ id: attachmentId, filename: parsed.data.filename, mime_type: parsed.data.mime_type, size_bytes: parsed.data.size_bytes });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.delete('/api/v2/kb/attachments/:attachmentId', async (req, reply) => {
+    try {
+      requireAdmin(req);
+      const { attachmentId } = req.params as { attachmentId: string };
+      await app.db.deleteFrom('kb_article_attachments').where('id', '=', attachmentId).execute();
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);

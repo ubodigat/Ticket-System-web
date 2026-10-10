@@ -34,7 +34,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Login Page
     if (q('#btn-login')) {
         const goToApp = (user) => {
-            UI.toast(`Willkommen ${user.name || user.username}`);
+            UI.toast(Auth.mfaSetupRequired
+                ? `Willkommen ${user.name || user.username} – bitte richte die Zwei-Faktor-Anmeldung in deinem Konto ein.`
+                : `Willkommen ${user.name || user.username}`);
             setTimeout(() => window.location.href = (user.role === 'admin' || user.role === 'superadmin') ? 'admin.html' : 'dashboard.html', 500);
         };
         // Die Entscheidung "ist ein zweiter Faktor nötig" trifft ausschließlich der Server

@@ -345,8 +345,8 @@ und `/api/v1/setup/*`) gegen MariaDB -- es gibt **keine** JSON-Blob-Kompatibilit
 | LDAP-Login | Echter Bind-basierter Login über `ldapts` als **Ergänzung** zum lokalen Passwort (`apps/server/src/auth/ldap.ts`): die Person braucht weiterhin ein lokales Konto mit demselben Benutzernamen, Rolle/Rechte kommen immer aus der eigenen Datenbank, nie aus LDAP-Gruppen. Konfiguration + Verbindungstest (`/api/v2/settings/ldap`, nur Superadmin) in Systemeinstellungen |
 | Outlook/Microsoft-Graph | **Noch nicht vorhanden** -- das alte UI hat dafür Eingabefelder, aber kein Backend; wurde aus den Admin-Modals entfernt statt ungespeichert vorzutäuschen. Erfordert eine App-Registrierung in Azure AD mit echten Zugangsdaten zum Testen, anders als SMTP/LDAP nicht ohne externe Infrastruktur sinnvoll umsetzbar |
 | Globales Audit-Log, Benachrichtigungen | Vollständige API; `script.js` umgestellt. Log-Einträge werden ausschließlich serverseitig bei der jeweiligen Aktion erzeugt (users.ts/settings.ts/tickets.ts), nicht mehr vom Client übermittelt -- Admins können das Protokoll nicht mehr leeren |
-| Wissensdatenbank, Textbausteine | Vollständige API; `script.js` umgestellt. Dateianhänge an Wissensartikeln gibt es im Schema nicht und wurden aus dem Editor entfernt |
-| Auswertung (Reports) | Kennzahlen (erstellte/geschlossene Tickets, Lösungszeit) laufen client-seitig über `AdminBoard.openReports`. Lösungszeit nutzt die echte, serverseitige `closed_at`-Spalte. **Bekannte Einschränkung:** `Erste Antwortzeit` bleibt leer, weil `Store.getTickets()` aus Performance-Gründen keine Chat-Nachrichten mitliefert (eigene Ressource pro Ticket) -- eine korrekte Berechnung bräuchte einen neuen Aggregations-Endpunkt |
+| Wissensdatenbank, Textbausteine | Vollständige API; `script.js` umgestellt. Dateianhänge an Wissensartikeln (Datei-Eingabe/Drag&Drop/Einfügen, wie in der lokalen Version vom 07.10.2026) laufen über eine eigene, AES-256-GCM-verschlüsselte Tabelle (`kb_article_attachments`, `apps/server/src/http/routes/knowledge.ts`) -- die generische Ticket-Anhang-API verlangt zwingend eine Ticket-ID und eignet sich dafür nicht |
+| Auswertung (Reports) | Kennzahlen (erstellte/geschlossene Tickets, Lösungszeit, Erste Antwortzeit) laufen client-seitig über `AdminBoard.openReports`. Lösungszeit nutzt die echte, serverseitige `closed_at`-Spalte, Erste Antwortzeit den eigenen, schlanken Endpunkt `GET /api/v2/tickets/first-response-times` (nur Admin) -- `Store.getTickets()` liefert bewusst weiterhin keine Chat-Nachrichten mit (Performance), dieser Report bekommt die Zeitpunkte stattdessen gezielt über eine korrelierte Unterabfrage |
 | Wiederkehrende Tickets | Vollständige API; `script.js` umgestellt (Intervall in Tagen/Wochen/Monaten + konkreter Startzeitpunkt statt "Wochentag/Tag im Monat"). Ausführung läuft serverseitig per Timer (alle 5 Min.) |
 | Auto-Archivierung geschlossener Tickets | Automatisch (Timer alle 5 Min., über Systemeinstellungen konfigurierbare Frist) |
 | Kontoanfragen (öffentliches Formular, annehmen/ablehnen) | Vollständige, verschlüsselte API; `script.js` umgestellt |
@@ -400,8 +400,13 @@ Umgesetzt:
 - KEK/DEK-Schlüsselverwaltung über eine austauschbare `KeyProvider`-Abstraktion
 - Echte Zwei-Faktor-Authentifizierung (TOTP) mit serverseitig erzeugtem QR-Code -- kein externer
   Dienst, kein clientseitig generiertes Secret
-- Serverseitiger Brute-Force-Schutz: Konten werden nach 5 Fehlversuchen (Passwort oder TOTP-Code)
-  15 Minuten gesperrt, unabhängig vom IP-Rate-Limit
+- Serverseitiger Brute-Force-Schutz, konfigurierbar unter Systemeinstellungen > Sicherheit
+  (Schwelle, Aktion -- dauerhaft sperren/zeitweise sperren/nur protokollieren --, Sperrdauer;
+  0 Fehlversuche = kein Limit), unabhängig vom IP-Rate-Limit. Solange nichts explizit gespeichert
+  wurde, gilt die sichere Vorgabe 5 Fehlversuche/15 Minuten Sperre (apps/server/src/domain/
+  securityPolicy.ts). "2FA erzwingen" (Keine/Alle/Nur Admins/Nur Benutzer) weist betroffene
+  Personen beim Login auf eine fehlende 2FA-Einrichtung hin, ohne den Login zu blockieren.
+  Sitzungsdauer ebenfalls dort konfigurierbar (0 Minuten = kein Zeit-Timeout).
 - Rechteprüfung ausschließlich serverseitig (`requireSession`/`requireAdmin`/`requireSuperadmin`),
   IDOR-Schutz auf Ticket-/Anhang-/Genehmigungsebene
 - MariaDB-TLS im Docker-Stack

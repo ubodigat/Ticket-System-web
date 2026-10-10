@@ -310,6 +310,18 @@ export interface AttachmentsTable {
   created_at: CreatedAt;
 }
 
+export interface KbArticleAttachmentsTable {
+  id: string;
+  kb_article_id: string;
+  uploaded_by_user_id: Nullable<string>;
+  uploaded_by_username: string;
+  filename: Buffer;
+  mime_type: string;
+  size_bytes: number;
+  data_b64: Buffer;
+  created_at: CreatedAt;
+}
+
 export interface TicketAuditLogTable {
   id: string;
   ticket_id: string;
@@ -390,6 +402,7 @@ export interface Database {
   ticket_relations: TicketRelationsTable;
   ticket_time_entries: TicketTimeEntriesTable;
   attachments: AttachmentsTable;
+  kb_article_attachments: KbArticleAttachmentsTable;
   ticket_audit_log: TicketAuditLogTable;
   account_requests: AccountRequestsTable;
   notifications: NotificationsTable;

@@ -632,6 +632,13 @@ export const AdminBoard = {
     // ... render methods ...
     render: async () => {
         const user = await Store.currentUser();
+        // currentUser() liefert null sowohl bei 401 (Sitzung abgelaufen, das behandelt bereits
+        // Auth.checkGuard() beim Laden der Seite) als auch bei einem vorübergehenden
+        // Serverfehler (z.B. 502 während eines Updates/Neustarts) -- ohne diese Prüfung riss
+        // das hier mit "Cannot read properties of null" ab und der 60-Sekunden-Refresh-Timer
+        // (siehe setInterval weiter oben) wiederholte den Absturz endlos. Einfach überspringen:
+        // der nächste Intervall-Durchlauf versucht es erneut, ohne die Seite zu verlassen.
+        if (!user) return;
         const rawTickets = await Store.getTickets();
         let tickets = rawTickets.filter(t => !t.archived);
 
@@ -1762,18 +1769,52 @@ export const AdminBoard = {
                             (Benutzerverwaltung → Kategorien → „Automatische Zuweisung an Gruppe").</div>
                         <!-- Sicherheit -->
                         <div id="sys-security" class="tab-content">
-                            <div class="settings-section-title">Anmeldung &amp; Sitzungen</div>
-                            <div class="form-grid">
-                                <div class="field"><label>Mindestlänge Passwort</label><input id="sys-sec-pass-min" type="number" min="8" max="128" placeholder="14"></div>
-                                <div class="field"><label>Sitzungslaufzeit (Minuten)</label><input id="sys-sec-session" type="number" min="5" max="10080" placeholder="480"></div>
-                                <div class="field"><label>Max. Fehlversuche</label><input id="sys-sec-attempts" type="number" min="1" max="50" placeholder="5"></div>
+                            <div class="field">
+                                <label>2FA erzwingen</label>
+                                <select id="sys-2fa-enforce">
+                                    <option value="none">Nicht erzwingen (optional)</option>
+                                    <option value="all">Alle Benutzer</option>
+                                    <option value="admin">Nur Administratoren</option>
+                                    <option value="user">Nur Benutzer</option>
+                                </select>
+                                <div class="hint">Benutzer werden beim Login aufgefordert, 2FA einzurichten, wenn sie betroffen sind.</div>
                             </div>
-                            <label class="check-row"><input type="checkbox" id="sys-sec-2fa-admins"><span><strong>2FA für Administratoren erzwingen</strong></span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-sec-permanent"><span>Dauerhafte Sitzungen erlauben</span></label>
+                            <div class="field">
+                                <label>Session-Timeout (Minuten, 0 = kein Timeout)</label>
+                                <input id="sys-session-timeout" type="number" placeholder="0" min="0">
+                            </div>
+                            <div class="field">
+                                <label>Max. Fehlversuche beim Login (0 = kein Limit)</label>
+                                <input id="sys-max-login-attempts" type="number" placeholder="0" min="0">
+                            </div>
+                            <div class="field">
+                                <label>Was passiert nach Erreichen der Fehlversuche?</label>
+                                <select id="sys-lockout-action">
+                                    <option value="lock">Konto sperren (Admin muss entsperren)</option>
+                                    <option value="temp">Konto vorübergehend sperren</option>
+                                    <option value="none">Nur protokollieren</option>
+                                </select>
+                            </div>
+                            <div class="field" id="sys-lockout-minutes-field">
+                                <label>Sperrdauer (Minuten)</label>
+                                <input id="sys-lockout-minutes" type="number" placeholder="15" min="1">
+                            </div>
+                            <div class="settings-section-title">Konto-Selbstverwaltung</div>
+                            <div class="hint">Welche Angaben dürfen Benutzer in ihrem Konto selbst ändern?</div>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-name"><span>Name</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-email"><span>E-Mail</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-dept"><span>Einrichtung / Abteilung</span></label>
                         </div>
 
                         <!-- Benachrichtigungen -->
                         <div id="sys-notifications" class="tab-content">
+                            <div class="settings-section-title">${Icon('bell-ring', 15)}Lege fest, wann automatisch E-Mails versendet werden.</div>
+                            <div class="checkbox-list">
+                                <label class="check-row">
+                                    <input type="checkbox" id="notif-account-approved">
+                                    <span class="check-text"><strong>Konto genehmigt</strong><span>Antragsteller erhalten eine E-Mail wenn ihr Konto genehmigt wurde.</span></span>
+                                </label>
+                            </div>
                             <div class="settings-section-title">${Icon('sliders-horizontal', 15)}Richtlinie je Ereignis (Benutzer &amp; Admins getrennt)</div>
                             <p class="hint">Standardwerte gelten, solange eine Person nichts Eigenes einstellt (unter Portaleinstellungen &gt; Benachrichtigungen). Wird ein Kästchen unter „anpassbar" deaktiviert, ist der Standardwert für alle verbindlich.</p>
                             <div id="sys-notif-matrix" class="notif-matrix"></div>
@@ -1852,14 +1893,29 @@ export const AdminBoard = {
                                 <div class="field"><label>Antwort-an Adresse</label><input id="sys-email-replyto" type="email" placeholder="reply@example.com"></div>
                                 <div class="field"><label>BCC Archiv-Adresse</label><input id="sys-email-bcc" type="email" placeholder="archiv@example.com"></div>
                             </div>
+                            <div class="settings-section-title">${Icon('mail-check', 15)}Vorlage und Signatur</div>
+                            <div class="field field-wide"><label>E-Mail-Vorlage</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
+                            <div class="field">
+                                <label class="check-row">
+                                    <input type="checkbox" id="sys-email-html-enabled">
+                                    <span class="check-text"><strong>HTML-E-Mails aktivieren</strong><span>Benachrichtigungen mit HTML-Signatur und formatiertem Inhalt vorbereiten.</span></span>
+                                </label>
+                            </div>
                             <div class="field field-wide"><label>HTML-Signatur</label><textarea id="sys-email-signature" rows="5" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
-                            <div class="settings-section-title">E-Mail Sicherheit</div>
+                            <div class="settings-section-title">${Icon('shield-check', 15)}Sicherheit und Zertifikate</div>
+                            <div class="callout"><strong>E-Mail Sicherheit:</strong> Zertifikate und Schlüssel werden gespeichert und für Backend/SMTP-Integration bereitgestellt.</div>
                             <div class="form-grid">
-                                <div class="field"><label>Transport-Sicherheit</label><select id="sys-email-transport"><option value="starttls">STARTTLS erzwingen</option><option value="tls">TLS/SSL</option><option value="none">Keine Verschlüsselung</option></select></div>
-                                <div class="field"><label>Zertifikatsprüfung</label><select id="sys-email-cert-mode"><option value="strict">Strikt prüfen</option><option value="opportunistic">Opportunistisch</option></select></div>
+                                <div class="field"><label>Transport-Sicherheit</label><select id="sys-email-transport"><option value="starttls">STARTTLS erzwingen</option><option value="tls">TLS/SSL erzwingen</option><option value="opportunistic">Opportunistisch</option></select></div>
+                                <div class="field"><label>Zertifikatsprüfung</label><select id="sys-email-cert-mode"><option value="strict">Strikt prüfen</option><option value="allow-self-signed">Self-signed erlauben</option><option value="disabled">Deaktiviert</option></select></div>
                             </div>
                             <div class="field field-wide"><label>S/MIME Zertifikat (PEM)</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
                             <div class="field field-wide"><label>S/MIME Private Key (PEM)</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+                            <div class="form-grid">
+                                <div class="field"><label>Key-Passphrase</label><input id="sys-email-smime-pass" type="password" placeholder="Optional"></div>
+                                <div class="field"><label>DKIM Selector</label><input id="sys-email-dkim-selector" type="text" placeholder="default"></div>
+                            </div>
+                            <div class="field"><label>DKIM Domain</label><input id="sys-email-dkim-domain" type="text" placeholder="example.com"></div>
+                            <div class="field field-wide"><label>DKIM Private Key (PEM)</label><textarea id="sys-email-dkim-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
                             <div class="setting-row">
                                 <span class="hint" id="sys-smtp-status"></span>
                                 <button class="btn-secondary btn-sm" id="sys-smtp-save-test" type="button">${Icon('send', 15)}Speichern &amp; Test-E-Mail senden</button>
@@ -1927,18 +1983,27 @@ export const AdminBoard = {
 
                         <!-- Unternehmenseinstellungen -->
                         <div id="sys-company" class="tab-content">
-                            <div class="field"><label>Firmenname</label><input id="sys-company-name" type="text" placeholder="Muster GmbH"></div>
+                            <div class="form-grid">
+                                <div class="field"><label>Firmenname</label><input id="sys-company-name" type="text" placeholder="Muster GmbH"></div>
+                                <div class="field"><label>Support-Abteilung</label><input id="sys-company-dept" type="text" placeholder="IT Service Desk"></div>
+                            </div>
                             <div class="settings-section-title">Branding &amp; Kontaktdaten</div>
                             <div class="field"><label>Firmenlogo / Logo-URL</label><input id="sys-company-logo" type="text" placeholder="https://example.com/logo.png oder Data-URL"></div>
                             <div class="form-grid">
                                 <div class="field"><label>Support-E-Mail</label><input id="sys-company-support" type="email" placeholder="support@example.com"></div>
                                 <div class="field"><label>Telefon</label><input id="sys-company-phone" type="text" placeholder="+49 ..."></div>
                             </div>
+                            <div class="form-grid">
+                                <div class="field"><label>Standard-Zeitzone</label><input id="sys-company-timezone" type="text" placeholder="Europe/Berlin"></div>
+                                <div class="field"><label>Standort / Region</label><input id="sys-company-location" type="text" placeholder="Deutschland"></div>
+                            </div>
                             <div class="field field-wide"><label>Adresse</label><textarea id="sys-company-address" rows="3" placeholder="Straße, PLZ Ort"></textarea></div>
                             <div class="form-grid">
                                 <div class="field"><label>Impressum-URL</label><input id="sys-company-imprint" type="url" placeholder="https://example.com/impressum"></div>
                                 <div class="field"><label>Datenschutz-URL</label><input id="sys-company-privacy" type="url" placeholder="https://example.com/datenschutz"></div>
                             </div>
+                            <div class="field field-wide"><label>E-Mail Signatur</label><textarea id="sys-company-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
+                            <div class="field field-wide"><label>HTML-E-Mail-Signatur</label><textarea id="sys-company-html-signature" rows="4" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
                             <div class="settings-section-title">Ticketnummern für neue Tickets</div>
                             <div class="callout">Formatvorlagen unterstützen <code>{prefix}</code>, <code>{category}</code> (Code der ersten Ticketkategorie) und <code>{number}</code>. Jede Vorlage muss <code>{number}</code> enthalten. Bestehende Ticketnummern bleiben unverändert.</div>
                             <div class="form-grid">
@@ -1950,11 +2015,6 @@ export const AdminBoard = {
                                 <label>Kategorieformate (leer = Standardformat)</label>
                                 <div id="sys-ticket-category-formats" class="ticket-number-category-formats"></div>
                             </div>
-                            <div class="settings-section-title">Konto-Selbstverwaltung</div>
-                            <div class="hint">Welche Angaben dürfen Benutzer in ihrem Konto selbst ändern?</div>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-name"><span>Name</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-email"><span>E-Mail</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-dept"><span>Einrichtung / Abteilung</span></label>
                             <div class="settings-section-title">Genehmigungen durch Vorgesetzte</div>
                             <div class="hint">Wenn eine Person mit hinterlegter Vorgesetzter Person ein Ticket mit einer der gewählten Prioritäten anlegt, wird automatisch eine Genehmigung angefordert. Vorgesetzte Person wird je Benutzer unter Benutzerverwaltung festgelegt.</div>
                             <label class="check-row"><input type="checkbox" id="sys-appr-enabled"><span><strong>Genehmigungsworkflow aktivieren</strong></span></label>
@@ -2008,6 +2068,7 @@ export const AdminBoard = {
         const general = settings.generalConfig || {};
         const company = settings.companyConfig || {};
         const security = settings.securityConfig || {};
+        const notif = settings.notifConfig || {};
         const emailAdvanced = settings.emailAdvancedConfig || {};
         const outlook = settings.outlookConfig || {};
         const companyBranding = settings.companyBrandingConfig || {};
@@ -2041,12 +2102,17 @@ export const AdminBoard = {
         q('#sys-bh-holidays').value = (businessHours.holidays || []).map(d => /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : d).join('\n');
 
         q('#sys-company-name').value = company.name || '';
+        q('#sys-company-dept').value = companyBranding.department || '';
         q('#sys-company-logo').value = companyBranding.logoDataUrl || '';
         q('#sys-company-support').value = companyBranding.supportEmail || '';
         q('#sys-company-phone').value = companyBranding.phone || '';
+        q('#sys-company-timezone').value = companyBranding.timezone || 'Europe/Berlin';
+        q('#sys-company-location').value = companyBranding.location || '';
         q('#sys-company-address').value = companyBranding.address || '';
         q('#sys-company-imprint').value = companyBranding.imprintUrl || '';
         q('#sys-company-privacy').value = companyBranding.privacyUrl || '';
+        q('#sys-company-signature').value = companyBranding.signature || '';
+        q('#sys-company-html-signature').value = companyBranding.htmlSignature || '';
         q('#sys-ticket-number-format').value = company.ticketNumberFormat || '{prefix}-{number}';
         q('#sys-ticket-number-prefix').value = company.ticketNumberPrefix || '';
         q('#sys-ticket-number-padding').value = company.ticketNumberPadding || 5;
@@ -2061,21 +2127,28 @@ export const AdminBoard = {
                 </div>`).join('') : '<div class="empty-state compact">Keine Kategorien angelegt.</div>';
         }
 
-        q('#sys-sec-pass-min').value = security.passwordMinLength ?? 14;
-        q('#sys-sec-session').value = security.sessionTimeoutMinutes ?? 480;
-        q('#sys-sec-attempts').value = security.maxLoginAttempts ?? 5;
-        q('#sys-sec-2fa-admins').checked = !!security.require2faForAdmins;
-        q('#sys-sec-permanent').checked = !!security.allowPermanentSessions;
+        q('#sys-2fa-enforce').value = security.force2FA || 'none';
+        q('#sys-session-timeout').value = security.sessionTimeout ?? 0;
+        q('#sys-max-login-attempts').value = security.maxLoginAttempts ?? 0;
+        q('#sys-lockout-action').value = security.lockoutAction || 'lock';
+        q('#sys-lockout-minutes').value = security.lockoutMinutes || 15;
 
+        q('#notif-account-approved').checked = !!notif.accountApproved;
         AdminBoard.renderNotifMatrix(q('#sys-notif-matrix'), await Store.getNotifPolicy());
 
         q('#sys-email-replyto').value = emailAdvanced.replyTo || '';
         q('#sys-email-bcc').value = emailAdvanced.bccArchive || '';
+        q('#sys-email-template').value = emailAdvanced.template || '';
+        q('#sys-email-html-enabled').checked = !!emailAdvanced.htmlEnabled;
         q('#sys-email-signature').value = emailAdvanced.htmlSignature || '';
         q('#sys-email-transport').value = emailAdvanced.transportSecurity || 'starttls';
         q('#sys-email-cert-mode').value = emailAdvanced.certificateValidation || 'strict';
         q('#sys-email-smime-cert').value = emailAdvanced.smimeCertificatePem || '';
         q('#sys-email-smime-key').value = emailAdvanced.smimePrivateKeyPem || '';
+        q('#sys-email-smime-pass').value = emailAdvanced.smimePassphrase || '';
+        q('#sys-email-dkim-selector').value = emailAdvanced.dkimSelector || '';
+        q('#sys-email-dkim-domain').value = emailAdvanced.dkimDomain || '';
+        q('#sys-email-dkim-key').value = emailAdvanced.dkimPrivateKeyPem || '';
 
         q('#sys-outlook-enabled').checked = !!outlook.enabled;
         q('#sys-outlook-tenant').value = outlook.tenantId || '';
@@ -2210,21 +2283,30 @@ export const AdminBoard = {
                         }).filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value))
                     },
                     securityConfig: {
-                        passwordMinLength: Math.max(8, Math.min(128, parseInt(q('#sys-sec-pass-min').value, 10) || 14)),
-                        sessionTimeoutMinutes: Math.max(5, Math.min(10080, parseInt(q('#sys-sec-session').value, 10) || 480)),
-                        maxLoginAttempts: Math.max(1, Math.min(50, parseInt(q('#sys-sec-attempts').value, 10) || 5)),
-                        require2faForAdmins: q('#sys-sec-2fa-admins').checked,
-                        allowPermanentSessions: q('#sys-sec-permanent').checked
+                        force2FA: q('#sys-2fa-enforce').value,
+                        sessionTimeout: Math.max(0, parseInt(q('#sys-session-timeout').value, 10) || 0),
+                        maxLoginAttempts: Math.max(0, parseInt(q('#sys-max-login-attempts').value, 10) || 0),
+                        lockoutAction: q('#sys-lockout-action').value,
+                        lockoutMinutes: Math.max(1, parseInt(q('#sys-lockout-minutes').value, 10) || 15)
+                    },
+                    notifConfig: {
+                        accountApproved: q('#notif-account-approved').checked
                     },
                     notifPolicy: AdminBoard.readNotifMatrix(q('#sys-notif-matrix')),
                     emailAdvancedConfig: {
                         replyTo: q('#sys-email-replyto').value.trim() || null,
                         bccArchive: q('#sys-email-bcc').value.trim() || null,
+                        template: q('#sys-email-template').value.trim(),
+                        htmlEnabled: q('#sys-email-html-enabled').checked,
                         htmlSignature: q('#sys-email-signature').value,
                         transportSecurity: q('#sys-email-transport').value,
                         certificateValidation: q('#sys-email-cert-mode').value,
                         smimeCertificatePem: q('#sys-email-smime-cert').value,
-                        smimePrivateKeyPem: q('#sys-email-smime-key').value
+                        smimePrivateKeyPem: q('#sys-email-smime-key').value,
+                        smimePassphrase: q('#sys-email-smime-pass').value,
+                        dkimSelector: q('#sys-email-dkim-selector').value.trim(),
+                        dkimDomain: q('#sys-email-dkim-domain').value.trim(),
+                        dkimPrivateKeyPem: q('#sys-email-dkim-key').value.trim()
                     },
                     outlookConfig: {
                         enabled: q('#sys-outlook-enabled').checked,
@@ -2235,12 +2317,17 @@ export const AdminBoard = {
                         createTicketsFromMail: q('#sys-outlook-create').checked
                     },
                     companyBrandingConfig: {
+                        department: q('#sys-company-dept').value.trim(),
                         logoDataUrl: q('#sys-company-logo').value.trim(),
                         supportEmail: q('#sys-company-support').value.trim(),
                         phone: q('#sys-company-phone').value.trim(),
+                        timezone: q('#sys-company-timezone').value.trim() || 'Europe/Berlin',
+                        location: q('#sys-company-location').value.trim(),
                         address: q('#sys-company-address').value,
                         imprintUrl: q('#sys-company-imprint').value.trim(),
-                        privacyUrl: q('#sys-company-privacy').value.trim()
+                        privacyUrl: q('#sys-company-privacy').value.trim(),
+                        signature: q('#sys-company-signature').value.trim(),
+                        htmlSignature: q('#sys-company-html-signature').value.trim()
                     },
                     ticketNumberFormat: {
                         prefix: q('#sys-ticket-number-prefix').value.trim(),
@@ -2874,15 +2961,26 @@ export const AdminBoard = {
         return users.filter(user => allowed.has(user.username));
     },
 
+    // ticket.todos existiert nicht mehr lokal (siehe renderTicketTodos) -- vorher iterierte diese
+    // Funktion über das immer leere ticket.todos-Array und löste dadurch NIE tatsächlich eine
+    // PATCH-Anfrage aus: eine Teilaufgabe blieb einer aus dem Ticket entfernten Beteiligten
+    // Person weiterhin zugewiesen, sowohl auf dem Server als auch in der Anzeige. Lädt die
+    // echten Teilaufgaben jetzt frisch von der API und löscht betroffene Zuweisungen dort.
     syncTodoAssignees: async (ticket) => {
         const allowed = new Set([ticket.owner, ...(ticket.participants || [])].filter(Boolean));
+        const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticket.id)}/todos`, { credentials: 'same-origin' }).catch(() => null);
+        const todos = res && res.ok ? (await res.json()).todos || [] : [];
         const cleared = [];
-        (ticket.todos || []).forEach(todo => {
-            if (todo.assignee && !allowed.has(todo.assignee)) {
-                cleared.push(todo.title);
-                todo.assignee = '';
+        for (const todo of todos) {
+            if (todo.assignee_username && !allowed.has(todo.assignee_username)) {
+                cleared.push(todo.content);
+                await fetch(`/api/v2/tickets/${encodeURIComponent(ticket.id)}/todos/${encodeURIComponent(todo.id)}`, {
+                    method: 'PATCH', credentials: 'same-origin',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ assignee_user_id: null, assignee_username: null })
+                }).catch(() => {});
             }
-        });
+        }
         if (cleared.length) await Store.addLog(ticket, 'Teilaufgaben-Zuweisung entfernt', cleared.join(', '));
     },
 
@@ -2979,6 +3077,7 @@ export const AdminBoard = {
             }
             t.participants = filtered;
             await AdminBoard.syncTodoAssignees(t);
+            AdminBoard.renderTicketTodos(t, staff, tickets);
             const actorUsername = (await Store.currentUser())?.username;
             for (const username of t.participants) {
                 if (!previouslyIn.has(username)) await AdminBoard.notifyIfAbsentAssignee(t, username, actorUsername);
@@ -3721,9 +3820,14 @@ export const AdminBoard = {
             // -- das echte Protokoll wird erst pro Ticket einzeln nachgeladen); die serverseitig
             // gesetzte closed_at-Spalte (tickets.ts PATCH-Handler) liefert den Zeitpunkt stattdessen direkt.
             const closedAt = t => t.closedAt ? new Date(t.closedAt).getTime() : null;
+            // Eigener, schlanker Endpunkt statt t.chat/t.comments (dort immer [], siehe oben) --
+            // vorher lieferte "Erste Antwortzeit" dadurch immer "–", egal wie viele Tickets
+            // tatsächlich beantwortet wurden.
+            const firstResponseMap = await Store.getFirstResponseTimes(new Date(since).toISOString());
             const firstResponse = t => {
-                const times = [...(t.chat || []).filter(c => c.role !== 'user'), ...(t.comments || [])].map(c => new Date(c.date).getTime()).sort((a, b) => a - b);
-                return times.length ? times[0] - new Date(t.createdAt).getTime() : null;
+                const respondedAt = firstResponseMap[t.id];
+                if (!respondedAt) return null;
+                return new Date(respondedAt).getTime() - new Date(t.createdAt).getTime();
             };
             const closed = all.map(t => ({ t, c: closedAt(t) })).filter(x => x.c && x.c >= since);
             const avg = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
@@ -3801,8 +3905,10 @@ export const AdminBoard = {
                                <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-numbered" title="Nummerierte Liste" aria-label="Nummerierte Liste">${Icon('list-ordered', 15)}</button>
                                <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-table" title="Tabelle einfügen" aria-label="Tabelle einfügen">${Icon('table', 15)}</button>
                                <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-link" title="Link einfügen" aria-label="Link einfügen">${Icon('link', 15)}</button>
+                               <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen">${Icon('paperclip', 15)}<input type="file" id="kb-file-input" style="display:none" multiple></label>
                            </div>
                            <div id="kb-new-body" class="rich-editor" contenteditable="true" data-placeholder="Schreibe wie in einem Textverarbeitungsprogramm: Formatierungen, Listen und Tabellen direkt bearbeiten."></div>
+                           <div id="kb-file-preview" class="file-preview"></div>
                        </div>
                    </div>` : ''}`,
             onSave: canEdit ? async (m) => {
@@ -3810,13 +3916,40 @@ export const AdminBoard = {
                 const bodyEl = m.querySelector('#kb-new-body');
                 const body = Utils.sanitizeRichHtml(bodyEl.innerHTML);
                 if (!title || !bodyEl.textContent.trim()) return UI.toast('Bitte Titel und Inhalt eingeben.');
-                if (!(await Store.createKbArticle(title, body))) return UI.toast('Speichern fehlgeschlagen.');
+                const articleId = await Store.createKbArticle(title, body);
+                if (!articleId) return UI.toast('Speichern fehlgeschlagen.');
+                if (AdminBoard.kbFiles.length) {
+                    try {
+                        await Promise.all(AdminBoard.kbFiles.map(f => Store.saveKbAttachment(articleId, f)));
+                    } catch (e) {
+                        UI.toast(e.message === 'ATTACHMENT_TOO_LARGE' ? 'Anhang ist zu groß (max. 15 MB).' : 'Artikel gespeichert, aber ein Anhang konnte nicht hochgeladen werden.');
+                    }
+                }
                 m.querySelector('#kb-new-title').value = '';
                 bodyEl.innerHTML = '';
+                AdminBoard.kbFiles = [];
+                renderKbFilePreview();
                 UI.toast('Artikel gespeichert.');
                 await render();
             } : null
         });
+        AdminBoard.kbFiles = [];
+        const renderKbFilePreview = () => {
+            const preview = modal.querySelector('#kb-file-preview');
+            if (!preview) return;
+            preview.innerHTML = '';
+            AdminBoard.kbFiles.forEach((file, index) => {
+                const chip = document.createElement('div');
+                chip.className = 'file-chip';
+                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="Entfernen" aria-label="${Utils.esc(file.name)} entfernen">${Icon('x', 13)}</button>`;
+                chip.querySelector('button').onclick = () => {
+                    AdminBoard.kbFiles.splice(index, 1);
+                    renderKbFilePreview();
+                };
+                preview.appendChild(chip);
+            });
+            if (window.lucide) lucide.createIcons();
+        };
         if (canEdit) {
             const bodyInput = modal.querySelector('#kb-new-body');
             // Verhindert, dass ein Klick auf die Werkzeugleiste den Fokus/die Auswahl im Editor verliert
@@ -3841,19 +3974,49 @@ export const AdminBoard = {
                 else document.execCommand('insertHTML', false, `<a href="${Utils.esc(href.trim())}" target="_blank" rel="noopener noreferrer">${Utils.esc(href.trim())}</a>`);
                 bodyInput.dispatchEvent(new Event('input', { bubbles: true }));
             };
+            const kbFileInput = modal.querySelector('#kb-file-input');
+            kbFileInput.onchange = (e) => {
+                AdminBoard.kbFiles.push(...Array.from(e.target.files || []));
+                renderKbFilePreview();
+                e.target.value = '';
+            };
+            const addKbFiles = files => {
+                AdminBoard.kbFiles.push(...files);
+                renderKbFilePreview();
+            };
+            UI.bindFileDrop(modal.querySelector('.kb-editor'), addKbFiles);
+            UI.bindPasteFiles(bodyInput, addKbFiles);
         }
         const render = async () => {
             const term = modal.querySelector('#kb-search').value.toLowerCase().trim();
             const articles = (await Store.getKbArticles()).filter(a => !term || `${a.title} ${a.body}`.toLowerCase().includes(term));
             modal.querySelector('#kb-list').innerHTML = articles.length ? articles.map(a => `
-                <details class="kb-article">
+                <details class="kb-article" data-id="${Utils.esc(a.id)}">
                     <summary><strong>${Utils.esc(a.title)}</strong> <span class="hint">${Utils.esc(a.source || '')} · ${Utils.fmtDate(a.createdAt)}</span></summary>
                     <div class="desc-text rich-content">${a.body}</div>
+                    <div class="file-preview kb-article-attachments" hidden></div>
                     ${canEdit ? `<button class="btn-ghost btn-sm kb-del" type="button" data-id="${Utils.esc(a.id)}">${Icon('trash-2', 14)}Löschen</button>` : ''}
                 </details>`).join('') : '<div class="empty-state compact">Keine Artikel gefunden.</div>';
             modal.querySelectorAll('.kb-del').forEach(btn => btn.onclick = async () => {
                 await Store.deleteKbArticle(btn.dataset.id);
                 await render();
+            });
+            // Anhänge je Artikel erst beim Aufklappen laden, nicht pauschal für alle Treffer.
+            modal.querySelectorAll('.kb-article').forEach(details => {
+                let loaded = false;
+                details.addEventListener('toggle', async () => {
+                    if (!details.open || loaded) return;
+                    loaded = true;
+                    const box = details.querySelector('.kb-article-attachments');
+                    const attachments = await Store.getKbArticleAttachments(details.dataset.id);
+                    box.hidden = attachments.length === 0;
+                    box.innerHTML = attachments.map(file => `<button type="button" class="file-chip kb-att" data-id="${Utils.esc(file.id)}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('');
+                    box.querySelectorAll('.kb-att').forEach(btn => btn.onclick = async () => {
+                        const full = await Store.getKbAttachment(btn.dataset.id);
+                        if (full) AdminBoard.openAttachmentPreview(full);
+                    });
+                    if (window.lucide) lucide.createIcons();
+                });
             });
             if (window.lucide) lucide.createIcons();
         };
@@ -3861,12 +4024,17 @@ export const AdminBoard = {
         await render();
     },
 
+    // t.comments existiert nicht mehr lokal (immer [], siehe mapApiTicketToLegacy) -- vorher
+    // fand dieser Knopf dadurch NIE einen Lösungsweg und meldete immer "gibt noch keinen
+    // Lösungsweg", selbst wenn einer dokumentiert war. Lädt die echten Notizen jetzt frisch.
     addSolutionToKnowledgeBase: async (t) => {
-        const solution = (t.comments || []).filter(c => (c.channel || 'solution') === 'solution');
+        const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/notes`, { credentials: 'same-origin' }).catch(() => null);
+        const notes = res && res.ok ? (await res.json()).notes || [] : [];
+        const solution = notes.filter(n => n.stream === 'solution');
         if (!solution.length) return UI.toast('Es gibt noch keinen Lösungsweg in diesem Ticket.');
         const title = await UI.promptText({ title: 'Wissensartikel', label: 'Titel des Artikels', value: t.title, saveLabel: 'Speichern' });
         if (!title || !title.trim()) return;
-        const body = solution.map(c => `${c.text || ''}`).join('\n\n');
+        const body = solution.map(n => n.content || '').join('\n\n');
         if (!(await Store.createKbArticle(title.trim(), body, t.id))) return UI.toast('Speichern fehlgeschlagen.');
         UI.toast('Als Wissensartikel gespeichert.');
     },
@@ -4840,7 +5008,7 @@ export const AdminBoard = {
     printTicket: async (id, options = {}) => {
         const opts = { todos: true, adminChat: true, solution: true, chat: true, time: true, log: false, ...options };
         const tickets = await Store.getTickets();
-        const t = tickets.find(x => x.id === id);
+        const t = tickets.find(x => x.id === id) || await Store.getTicketById(id);
         if (!t) return;
         const users = await Store.getUsers();
         const nameFor = (username) => {
@@ -4852,21 +5020,52 @@ export const AdminBoard = {
         const company = settings.companyConfig || {};
         const actor = await Store.currentUser();
         const slaCountdown = Store.formatSlaCountdown(t, settings);
-        const todos = opts.todos ? (t.todos || []).map(d => `<li>${d.done ? '☑' : '☐'} ${Utils.esc(d.title)}${d.assignee ? ' – ' + Utils.esc(nameFor(d.assignee)) : ''}${d.done && d.doneAt ? ` – erledigt am ${Utils.esc(Utils.fmtDate(d.doneAt))}` : ''}</li>`).join('') : '';
-        const entryRow = (c) => `
-            <div class="p-entry"><strong>${Utils.esc(c.author)}</strong> <span>${Utils.esc(Utils.fmtDate(c.date))}</span>
-            <p>${Utils.esc(c.text || '')}</p></div>`;
-        const adminChatEntries = opts.adminChat ? (t.comments || []).filter(c => (c.channel || 'solution') === 'admin-chat').map(entryRow).join('') : '';
-        const solutionEntries = opts.solution ? (t.comments || []).filter(c => (c.channel || 'solution') === 'solution').map(entryRow).join('') : '';
-        const chat = opts.chat ? (t.chat || []).map(entryRow).join('') : '';
-        const logEntries = opts.log ? (t.logs || []).slice().reverse().map(l => `
-            <div class="p-entry"><strong>${Utils.esc(l.user || '-')}</strong> <span>${Utils.esc(Utils.fmtDate(l.date))}</span>
-            <p>${Utils.esc(l.action || '')}${l.details ? ' – ' + Utils.esc(l.details) : ''}</p></div>`).join('') : '';
+        // Die Ticket-Liste (Store.getTickets) liefert bewusst nur Zaehlungen, keine vollen
+        // Inhalte (siehe mapApiTicketToLegacy) -- vorher griff der Druck direkt auf t.todos/
+        // t.comments/t.chat/t.logs/t.timeEntries zu, die dadurch IMMER leer waren: der Ausdruck
+        // enthielt faktisch nur noch Kopf/Metadaten/Beschreibung, egal welche Haekchen gesetzt
+        // waren. Jetzt werden die tatsaechlichen Inhalte je Abschnitt frisch von der jeweiligen
+        // Detail-API geladen, genau wie die Detailansicht es auch tut.
+        const entryRow = (author, date, text) => `
+            <div class="p-entry"><strong>${Utils.esc(author)}</strong> <span>${Utils.esc(Utils.fmtDate(date))}</span>
+            <p>${Utils.esc(text || '')}</p></div>`;
+
+        let todos = '';
+        if (opts.todos) {
+            const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/todos`, { credentials: 'same-origin' }).catch(() => null);
+            const list = res && res.ok ? (await res.json()).todos || [] : [];
+            todos = list.map(d => `<li>${d.done ? '☑' : '☐'} ${Utils.esc(d.content)}${d.assignee_username ? ' – ' + Utils.esc(nameFor(d.assignee_username)) : ''}</li>`).join('');
+        }
+        let adminChatEntries = '', solutionEntries = '';
+        if (opts.adminChat || opts.solution) {
+            const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/notes`, { credentials: 'same-origin' }).catch(() => null);
+            const notes = res && res.ok ? (await res.json()).notes || [] : [];
+            if (opts.adminChat) adminChatEntries = notes.filter(n => n.stream === 'admin-chat').map(n => entryRow(n.author_name || n.author_username, n.created_at, n.content)).join('');
+            if (opts.solution) solutionEntries = notes.filter(n => n.stream === 'solution').map(n => entryRow(n.author_name || n.author_username, n.created_at, n.content)).join('');
+        }
+        let chat = '';
+        if (opts.chat) {
+            const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/messages`, { credentials: 'same-origin' }).catch(() => null);
+            const messages = res && res.ok ? (await res.json()).messages || [] : [];
+            chat = messages.map(m => entryRow(m.sender_name || (m.sender_role === 'user' ? nameFor(t.author) : '-'), m.created_at, m.content)).join('');
+        }
+        let logEntries = '';
+        if (opts.log) {
+            const log = await Store.getTicketAuditLog(t.id);
+            logEntries = log.slice().reverse().map(l => `
+                <div class="p-entry"><strong>${Utils.esc(l.user || '-')}</strong> <span>${Utils.esc(Utils.fmtDate(l.date))}</span>
+                <p>${Utils.esc(l.action || '')}${l.details ? ' – ' + Utils.esc(l.details) : ''}</p></div>`).join('');
+        }
         const fmtMinutesPrint = (mins) => mins >= 60 ? `${(mins / 60).toFixed(mins % 60 === 0 ? 0 : 1)} Std.` : `${mins} Min.`;
-        const totalMinutes = (t.timeEntries || []).reduce((sum, e) => sum + (e.minutes || 0), 0);
-        const timeEntries = opts.time ? (t.timeEntries || []).map(e => `
-            <div class="p-entry"><strong>${Utils.esc(nameFor(e.username))}</strong> <span>${Utils.esc(Utils.fmtDate(e.date))} – ${fmtMinutesPrint(e.minutes)}</span>
-            ${e.note ? `<p>${Utils.esc(e.note)}</p>` : ''}</div>`).join('') : '';
+        let timeEntries = '', totalMinutes = 0;
+        if (opts.time) {
+            const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/time-entries`, { credentials: 'same-origin' }).catch(() => null);
+            const entries = res && res.ok ? (await res.json()).entries || [] : [];
+            totalMinutes = entries.reduce((sum, e) => sum + (e.minutes || 0), 0);
+            timeEntries = entries.map(e => `
+                <div class="p-entry"><strong>${Utils.esc(nameFor(e.username))}</strong> <span>${Utils.esc(Utils.fmtDate(e.created_at))} – ${fmtMinutesPrint(e.minutes)}</span>
+                ${e.note ? `<p>${Utils.esc(e.note)}</p>` : ''}</div>`).join('');
+        }
         const participants = [...new Set([t.owner, ...(t.participants || [])].filter(Boolean))].map(nameFor).join(', ') || '-';
         const incidentOf = t.linkedIncidentId ? tickets.find(x => x.id === t.linkedIncidentId) : null;
         const linkedToIncident = t.isMajorIncident ? tickets.filter(x => x.linkedIncidentId === t.id && !x.archived) : [];

@@ -26,6 +26,7 @@ import { registerRecurringRoutes } from './routes/recurring.js';
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerUpdateRoutes } from './routes/update.js';
 import { registerStaticAssetRoutes } from './routes/staticAssets.js';
+import { loadSecurityPolicy } from '../domain/securityPolicy.js';
 
 // Strikte CSP, keine CDN-Hosts, kein 'unsafe-inline'/'unsafe-eval' (verbindlich, siehe
 // Anforderungsliste "Fehlende Content Security Policy"/"XSS"/"DOM-Based XSS"). Die alte,
@@ -61,21 +62,41 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   app.decorate('db', deps.db);
-  app.decorate('ticketSession', null);
+  app.decorateRequest('ticketSession', null);
+
+  await app.register(helmet, {
+    contentSecurityPolicy: { directives: CSP_DIRECTIVES },
+    crossOriginEmbedderPolicy: true,
+    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
+  });
+
+  await app.register(cookie, {
+    secret: deps.env.COOKIE_SECRET
+  });
 
   // Rollen/Sperr-/Archiv-Status standen bisher nur im signierten Cookie (bis zu 8h gueltig) und
   // wurden nie erneut gegen die Datenbank geprueft -- eine Rollenaenderung, Sperrung oder
   // Archivierung griff dadurch erst nach Ablauf/Neu-Login, nicht sofort. Dieser Hook laedt den
   // aktuellen Stand bei jeder authentifizierten Anfrage einmal nach; requireSession/-Admin/
   // -Superadmin (session.ts) lesen nur noch das bereits gepruefte Ergebnis.
+  // Muss NACH app.register(cookie, ...) eingehaengt werden -- sonst existieren req.cookies/
+  // req.unsignCookie (vom cookie-Plugin bereitgestellt) bei Ausfuehrung noch nicht und jede
+  // einzelne Anfrage (auch /health) wirft sofort einen ungefangenen Fehler.
   app.addHook('onRequest', async (req) => {
-    const raw = req.cookies['__Host-ticket_session'] || req.cookies.ticket_session;
+    const raw = req.cookies?.['__Host-ticket_session'] || req.cookies?.ticket_session;
     if (!raw) { req.ticketSession = null; return; }
     const unsigned = req.unsignCookie(raw);
     if (!unsigned.valid || !unsigned.value) { req.ticketSession = null; return; }
     try {
       const parsed = JSON.parse(Buffer.from(unsigned.value, 'base64url').toString('utf8')) as { uid?: unknown; iat?: unknown };
-      if (typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number' || Date.now() - parsed.iat > 8 * 60 * 60 * 1000) {
+      if (typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number') {
+        req.ticketSession = null;
+        return;
+      }
+      // sessionTimeoutMinutes === 0 bedeutet "kein Timeout" (Systemeinstellungen > Sicherheit),
+      // sonst gilt genau dasselbe Limit wie beim Ausstellen des Cookies in auth.ts.
+      const policy = await loadSecurityPolicy(deps.db);
+      if (policy.sessionTimeoutMinutes > 0 && Date.now() - parsed.iat > policy.sessionTimeoutMinutes * 60 * 1000) {
         req.ticketSession = null;
         return;
       }
@@ -92,16 +113,6 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     } catch {
       req.ticketSession = null;
     }
-  });
-
-  await app.register(helmet, {
-    contentSecurityPolicy: { directives: CSP_DIRECTIVES },
-    crossOriginEmbedderPolicy: true,
-    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
-  });
-
-  await app.register(cookie, {
-    secret: deps.env.COOKIE_SECRET
   });
 
   await app.register(rateLimit, {

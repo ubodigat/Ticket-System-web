@@ -1,5 +1,181 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-11 - Boot-/Verdrahtungs-Smoke-Test ergänzt (apps/server/test/appBoot.test.ts)
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Anlass: Nachfrage, ob wirklich ALLE Funktionen fehlerfrei laufen. Ehrlicher Befund dazu: in
+  dieser Arbeitsumgebung steht weder Docker noch eine echte MariaDB/MySQL-Instanz zur Verfügung
+  -- ein echter Durchklick-Test der laufenden Installation ist von hier aus technisch nicht
+  möglich. Was stattdessen ergänzt wurde, um die Lücke zwischen "Typecheck/Unit-Tests grün" und
+  "läuft wirklich" zu verkleinern: ein Boot-Smoke-Test, der `buildApp()` gegen eine
+  Kysely-Instanz mit Kyselys eigenem `DummyDriver` (keine echte Verbindung, aber auch kein
+  Wurf) tatsächlich hochfährt und per `app.inject()` echte HTTP-Anfragen durch den vollständigen
+  Plugin-/Hook-Stack schickt.
+- Genau diese Prüfung hätte den Produktionsausfall vom 11.10.2026 (502, siehe Eintrag oben)
+  gefangen: der Fehler lag in der Registrierungsreihenfolge von Hook/Plugin in `app.ts` und
+  hätte bei JEDER Anfrage einschließlich `/health` einen ungefangenen Fehler geworfen -- etwas,
+  das weder `tsc` noch die bisherigen, auf einzelne Funktionen beschränkten Unit-Tests prüfen
+  konnten, weil beide nie den gesamten Fastify-Request-Lebenszyklus durchlaufen.
+- Deckt ab: `buildApp()` wirft nicht beim Start; `/health` antwortet statt abzustürzen;
+  geschützte Routen antworten ohne Sitzung mit 401 statt 500 (auch mit einem manipulierten/
+  ungültigen Sitzungs-Cookie); unbekannte Routen liefern 404.
+- **Ersetzt ausdrücklich keinen echten Test gegen eine echte Installation** -- Datenbank-Logik,
+  Verschlüsselung mit echten Schlüsseln, tatsächliche Dateninhalte und alles, was eine echte
+  Zeile in einer echten Tabelle braucht, prüft dieser Test bewusst nicht (dafür sind die
+  bestehenden, auf `DummyDriver` basierenden Mocks zu grob). Ein Durchklicken der echten
+  Installation ersetzt das nicht.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-11 - "Erste Antwortzeit" in der Auswertung berechnet jetzt tatsächlich etwas
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Letzte bisher offene, ehrlich dokumentierte Einschränkung aus der Auswertung (Reports)
+  behoben: `firstResponse()` las `t.chat`/`t.comments` vom Ticket-Objekt der Listen-API --
+  seit der Normalisierung dort immer `[]` (siehe `mapApiTicketToLegacy`), wodurch "Erste
+  Antwortzeit" immer "–" anzeigte, auch im Mitarbeiter-Vergleich in derselben Auswertung.
+- Fix: neuer, schlanker Endpunkt `GET /api/v2/tickets/first-response-times` (nur Admin,
+  `apps/server/src/http/routes/tickets.ts`) liefert je Ticket den Zeitpunkt der ersten
+  Admin-/Superadmin-Nachricht per korrelierter Unterabfrage -- bewusst ein eigener Endpunkt statt
+  einer weiteren Unterabfrage an der generischen Ticket-Liste, die von jeder Rolle bei jedem
+  normalen Laden mitbezahlt werden müsste. `js/store.js`: `Store.getFirstResponseTimes(sinceIso)`.
+  `js/admin-board.js` (`AdminBoard.openReports`): `firstResponse()` nutzt die echten Zeitpunkte.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-11 - Weitere Funktionslücken zur lokalen Version vom 07.10.2026 geschlossen
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Anlass: gezielte Aufforderung, erneut zu prüfen, was der Serverversion noch fehlt, und es
+  funktionsfähig umzusetzen. Gefunden und behoben, schwerste zuerst:
+  - **Ticket drucken zeigte fast nie etwas außer Kopf/Metadaten (stiller Funktionsverlust):**
+    `AdminBoard.printTicket` las `t.todos`/`t.comments`/`t.chat`/`t.logs`/`t.timeEntries` vom
+    Ticket-Objekt der Listen-API -- die sind dort seit der Normalisierung immer `[]` (siehe
+    `mapApiTicketToLegacy`). Jedes der standardmäßig angehakten Druck-Optionen
+    (Teilaufgaben/Admin-Chat/Lösungsweg/Chat-Verlauf/Zeiterfassung) tat dadurch nichts -- ein
+    ausgedrucktes Ticket enthielt nur Kopf, Metadaten und Beschreibung, unabhängig von den
+    gewählten Haken. Betrifft auch Abrechnungs-/Prüfzwecke (Zeiterfassung). Fix: `printTicket`
+    lädt jeden Abschnitt jetzt frisch von der jeweiligen Detail-API
+    (`/todos`, `/notes`, `/messages`, `/time-entries`, `Store.getTicketAuditLog`).
+  - **"Als Wissensartikel übernehmen" fand nie einen Lösungsweg:** derselbe Fehler --
+    `addSolutionToKnowledgeBase(t)` las `t.comments` (immer `[]`). Der Knopf meldete deshalb
+    immer "Es gibt noch keinen Lösungsweg", selbst wenn einer dokumentiert war. Fix: lädt die
+    echten internen Notizen jetzt über `/api/v2/tickets/:id/notes`.
+  - **Teilaufgaben-Zuweisung wurde beim Entfernen einer Beteiligten Person nie tatsächlich
+    gelöscht:** `AdminBoard.syncTodoAssignees` iterierte ebenfalls über das immer leere
+    `ticket.todos`-Array und löste dadurch nie eine PATCH-Anfrage aus -- eine Teilaufgabe blieb
+    einer aus dem Ticket entfernten Person dauerhaft zugewiesen, sowohl serverseitig als auch in
+    der Anzeige. Fix: lädt die echten Teilaufgaben über `/todos` und löscht betroffene
+    Zuweisungen dort gezielt per PATCH.
+  - **Genehmigungs-Entscheidung über generisches Ticket-PATCH umgehbar** (bereits am 10.10.2026
+    behoben, hier nur zur Vollständigkeit nicht erneut aufgeführt).
+  - **Wissensdatenbank: Dateianhänge an Artikeln fehlten komplett.** Die lokale Version vom
+    07.10.2026 erlaubte Datei-Eingabe/Drag&Drop/Einfügen beim Anlegen eines Artikels -- die
+    Serverversion hatte dafür weder Datenbankspalte noch Endpunkt noch UI. Neu:
+    - Migration `0023_kb_article_attachments.ts`: eigene, schlanke Tabelle (nicht die generische
+      `attachments`-Tabelle wiederverwendet, da dort `ticket_id` eine Pflichtangabe ist).
+    - `apps/server/src/http/routes/knowledge.ts`: vier neue Endpunkte (Liste/Upload je Artikel,
+      Einzelabruf mit Inhalt, Löschen), gleiche AES-256-GCM-Verschlüsselung wie Ticket-Anhänge,
+      gleiche MIME-/Endungs-Blockliste (siehe Sicherheitsaudit vom 10.10.2026, inkl.
+      `image/svg+xml`).
+    - `js/store.js`: `getKbArticleAttachments`/`saveKbAttachment`/`getKbAttachment`/
+      `deleteKbAttachment`; `createKbArticle` gibt jetzt die neue Artikel-ID zurück (vorher nur
+      `true`/`false`), damit Anhänge gleich mit hochgeladen werden können.
+    - `js/admin-board.js` (`openKnowledgeBase`): Datei-Eingabe, Drag&Drop und Einfügen beim
+      Anlegen eines Artikels (wie in der lokalen Version), Anhang-Chips je Artikel (beim
+      Aufklappen nachgeladen, nicht pauschal für die ganze Liste).
+  - **Genehmigungsverlauf:** eine erneute Genehmigungsanfrage nach einer Ablehnung überschrieb
+    bisher die Angaben der vorherigen Entscheidung ohne Spur. Es gibt weiterhin keine
+    vollständige Historie als eigene Datenstruktur (auch die lokale Version rendert nirgends
+    eine solche Liste, hält die Einträge nur ungenutzt im Speicher), aber das ohnehin
+    vorhandene `ticket_audit_log` (jetzt auch über den reparierten Ticket-Protokoll-Druck
+    einsehbar, siehe oben) vermerkt bei Anfrage/Entscheidung jetzt zusätzlich Prüfer-Person und
+    Ablehnungsgrund, statt nur den nackten Status.
+- Geprüft und als bereits gleichwertig zur lokalen Version bestätigt (keine Änderung nötig):
+  Auswertung/Reports, Textbausteine, Wiederkehrende Tickets (bewusst als Server-Cron mit festem
+  Startzeitpunkt statt Tag-im-Monat/Wochentag umgesetzt), CSV-Export/Import, Genehmigungs-
+  Anfrage/Entscheidung/Status-Anzeige im Ticket-Modal und auf der Kanban-Karte,
+  Großstörungs-Verknüpfung und Status-Synchronisation.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-11 - Kritischer Ausfall (502) durch Hook-Reihenfolge in app.ts behoben
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Befund (vom Nutzer per Browser-Konsole gemeldet): Nach dem Sicherheitsaudit vom 10.10.2026
+  antwortete die laufende Installation auf **alle** Anfragen (`/api/v2/tickets`,
+  `/api/v2/users/me`, sogar `/health`) mit 502, und `admin-board.js` stürzte mit
+  "Cannot read properties of null (reading 'role')" ab.
+- Ursache: Der neue `onRequest`-Hook für die Rollen-/Sperr-Nachprüfung
+  (`apps/server/src/http/app.ts`) wurde VOR `app.register(cookie, ...)` eingehängt. Dadurch
+  existierten `req.cookies`/`req.unsignCookie` (bereitgestellt vom `@fastify/cookie`-Plugin) zum
+  Ausführungszeitpunkt noch nicht -- jede einzelne Anfrage warf sofort einen ungefangenen Fehler,
+  auch der Docker-Healthcheck auf `/health`. Der Container galt dadurch als "unhealthy", Caddy
+  bekam keine Verbindung mehr -> 502 für alle Nutzer.
+- Fix: Hook-Registrierung hinter `app.register(cookie, ...)` verschoben, `req.cookies`-Zugriff
+  zusätzlich mit `?.` abgesichert, `ticketSession` korrekt über `app.decorateRequest(...)` statt
+  `app.decorate(...)` deklariert (letzteres hätte die Instanz, nicht die Anfrage dekoriert).
+- Nebenbei gefunden und mitbehoben: `AdminBoard.render()` (`js/admin-board.js`) griff ungeprüft
+  auf `user.role` zu -- `Store.currentUser()` liefert bei JEDEM Fehlschlag (401 ebenso wie ein
+  vorübergehendes 502) `null` zurück. Der 60-Sekunden-Refresh-Timer wiederholte den Absturz
+  dadurch endlos. Jetzt: einfacher, stiller Abbruch dieses Render-Durchlaufs, nächster
+  Intervall-Durchlauf versucht es erneut.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-11 - Systemeinstellungen (Sicherheit/Benachrichtigungen/E-Mail/Unternehmen) noch immer nicht identisch zur lokalen Version
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Anlass: Screenshot-Vergleich der Systemeinstellungen zwischen Serverversion und der lokalen
+  Version vom 07.10.2026 zeigte, dass trotz vorheriger Anpassungsrunden weiterhin mehrere Tabs
+  mit abweichenden Feldern/Bezeichnungen/Verhalten liefen. Mit dem baseline-Export aus `script.js`
+  (Commit `5cdb6aa`) Feld für Feld abgeglichen und behoben:
+  - **Tab "Sicherheit" war komplett anders aufgebaut und wirkungslos:** Die Serverversion zeigte
+    "Mindestlänge Passwort"/"Sitzungslaufzeit"/"2FA für Administratoren erzwingen"
+    (Checkbox)/"Dauerhafte Sitzungen erlauben" -- Felder, die es in der lokalen Version gar nicht
+    gibt, UND alle zugehörigen `securityConfig`-Werte wurden serverseitig nirgends gelesen (nur
+    gespeichert, nie angewendet; Brute-Force-Schutz/Sitzungsdauer blieben fest auf 5
+    Versuche/15 Minuten/8 Stunden einprogrammiert). Jetzt exakt wie die lokale Version: "2FA
+    erzwingen" (Keine/Alle/Nur Admins/Nur Benutzer), "Session-Timeout (0 = kein Timeout)",
+    "Max. Fehlversuche (0 = kein Limit)", "Was passiert nach Erreichen der Fehlversuche?"
+    (Sperren/Vorübergehend sperren/Nur protokollieren), Sperrdauer -- UND serverseitig jetzt
+    tatsächlich wirksam:
+    - Neu: `apps/server/src/domain/securityPolicy.ts` (`loadSecurityPolicy`,
+      `force2faAppliesToRole`) liest diese Werte aus den Systemeinstellungen, mit sicheren
+      Vorgaben (5/15 Min./8h), solange nichts explizit gespeichert wurde.
+    - `apps/server/src/http/routes/auth.ts`: Login/MFA-Verify/`currentUser()` nutzen jetzt
+      `maxLoginAttempts`/`lockoutAction`/`lockoutMinutes` statt fester Konstanten, Sitzungs-Cookie
+      und -Gültigkeit richten sich nach `sessionTimeout` (0 = kein Ablauf), erfolgreiche Logins
+      melden `mfaSetupRequired`, wenn "2FA erzwingen" die Person betrifft und sie noch keine 2FA
+      eingerichtet hat (blockiert den Login nicht, nur ein Hinweis -- wie im Hinweistext der
+      lokalen Version).
+    - `apps/server/src/http/app.ts`: der Live-Rollen-Check (siehe Eintrag vom 10.10.2026) nutzt
+      jetzt ebenfalls `sessionTimeout` statt der vorher fest verdrahteten 8 Stunden.
+    - Neue Tests: `apps/server/test/securityPolicy.test.ts`.
+  - **Tab "Benachrichtigungen" fehlte die "Konto genehmigt"-Automail komplett:** weder Schalter
+    noch die eigentliche Mail gab es serverseitig. Neu: `notifConfig.accountApproved` in
+    `settings.ts`, `PATCH /api/v2/account-requests/:id` verschickt bei Freigabe jetzt eine Mail
+    an die Antragsperson, wenn der Schalter aktiv ist (`apps/server/src/http/routes/extras.ts`).
+  - **Tab "E-Mail Einstellungen" fehlten HTML-E-Mails sowie Teile von "Sicherheit und
+    Zertifikate":** "HTML-E-Mails aktivieren"-Schalter, E-Mail-Vorlage, Key-Passphrase,
+    DKIM Selector/Domain/Private-Key fehlten vollständig; die Zertifikatsprüfung bot nur
+    "Strikt"/"Opportunistisch" statt der drei Stufen "Strikt"/"Self-signed erlauben"/
+    "Deaktiviert", Transport-Sicherheit "STARTTLS/TLS/Keine" statt "STARTTLS/TLS/
+    Opportunistisch". Alle Felder ergänzt, Enum-Werte an die lokale Version angeglichen
+    (`emailAdvancedConfig` in `settings.ts`). Wie in der lokalen Version selbst dokumentiert
+    ("...werden gespeichert und für Backend/SMTP-Integration bereitgestellt") werden
+    S/MIME/DKIM-Werte gespeichert, aber (wie im Original) nicht aktiv zum Signieren
+    ausgehender Mails verwendet -- kein Funktionsverlust gegenüber der lokalen Version.
+  - **Tab "Unternehmenseinstellungen" fehlten mehrere Felder:** "Support-Abteilung",
+    "Standard-Zeitzone", "Standort / Region", "E-Mail Signatur" (Klartext) und
+    "HTML-E-Mail-Signatur" ergänzt (`companyBrandingConfig` in `settings.ts`). Vorhandene,
+    über die lokale Version hinausgehende Felder (getrennte Impressum-/Datenschutz-URL statt
+    einer kombinierten, eigenständiges "Adresse"-Feld) bewusst zusätzlich belassen, nicht
+    entfernt.
+  - Die "Konto-Selbstverwaltung"-Checkboxen (Name/E-Mail/Einrichtung-Abteilung) standen in der
+    Serverversion fälschlich im Tab "Unternehmen" statt wie in der lokalen Version im Tab
+    "Sicherheit" -- verschoben, doppelte IDs (ein und dieselbe Checkbox in zwei Tabs) entfernt.
+- `apps/server/test/session.test.ts` angepasst: prüft jetzt direkt gegen `req.ticketSession`
+  statt ein signiertes Cookie nachzubilden, da Cookie-Parsing und die DB-Gegenprobe seit dem
+  10.10.2026 zentral im `onRequest`-Hook in `app.ts` laufen (nicht mehr in `session.ts`).
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
 ## 2026-10-10 - Genehmigungs-Entscheidung über generisches Ticket-PATCH umgehbar
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Anlass: gezielte Nachfrage, ob "nichts dem Browser vertraut, nur der Server die sichere Zone
