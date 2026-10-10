@@ -33,7 +33,7 @@ import { registerStaticAssetRoutes } from './routes/staticAssets.js';
 const CSP_DIRECTIVES = {
   defaultSrc: ["'self'"],
   scriptSrc: ["'self'"],
-  styleSrc: ["'self'"],
+  styleSrc: ["'self'", "'unsafe-inline'"],
   imgSrc: ["'self'", 'data:'],
   fontSrc: ["'self'"],
   connectSrc: ["'self'"],

@@ -2,6 +2,9 @@
 	# Produktions-Admin-API nicht exponiert; email für ACME wird von install.sh eingetragen.
 	email {$ACME_EMAIL:admin@example.invalid}
 	default_sni {$PUBLIC_DOMAIN:localhost}
+	servers {
+		protocols h1 h2
+	}
 }
 
 {$PUBLIC_DOMAIN:localhost} {
@@ -15,6 +18,7 @@
 	reverse_proxy app:3000
 
 	header {
+		Alt-Svc "clear"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"

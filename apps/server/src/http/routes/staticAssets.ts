@@ -35,10 +35,12 @@ const ASSETS: Record<string, { file: string; contentType: string; root: 'app' | 
   '/js/admin-board.js': { file: 'js/admin-board.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/context-menu.js': { file: 'js/context-menu.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/style.css': { file: 'style.css', contentType: 'text/css; charset=utf-8', root: 'app' },
+  '/favicon.ico': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
   '/picture/favicon.png': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
   // Self-hosted statt CDN (Anforderung "Bibliotheken lokal statt per CDN") -- feste Versionen,
   // heruntergeladen und einmalig ins Repository gelegt, kein Build-Schritt zur Laufzeit nötig.
   '/vendor/lucide.min.js': { file: 'lucide.min.js', contentType: 'application/javascript; charset=utf-8', root: 'vendor' },
+  '/vendor/dompurify.min.js': { file: 'dompurify.min.js', contentType: 'application/javascript; charset=utf-8', root: 'vendor' },
   '/vendor/mammoth.browser.min.js': { file: 'mammoth.browser.min.js', contentType: 'application/javascript; charset=utf-8', root: 'vendor' },
   '/vendor/xlsx.full.min.js': { file: 'xlsx.full.min.js', contentType: 'application/javascript; charset=utf-8', root: 'vendor' },
   '/vendor/jszip.min.js': { file: 'jszip.min.js', contentType: 'application/javascript; charset=utf-8', root: 'vendor' }

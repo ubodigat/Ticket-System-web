@@ -17,6 +17,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
     <link rel="icon" type="image/png" href="picture/favicon.png">
     <link rel="stylesheet" href="style.css">
     <script src="/vendor/lucide.min.js"></script>
+    <script src="/vendor/dompurify.min.js"></script>
     <script src="/vendor/mammoth.browser.min.js"></script>
     <script src="/vendor/xlsx.full.min.js"></script>
     <script src="/vendor/jszip.min.js"></script>
@@ -330,7 +331,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                 </div>
                 <div class="field">
                     <label for="a-password">Passwort</label>
-                    <input type="text" id="a-password" value="123">
+                    <input type="password" id="a-password" autocomplete="new-password" placeholder="Wird sicher generiert">
                 </div>
                 <div class="field">
                     <label for="a-role">Rolle</label>
@@ -398,12 +399,6 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
     </div>
 
     <div id="toast"></div>
-    <script type="module">
-        import { E2E } from './crypto.js';
-        import { API } from './api.js';
-        window.E2E = E2E;
-        window.API = API;
-    </script>
     <script type="module" src="script.js"></script>
 <aside class="cpal-origin" role="note" aria-label="Ursprung des Ticket-Systems">
   <div class="cpal-origin__tag">ORIGINALPROJEKT</div>

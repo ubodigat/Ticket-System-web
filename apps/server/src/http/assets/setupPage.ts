@@ -18,6 +18,7 @@ export const SETUP_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Einrichtung</title>
+<link rel="icon" type="image/png" href="/picture/favicon.png">
 <link rel="stylesheet" href="/setup/setup.css">
 </head>
 <body>

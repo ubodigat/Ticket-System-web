@@ -9,6 +9,7 @@ COPY tsconfig.base.json ./
 COPY apps/server ./apps/server
 RUN mkdir -p public
 COPY index.html dashboard.html admin.html script.js style.css ./public/
+COPY js ./public/js
 COPY picture ./public/picture
 COPY vendor ./vendor
 RUN npm run build --workspace=apps/server

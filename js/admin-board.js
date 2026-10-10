@@ -5522,7 +5522,7 @@ export const AdminBoard = {
         AdminBoard.currentReq = req;
         q('#a-name-disp').textContent = req.name;
         q('#a-username').value = req.name.toLowerCase().replace(/\s+/g, '');
-        q('#a-password').value = '123';
+        q('#a-password').value = Utils.secureToken(18);
         q('#approve-modal').classList.add('open');
 
         // Permissions check: only superadmins can set role/dept
@@ -5644,7 +5644,7 @@ export const AdminBoard = {
                 email,
                 role: ['user', 'admin', 'superadmin'].includes(role) ? role : 'user',
                 dept: deptStr ? deptStr.split(';') : undefined,
-                password: '123' // Default password for import
+                password: Utils.secureToken(18)
             };
 
             users.push(newUser);
@@ -5673,6 +5673,10 @@ export const AdminBoard = {
 
         if (!username || !password) {
             UI.toast('Bitte alle Felder füllen');
+            return;
+        }
+        if (password.length < 12) {
+            UI.toast('Passwort muss mindestens 12 Zeichen lang sein');
             return;
         }
 

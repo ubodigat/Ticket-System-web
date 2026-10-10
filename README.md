@@ -140,7 +140,8 @@ Im Installationsordner:
 ```bash
 cd /opt/ticket-system
 git pull
-docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --build
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env build --no-cache app
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --force-recreate
 docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env exec -T app node dist/db/migrate.js
 ```
 
@@ -240,8 +241,8 @@ http://127.0.0.1:3000
                                         aufgeteilt -- siehe Hinweis unten)
     context-menu.js                    Rechtsklick-Kontextmenü für Tickets
   style.css                          Styling
-  vendor/                            Selbst gehostete Bibliotheken (lucide, mammoth, xlsx,
-                                      jszip) statt CDN -- siehe staticAssets.ts
+  vendor/                            Selbst gehostete Bibliotheken (lucide, DOMPurify, mammoth,
+                                      xlsx, jszip) statt CDN -- siehe staticAssets.ts
   install.sh                         Ein-Befehl-Dockerinstallation
   apps/server/                       Fastify/MariaDB-Server
   ops/docker/                        Docker Compose, Dockerfile, Caddy
@@ -377,8 +378,12 @@ Umgesetzt:
   Port 465) oder STARTTLS mit `requireTLS: true` (Port 587) -- schlägt STARTTLS fehl, bricht der
   Versand ab, statt unverschlüsselt auf Klartext zurückzufallen
 - Signierte, `HttpOnly`/`SameSite=Lax`-Session-Cookies
-- Strikte Content-Security-Policy ohne `unsafe-inline`/`unsafe-eval` und ohne CDN-Hosts --
-  alle Bibliotheken (`lucide`, `mammoth`, `xlsx`, `jszip`) liegen selbst gehostet unter `vendor/`
+- Content-Security-Policy ohne CDN-Hosts und ohne `unsafe-inline`/`unsafe-eval` fuer JavaScript.
+  `script-src` ist auf `'self'` begrenzt. `style-src` erlaubt derzeit bewusst
+  `'unsafe-inline'`, weil die vorhandene Oberflaeche aus der lokalen Version dynamische
+  Style-Attribute/CSS-Variablen fuer Icons, Dropdowns, Popovers, Farbpunkte, Datepicker und
+  Hintergrundbilder nutzt. Alle Bibliotheken (`lucide`, `DOMPurify`, `mammoth`, `xlsx`, `jszip`)
+  liegen selbst gehostet unter `vendor/`
 - Rate-Limiting (global + verschärft auf Login/Setup/Kontoanfragen)
 - Einheitliche, nicht-auskunftsfreudige Fehlerantworten (`routeError.ts`) -- interne
   Fehlermeldungen (z.B. von MariaDB) werden nie an den Client weitergegeben, nur serverseitig
@@ -443,6 +448,33 @@ Haeufige Ursachen:
 - `ops/docker/.env` fehlt oder enthaelt falsche Werte.
 - `ops/secrets/app.kek` fehlt.
 - TLS-Dateien unter `ops/tls/mariadb/` fehlen.
+
+### Admin-Oberflaeche hat keine Icons, `/js/*.js` liefert 404 oder CSP-Fehler
+
+Wenn der Browser Fehler wie `js/utils.js 404`, `js/admin-board.js 404`, blockierte Inline-Skripte
+oder blockierte Styles meldet, laeuft fast immer noch ein alter App-Container oder ein alter
+Browsercache. Die aktuelle Version liefert die Dateien unter `/js/*` aus, kopiert sie ins
+Docker-Image und erlaubt fuer die bestehende Oberflaeche die notwendigen dynamischen Styles.
+
+Auf dem Server hart neu bauen und den Container ersetzen:
+
+```bash
+cd /opt/ticket-system
+git pull
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env build --no-cache app
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --force-recreate
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env exec -T app node dist/db/migrate.js
+```
+
+Danach pruefen:
+
+```bash
+curl -k -I https://<server-ip>/js/utils.js
+curl -k -I https://<server-ip>/admin.html
+```
+
+Beide Befehle muessen `HTTP/2 200` oder `HTTP/1.1 200` liefern. Danach im Browser einmal hart
+neu laden (`Strg+F5`) oder den Cache fuer die Seite leeren.
 
 ### Ports 80 oder 443 sind belegt
 

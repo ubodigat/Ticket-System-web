@@ -6,7 +6,7 @@ The Original Developer is the Initial Developer: U:Bodigat.
 The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
 Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
-import { q, Icon } from './utils.js';
+import { q } from './utils.js';
 import { Store } from './store.js';
 
 // --- i18n ---
@@ -119,22 +119,30 @@ export const Lang = {
         Lang.applyAdminDOM();
     },
     applyAdminDOM: () => {
-        const setHTML = (selector, html) => {
+        const setIconText = (selector, iconName, size, text) => {
             const el = q(selector);
-            if (el) el.innerHTML = html;
+            if (!el) return;
+            const icon = document.createElement('i');
+            icon.dataset.lucide = iconName;
+            icon.setAttribute('width', String(size));
+            icon.setAttribute('height', String(size));
+            el.replaceChildren(icon, document.createTextNode(text));
         };
         const setText = (selector, text) => {
             const el = q(selector);
             if (el) el.textContent = text;
         };
-        setHTML('#btn-to-dash', `${Icon('layout-dashboard', 16)}${Lang.t('dashboard')}`);
-        setHTML('#btn-global-logs', `${Icon('bell', 16)}${Lang.t('systemLogs')}`);
-        setHTML('#btn-archive', `${Icon('archive', 16)}${Lang.t('archive')}`);
-        setHTML('#btn-list-view', q('#list-view')?.style.display === 'block'
-            ? `${Icon('layout-grid', 16)}${Lang.t('board')}`
-            : `${Icon('table-properties', 16)}${Lang.t('list')}`);
-        setHTML('#btn-admin-create-ticket', `${Icon('plus', 16)}${Lang.t('newTicket')}`);
-        setHTML('#btn-admin-create-incident', `${Icon('siren', 16)}${Lang.t('createIncident')}`);
+        setIconText('#btn-to-dash', 'layout-dashboard', 16, Lang.t('dashboard'));
+        setIconText('#btn-global-logs', 'bell', 16, Lang.t('systemLogs'));
+        setIconText('#btn-archive', 'archive', 16, Lang.t('archive'));
+        setIconText(
+            '#btn-list-view',
+            q('#list-view')?.style.display === 'block' ? 'layout-grid' : 'table-properties',
+            16,
+            q('#list-view')?.style.display === 'block' ? Lang.t('board') : Lang.t('list')
+        );
+        setIconText('#btn-admin-create-ticket', 'plus', 16, Lang.t('newTicket'));
+        setIconText('#btn-admin-create-incident', 'siren', 16, Lang.t('createIncident'));
         const adminSearchLabel = q('label[for="admin-ticket-search"]');
         if (adminSearchLabel) adminSearchLabel.textContent = Lang.t('searchTickets');
         const adminTicketSearch = q('#admin-ticket-search');
@@ -144,8 +152,8 @@ export const Lang = {
             notifBtn.title = Lang.t('notifications');
             notifBtn.setAttribute('aria-label', Lang.t('notifications'));
         }
-        setHTML('#archive-view .archive-header h3', `${Icon('archive', 18)}${Lang.t('archivedTickets')}`);
-        setHTML('#btn-back-kanban', `${Icon('arrow-left', 16)}${Lang.t('backToOverview')}`);
+        setIconText('#archive-view .archive-header h3', 'archive', 18, Lang.t('archivedTickets'));
+        setIconText('#btn-back-kanban', 'arrow-left', 16, Lang.t('backToOverview'));
         const archiveSearch = q('#archive-search');
         if (archiveSearch) archiveSearch.placeholder = Lang.current === 'en' ? 'Search archive (title, author, content)...' : 'Suche im Archiv (Titel, Autor, Inhalt)...';
         setText('#requests-board .request-banner-title', Lang.t('requests'));
@@ -164,11 +172,11 @@ export const Lang = {
         };
         replaceCountLabel('#request-count', 'request-count', Lang.t('open'));
         replaceCountLabel('#overdue-ticket-count', 'overdue-ticket-count', Lang.t('tickets'), 'overdue-count');
-        setHTML('#requests-modal-title', `${Icon('user-round-plus', 18)}${Lang.t('requests')}`);
-        setHTML('#col-new .col-header span:first-child', `${Icon('inbox', 16)}${Lang.t('statusNew')}`);
-        setHTML('#col-doing .col-header span:first-child', `${Icon('loader', 16)}${Lang.t('statusDoing')}`);
-        setHTML('#col-waiting .col-header span:first-child', `${Icon('pause-circle', 16)}${Lang.t('statusWaiting')}`);
-        setHTML('#col-done .col-header span:first-child', `${Icon('check-circle', 16)}${Lang.t('statusClosed')}`);
+        setIconText('#requests-modal-title', 'user-round-plus', 18, Lang.t('requests'));
+        setIconText('#col-new .col-header span:first-child', 'inbox', 16, Lang.t('statusNew'));
+        setIconText('#col-doing .col-header span:first-child', 'loader', 16, Lang.t('statusDoing'));
+        setIconText('#col-waiting .col-header span:first-child', 'pause-circle', 16, Lang.t('statusWaiting'));
+        setIconText('#col-done .col-header span:first-child', 'check-circle', 16, Lang.t('statusClosed'));
         setText('#ticket-modal .tab-btn[data-tab="details"]', Lang.t('details'));
         setText('#ticket-modal .tab-btn[data-tab="chat"]', Lang.t('chat'));
         setText('#ticket-modal .tab-btn[data-tab="internal"]', Lang.current === 'en' ? 'Internal communication' : 'Interne Kommunikation');
@@ -199,10 +207,9 @@ export const Lang = {
         const commentInput = q('#m-new-comment');
         if (commentInput) commentInput.placeholder = Lang.t('addComment');
         setText('#btn-add-comment', Lang.t('comment'));
-        const archiveBtn = q('#btn-archive-ticket');
-        if (archiveBtn) archiveBtn.innerHTML = `${Icon('archive', 16)}${Lang.t('archive')}`;
-        setHTML('#approve-modal h3', `${Icon('user-plus', 18)}${Lang.t('createUser')}`);
-        setHTML('#user-man-modal h3', `${Icon('users', 18)}${Lang.t('userManagement')}`);
+        setIconText('#btn-archive-ticket', 'archive', 16, Lang.t('archive'));
+        setIconText('#approve-modal h3', 'user-plus', 18, Lang.t('createUser'));
+        setIconText('#user-man-modal h3', 'users', 18, Lang.t('userManagement'));
         q('#m-prio-edit option[value="Niedrig"]') && (q('#m-prio-edit option[value="Niedrig"]').textContent = Lang.t('low'));
         q('#m-prio-edit option[value="Normal"]') && (q('#m-prio-edit option[value="Normal"]').textContent = Lang.t('normal'));
         q('#m-prio-edit option[value="Hoch"]') && (q('#m-prio-edit option[value="Hoch"]').textContent = Lang.t('high'));

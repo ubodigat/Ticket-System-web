@@ -31,10 +31,15 @@ Für eine lokale Entwicklungsumgebung ohne öffentliches TLS: `./install.sh --de
 ## Update
 
 ```bash
-docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env pull
-docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --build
+git pull
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env build --no-cache app
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --force-recreate
 docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env exec -T app node dist/db/migrate.js
 ```
+
+Das harte Neubauen ist wichtig, weil die Weboberflaeche statische Dateien aus `js/` und
+`vendor/` in das App-Image kopiert. Ohne Rebuild kann der Server noch alte HTML-/JS-Dateien
+ausliefern, was sich im Browser als fehlende Icons, `/js/*.js`-404 oder CSP-Fehler zeigt.
 
 Migrationen sind additiv (`up`-Richtung wird bei jedem Update erneut ausgeführt, bereits
 angewendete Migrationen werden von Kysely übersprungen). Ein `ticketctl`-Kommando, das diese

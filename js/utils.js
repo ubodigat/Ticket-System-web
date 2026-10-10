@@ -13,7 +13,7 @@ export const qa = (s) => Array.from(document.querySelectorAll(s));
 
 // Icons: Größe per Parameter; Abstände kommen immer vom Container (gap), nie vom Icon
 export const Icon = (name, size = 16) =>
-    `<i data-lucide="${name}" style="width:${size}px;height:${size}px;"></i>`;
+    `<i data-lucide="${name}" width="${size}" height="${size}"></i>`;
 
 // --- Utils ---
 export const Utils = {
@@ -106,6 +106,13 @@ export const Utils = {
         return new RegExp(`@(${escaped.join('|')})(?!\\w)`, 'g');
     },
     sanitizeRichHtml: (html = '') => {
+        if (window.DOMPurify?.sanitize) {
+            return window.DOMPurify.sanitize(html, {
+                ALLOWED_TAGS: ['a', 'b', 'br', 'code', 'div', 'em', 'i', 'li', 'ol', 'p', 'pre', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'],
+                ALLOWED_ATTR: ['class', 'href', 'rel', 'target'],
+                ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i
+            }).trim();
+        }
         const doc = new DOMParser().parseFromString(html, 'text/html');
         doc.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach(el => el.remove());
         doc.body.querySelectorAll('*').forEach(el => {
@@ -179,14 +186,8 @@ export const Utils = {
         closeList();
         return output.join('');
     },
-    read: (key, fallback) => {
-        try {
-            return JSON.parse(localStorage.getItem(key)) ?? fallback;
-        } catch {
-            return fallback;
-        }
-    },
-    write: (key, val) => localStorage.setItem(key, JSON.stringify(val)),
+    read: (_key, fallback) => fallback,
+    write: () => true,
     adjustColor: (color, amount) => {
         return '#' + color.replace(/^#/, '').replace(/../g, color => ('0' + Math.min(255, Math.max(0, parseInt(color, 16) + amount)).toString(16)).substr(-2));
     },

@@ -48,62 +48,14 @@ export const Store = {
         });
         db.close();
     },
-    serverKeys: new Set(['users', 'app_settings', 'user_groups', 'list_views', 'tickets', 'account_requests', 'global_logs', 'notifications']),
-    readServer: async (key, fallback) => {
-        if (!Store.serverKeys.has(key) || !location.protocol.startsWith('http')) return fallback;
-        try {
-            const res = await fetch(`/api/v1/legacy-data/${encodeURIComponent(key)}`, {
-                credentials: 'same-origin'
-            });
-            if (!res.ok) return fallback;
-            const payload = await res.json();
-            return payload.value ?? fallback;
-        } catch {
-            return fallback;
-        }
-    },
-    writeServer: async (key, value) => {
-        if (!Store.serverKeys.has(key) || !location.protocol.startsWith('http')) return false;
-        try {
-            const res = await fetch(`/api/v1/legacy-data/${encodeURIComponent(key)}`, {
-                method: 'PUT',
-                credentials: 'same-origin',
-                headers: {
-                    'content-type': 'application/json'
-                },
-                body: JSON.stringify({ value })
-            });
-            return res.ok;
-        } catch {
-            return false;
-        }
-    },
     readPersistent: async (key, fallback) => {
-        const serverValue = await Store.readServer(key, undefined);
-        if (serverValue !== undefined) return serverValue;
-        if (key === 'users' || key === 'app_settings') {
-            const stored = await Store.readRecord(key, null);
-            if (stored) return stored;
-        }
-        const legacy = Utils.read(key, null);
-        if (legacy !== null) {
-            if (await Store.writeServer(key, legacy)) {
-                localStorage.removeItem(key);
-            } else if (key === 'users' || key === 'app_settings') {
-                await Store.writeRecord(key, legacy);
-                localStorage.removeItem(key);
-            }
-            return legacy;
-        }
-        return fallback;
+        if (location.protocol.startsWith('http')) return fallback;
+        return Store.readRecord(key, fallback);
     },
     writePersistent: async (key, value) => {
-        if (await Store.writeServer(key, value)) return true;
-        if (key === 'users' || key === 'app_settings') {
-            await Store.writeRecord(key, value);
-            return true;
-        }
-        return Utils.write(key, value);
+        if (location.protocol.startsWith('http')) return true;
+        await Store.writeRecord(key, value);
+        return true;
     },
     // Eigenes Profil inkl. Rollen-/Sperr-/2FA-Status -- /api/v2/users/me ist für JEDE angemeldete
     // Person erreichbar (im Gegensatz zu /api/v2/users, das nur Admins die ganze Liste zeigt).
@@ -118,7 +70,7 @@ export const Store = {
         }
     },
     // Benutzer laufen NICHT mehr über die generische readPersistent/writePersistent-Brücke
-    // (die sprach die inzwischen entfernte /api/v1/legacy-data/*-Schnittstelle an) -- stattdessen
+    // (die sprach die inzwischen entfernte generische Alt-Schnittstelle an) -- stattdessen
     // direkt gegen die echte, rechtegeprüfte v2-API. Rückgabeform wird auf die alten Feldnamen
     // abgebildet, damit die bestehenden Aufrufstellen in diesem Modul unverändert bleiben können.
     _usersCache: null,
@@ -1285,20 +1237,19 @@ export const Store = {
         const serverMode = location.protocol.startsWith('http');
         const sessionUser = await Store.fetchSessionUser();
         if (sessionUser) {
-            localStorage.setItem('currentUser', sessionUser.username);
             await Store.syncSessionUser(sessionUser);
         } else if (serverMode) {
             return;
         }
         let users = await Store.getUsers();
         if (!serverMode) {
-        // Check for Admin and enforce password '123'
+        // Lokaler Datei-Prototyp: Demo-Konten bekommen zufällige Startpasswörter.
         const adminIdx = users.findIndex(u => u.username === 'admin');
         if (adminIdx === -1) {
             users.push({
                 id: Utils.uid(),
                 username: 'admin',
-                password: '123',
+                password: Utils.secureToken(18),
                 name: 'Administrator',
                 role: 'superadmin',
                 dept: 'All'
@@ -1318,7 +1269,7 @@ export const Store = {
             users.push({
                 id: Utils.uid(),
                 username: 'user',
-                password: '123',
+                password: Utils.secureToken(18),
                 name: 'Max Mustermann',
                 role: 'user'
             });

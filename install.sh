@@ -34,6 +34,10 @@ log() {
   printf '\n==> %s\n' "$1"
 }
 
+warn() {
+  printf '\nWARN: %s\n' "$1" >&2
+}
+
 run_root() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     "$@"
@@ -43,6 +47,22 @@ run_root() {
     echo "This step needs root permissions. Run the installer as root or install sudo." >&2
     exit 1
   fi
+}
+
+retry_root() {
+  local max_attempts="$1"
+  shift
+  local attempt=1
+  local delay=3
+  until run_root "$@"; do
+    if [[ "$attempt" -ge "$max_attempts" ]]; then
+      return 1
+    fi
+    warn "Command failed; retrying in ${delay}s (${attempt}/${max_attempts}): $*"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
 }
 
 apt_install() {
@@ -77,7 +97,32 @@ ensure_docker() {
   log "Installing Docker and Docker Compose plugin"
 
   if ! command -v docker >/dev/null 2>&1 || ! run_root docker compose version >/dev/null 2>&1; then
-    curl -fsSL https://get.docker.com | run_root sh
+    # Use Docker's signed apt repository instead of piping a downloaded shell script into sh.
+    # This keeps the bootstrap auditable and lets apt verify package signatures.
+    . /etc/os-release
+    local distro="${ID:-debian}"
+    local codename="${VERSION_CODENAME:-}"
+    if [[ -z "$codename" && -r /etc/debian_version ]]; then
+      codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+    fi
+    if [[ "$distro" != "ubuntu" ]]; then
+      distro="debian"
+    fi
+    if [[ -z "$codename" ]]; then
+      echo "Could not detect Debian/Ubuntu codename for Docker repository." >&2
+      exit 1
+    fi
+
+    run_root install -m 0755 -d /etc/apt/keyrings
+    run_root rm -f /etc/apt/keyrings/docker.asc
+    curl -fsSL "https://download.docker.com/linux/${distro}/gpg" -o /tmp/docker.asc
+    run_root install -m 0644 /tmp/docker.asc /etc/apt/keyrings/docker.asc
+    rm -f /tmp/docker.asc
+
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${distro} ${codename} stable" \
+      | run_root tee /etc/apt/sources.list.d/docker.list >/dev/null
+    run_root apt-get update
+    apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   fi
 
   if ! run_root docker compose version >/dev/null 2>&1; then
@@ -87,6 +132,30 @@ ensure_docker() {
   fi
 
   run_root systemctl enable --now docker >/dev/null 2>&1 || true
+}
+
+repo_host() {
+  local without_scheme="${REPO_URL#*://}"
+  printf '%s\n' "${without_scheme%%/*}"
+}
+
+print_clone_help() {
+  local host
+  host="$(repo_host)"
+  cat >&2 <<EOF
+
+Repository download failed.
+
+Check these points on the server:
+  - DNS/network access to: $host
+  - outbound HTTPS on port 443
+  - REPO_URL if you use a fork or private mirror
+
+Manual fallback:
+  git clone "$REPO_URL" "$INSTALL_DIR"
+  cd "$INSTALL_DIR"
+  ./install.sh
+EOF
 }
 
 rerun_from_clone_if_needed() {
@@ -99,14 +168,14 @@ rerun_from_clone_if_needed() {
 
   log "Cloning repository"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
-    run_root git -C "$INSTALL_DIR" pull --ff-only
+    retry_root 5 git -C "$INSTALL_DIR" pull --ff-only || { print_clone_help; exit 1; }
   else
     run_root mkdir -p "$(dirname "$INSTALL_DIR")"
     if [[ -e "$INSTALL_DIR" && ! -d "$INSTALL_DIR/.git" ]]; then
       echo "Installation directory exists but is not a Git repository: $INSTALL_DIR" >&2
       exit 1
     fi
-    run_root git clone "$REPO_URL" "$INSTALL_DIR"
+    retry_root 5 git clone "$REPO_URL" "$INSTALL_DIR" || { print_clone_help; exit 1; }
   fi
 
   run_root chown -R "$(id -u):$(id -g)" "$INSTALL_DIR" 2>/dev/null || true
@@ -158,6 +227,7 @@ COOKIE_SECRET=$COOKIE_SECRET
 INSTALLATION_ID=$INSTALLATION_ID
 HTTP_PORT=80
 HTTPS_PORT=443
+BIND_ADDRESS=0.0.0.0
 PUBLIC_DOMAIN=${DEFAULT_IP:-localhost}
 ACME_EMAIL=admin@example.invalid
 EOF

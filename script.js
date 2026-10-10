@@ -143,7 +143,11 @@ const ScrollToTop = {
             btn = document.createElement('button');
             btn.id = 'scroll-to-top-btn';
             btn.className = 'btn-primary btn-icon btn-scroll-to-top';
-            btn.innerHTML = Icon('arrow-up', 18);
+            const icon = document.createElement('i');
+            icon.dataset.lucide = 'arrow-up';
+            icon.setAttribute('width', '18');
+            icon.setAttribute('height', '18');
+            btn.replaceChildren(icon);
             btn.title = 'Nach oben';
             btn.setAttribute('aria-label', 'Nach oben');
             btn.onclick = () => window.scrollTo({
