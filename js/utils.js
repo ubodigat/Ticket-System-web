@@ -110,7 +110,7 @@ export const Utils = {
             return window.DOMPurify.sanitize(html, {
                 ALLOWED_TAGS: ['a', 'b', 'br', 'code', 'div', 'em', 'i', 'li', 'ol', 'p', 'pre', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'],
                 ALLOWED_ATTR: ['class', 'href', 'rel', 'target'],
-                ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i
+                ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^A-Za-z]|[A-Za-z+.\-]+(?:[^A-Za-z+.:\-]|$))/
             }).trim();
         }
         const doc = new DOMParser().parseFromString(html, 'text/html');
