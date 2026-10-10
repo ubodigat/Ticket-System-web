@@ -48,10 +48,11 @@ Das Installationsskript:
 4. erzeugt `ops/docker/.env`,
 5. erzeugt den KEK unter `ops/secrets/app.kek`,
 6. erzeugt interne MariaDB-TLS-Zertifikate,
-7. baut und startet den Docker-Stack,
-8. wartet auf den App-Healthcheck,
-9. fuehrt die Datenbankmigrationen aus,
-10. gibt die URL fuer die Einrichtung aus.
+7. oeffnet bei aktiver `ufw`/`firewalld` die Ports `80/tcp` und `443/tcp`,
+8. baut und startet den Docker-Stack,
+9. wartet auf den App-Healthcheck,
+10. fuehrt die Datenbankmigrationen aus,
+11. prueft lokal die HTTPS-Erreichbarkeit und gibt die URL fuer die Einrichtung aus.
 
 Der Stack besteht aus:
 
@@ -490,6 +491,27 @@ Danach:
 ```bash
 docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d
 ```
+
+### Server antwortet lokal, Browser von einem anderen Geraet zeigt `ERR_CONNECTION_REFUSED`
+
+Wenn auf dem Server `curl -k -I https://<server-ip>/health` funktioniert, aber der Browser auf
+einem anderen Geraet `ERR_CONNECTION_REFUSED` zeigt, laeuft die Anwendung bereits. Dann wird die
+Verbindung ausserhalb des Containers blockiert.
+
+Pruefen:
+
+```bash
+docker ps -a
+ss -ltnp | grep -E ':(80|443)\b'
+curl -k -I https://<server-ip>/health
+```
+
+Wenn diese Befehle auf dem Server erfolgreich sind, aber der Client nicht verbinden kann:
+
+- im Browser explizit `https://<server-ip>/setup` oeffnen,
+- Host-Firewall pruefen (`ufw status`, `firewall-cmd --list-all`),
+- VM-/Provider-/Router-Firewall fuer TCP `80` und `443` freigeben,
+- danach den Installer erneut ausfuehren oder den Stack neu starten.
 
 ## Lizenz
 

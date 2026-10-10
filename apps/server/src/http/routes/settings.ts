@@ -61,13 +61,54 @@ const settingsConfigSchema = z.object({
     padding: z.number().int().min(1).max(10).default(5)
   }).optional(),
   accountSelfServiceFields: z.array(z.enum(['name', 'email', 'department'])).optional(),
-  autoArchiveClosedAfterDays: z.number().int().min(1).max(3650).optional(),
+  autoArchiveClosedAfterDays: z.number().int().min(0).max(3650).optional(),
   waitingReminderDays: z.number().int().min(1).max(365).optional(),
   waitingAutoCloseDays: z.number().int().min(1).max(365).optional(),
   approvalWorkflow: z.object({
     enabled: z.boolean().default(false),
     priorities: z.array(z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch'])).default([]),
     fallbackApproverUserId: z.string().nullable().optional()
+  }).optional(),
+  securityConfig: z.object({
+    passwordMinLength: z.number().int().min(8).max(128).optional(),
+    sessionTimeoutMinutes: z.number().int().min(5).max(10080).optional(),
+    maxLoginAttempts: z.number().int().min(1).max(50).optional(),
+    require2faForAdmins: z.boolean().optional(),
+    allowPermanentSessions: z.boolean().optional()
+  }).optional(),
+  notificationConfig: z.object({
+    notifyNewTicket: z.boolean().optional(),
+    notifyStatusChange: z.boolean().optional(),
+    notifyNewMessage: z.boolean().optional(),
+    notifyTicketClosed: z.boolean().optional(),
+    notifyAccountApproved: z.boolean().optional(),
+    digestEnabled: z.boolean().optional(),
+    digestHour: z.string().regex(/^\d{2}:\d{2}$/).optional()
+  }).optional(),
+  emailAdvancedConfig: z.object({
+    replyTo: z.string().trim().max(255).nullable().optional(),
+    bccArchive: z.string().trim().max(255).nullable().optional(),
+    htmlSignature: z.string().max(10000).optional(),
+    transportSecurity: z.enum(['starttls', 'tls', 'none']).optional(),
+    certificateValidation: z.enum(['strict', 'opportunistic']).optional(),
+    smimeCertificatePem: z.string().max(20000).optional(),
+    smimePrivateKeyPem: z.string().max(20000).optional()
+  }).optional(),
+  outlookConfig: z.object({
+    enabled: z.boolean().optional(),
+    tenantId: z.string().trim().max(255).optional(),
+    clientId: z.string().trim().max(255).optional(),
+    mailbox: z.string().trim().max(255).optional(),
+    syncIncoming: z.boolean().optional(),
+    createTicketsFromMail: z.boolean().optional()
+  }).optional(),
+  companyBrandingConfig: z.object({
+    logoDataUrl: z.string().max(1024 * 1024).optional(),
+    supportEmail: z.string().trim().max(255).optional(),
+    phone: z.string().trim().max(80).optional(),
+    address: z.string().max(1000).optional(),
+    imprintUrl: z.string().trim().max(500).optional(),
+    privacyUrl: z.string().trim().max(500).optional()
   }).optional()
 }).partial();
 

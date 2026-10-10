@@ -73,7 +73,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   await app.register(rateLimit, {
     global: true,
-    max: 100,
+    // Die Oberfläche lädt beim Start mehrere JS-/Vendor-Assets und danach parallel Settings,
+    // Benutzer, Tickets, Logs und Benachrichtigungen. 100/min war dafür zu knapp und führte
+    // bei normaler Nutzung zu 429 auf /api/v2/settings, /api/v2/users usw. Kritische Routen
+    // wie Setup/Login/MFA behalten eigene engere Limits in den jeweiligen Route-Configs.
+    max: 1000,
     timeWindow: '1 minute'
   });
 

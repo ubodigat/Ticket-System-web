@@ -49,11 +49,14 @@ export const Store = {
         db.close();
     },
     readPersistent: async (key, fallback) => {
-        if (location.protocol.startsWith('http')) return fallback;
+        // Im Serverbetrieb liegen fachliche Daten in der Datenbank. Reine Geräte-/UI-Einstellungen
+        // wie Theme, Sprache, Akzentfarbe und eigenes Hintergrundbild bleiben bewusst lokal pro
+        // Browser. Sonst würde die Oberfläche bei jedem Seitenwechsel auf Defaults zurückfallen.
+        if (location.protocol.startsWith('http') && key !== 'app_settings') return fallback;
         return Store.readRecord(key, fallback);
     },
     writePersistent: async (key, value) => {
-        if (location.protocol.startsWith('http')) return true;
+        if (location.protocol.startsWith('http') && key !== 'app_settings') return true;
         await Store.writeRecord(key, value);
         return true;
     },
@@ -568,6 +571,26 @@ export const Store = {
                     email: !cfg.accountSelfServiceFields || cfg.accountSelfServiceFields.includes('email'),
                     department: !!cfg.accountSelfServiceFields?.includes('department')
                 }
+            };
+            settings.securityConfig = {
+                ...(settings.securityConfig || {}),
+                ...(cfg.securityConfig || {})
+            };
+            settings.notificationConfig = {
+                ...(settings.notificationConfig || {}),
+                ...(cfg.notificationConfig || {})
+            };
+            settings.emailAdvancedConfig = {
+                ...(settings.emailAdvancedConfig || {}),
+                ...(cfg.emailAdvancedConfig || {})
+            };
+            settings.outlookConfig = {
+                ...(settings.outlookConfig || {}),
+                ...(cfg.outlookConfig || {})
+            };
+            settings.companyBrandingConfig = {
+                ...(settings.companyBrandingConfig || {}),
+                ...(cfg.companyBrandingConfig || {})
             };
         }
         return settings;

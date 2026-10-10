@@ -1692,20 +1692,67 @@ export const AdminBoard = {
                         <button class="tab-btn active" data-tab="sys-general">
                             <i data-lucide="sliders"></i><span>${Lang.t('general')}</span>
                         </button>
-                        <button class="tab-btn" data-tab="sys-company">
-                            <i data-lucide="building-2"></i><span>${Lang.t('company')}</span>
+                        <button class="tab-btn" data-tab="sys-security">
+                            <i data-lucide="shield"></i><span>Sicherheit</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-notifications">
+                            <i data-lucide="bell"></i><span>Benachrichtigungen</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-email">
-                            <i data-lucide="mail"></i><span>${Lang.t('emailIntegration')}</span>
+                            <i data-lucide="mail"></i><span>E-Mail Einstellungen / Benachrichtigungen</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-ldap">
                             <i data-lucide="server"></i><span>LDAP</span>
                         </button>
+                        <button class="tab-btn" data-tab="sys-outlook">
+                            <i data-lucide="mail-check"></i><span>Outlook Einrichtung</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-company">
+                            <i data-lucide="building-2"></i><span>Unternehmenseinstellungen</span>
+                        </button>
                     </nav>
                     <div class="modal-body sys-settings-content">
-                        <div class="callout">Microsoft-Graph/Outlook-Integration gibt es im aktuellen Backend nicht -- dieses Feld
+                        <div class="callout" hidden>Microsoft-Graph/Outlook-Integration gibt es im aktuellen Backend nicht -- dieses Feld
                             wurde entfernt statt ungespeichert vorzutäuschen. Automatische Zuweisung läuft über die Kategorie
                             (Benutzerverwaltung → Kategorien → „Automatische Zuweisung an Gruppe").</div>
+                        <!-- Sicherheit -->
+                        <div id="sys-security" class="tab-content">
+                            <div class="settings-section-title">Anmeldung &amp; Sitzungen</div>
+                            <div class="form-grid">
+                                <div class="field"><label>Mindestlänge Passwort</label><input id="sys-sec-pass-min" type="number" min="8" max="128" placeholder="14"></div>
+                                <div class="field"><label>Sitzungslaufzeit (Minuten)</label><input id="sys-sec-session" type="number" min="5" max="10080" placeholder="480"></div>
+                                <div class="field"><label>Max. Fehlversuche</label><input id="sys-sec-attempts" type="number" min="1" max="50" placeholder="5"></div>
+                            </div>
+                            <label class="check-row"><input type="checkbox" id="sys-sec-2fa-admins"><span><strong>2FA für Administratoren erzwingen</strong></span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-sec-permanent"><span>Dauerhafte Sitzungen erlauben</span></label>
+                        </div>
+
+                        <!-- Benachrichtigungen -->
+                        <div id="sys-notifications" class="tab-content">
+                            <div class="settings-section-title">Automatische Benachrichtigungen</div>
+                            <label class="check-row"><input type="checkbox" id="sys-notify-new-ticket"><span>Neue Tickets melden</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-notify-status"><span>Statusänderungen melden</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-notify-message"><span>Neue Nachrichten und interne Kommentare melden</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-notify-closed"><span>Geschlossene Tickets melden</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-notify-account"><span>Freigegebene Konten melden</span></label>
+                            <div class="settings-section-title">Zusammenfassung</div>
+                            <label class="check-row"><input type="checkbox" id="sys-notify-digest"><span>Tägliche Zusammenfassung aktivieren</span></label>
+                            <div class="field"><label>Uhrzeit</label><input id="sys-notify-digest-hour" type="time"></div>
+                        </div>
+
+                        <!-- Outlook -->
+                        <div id="sys-outlook" class="tab-content">
+                            <div class="callout">Outlook/Microsoft Graph kann hier vorbereitet werden. Für den produktiven Mailimport muss im Backend ein Graph-Connector mit den hinterlegten Daten betrieben werden.</div>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-enabled"><span><strong>Outlook/Graph Integration aktivieren</strong></span></label>
+                            <div class="form-grid">
+                                <div class="field"><label>Tenant-ID</label><input id="sys-outlook-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
+                                <div class="field"><label>Client-ID</label><input id="sys-outlook-client" type="text" placeholder="App Registration Client-ID"></div>
+                            </div>
+                            <div class="field"><label>Support-Postfach</label><input id="sys-outlook-mailbox" type="email" placeholder="support@example.com"></div>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-sync"><span>Eingehende E-Mails synchronisieren</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-create"><span>Aus E-Mails automatisch Tickets erstellen</span></label>
+                        </div>
+
                         <!-- LDAP -->
                         <div id="sys-ldap" class="tab-content">
                             <div class="callout">LDAP-Login ist eine ERGÄNZUNG zum lokalen Passwort, kein Ersatz: Die Person
@@ -1747,6 +1794,18 @@ export const AdminBoard = {
                                 <div class="field"><label>Absender-Adresse</label><input id="sys-smtp-from" type="email" placeholder="support@example.com"></div>
                                 <div class="field"><label>Absender-Name</label><input id="sys-smtp-fromname" type="text" placeholder="Support Portal"></div>
                             </div>
+                            <div class="form-grid">
+                                <div class="field"><label>Antwort-an Adresse</label><input id="sys-email-replyto" type="email" placeholder="reply@example.com"></div>
+                                <div class="field"><label>BCC Archiv-Adresse</label><input id="sys-email-bcc" type="email" placeholder="archiv@example.com"></div>
+                            </div>
+                            <div class="field field-wide"><label>HTML-Signatur</label><textarea id="sys-email-signature" rows="5" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
+                            <div class="settings-section-title">E-Mail Sicherheit</div>
+                            <div class="form-grid">
+                                <div class="field"><label>Transport-Sicherheit</label><select id="sys-email-transport"><option value="starttls">STARTTLS erzwingen</option><option value="tls">TLS/SSL</option><option value="none">Keine Verschlüsselung</option></select></div>
+                                <div class="field"><label>Zertifikatsprüfung</label><select id="sys-email-cert-mode"><option value="strict">Strikt prüfen</option><option value="opportunistic">Opportunistisch</option></select></div>
+                            </div>
+                            <div class="field field-wide"><label>S/MIME Zertifikat (PEM)</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+                            <div class="field field-wide"><label>S/MIME Private Key (PEM)</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
                             <div class="setting-row">
                                 <span class="hint" id="sys-smtp-status"></span>
                                 <button class="btn-secondary btn-sm" id="sys-smtp-save-test" type="button">${Icon('send', 15)}Speichern &amp; Test-E-Mail senden</button>
@@ -1796,6 +1855,17 @@ export const AdminBoard = {
                         <!-- Unternehmenseinstellungen -->
                         <div id="sys-company" class="tab-content">
                             <div class="field"><label>Firmenname</label><input id="sys-company-name" type="text" placeholder="Muster GmbH"></div>
+                            <div class="settings-section-title">Branding &amp; Kontaktdaten</div>
+                            <div class="field"><label>Firmenlogo / Logo-URL</label><input id="sys-company-logo" type="text" placeholder="https://example.com/logo.png oder Data-URL"></div>
+                            <div class="form-grid">
+                                <div class="field"><label>Support-E-Mail</label><input id="sys-company-support" type="email" placeholder="support@example.com"></div>
+                                <div class="field"><label>Telefon</label><input id="sys-company-phone" type="text" placeholder="+49 ..."></div>
+                            </div>
+                            <div class="field field-wide"><label>Adresse</label><textarea id="sys-company-address" rows="3" placeholder="Straße, PLZ Ort"></textarea></div>
+                            <div class="form-grid">
+                                <div class="field"><label>Impressum-URL</label><input id="sys-company-imprint" type="url" placeholder="https://example.com/impressum"></div>
+                                <div class="field"><label>Datenschutz-URL</label><input id="sys-company-privacy" type="url" placeholder="https://example.com/datenschutz"></div>
+                            </div>
                             <div class="settings-section-title">Ticketnummern für neue Tickets</div>
                             <div class="callout">Format: <code>{prefix}-{number}</code>. Bestehende Ticketnummern bleiben unverändert.</div>
                             <div class="form-grid">
@@ -1849,6 +1919,11 @@ export const AdminBoard = {
         const settings = await Store.getSettings();
         const general = settings.generalConfig || {};
         const company = settings.companyConfig || {};
+        const security = settings.securityConfig || {};
+        const notifications = settings.notificationConfig || {};
+        const emailAdvanced = settings.emailAdvancedConfig || {};
+        const outlook = settings.outlookConfig || {};
+        const companyBranding = settings.companyBrandingConfig || {};
 
         q('#sys-portal-name').value = general.portalName || 'Support Portal';
         q('#sys-auto-archive').value = general.autoArchiveDays || 0;
@@ -1868,8 +1943,43 @@ export const AdminBoard = {
         qa('#sys-bh-days .bh-day-enabled').forEach(cb => { cb.checked = bhDays.includes(Number(cb.value)); });
 
         q('#sys-company-name').value = company.name || '';
+        q('#sys-company-logo').value = companyBranding.logoDataUrl || '';
+        q('#sys-company-support').value = companyBranding.supportEmail || '';
+        q('#sys-company-phone').value = companyBranding.phone || '';
+        q('#sys-company-address').value = companyBranding.address || '';
+        q('#sys-company-imprint').value = companyBranding.imprintUrl || '';
+        q('#sys-company-privacy').value = companyBranding.privacyUrl || '';
         q('#sys-ticket-number-prefix').value = company.ticketNumberPrefix || '';
         q('#sys-ticket-number-padding').value = company.ticketNumberPadding || 5;
+
+        q('#sys-sec-pass-min').value = security.passwordMinLength ?? 14;
+        q('#sys-sec-session').value = security.sessionTimeoutMinutes ?? 480;
+        q('#sys-sec-attempts').value = security.maxLoginAttempts ?? 5;
+        q('#sys-sec-2fa-admins').checked = !!security.require2faForAdmins;
+        q('#sys-sec-permanent').checked = !!security.allowPermanentSessions;
+
+        q('#sys-notify-new-ticket').checked = notifications.notifyNewTicket !== false;
+        q('#sys-notify-status').checked = notifications.notifyStatusChange !== false;
+        q('#sys-notify-message').checked = notifications.notifyNewMessage !== false;
+        q('#sys-notify-closed').checked = notifications.notifyTicketClosed !== false;
+        q('#sys-notify-account').checked = notifications.notifyAccountApproved !== false;
+        q('#sys-notify-digest').checked = !!notifications.digestEnabled;
+        q('#sys-notify-digest-hour').value = notifications.digestHour || '08:00';
+
+        q('#sys-email-replyto').value = emailAdvanced.replyTo || '';
+        q('#sys-email-bcc').value = emailAdvanced.bccArchive || '';
+        q('#sys-email-signature').value = emailAdvanced.htmlSignature || '';
+        q('#sys-email-transport').value = emailAdvanced.transportSecurity || 'starttls';
+        q('#sys-email-cert-mode').value = emailAdvanced.certificateValidation || 'strict';
+        q('#sys-email-smime-cert').value = emailAdvanced.smimeCertificatePem || '';
+        q('#sys-email-smime-key').value = emailAdvanced.smimePrivateKeyPem || '';
+
+        q('#sys-outlook-enabled').checked = !!outlook.enabled;
+        q('#sys-outlook-tenant').value = outlook.tenantId || '';
+        q('#sys-outlook-client').value = outlook.clientId || '';
+        q('#sys-outlook-mailbox').value = outlook.mailbox || '';
+        q('#sys-outlook-sync').checked = !!outlook.syncIncoming;
+        q('#sys-outlook-create').checked = !!outlook.createTicketsFromMail;
 
         const accEditable = settings.accountConfig?.editable || {};
         q('#sys-acc-name').checked = accEditable.name !== false;
@@ -1961,7 +2071,7 @@ export const AdminBoard = {
                 companyName: q('#sys-company-name').value.trim(),
                 portalName: q('#sys-portal-name').value.trim() || 'Support Portal',
                 config: {
-                    autoArchiveClosedAfterDays: Math.max(1, parseInt(q('#sys-auto-archive').value, 10) || 1),
+                    autoArchiveClosedAfterDays: Math.max(0, parseInt(q('#sys-auto-archive').value, 10) || 0),
                     waitingReminderDays: Math.max(1, parseInt(q('#sys-wait-remind').value, 10) || 2),
                     waitingAutoCloseDays: Math.max(1, parseInt(q('#sys-wait-close').value, 10) || 7),
                     slaHoursByPriority: {
@@ -1975,6 +2085,47 @@ export const AdminBoard = {
                         end: q('#sys-bh-end').value || '17:00',
                         days: qa('#sys-bh-days .bh-day-enabled:checked').map(cb => Number(cb.value))
                     } : undefined,
+                    securityConfig: {
+                        passwordMinLength: Math.max(8, Math.min(128, parseInt(q('#sys-sec-pass-min').value, 10) || 14)),
+                        sessionTimeoutMinutes: Math.max(5, Math.min(10080, parseInt(q('#sys-sec-session').value, 10) || 480)),
+                        maxLoginAttempts: Math.max(1, Math.min(50, parseInt(q('#sys-sec-attempts').value, 10) || 5)),
+                        require2faForAdmins: q('#sys-sec-2fa-admins').checked,
+                        allowPermanentSessions: q('#sys-sec-permanent').checked
+                    },
+                    notificationConfig: {
+                        notifyNewTicket: q('#sys-notify-new-ticket').checked,
+                        notifyStatusChange: q('#sys-notify-status').checked,
+                        notifyNewMessage: q('#sys-notify-message').checked,
+                        notifyTicketClosed: q('#sys-notify-closed').checked,
+                        notifyAccountApproved: q('#sys-notify-account').checked,
+                        digestEnabled: q('#sys-notify-digest').checked,
+                        digestHour: q('#sys-notify-digest-hour').value || '08:00'
+                    },
+                    emailAdvancedConfig: {
+                        replyTo: q('#sys-email-replyto').value.trim() || null,
+                        bccArchive: q('#sys-email-bcc').value.trim() || null,
+                        htmlSignature: q('#sys-email-signature').value,
+                        transportSecurity: q('#sys-email-transport').value,
+                        certificateValidation: q('#sys-email-cert-mode').value,
+                        smimeCertificatePem: q('#sys-email-smime-cert').value,
+                        smimePrivateKeyPem: q('#sys-email-smime-key').value
+                    },
+                    outlookConfig: {
+                        enabled: q('#sys-outlook-enabled').checked,
+                        tenantId: q('#sys-outlook-tenant').value.trim(),
+                        clientId: q('#sys-outlook-client').value.trim(),
+                        mailbox: q('#sys-outlook-mailbox').value.trim(),
+                        syncIncoming: q('#sys-outlook-sync').checked,
+                        createTicketsFromMail: q('#sys-outlook-create').checked
+                    },
+                    companyBrandingConfig: {
+                        logoDataUrl: q('#sys-company-logo').value.trim(),
+                        supportEmail: q('#sys-company-support').value.trim(),
+                        phone: q('#sys-company-phone').value.trim(),
+                        address: q('#sys-company-address').value,
+                        imprintUrl: q('#sys-company-imprint').value.trim(),
+                        privacyUrl: q('#sys-company-privacy').value.trim()
+                    },
                     ticketNumberFormat: {
                         prefix: q('#sys-ticket-number-prefix').value.trim(),
                         padding

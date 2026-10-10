@@ -134,6 +134,64 @@ ensure_docker() {
   run_root systemctl enable --now docker >/dev/null 2>&1 || true
 }
 
+detect_primary_ip() {
+  local ip
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  printf '%s\n' "${ip:-localhost}"
+}
+
+set_env_var() {
+  local key="$1"
+  local value="$2"
+  local file="$3"
+
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -v key="$key" -v value="$value" 'BEGIN { prefix=key "=" } index($0, prefix) == 1 { print key "=" value; next } { print }' "$file" > "$tmp_file"
+    cat "$tmp_file" > "$file"
+    rm -f "$tmp_file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
+ensure_public_env_defaults() {
+  local primary_ip
+  primary_ip="$(detect_primary_ip)"
+
+  set_env_var "HTTP_PORT" "${HTTP_PORT:-80}" "$ENV_FILE"
+  set_env_var "HTTPS_PORT" "${HTTPS_PORT:-443}" "$ENV_FILE"
+  set_env_var "BIND_ADDRESS" "${BIND_ADDRESS:-0.0.0.0}" "$ENV_FILE"
+
+  if ! grep -q '^PUBLIC_DOMAIN=' "$ENV_FILE" || grep -Eq '^PUBLIC_DOMAIN=(localhost|127\.0\.0\.1)?$' "$ENV_FILE"; then
+    set_env_var "PUBLIC_DOMAIN" "$primary_ip" "$ENV_FILE"
+  fi
+}
+
+open_firewall_ports() {
+  local opened=false
+
+  if command -v ufw >/dev/null 2>&1 && run_root ufw status 2>/dev/null | grep -qi '^Status: active'; then
+    log "Opening firewall ports 80/tcp and 443/tcp with ufw"
+    run_root ufw allow 80/tcp >/dev/null || true
+    run_root ufw allow 443/tcp >/dev/null || true
+    opened=true
+  fi
+
+  if command -v firewall-cmd >/dev/null 2>&1 && run_root firewall-cmd --state >/dev/null 2>&1; then
+    log "Opening firewall ports 80/tcp and 443/tcp with firewalld"
+    run_root firewall-cmd --permanent --add-service=http >/dev/null || true
+    run_root firewall-cmd --permanent --add-service=https >/dev/null || true
+    run_root firewall-cmd --reload >/dev/null || true
+    opened=true
+  fi
+
+  if [[ "$opened" == "false" ]]; then
+    warn "No active ufw/firewalld detected. If the site is unreachable from another device, allow TCP ports 80 and 443 in the server, VM, router or provider firewall."
+  fi
+}
+
 repo_host() {
   local without_scheme="${REPO_URL#*://}"
   printf '%s\n' "${without_scheme%%/*}"
@@ -218,7 +276,7 @@ else
   COOKIE_SECRET="$(openssl rand -base64 48)"
   INSTALLATION_ID="$(make_uuid)"
 
-  DEFAULT_IP=$(hostname -I | awk '{print $1}')
+  DEFAULT_IP=$(detect_primary_ip)
   cat > "$ENV_FILE" <<EOF
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
@@ -233,6 +291,8 @@ ACME_EMAIL=admin@example.invalid
 EOF
   chmod 600 "$ENV_FILE"
 fi
+
+ensure_public_env_defaults
 
 KEK_PATH="$SECRETS_DIR/app.kek"
 if [[ -f "$KEK_PATH" ]]; then
@@ -272,8 +332,11 @@ if [[ "$DEV_MODE" == "true" ]]; then
   log "Development mode active; using localhost HTTP"
 fi
 
+open_firewall_ports
+
 log "Building and starting Docker stack"
-run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --build
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" build --no-cache app
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate
 
 log "Waiting for app healthcheck"
 ATTEMPTS=0
@@ -300,12 +363,26 @@ if [[ "$DEV_MODE" == "true" || "$PUBLIC_DOMAIN" == "localhost" ]]; then
   PUBLIC_URL="http://localhost:${HTTP_PORT}"
 fi
 
+log "Checking local web reachability"
+if ! curl -kfsS --max-time 10 "https://${PUBLIC_DOMAIN}/health" >/dev/null 2>&1; then
+  warn "Local HTTPS check for https://${PUBLIC_DOMAIN}/health failed. The containers may still be starting; check Docker logs if the browser cannot connect."
+fi
+
 cat <<EOF
 
 ================================================================================
   Installation completed.
   Ticket system URL: $PUBLIC_URL
+  Setup URL:         ${PUBLIC_URL}/setup
   Open the URL in your browser and complete the setup assistant.
+
+  If the browser on another device shows ERR_CONNECTION_REFUSED:
+    1. Check that you open the HTTPS URL above, not only the bare IP address.
+    2. Check host/provider/VM/router firewall rules for TCP ports 80 and 443.
+    3. Test from the server:
+       curl -k -I https://${PUBLIC_DOMAIN}/health
+    4. Test from the client:
+       curl -k -I https://${PUBLIC_DOMAIN}/health
 
   Install directory: $SCRIPT_DIR
   Docker env file:   $ENV_FILE
