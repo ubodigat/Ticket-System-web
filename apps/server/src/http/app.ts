@@ -24,6 +24,7 @@ import { registerSettingsRoutes } from './routes/settings.js';
 import { registerKnowledgeRoutes } from './routes/knowledge.js';
 import { registerRecurringRoutes } from './routes/recurring.js';
 import { registerMfaRoutes } from './routes/mfa.js';
+import { registerUpdateRoutes } from './routes/update.js';
 import { registerStaticAssetRoutes } from './routes/staticAssets.js';
 
 // Strikte CSP, keine CDN-Hosts, kein 'unsafe-inline'/'unsafe-eval' (verbindlich, siehe
@@ -60,6 +61,38 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   app.decorate('db', deps.db);
+  app.decorate('ticketSession', null);
+
+  // Rollen/Sperr-/Archiv-Status standen bisher nur im signierten Cookie (bis zu 8h gueltig) und
+  // wurden nie erneut gegen die Datenbank geprueft -- eine Rollenaenderung, Sperrung oder
+  // Archivierung griff dadurch erst nach Ablauf/Neu-Login, nicht sofort. Dieser Hook laedt den
+  // aktuellen Stand bei jeder authentifizierten Anfrage einmal nach; requireSession/-Admin/
+  // -Superadmin (session.ts) lesen nur noch das bereits gepruefte Ergebnis.
+  app.addHook('onRequest', async (req) => {
+    const raw = req.cookies['__Host-ticket_session'] || req.cookies.ticket_session;
+    if (!raw) { req.ticketSession = null; return; }
+    const unsigned = req.unsignCookie(raw);
+    if (!unsigned.valid || !unsigned.value) { req.ticketSession = null; return; }
+    try {
+      const parsed = JSON.parse(Buffer.from(unsigned.value, 'base64url').toString('utf8')) as { uid?: unknown; iat?: unknown };
+      if (typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number' || Date.now() - parsed.iat > 8 * 60 * 60 * 1000) {
+        req.ticketSession = null;
+        return;
+      }
+      const row = await deps.db.selectFrom('users')
+        .select(['username', 'role', 'account_archived', 'locked_until', 'locked_permanent'])
+        .where('id', '=', parsed.uid)
+        .executeTakeFirst();
+      const isLocked = !!row && (row.locked_permanent || (!!row.locked_until && new Date(row.locked_until).getTime() > Date.now()));
+      if (!row || row.account_archived || isLocked) {
+        req.ticketSession = null;
+        return;
+      }
+      req.ticketSession = { uid: parsed.uid, username: row.username, role: row.role };
+    } catch {
+      req.ticketSession = null;
+    }
+  });
 
   await app.register(helmet, {
     contentSecurityPolicy: { directives: CSP_DIRECTIVES },
@@ -93,6 +126,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerKnowledgeRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerRecurringRoutes(app);
   registerMfaRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerUpdateRoutes(app, { env: deps.env });
   registerStaticAssetRoutes(app);
 
   return app;
@@ -101,5 +135,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 declare module 'fastify' {
   interface FastifyInstance {
     db: Kysely<Database>;
+  }
+  interface FastifyRequest {
+    ticketSession: { uid: string; username: string; role: 'user' | 'admin' | 'superadmin' } | null;
   }
 }

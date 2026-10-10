@@ -19,11 +19,13 @@ import { routeError } from './routeError.js';
 import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
 import { isValidTicketStatus } from '../../domain/status.js';
+import { buildTicketNumber } from '../../domain/ticketNumber.js';
 
 export interface TicketsRouteDeps {
   env: Env;
   keyProvider: KeyProvider;
 }
+
 
 // Alle Ticket-/Chat-/Notiz-Inhalte werden serverseitig AES-256-GCM-verschlüsselt gespeichert
 // (docs-Entscheidung: serverseitig statt Ende-zu-Ende, da Server weiterhin lesen/filtern muss).
@@ -119,7 +121,8 @@ const updateTicketSchema = z.object({
   type: z.enum(['ticket', 'incident']).optional(),
   incident_notice: z.string().trim().max(2000).nullable().optional(),
   archived: z.boolean().optional(),
-  waiting_message: z.string().trim().max(2000).optional()
+  waiting_message: z.string().trim().max(2000).optional(),
+  archived_author_ack: z.boolean().optional()
 });
 
 const sendMessageSchema = z.object({
@@ -252,14 +255,50 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const session = requireSession(req);
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
 
+      // Die Übersicht (Kanban/Liste) brauchte bisher kein Zähl-/Status-Wissen über Chat, Notizen,
+      // Teilaufgaben und Anhänge -- die liegen seit der Normalisierung in eigenen Tabellen und
+      // kommen nicht mehr automatisch mit (vorher: ein JSON-Blob mit allem zusammen). Ohne diese
+      // korrelierten Unterabfragen zeigten die Karten immer "0" an und das "wartet auf
+      // Antwort"-Symbol nie, unabhängig vom tatsächlichen Stand.
       let query = app.db.selectFrom('tickets')
-        .select([
+        .select(eb => [
           'id', 'ticket_number', 'title', 'status', 'priority', 'category', 'type',
           'created_by_user_id', 'created_by_username', 'assigned_to_user_id', 'assigned_to_username', 'assigned_group_id',
-          'sla_due_at', 'custom_due_at', 'archived_at', 'closed_at',
+          'sla_due_at', 'custom_due_at', 'archived_at', 'closed_at', 'archived_author_ack',
           'approval_status', 'approval_requested_by', 'approval_reviewer_id', 'approval_text',
           'incident_id', 'incident_notice', 'filed_by_user_id', 'filed_by_username',
-          'waiting_since', 'waiting_message', 'custom_fields_json', 'created_at', 'updated_at'
+          'waiting_since', 'waiting_message', 'custom_fields_json', 'created_at', 'updated_at',
+          eb.selectFrom('ticket_messages')
+            .select('sender_role')
+            .whereRef('ticket_messages.ticket_id', '=', 'tickets.id')
+            .orderBy('created_at', 'desc')
+            .limit(1)
+            .as('last_message_role'),
+          eb.selectFrom('ticket_messages')
+            .select(eb2 => eb2.fn.countAll<number>().as('n'))
+            .whereRef('ticket_messages.ticket_id', '=', 'tickets.id')
+            .as('message_count'),
+          eb.selectFrom('ticket_notes')
+            .select(eb2 => eb2.fn.countAll<number>().as('n'))
+            .whereRef('ticket_notes.ticket_id', '=', 'tickets.id')
+            .as('note_count'),
+          eb.selectFrom('ticket_todos')
+            .select(eb2 => eb2.fn.countAll<number>().as('n'))
+            .whereRef('ticket_todos.ticket_id', '=', 'tickets.id')
+            .as('todo_count'),
+          eb.selectFrom('ticket_todos')
+            .select(eb2 => eb2.fn.countAll<number>().as('n'))
+            .whereRef('ticket_todos.ticket_id', '=', 'tickets.id')
+            .where('done', '=', true)
+            .as('todo_done_count'),
+          eb.selectFrom('attachments')
+            .select(eb2 => eb2.fn.countAll<number>().as('n'))
+            .whereRef('attachments.ticket_id', '=', 'tickets.id')
+            .as('attachment_count'),
+          eb.selectFrom('users')
+            .select('account_archived')
+            .whereRef('users.id', '=', 'tickets.created_by_user_id')
+            .as('author_archived')
         ])
         .where('archived_at', 'is', null);
 
@@ -352,13 +391,20 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const slaConfig = settingsRowForSla?.config_json ? JSON.parse(settingsRowForSla.config_json) : {};
       const slaDueAt = calculateSlaDueAt(new Date(), parsed.data.priority, slaConfig);
 
+      const numberingSettingsRow = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+      const numberingConfig = numberingSettingsRow?.config_json ? JSON.parse(numberingSettingsRow.config_json) : {};
+
       const MAX_TICKET_NUMBER_RETRIES = 5;
       for (let attempt = 0; attempt < MAX_TICKET_NUMBER_RETRIES; attempt++) {
-        const maxRow = await app.db.selectFrom('tickets')
-          .select(app.db.fn.max('ticket_number').as('max_num'))
-          .executeTakeFirst();
-        const lastNum = parseInt(String(maxRow?.max_num ?? '0').replace(/\D/g, ''), 10) || 0;
-        const ticketNumber = String(lastNum + 1).padStart(5, '0');
+        // Höchste bisher vergebene laufende Nummer über alle Tickets hinweg (unabhängig vom
+        // Format/Präfix) -- robust gegen nachträgliche Formatänderungen, da nur die Ziffern
+        // ausgewertet werden, nicht die komplette formatierte Zeichenkette.
+        const rows = await app.db.selectFrom('tickets').select('ticket_number').execute();
+        const lastNum = rows.reduce((max, row) => {
+          const digits = String(row.ticket_number || '').match(/(\d+)(?!.*\d)/);
+          return Math.max(max, digits ? parseInt(digits[1]!, 10) : 0);
+        }, 0);
+        const ticketNumber = buildTicketNumber(lastNum + 1, parsed.data.category ?? null, numberingConfig);
 
         try {
           await app.db.insertInto('tickets').values({
@@ -481,7 +527,10 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       }
 
       const deks = await loadTicketDeks(app, deps.keyProvider);
-      return reply.send({ ticket: decryptTicketRow(ticket, deks, deps) });
+      const authorRow = ticket.created_by_user_id
+        ? await app.db.selectFrom('users').select('account_archived').where('id', '=', ticket.created_by_user_id).executeTakeFirst()
+        : undefined;
+      return reply.send({ ticket: { ...decryptTicketRow(ticket, deks, deps), author_archived: authorRow?.account_archived ?? false } });
     } catch (e: any) {
       return routeError(app, reply, e);
     }

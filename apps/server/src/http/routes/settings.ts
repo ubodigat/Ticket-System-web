@@ -49,17 +49,39 @@ const updateCategorySchema = z.object({
 // Freiform, aber mit sinnvollen Grenzen -- entspricht dem bisherigen generalConfig/slaConfig/
 // notificationPolicy/accountConfig-Nest aus der alten Oberfläche, nur jetzt serverseitig
 // validiert statt ungeprüft aus dem Browser übernommen.
+// Je Wochentag (0=Sonntag..6=Samstag) individuelle Zeiten statt einer einzigen globalen
+// Start/Ende-Zeit -- entspricht der ursprünglichen, lokalen Version (vor der Datenbank-Anbindung).
+const businessHoursDaySchema = z.object({
+  enabled: z.boolean(),
+  start: z.string().regex(/^\d{2}:\d{2}$/),
+  end: z.string().regex(/^\d{2}:\d{2}$/)
+});
+
 const settingsConfigSchema = z.object({
   slaHoursByPriority: z.record(z.string(), z.number().int().positive().max(24 * 365)).optional(),
+  // "Frist auch Benutzern anzeigen" -- dezenter SLA-Hinweis im Benutzer-Dashboard (ohne Alarmfarben).
+  showSlaToUsers: z.boolean().optional(),
+  defaultPrio: z.enum(['Niedrig', 'Normal', 'Hoch']).optional(),
   businessHours: z.object({
+    enabled: z.boolean().optional(),
     start: z.string().regex(/^\d{2}:\d{2}$/),
     end: z.string().regex(/^\d{2}:\d{2}$/),
-    days: z.array(z.number().int().min(0).max(6))
+    days: z.array(z.number().int().min(0).max(6)),
+    // Individuelle Zeiten je Wochentag (überschreibt start/end für den jeweiligen Tag, wenn
+    // vorhanden) und Feiertage (YYYY-MM-DD) -- an diesen Tagen läuft keine Lösungsfrist.
+    perDay: z.record(z.string(), businessHoursDaySchema).optional(),
+    holidays: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(366).optional()
   }).optional(),
+  // format: Vorlage mit {prefix}/{category}/{number}, muss {number} enthalten -- validiert in
+  // buildTicketNumber (tickets.ts), nicht hier, da der Platzhalter-Check dort mit derselben
+  // Logik wie beim tatsächlichen Erzeugen der Nummer laufen soll.
   ticketNumberFormat: z.object({
     prefix: z.string().max(16).default(''),
-    padding: z.number().int().min(1).max(10).default(5)
+    padding: z.number().int().min(1).max(12).default(5),
+    format: z.string().trim().max(64).optional()
   }).optional(),
+  // Pro Kategorie ein eigenes Format (überschreibt ticketNumberFormat.format für diese Kategorie).
+  ticketNumberCategoryFormats: z.record(z.string(), z.string().trim().max(64)).optional(),
   accountSelfServiceFields: z.array(z.enum(['name', 'email', 'department'])).optional(),
   autoArchiveClosedAfterDays: z.number().int().min(0).max(3650).optional(),
   waitingReminderDays: z.number().int().min(1).max(365).optional(),
@@ -76,15 +98,16 @@ const settingsConfigSchema = z.object({
     require2faForAdmins: z.boolean().optional(),
     allowPermanentSessions: z.boolean().optional()
   }).optional(),
-  notificationConfig: z.object({
-    notifyNewTicket: z.boolean().optional(),
-    notifyStatusChange: z.boolean().optional(),
-    notifyNewMessage: z.boolean().optional(),
-    notifyTicketClosed: z.boolean().optional(),
-    notifyAccountApproved: z.boolean().optional(),
-    digestEnabled: z.boolean().optional(),
-    digestHour: z.string().regex(/^\d{2}:\d{2}$/).optional()
-  }).optional(),
+  // Je Ereignistyp (newTicket/mention/statusChange/...) und Rolle (user/admin): Standardwert
+  // für App/E-Mail und ob die Person das selbst anpassen darf (appLocked/emailLocked) -- siehe
+  // Store.resolveNotifPref im Frontend, das genau diese Struktur mit den persönlichen
+  // Einstellungen der jeweiligen Person kombiniert.
+  notifPolicy: z.record(z.string(), z.record(z.string(), z.object({
+    defaultApp: z.boolean().optional(),
+    defaultEmail: z.boolean().optional(),
+    appLocked: z.boolean().optional(),
+    emailLocked: z.boolean().optional()
+  }))).optional(),
   emailAdvancedConfig: z.object({
     replyTo: z.string().trim().max(255).nullable().optional(),
     bccArchive: z.string().trim().max(255).nullable().optional(),

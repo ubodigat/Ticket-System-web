@@ -254,5 +254,23 @@ export const Utils = {
         const d = new Date(yyyy, mm - 1, dd, hh, min, 0, 0);
         if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd || d.getHours() !== hh || d.getMinutes() !== min) return null;
         return d.getTime();
+    },
+    // Lädt eine der schweren, selten gebrauchten Vorschau-Bibliotheken (mammoth/xlsx/jszip,
+    // zusammen >1,6 MB) erst beim ersten tatsächlichen Bedarf nach, statt sie wie bisher auf
+    // jedem Seitenaufruf blockierend im <head> zu laden -- genau das ließ u.a. die Icons
+    // spürbar verzögert erscheinen, weil der Browser erst diese Dateien fertig laden musste.
+    // Pro URL nur einmal angehängt (gecachte Promise), auch bei mehrfachem parallelem Aufruf.
+    _vendorScripts: {},
+    loadVendorScript: (src) => {
+        if (!Utils._vendorScripts[src]) {
+            Utils._vendorScripts[src] = new Promise((resolve, reject) => {
+                const el = document.createElement('script');
+                el.src = src;
+                el.onload = () => resolve();
+                el.onerror = () => reject(new Error(`Skript konnte nicht geladen werden: ${src}`));
+                document.head.appendChild(el);
+            });
+        }
+        return Utils._vendorScripts[src];
     }
 };

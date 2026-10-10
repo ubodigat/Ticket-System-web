@@ -30,7 +30,9 @@ const envSchema = z.object({
   INSTALLATION_ID: z.string().uuid(),
   SCHEMA_VERSION: z.coerce.number().int().positive().default(1),
 
-  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(1)
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(1),
+  UPDATE_SERVICE_URL: z.string().url().optional(),
+  UPDATE_TOKEN: z.string().min(32).optional()
 });
 
 export type Env = z.infer<typeof envSchema>;

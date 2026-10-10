@@ -38,6 +38,11 @@ const updateUserSchema = z.object({
   email: z.string().email().max(255).optional(),
   role: z.enum(['user', 'admin']).optional(),
   department_group_id: z.string().nullable().optional(),
+  // Freitext-Einrichtung/Abteilung (nicht zu verwechseln mit department_group_id, der
+  // Gruppenzugehörigkeit) -- die UI-seitige Sichtbarkeit beim Selbst-Bearbeiten regelt
+  // accountConfig.editable.department (Systemeinstellungen), nicht diese Schema-Prüfung hier;
+  // dasselbe Muster wie bei name/email oben.
+  department: z.string().trim().max(255).nullable().optional(),
   supervisor_user_id: z.string().nullable().optional(),
   account_archived: z.boolean().optional(),
   locked_permanent: z.boolean().optional()
@@ -101,12 +106,62 @@ const setAbsenceSchema = z.object({
 
 export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps): void {
 
+  // Korrelierte Unterabfragen für die aktuell laufende Abwesenheit (hoechstens eine Zeile mit
+  // active=true pro Person, siehe POST /users/me/absence: eine laufende Abwesenheit wird immer
+  // zuerst beendet, bevor eine neue beginnt). Fehlte bisher komplett in der API-Antwort --
+  // AdminBoard.renderUserManager/Settings.renderAbsenceArea lasen deshalb immer "keine Abwesenheit",
+  // selbst wenn in der Datenbank eine aktive Abwesenheit hinterlegt war.
+  const absenceSelects = (eb: any) => [
+    eb.selectFrom('user_absences').select('from_at')
+      .whereRef('user_absences.user_id', '=', 'users.id').where('user_absences.active', '=', true)
+      .limit(1).as('absence_from_at'),
+    eb.selectFrom('user_absences').select('until_at')
+      .whereRef('user_absences.user_id', '=', 'users.id').where('user_absences.active', '=', true)
+      .limit(1).as('absence_until_at'),
+    eb.selectFrom('user_absences').select('visible')
+      .whereRef('user_absences.user_id', '=', 'users.id').where('user_absences.active', '=', true)
+      .limit(1).as('absence_visible'),
+    eb.selectFrom('user_absences')
+      .innerJoin('users as su', 'su.id', 'user_absences.substitute_user_id')
+      .select('su.username')
+      .whereRef('user_absences.user_id', '=', 'users.id').where('user_absences.active', '=', true)
+      .limit(1).as('absence_substitute_username')
+  ];
+
+  // Wandelt die vier absence_*-Rohspalten in das vom Frontend erwartete Objekt
+  // { active, pending, substitute, visible, fromMs, untilMs } um (siehe
+  // AdminBoard.absenceInfoText/renderUserManager, Settings.renderAbsenceArea). "pending" =
+  // eine künftige Abwesenheit ist hinterlegt, aber ihr Beginn liegt noch in der Zukunft;
+  // "active" = sie gilt bereits heute.
+  function buildAbsence(row: { absence_from_at?: Date | string | null; absence_until_at?: Date | string | null; absence_visible?: boolean | null; absence_substitute_username?: string | null }) {
+    // Keine aktive Abwesenheitszeile für diese Person gefunden -- alle vier Unterabfragen
+    // liefern dann NULL (absence_visible ist eine Boolean-Spalte, NULL heisst hier "keine Zeile",
+    // nicht "false").
+    if (row.absence_visible == null && row.absence_from_at == null && row.absence_until_at == null && row.absence_substitute_username == null) {
+      return null;
+    }
+    const fromMs = row.absence_from_at ? new Date(row.absence_from_at).getTime() : null;
+    const untilMs = row.absence_until_at ? new Date(row.absence_until_at).getTime() : null;
+    const pending = !!fromMs && fromMs > Date.now();
+    return {
+      active: !pending,
+      pending,
+      substitute: row.absence_substitute_username ?? null,
+      visible: !!row.absence_visible,
+      fromMs,
+      untilMs
+    };
+  }
+
   // GET /api/v2/users - Alle Benutzer (nur Admin)
   app.get('/api/v2/users', async (req, reply) => {
     try {
       requireAdmin(req);
       const rows = await app.db.selectFrom('users')
-        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at'])
+        .select(eb => [
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at',
+          ...absenceSelects(eb)
+        ])
         .orderBy('created_at', 'asc')
         .execute();
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
@@ -125,7 +180,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           name_enc: undefined,
           email_enc: undefined,
           name: fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-          email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion))
+          email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
+          absence: buildAbsence(row as any)
         };
       });
       return reply.send({ users });
@@ -139,7 +195,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     try {
       const session = requireSession(req);
       const row = await app.db.selectFrom('users')
-        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at'])
+        .select(eb => [
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at',
+          ...absenceSelects(eb)
+        ])
         .where('id', '=', session.uid)
         .executeTakeFirst();
       if (!row) return reply.code(404).send({ error: 'not_found' });
@@ -158,7 +217,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         name_enc: undefined,
         email_enc: undefined,
         name: fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-        email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion))
+        email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
+        absence: buildAbsence(row as any)
       };
       return reply.send({ user });
     } catch (e: any) {
@@ -266,6 +326,9 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         });
         updates.email_blind_idx = computeBlindIndex(blindIndexDek.rawDek, parsed.data.email.trim().toLowerCase());
       }
+      // department ist Klartext (kein personenbezogenes Pflichtfeld wie Name/E-Mail, keine
+      // Verschlüsselung dafür vorgesehen) -- gleiche Selbst-/Admin-Berechtigung wie Name/E-Mail.
+      if (parsed.data.department !== undefined) updates.department = parsed.data.department;
 
       // Nur Admin darf Rolle, Gruppe, Vorgesetzte Person, Archivierung und Sperrung ändern
       if (isAdmin) {
@@ -451,60 +514,112 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
   // --- Abwesenheit & Vertretung (nur Admin/Superadmin, wie im Altsystem) ---
 
+  // Gemeinsame Logik für Self-Service- (/users/me/absence) und Admin-Endpunkt
+  // (/users/:id/absence) -- vorher nur als Self-Service vorhanden; AdminBoard.setAbsence im
+  // Frontend (aufgerufen aus der Benutzerverwaltung heraus, um ANDERE Personen abwesend zu
+  // melden) rief diesen Endpunkt nie auf, sondern mutierte nur ein lokales JS-Objekt und
+  // "speicherte" es über Store.saveUsers, das das absence-Feld gar nicht kennt -- Abwesenheiten
+  // für andere Personen wurden dadurch nie tatsächlich in der Datenbank gespeichert.
+  async function applyUserAbsence(targetUserId: string, actor: { uid: string; username: string }, data: z.infer<typeof setAbsenceSchema>) {
+    // Laufende Abwesenheit derselben Person beenden, bevor eine neue beginnt -- nie zwei
+    // gleichzeitig aktive Zeilen für dieselbe Person.
+    await app.db.updateTable('user_absences')
+      .set({ active: false, ended_at: new Date().toISOString() })
+      .where('user_id', '=', targetUserId)
+      .where('active', '=', true)
+      .execute();
+
+    if (!data.active) {
+      return { success: true, active: false };
+    }
+
+    const id = randomUUID();
+    await app.db.insertInto('user_absences').values({
+      id,
+      user_id: targetUserId,
+      active: true,
+      from_at: data.from_at ?? null,
+      until_at: data.until_at ?? null,
+      substitute_user_id: data.substitute_user_id ?? null,
+      visible: data.visible
+    }).execute();
+
+    // Sofortige Wirkung (docs/SPEC.md §7.1): offene, zugewiesene Tickets gehen sofort an die
+    // Vertretung über, nicht erst beim nächsten Login irgendeiner Person.
+    if (data.substitute_user_id) {
+      const reassigned = await app.db.selectFrom('tickets')
+        .select('id')
+        .where('assigned_to_user_id', '=', targetUserId)
+        .where('archived_at', 'is', null)
+        .execute();
+      if (reassigned.length > 0) {
+        const substitute = await app.db.selectFrom('users').select('username').where('id', '=', data.substitute_user_id).executeTakeFirst();
+        await app.db.updateTable('tickets')
+          .set({ assigned_to_user_id: data.substitute_user_id, assigned_to_username: substitute?.username ?? null, updated_at: new Date().toISOString() })
+          .where('assigned_to_user_id', '=', targetUserId)
+          .where('archived_at', 'is', null)
+          .execute();
+        for (const ticket of reassigned) {
+          await app.db.insertInto('ticket_audit_log').values({
+            id: randomUUID(), ticket_id: ticket.id, actor_user_id: actor.uid, actor_username: actor.username,
+            action: 'reassigned_absence', field: 'assigned_to_user_id', old_value: targetUserId, new_value: data.substitute_user_id
+          }).execute();
+        }
+      }
+    }
+
+    return { success: true, active: true, id };
+  }
+
   app.post('/api/v2/users/me/absence', async (req, reply) => {
     try {
       const session = requireAdmin(req);
       const parsed = setAbsenceSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      return reply.send(await applyUserAbsence(session.uid, session, parsed.data));
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
 
-      // Laufende Abwesenheit desselben Benutzers beenden, bevor eine neue beginnt -- nie zwei
-      // gleichzeitig aktive Zeilen für denselben Benutzer.
-      await app.db.updateTable('user_absences')
-        .set({ active: false, ended_at: new Date().toISOString() })
-        .where('user_id', '=', session.uid)
-        .where('active', '=', true)
+  // POST /api/v2/users/:id/absence - Admin meldet eine ANDERE Person abwesend (z.B. aus der
+  // Benutzerverwaltung heraus) -- siehe Kommentar bei applyUserAbsence oben.
+  app.post('/api/v2/users/:id/absence', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      const { id } = req.params as { id: string };
+      const parsed = setAbsenceSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      const target = await app.db.selectFrom('users').select('id').where('id', '=', id).executeTakeFirst();
+      if (!target) return reply.code(404).send({ error: 'not_found' });
+      return reply.send(await applyUserAbsence(id, session, parsed.data));
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // GET /api/v2/users/:id/absence/transferred-tickets - welche (noch nicht archivierten)
+  // Tickets sind wegen einer Abwesenheit dieser Person an eine Vertretung übergegangen und
+  // liegen jetzt noch bei jemand anderem? Aus dem Audit-Log abgeleitet (ticket_audit_log-Eintrag
+  // "reassigned_absence"), statt wie im Altsystem in einer eigenen Liste auf dem Benutzerobjekt
+  // nachgehalten -- die gibt es im normalisierten Schema nicht mehr.
+  app.get('/api/v2/users/:id/absence/transferred-tickets', async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      const { id } = req.params as { id: string };
+      if (session.uid !== id && session.role !== 'admin' && session.role !== 'superadmin') {
+        return reply.code(403).send({ error: 'forbidden' });
+      }
+      const rows = await app.db.selectFrom('ticket_audit_log')
+        .innerJoin('tickets', 'tickets.id', 'ticket_audit_log.ticket_id')
+        .select(['tickets.id as ticket_id'])
+        .where('ticket_audit_log.action', '=', 'reassigned_absence')
+        .where('ticket_audit_log.old_value', '=', id)
+        .where('tickets.archived_at', 'is', null)
+        .where('tickets.assigned_to_user_id', '!=', id)
+        .distinct()
         .execute();
-
-      if (!parsed.data.active) {
-        return reply.send({ success: true, active: false });
-      }
-
-      const id = randomUUID();
-      await app.db.insertInto('user_absences').values({
-        id,
-        user_id: session.uid,
-        active: true,
-        from_at: parsed.data.from_at ?? null,
-        until_at: parsed.data.until_at ?? null,
-        substitute_user_id: parsed.data.substitute_user_id ?? null,
-        visible: parsed.data.visible
-      }).execute();
-
-      // Sofortige Wirkung (docs/SPEC.md §7.1): offene, zugewiesene Tickets gehen sofort an die
-      // Vertretung über, nicht erst beim nächsten Login irgendeiner Person.
-      if (parsed.data.substitute_user_id) {
-        const reassigned = await app.db.selectFrom('tickets')
-          .select('id')
-          .where('assigned_to_user_id', '=', session.uid)
-          .where('archived_at', 'is', null)
-          .execute();
-        if (reassigned.length > 0) {
-          const substitute = await app.db.selectFrom('users').select('username').where('id', '=', parsed.data.substitute_user_id).executeTakeFirst();
-          await app.db.updateTable('tickets')
-            .set({ assigned_to_user_id: parsed.data.substitute_user_id, assigned_to_username: substitute?.username ?? null, updated_at: new Date().toISOString() })
-            .where('assigned_to_user_id', '=', session.uid)
-            .where('archived_at', 'is', null)
-            .execute();
-          for (const ticket of reassigned) {
-            await app.db.insertInto('ticket_audit_log').values({
-              id: randomUUID(), ticket_id: ticket.id, actor_user_id: session.uid, actor_username: session.username,
-              action: 'reassigned_absence', field: 'assigned_to_user_id', old_value: session.uid, new_value: parsed.data.substitute_user_id
-            }).execute();
-          }
-        }
-      }
-
-      return reply.send({ success: true, active: true, id });
+      return reply.send({ ticketIds: rows.map(r => r.ticket_id) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }

@@ -10,10 +10,22 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 // Anzeige-Rechnung in script.js, der Server selbst hat sla_due_at nie gesetzt. Jetzt berechnet
 // und setzt tickets.ts diesen Wert bei der Ticket-Erstellung, damit die Frist eine echte,
 // serverseitige Tatsache ist statt einer reinen Browser-Anzeige.
-export interface BusinessHoursConfig {
+export interface BusinessHoursDayConfig {
+  enabled: boolean;
   start: string; // "HH:MM"
   end: string; // "HH:MM"
-  days: number[]; // 0 = Sonntag ... 6 = Samstag
+}
+
+export interface BusinessHoursConfig {
+  start: string; // "HH:MM" -- Fallback, wenn kein individueller Tag in "perDay" konfiguriert ist
+  end: string; // "HH:MM"
+  days: number[]; // 0 = Sonntag ... 6 = Samstag -- Fallback, wenn "perDay" fehlt
+  // Individuelle Zeiten je Wochentag (Schlüssel "0".."6") -- überschreibt start/end/days für
+  // genau diesen Tag. Fehlt ein Tag hier, gelten start/end/days wie bisher.
+  perDay?: Record<string, BusinessHoursDayConfig>;
+  // Feiertage als "YYYY-MM-DD" (UTC-Kalendertag) -- an diesen Tagen läuft keine Frist, auch
+  // wenn der Wochentag sonst als Geschäftstag konfiguriert ist.
+  holidays?: string[];
 }
 
 export interface SlaConfig {
@@ -31,26 +43,42 @@ function parseTimeOfDay(value: string): { hours: number; minutes: number } {
 // Rechnet bewusst durchgehend in UTC (*nicht* der lokalen Zeitzone des Node-Prozesses) --
 // deterministisch unabhängig vom Serverstandort; es gibt keine Installations-Zeitzone zum
 // Konfigurieren, UTC ist die einzige eindeutige Wahl.
+function utcDateKey(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
 function addBusinessHours(start: Date, hours: number, cfg: BusinessHoursConfig): Date {
-  const { hours: startH, minutes: startM } = parseTimeOfDay(cfg.start);
-  const { hours: endH, minutes: endM } = parseTimeOfDay(cfg.end);
   let remainingMs = hours * 60 * 60 * 1000;
   let cursor = new Date(start);
+  const holidays = new Set(cfg.holidays ?? []);
+  const fallbackEndMinutes = parseTimeOfDay(cfg.end).hours * 60 + parseTimeOfDay(cfg.end).minutes;
+  const fallbackStartMinutes = parseTimeOfDay(cfg.start).hours * 60 + parseTimeOfDay(cfg.start).minutes;
 
   // Schutz gegen eine Konfiguration ohne gültige Geschäftstage/-fenster (würde sonst endlos laufen).
-  if (!cfg.days.length || endH * 60 + endM <= startH * 60 + startM) {
+  const hasAnyWindow = cfg.perDay
+    ? Object.values(cfg.perDay).some(d => d.enabled)
+    : cfg.days.length > 0 && fallbackEndMinutes > fallbackStartMinutes;
+  if (!hasAnyWindow) {
     return new Date(start.getTime() + remainingMs);
   }
 
   // Obergrenze an Schleifendurchläufen (ein Tag je Durchlauf) als zusätzliche Sicherheit.
   for (let guard = 0; guard < 3650 && remainingMs > 0; guard++) {
+    const dayOfWeek = cursor.getUTCDay();
+    const dayCfg: BusinessHoursDayConfig = cfg.perDay?.[String(dayOfWeek)] ?? {
+      enabled: cfg.days.includes(dayOfWeek),
+      start: cfg.start,
+      end: cfg.end
+    };
+    const isHoliday = holidays.has(utcDateKey(cursor));
+    const { hours: startH, minutes: startM } = parseTimeOfDay(dayCfg.start);
+    const { hours: endH, minutes: endM } = parseTimeOfDay(dayCfg.end);
     const dayStart = new Date(cursor);
     dayStart.setUTCHours(startH, startM, 0, 0);
     const dayEnd = new Date(cursor);
     dayEnd.setUTCHours(endH, endM, 0, 0);
 
-    const isBusinessDay = cfg.days.includes(cursor.getUTCDay());
-    if (isBusinessDay && cursor < dayEnd) {
+    if (dayCfg.enabled && !isHoliday && dayEnd > dayStart && cursor < dayEnd) {
       const windowStart = cursor < dayStart ? dayStart : cursor;
       const availableMs = dayEnd.getTime() - windowStart.getTime();
       if (availableMs > 0) {

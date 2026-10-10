@@ -352,13 +352,16 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
 
       // Sicherheit: Gefährliche MIME-Typen ablehnen
-      const blockedMime = ['text/html', 'application/javascript', 'application/x-php', 'application/x-sh'];
+      // image/svg+xml wird ausgefuehrt, sobald es direkt (z.B. ueber einen blob:-Link im neuen
+      // Tab) im Browser geoeffnet wird -- eingebettetes <script> laeuft dann same-origin mit der
+      // Session der oeffnenden Person (gespeicherte XSS via Anhang).
+      const blockedMime = ['text/html', 'application/javascript', 'application/x-php', 'application/x-sh', 'image/svg+xml'];
       if (blockedMime.includes(parsed.data.mime_type.toLowerCase())) {
         return reply.code(400).send({ error: 'blocked_mime_type' });
       }
 
       // Sicherheit: Dateierweiterungen prüfen
-      const blockedExtensions = ['.exe', '.php', '.sh', '.bat', '.cmd', '.ps1', '.py', '.rb', '.js', '.html'];
+      const blockedExtensions = ['.exe', '.php', '.sh', '.bat', '.cmd', '.ps1', '.py', '.rb', '.js', '.html', '.svg', '.svgz', '.htm', '.xhtml'];
       const ext = parsed.data.filename.toLowerCase().split('.').pop() ?? '';
       if (blockedExtensions.includes('.' + ext)) {
         return reply.code(400).send({ error: 'blocked_extension' });

@@ -1,0 +1,11 @@
+FROM node:24-alpine
+
+RUN apk add --no-cache git docker-cli docker-cli-compose ca-certificates
+
+WORKDIR /updater
+COPY ops/docker/updater-server.mjs ./updater-server.mjs
+
+ENV PORT=3099
+EXPOSE 3099
+
+CMD ["node", "/updater/updater-server.mjs"]

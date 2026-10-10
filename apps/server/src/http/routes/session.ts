@@ -15,31 +15,12 @@ export interface SessionContext {
   role: 'user' | 'admin' | 'superadmin';
 }
 
+// Cookie-Parsing und die Gegenprobe gegen den aktuellen Rollen-/Sperr-/Archiv-Status in der
+// Datenbank laufen zentral im onRequest-Hook in app.ts (einmal pro Anfrage); hier wird nur noch
+// das bereits geprüfte Ergebnis gelesen. So greift eine Rollenänderung, Sperrung oder
+// Archivierung sofort und nicht erst nach Ablauf des bis zu 8h gültigen Cookies.
 export function getSession(req: FastifyRequest): SessionContext | null {
-  const raw = req.cookies['__Host-ticket_session'] || req.cookies.ticket_session;
-  if (!raw) return null;
-  const unsigned = req.unsignCookie(raw);
-  if (!unsigned.valid || !unsigned.value) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(unsigned.value, 'base64url').toString('utf8')) as {
-      uid?: unknown;
-      username?: unknown;
-      role?: unknown;
-      iat?: unknown;
-    };
-    if (
-      typeof parsed.uid !== 'string' ||
-      typeof parsed.iat !== 'number' ||
-      Date.now() - parsed.iat > 8 * 60 * 60 * 1000
-    ) return null;
-    return {
-      uid: parsed.uid,
-      username: typeof parsed.username === 'string' ? parsed.username : '',
-      role: (parsed.role === 'superadmin' ? 'superadmin' : parsed.role === 'admin' ? 'admin' : 'user') as SessionContext['role']
-    };
-  } catch {
-    return null;
-  }
+  return req.ticketSession ?? null;
 }
 
 export function requireSession(req: FastifyRequest): SessionContext {

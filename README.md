@@ -86,6 +86,8 @@ Wichtige Dateien:
 install.sh                         Ein-Befehl-Installation
 ops/docker/docker-compose.yml       Docker-Stack
 ops/docker/Dockerfile.server        Server- und Frontend-Image
+ops/docker/Dockerfile.updater       Image fuer den Selbst-Update-Sidecar (siehe Updates oben)
+ops/docker/updater-server.mjs       Minimaler HTTP-Dienst des Updater-Containers
 ops/docker/Caddyfile                Reverse Proxy
 ops/docker/.env                     generierte Docker-Konfiguration, nicht committen
 ops/secrets/app.kek                 generierter Schluessel, nicht committen
@@ -135,6 +137,32 @@ docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env down
 ```
 
 ## Updates
+
+### Automatisch über die Oberfläche (empfohlen)
+
+In den Systemeinstellungen (nur Superadmin) gibt es einen Tab **Update**. Er zeigt den lokalen
+Versionsstand gegen den aktuellen Stand auf GitHub und erlaubt per Knopfdruck ein Update, ohne
+eine Konsole zu öffnen: `git fetch` + `git reset --hard origin/main`, `docker compose build
+--no-cache app`, Neustart des `app`-Containers und die Datenbankmigrationen laufen automatisch im
+Hintergrund. Der Fortschritt (Schritt + Log der letzten Zeilen) wird live angezeigt.
+
+Technisch läuft das über einen eigenen, nur intern erreichbaren `updater`-Container (`ops/docker/
+Dockerfile.updater`, `ops/docker/updater-server.mjs`), den die Haupt-App über `/api/v2/update/
+status` und `/api/v2/update/run` anspricht (Bearer-Token aus `UPDATE_TOKEN` in `.env`, vom
+Installer erzeugt, nie im Browser sichtbar). **Wichtiger Sicherheitshinweis:** Dieser Container hat
+Zugriff auf den Docker-Socket des Hosts (`/var/run/docker.sock`), weil er `docker compose build/up`
+ausführen muss -- das ist faktisch root-Zugriff auf den Host. Er ist deshalb ausschließlich über das
+interne Docker-Netz erreichbar (kein veröffentlichter Port, kein Zugriff von Caddy aus) und nur mit
+gültigem `UPDATE_TOKEN` ansprechbar; nur Superadmins können die Funktion in der Oberfläche
+überhaupt sehen und auslösen. Ein Update zieht exakt den Stand des konfigurierten Branches (Standard
+`main`) des geklonten Repositorys (`REPO_URL` beim Setup) -- wer Schreibzugriff auf diesen Branch
+hat, kann damit letztlich bestimmen, welcher Code auf dem Server läuft, genau wie bei einem manuell
+ausgeführten `git pull`.
+
+Betrifft nur den `app`-Container. Änderungen an `Dockerfile.updater`/`updater-server.mjs` selbst
+erfordern weiterhin einen manuellen Neustart des `updater`-Containers.
+
+### Manuell
 
 Im Installationsordner:
 
@@ -282,6 +310,7 @@ apps/server/
         knowledge.ts                   Wissensdatenbank, Textbausteine
         recurring.ts                   Wiederkehrende Ticket-Regeln (Verwaltung)
         extras.ts                      Benachrichtigungen, Kontoanfragen, Anhänge, Audit-Log
+        update.ts                      Proxy zum internen Updater-Container (nur Superadmin)
         session.ts, routeError.ts      Rechteprüfung, einheitliche Fehlerantworten
         staticAssets.ts                Liefert dashboard.html/admin.html/script.js/style.css/vendor
     jobs/maintenance.ts                Auto-Archivierung + Ausführung fälliger wiederkehrender
@@ -317,6 +346,7 @@ und `/api/v1/setup/*`) gegen MariaDB -- es gibt **keine** JSON-Blob-Kompatibilit
 | Outlook/Microsoft-Graph | **Noch nicht vorhanden** -- das alte UI hat dafür Eingabefelder, aber kein Backend; wurde aus den Admin-Modals entfernt statt ungespeichert vorzutäuschen. Erfordert eine App-Registrierung in Azure AD mit echten Zugangsdaten zum Testen, anders als SMTP/LDAP nicht ohne externe Infrastruktur sinnvoll umsetzbar |
 | Globales Audit-Log, Benachrichtigungen | Vollständige API; `script.js` umgestellt. Log-Einträge werden ausschließlich serverseitig bei der jeweiligen Aktion erzeugt (users.ts/settings.ts/tickets.ts), nicht mehr vom Client übermittelt -- Admins können das Protokoll nicht mehr leeren |
 | Wissensdatenbank, Textbausteine | Vollständige API; `script.js` umgestellt. Dateianhänge an Wissensartikeln gibt es im Schema nicht und wurden aus dem Editor entfernt |
+| Auswertung (Reports) | Kennzahlen (erstellte/geschlossene Tickets, Lösungszeit) laufen client-seitig über `AdminBoard.openReports`. Lösungszeit nutzt die echte, serverseitige `closed_at`-Spalte. **Bekannte Einschränkung:** `Erste Antwortzeit` bleibt leer, weil `Store.getTickets()` aus Performance-Gründen keine Chat-Nachrichten mitliefert (eigene Ressource pro Ticket) -- eine korrekte Berechnung bräuchte einen neuen Aggregations-Endpunkt |
 | Wiederkehrende Tickets | Vollständige API; `script.js` umgestellt (Intervall in Tagen/Wochen/Monaten + konkreter Startzeitpunkt statt "Wochentag/Tag im Monat"). Ausführung läuft serverseitig per Timer (alle 5 Min.) |
 | Auto-Archivierung geschlossener Tickets | Automatisch (Timer alle 5 Min., über Systemeinstellungen konfigurierbare Frist) |
 | Kontoanfragen (öffentliches Formular, annehmen/ablehnen) | Vollständige, verschlüsselte API; `script.js` umgestellt |
@@ -378,7 +408,14 @@ Umgesetzt:
 - SMTP-Versand erzwingt Verschlüsselung: entweder direktes TLS/SMTPS (`secure: true`, i.d.R.
   Port 465) oder STARTTLS mit `requireTLS: true` (Port 587) -- schlägt STARTTLS fehl, bricht der
   Versand ab, statt unverschlüsselt auf Klartext zurückzufallen
-- Signierte, `HttpOnly`/`SameSite=Lax`-Session-Cookies
+- Signierte, `HttpOnly`/`SameSite=Lax`-Session-Cookies. Rolle, Sperr- und Archivstatus stehen
+  zwar im Cookie, werden aber bei jeder authentifizierten Anfrage per `onRequest`-Hook erneut
+  gegen die Datenbank geprüft (`apps/server/src/http/app.ts`) -- eine Degradierung, Sperrung
+  oder Archivierung eines Kontos greift dadurch sofort, nicht erst nach Ablauf des bis zu
+  8 Stunden gültigen Cookies oder einem erneuten Login
+- Anhang-Upload blockiert `image/svg+xml`/`text/html` (und die zugehörigen Dateiendungen)
+  gezielt -- beides würde beim direkten Öffnen im Browser (z.B. "In neuem Tab öffnen") als
+  gespeicherte XSS mit der Sitzung der öffnenden Person ausgeführt
 - Content-Security-Policy ohne CDN-Hosts und ohne `unsafe-inline`/`unsafe-eval` fuer JavaScript.
   `script-src` ist auf `'self'` begrenzt. `style-src` erlaubt derzeit bewusst
   `'unsafe-inline'`, weil die vorhandene Oberflaeche aus der lokalen Version dynamische
@@ -391,6 +428,19 @@ Umgesetzt:
   geloggt
 - Helmet-Security-Header, Caddy Reverse Proxy, non-root App-Container
 - Validierte Umgebungsvariablen ohne Secret-Defaults
+- Selbst-Update-Funktion (`/api/v2/update/*`, nur Superadmin) ruft nur einen Bearer-Token-
+  geschützten (zeitkonstanter Vergleich via `timingSafeEqual`), ausschließlich intern
+  erreichbaren Sidecar-Container auf -- der Token selbst wird nie an den Browser ausgeliefert.
+  Dieser Sidecar hat aus technischen Gründen Zugriff auf den Docker-Socket des Hosts (siehe
+  [Updates](#updates)), was faktisch Root-Rechte auf dem Host bedeutet -- bewusste Abwägung
+  zugunsten "Update per Klick ohne Server-Zugang", mit Netzwerkisolation als Gegenmaßnahme.
+  **Verbleibendes Restrisiko:** ein Update führt `git reset --hard origin/<branch>` gefolgt von
+  einem Docker-Rebuild aus -- wer den konfigurierten Git-Ursprung kontrolliert (kompromittiertes
+  GitHub-Konto, manipulierter Pull Request, DNS/TLS-Angriff auf den Ursprung), bekommt beim
+  nächsten Update-Klick effektiv Root auf dem Host. Es gibt keine Commit-Signaturprüfung oder
+  Pinning auf einen geprüften Commit. Mit voller Absicht so belassen, da eine Signaturprüfung
+  eine eigene Vertrauenskette (wessen Schlüssel?) bräuchte -- die für den aktuellen Rahmen
+  (Admin vertraut dem eigenen Repository) nicht verhältnismäßig wäre
 
 Noch nicht umgesetzt (siehe Tabelle oben): E-Mail-Versand, LDAP, eine echte Job-Queue mit
 Mehrinstanzen-Sperre, vollständige Verschlüsselung von Konto-Anfrage-Freitextfeldern

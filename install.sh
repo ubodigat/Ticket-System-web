@@ -163,6 +163,9 @@ ensure_public_env_defaults() {
   set_env_var "HTTP_PORT" "${HTTP_PORT:-80}" "$ENV_FILE"
   set_env_var "HTTPS_PORT" "${HTTPS_PORT:-443}" "$ENV_FILE"
   set_env_var "BIND_ADDRESS" "${BIND_ADDRESS:-0.0.0.0}" "$ENV_FILE"
+  if ! grep -q '^UPDATE_TOKEN=' "$ENV_FILE"; then
+    set_env_var "UPDATE_TOKEN" "$(openssl rand -base64 48)" "$ENV_FILE"
+  fi
 
   if ! grep -q '^PUBLIC_DOMAIN=' "$ENV_FILE" || grep -Eq '^PUBLIC_DOMAIN=(localhost|127\.0\.0\.1)?$' "$ENV_FILE"; then
     set_env_var "PUBLIC_DOMAIN" "$primary_ip" "$ENV_FILE"
@@ -274,6 +277,7 @@ else
   DB_USER="ticketapp"
   DB_PASSWORD="$(openssl rand -base64 32)"
   COOKIE_SECRET="$(openssl rand -base64 48)"
+  UPDATE_TOKEN="$(openssl rand -base64 48)"
   INSTALLATION_ID="$(make_uuid)"
 
   DEFAULT_IP=$(detect_primary_ip)
@@ -282,6 +286,7 @@ DB_NAME=$DB_NAME
 DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
 COOKIE_SECRET=$COOKIE_SECRET
+UPDATE_TOKEN=$UPDATE_TOKEN
 INSTALLATION_ID=$INSTALLATION_ID
 HTTP_PORT=80
 HTTPS_PORT=443

@@ -30,6 +30,13 @@ Für eine lokale Entwicklungsumgebung ohne öffentliches TLS: `./install.sh --de
 
 ## Update
 
+Am einfachsten über die Oberfläche: Systemeinstellungen > Update (nur Superadmin) zeigt den
+Versionsstand gegen GitHub und führt die folgenden Schritte automatisch aus. Details zum
+`updater`-Sidecar-Container (Docker-Socket-Zugriff, Netzwerkisolation): siehe
+[README.md#updates](../../README.md#updates).
+
+Manuell (falls die Oberfläche nicht erreichbar ist oder kein `UPDATE_TOKEN` konfiguriert wurde):
+
 ```bash
 git pull
 docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env build --no-cache app

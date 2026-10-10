@@ -710,20 +710,19 @@ export const AdminBoard = {
             const ownerUsername = t.owner || (Array.isArray(t.assignees) ? t.assignees[0] : t.assignee);
             const owner = ownerUsername ? usersList.find(x => x.username === ownerUsername) : null;
             const ownerLabel = owner ? (owner.name || owner.username) : (ownerUsername || Lang.t('unassigned'));
-            // Nur die zuletzt gesendete Chat-Nachricht entscheidet, ob eine Antwort aussteht –
-            // Statusänderungen o.ä. im Protokoll lösen keinen "wartet auf Antwort"-Hinweis aus.
-            const latestChat = (t.chat || []).slice().sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0))[0];
-            const awaitingReply = latestChat?.role === 'user';
-            const todoOpen = (t.todos || []).filter(todo => !todo.done).length;
-            const todoTotal = (t.todos || []).length;
-            const todoDone = todoTotal - todoOpen;
+            // Zaehlungen und "letzte Nachricht von Benutzer?" kommen direkt aus der Listen-API
+            // (tickets.ts GET /api/v2/tickets) -- t.chat/t.todos/t.comments sind in der Kartenansicht
+            // absichtlich leer (echte Inhalte laedt erst die Detailansicht je Ticket nach).
+            const awaitingReply = !!t.awaitingReply;
+            const todoTotal = t.todoTotal || 0;
+            const todoDone = t.todoDone || 0;
             const waitingReason = String(t.status || '').startsWith('Warten auf') ? Lang.status(t.status) : '';
 
             const linkedCount = t.isMajorIncident ? rawTickets.filter(x => x.linkedIncidentId === t.id && !x.archived).length : 0;
             const catList = (Array.isArray(t.category) ? t.category : [t.category]).filter(Boolean);
             const categoryText = catList.length ? catList.slice(0, 2).join(', ') + (catList.length > 2 ? ` +${catList.length - 2}` : '') : '-';
             const sla = Store.formatSlaCountdown(t, slaSettings);
-            const attachmentCount = (t.attachments || []).length;
+            const attachmentCount = t.attachmentCount || 0;
             const pendingApproval = (t.approvals || []).some(a => a.status === 'pending');
             const tone = pendingApproval ? 'approval' : isOverdue ? 'overdue' : t.isMajorIncident ? 'incident' : t.prio === 'Kritisch' ? 'critical' : '';
             card.classList.add('card-v2');
@@ -744,8 +743,8 @@ export const AdminBoard = {
                     ${t.isMajorIncident ? `<span class="t-incident-badge card-incident-badge" title="${Utils.esc(t.incidentNotice || Lang.t('majorIncident'))}">${Icon('siren', 11)}${Lang.t('majorIncident')} · ${linkedCount}</span>` : ''}
                 </div>
                 <div class="card-hover-meta" aria-hidden="true">
-                    <span title="${Lang.t('messages')}">${Icon('message-square', 12)}${(t.chat?.length || 0)}</span>
-                    <span title="${Lang.t('internalNotesShort')}">${Icon('notebook-tabs', 12)}${(t.comments?.length || 0)}</span>
+                    <span title="${Lang.t('messages')}">${Icon('message-square', 12)}${t.chatCount || 0}</span>
+                    <span title="${Lang.t('internalNotesShort')}">${Icon('notebook-tabs', 12)}${t.noteCount || 0}</span>
                     <span title="Anhänge">${Icon('paperclip', 12)}${attachmentCount}</span>
                     <span title="${todoDone} von ${todoTotal} Teilaufgaben erledigt">${Icon('list-checks', 12)}${todoDone}/${todoTotal}</span>
                 </div>
@@ -1671,6 +1670,49 @@ export const AdminBoard = {
         modal.querySelector('#generic-save-head')?.remove();
     },
 
+    // pollTimer: läuft ein Update, fragt diese Funktion den Status alle 4s erneut ab, damit der
+    // Fortschritt live sichtbar ist (ein docker build --no-cache kann mehrere Minuten dauern) --
+    // ohne dass die Person manuell auf "Prüfen" klicken muss.
+    updatePollTimer: null,
+    renderUpdateStatus: async () => {
+        const area = q('#sys-update-status');
+        if (!area) return;
+        clearTimeout(AdminBoard.updatePollTimer);
+        area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} Update-Status wird geprüft...</div>`;
+        const status = await Store.getUpdateStatus();
+        if (!q('#sys-update-status')) return; // Modal inzwischen geschlossen
+        if (!status) {
+            area.innerHTML = `<div class="callout callout-danger">Updater ist nicht erreichbar oder nicht konfiguriert. Bitte Docker-Stack mit dem aktuellen Compose neu starten.</div>`;
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+        if (status.error === 'github_unreachable') {
+            area.innerHTML = `<div class="callout callout-danger">GitHub ist vom Server aus nicht erreichbar -- Internetverbindung des Updater-Dienstes prüfen.</div>`;
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+        const job = status.job;
+        const updateAvailable = !!status.updateAvailable;
+        area.innerHTML = `
+            <div class="settings-summary-grid">
+                <div class="summary-card"><span>Lokale Version</span><strong>${Utils.esc((status.localCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.localSubject || '')}</small></div>
+                <div class="summary-card"><span>GitHub Version</span><strong>${Utils.esc((status.remoteCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.remoteSubject || '')}</small></div>
+                <div class="summary-card"><span>Status</span><strong>${updateAvailable ? `${status.commitsBehind || 1} Update(s) verfügbar` : 'Aktuell'}</strong><small>${Utils.esc(status.branch || 'main')}</small></div>
+            </div>
+            ${job ? `<div class="update-log ${job.ok ? 'ok' : job.running ? 'running' : 'failed'}">
+                <strong>${job.running ? 'Update läuft...' : job.ok ? 'Letztes Update erfolgreich' : 'Letztes Update fehlgeschlagen'}</strong>
+                <span>Schritt: ${Utils.esc(job.step || '-')}</span>
+                <pre>${Utils.esc((job.log || []).slice(-18).join('\n'))}</pre>
+            </div>` : ''}
+        `;
+        const runBtn = q('#sys-update-run');
+        if (runBtn) runBtn.disabled = !updateAvailable || !!job?.running;
+        if (window.lucide) lucide.createIcons();
+        if (job?.running) {
+            AdminBoard.updatePollTimer = setTimeout(() => AdminBoard.renderUpdateStatus(), 4000);
+        }
+    },
+
     openSystemSettings: async () => {
         let apprFallbackPicker;
         let modal = q('#sys-settings-modal');
@@ -1710,6 +1752,9 @@ export const AdminBoard = {
                         <button class="tab-btn" data-tab="sys-company">
                             <i data-lucide="building-2"></i><span>Unternehmenseinstellungen</span>
                         </button>
+                        <button class="tab-btn" data-tab="sys-update">
+                            <i data-lucide="download-cloud"></i><span>Update</span>
+                        </button>
                     </nav>
                     <div class="modal-body sys-settings-content">
                         <div class="callout" hidden>Microsoft-Graph/Outlook-Integration gibt es im aktuellen Backend nicht -- dieses Feld
@@ -1729,15 +1774,9 @@ export const AdminBoard = {
 
                         <!-- Benachrichtigungen -->
                         <div id="sys-notifications" class="tab-content">
-                            <div class="settings-section-title">Automatische Benachrichtigungen</div>
-                            <label class="check-row"><input type="checkbox" id="sys-notify-new-ticket"><span>Neue Tickets melden</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-notify-status"><span>Statusänderungen melden</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-notify-message"><span>Neue Nachrichten und interne Kommentare melden</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-notify-closed"><span>Geschlossene Tickets melden</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-notify-account"><span>Freigegebene Konten melden</span></label>
-                            <div class="settings-section-title">Zusammenfassung</div>
-                            <label class="check-row"><input type="checkbox" id="sys-notify-digest"><span>Tägliche Zusammenfassung aktivieren</span></label>
-                            <div class="field"><label>Uhrzeit</label><input id="sys-notify-digest-hour" type="time"></div>
+                            <div class="settings-section-title">${Icon('sliders-horizontal', 15)}Richtlinie je Ereignis (Benutzer &amp; Admins getrennt)</div>
+                            <p class="hint">Standardwerte gelten, solange eine Person nichts Eigenes einstellt (unter Portaleinstellungen &gt; Benachrichtigungen). Wird ein Kästchen unter „anpassbar" deaktiviert, ist der Standardwert für alle verbindlich.</p>
+                            <div id="sys-notif-matrix" class="notif-matrix"></div>
                         </div>
 
                         <!-- Outlook -->
@@ -1751,6 +1790,21 @@ export const AdminBoard = {
                             <div class="field"><label>Support-Postfach</label><input id="sys-outlook-mailbox" type="email" placeholder="support@example.com"></div>
                             <label class="check-row"><input type="checkbox" id="sys-outlook-sync"><span>Eingehende E-Mails synchronisieren</span></label>
                             <label class="check-row"><input type="checkbox" id="sys-outlook-create"><span>Aus E-Mails automatisch Tickets erstellen</span></label>
+                        </div>
+
+                        <!-- Update -->
+                        <div id="sys-update" class="tab-content">
+                            <div class="callout">Prüft den aktuellen Stand gegen GitHub und aktualisiert die Serverinstallation per internem Updater. Während des Updates wird der App-Container neu gebaut und kurz neu gestartet.</div>
+                            <div class="update-status" id="sys-update-status">
+                                <div class="empty-state compact">Noch nicht geprüft.</div>
+                            </div>
+                            <div class="setting-row">
+                                <span class="hint">Nur Superadmins können Updates starten.</span>
+                                <div class="button-row">
+                                    <button class="btn-secondary btn-sm" id="sys-update-check" type="button">${Icon('refresh-cw', 15)}Prüfen</button>
+                                    <button class="btn-primary btn-sm" id="sys-update-run" type="button">${Icon('download-cloud', 15)}Update installieren</button>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- LDAP -->
@@ -1821,34 +1875,53 @@ export const AdminBoard = {
                                 <label>${Lang.t('autoArchiveDays')}</label>
                                 <input id="sys-auto-archive" type="number" placeholder="0" min="0">
                             </div>
+                            <div class="field">
+                                <label>Standard-Priorität für neue Tickets</label>
+                                <select id="sys-default-prio">
+                                    <option value="Normal">Normal</option>
+                                    <option value="Hoch">Hoch</option>
+                                    <option value="Niedrig">Niedrig</option>
+                                </select>
+                            </div>
                             <div class="settings-section-title">Warten auf Benutzer</div>
                             <div class="form-grid">
                                 <div class="field"><label for="sys-wait-remind">Erinnerung nach (Tagen)</label><input id="sys-wait-remind" type="number" min="1" placeholder="2"></div>
                                 <div class="field"><label for="sys-wait-close">Automatisch schließen nach (Tagen)</label><input id="sys-wait-close" type="number" min="1" placeholder="7"></div>
                             </div>
-                            <div class="settings-section-title">Lösungsfrist je Priorität (Stunden)</div>
+                            <div class="settings-section-title">Lösungsfrist je Priorität</div>
+                            <div class="hint">Zeit bis zur Lösung, wahlweise in Stunden oder Tagen.</div>
                             <div class="form-grid">
-                                <div class="field"><label for="sys-sla-low">Niedrig</label><input id="sys-sla-low" type="number" min="1"></div>
-                                <div class="field"><label for="sys-sla-normal">Normal</label><input id="sys-sla-normal" type="number" min="1"></div>
-                                <div class="field"><label for="sys-sla-high">Hoch</label><input id="sys-sla-high" type="number" min="1"></div>
-                                <div class="field"><label for="sys-sla-critical">Kritisch</label><input id="sys-sla-critical" type="number" min="1"></div>
+                                <div class="field"><label for="sys-sla-low">Niedrig</label><div class="sla-field-row"><input id="sys-sla-low" type="number" min="0.25" step="0.25"><select id="sys-sla-low-unit" aria-label="Einheit Niedrig"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
+                                <div class="field"><label for="sys-sla-normal">Normal</label><div class="sla-field-row"><input id="sys-sla-normal" type="number" min="0.25" step="0.25"><select id="sys-sla-normal-unit" aria-label="Einheit Normal"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
+                                <div class="field"><label for="sys-sla-high">Hoch</label><div class="sla-field-row"><input id="sys-sla-high" type="number" min="0.25" step="0.25"><select id="sys-sla-high-unit" aria-label="Einheit Hoch"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
+                                <div class="field"><label for="sys-sla-critical">Kritisch</label><div class="sla-field-row"><input id="sys-sla-critical" type="number" min="0.25" step="0.25"><select id="sys-sla-critical-unit" aria-label="Einheit Kritisch"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
                             </div>
+                            <label class="check-row sla-user-visibility-row">
+                                <input type="checkbox" id="sys-sla-show-users">
+                                <span class="check-text"><strong>Frist auch Benutzern anzeigen</strong><span>Dezenter Hinweis im Ticket, ohne Alarmfarben – auch wenn die Frist überschritten ist.</span></span>
+                            </label>
+
                             <div class="settings-section-title">Geschäftszeiten für Fristen</div>
                             <label class="check-row">
                                 <input type="checkbox" id="sys-bh-enabled">
-                                <span class="check-text"><strong>Geschäftszeiten berücksichtigen</strong><span>Außerhalb dieser Zeit läuft die Lösungsfrist nicht weiter (gleiche Zeit an allen gewählten Tagen).</span></span>
+                                <span class="check-text"><strong>Geschäftszeiten berücksichtigen</strong><span>Außerhalb dieser Zeiten sowie an Feiertagen läuft die Lösungsfrist nicht weiter.</span></span>
                             </label>
-                            <div class="form-grid">
-                                <div class="field"><label for="sys-bh-start">Beginn</label><input id="sys-bh-start" type="time"></div>
-                                <div class="field"><label for="sys-bh-end">Ende</label><input id="sys-bh-end" type="time"></div>
-                            </div>
                             <div class="field field-wide">
-                                <label>Tage</label>
-                                <div class="perm-grid" id="sys-bh-days">
+                                <label>Geschäftszeiten je Tag</label>
+                                <div class="business-hours-grid" id="sys-bh-days">
                                     ${[1, 2, 3, 4, 5, 6, 0].map(i => ({ i, d: ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'][i] })).map(({ i, d }) => `
-                                        <label class="check-row compact"><input type="checkbox" class="bh-day-enabled" value="${i}"><span>${d}</span></label>
+                                        <div class="business-day-row" data-day="${i}">
+                                            <label class="check-row compact"><input type="checkbox" class="bh-day-enabled" value="${i}"><span>${d}</span></label>
+                                            <input class="bh-day-start" type="time" aria-label="${d} Beginn">
+                                            <span class="business-day-sep">bis</span>
+                                            <input class="bh-day-end" type="time" aria-label="${d} Ende">
+                                        </div>
                                     `).join('')}
                                 </div>
+                            </div>
+                            <div class="field field-wide">
+                                <label for="sys-bh-holidays">Feiertage (ein Datum pro Zeile, dd.mm.jjjj)</label>
+                                <textarea id="sys-bh-holidays" rows="4" placeholder="01.01.2026&#10;25.12.2026"></textarea>
                             </div>
                         </div>
 
@@ -1867,10 +1940,15 @@ export const AdminBoard = {
                                 <div class="field"><label>Datenschutz-URL</label><input id="sys-company-privacy" type="url" placeholder="https://example.com/datenschutz"></div>
                             </div>
                             <div class="settings-section-title">Ticketnummern für neue Tickets</div>
-                            <div class="callout">Format: <code>{prefix}-{number}</code>. Bestehende Ticketnummern bleiben unverändert.</div>
+                            <div class="callout">Formatvorlagen unterstützen <code>{prefix}</code>, <code>{category}</code> (Code der ersten Ticketkategorie) und <code>{number}</code>. Jede Vorlage muss <code>{number}</code> enthalten. Bestehende Ticketnummern bleiben unverändert.</div>
                             <div class="form-grid">
-                                <div class="field"><label>Präfix (leer = nur laufende Nummer)</label><input id="sys-ticket-number-prefix" type="text" placeholder="TS"></div>
-                                <div class="field"><label>Stellen der laufenden Nummer</label><input id="sys-ticket-number-padding" type="number" min="1" max="10" placeholder="5"></div>
+                                <div class="field"><label>Format (Standard)</label><input id="sys-ticket-number-format" type="text" placeholder="{prefix}-{number}"></div>
+                                <div class="field"><label>Zusatz / Präfix</label><input id="sys-ticket-number-prefix" type="text" placeholder="TS"></div>
+                                <div class="field"><label>Stellen der laufenden Nummer</label><input id="sys-ticket-number-padding" type="number" min="1" max="12" placeholder="5"></div>
+                            </div>
+                            <div class="field field-wide">
+                                <label>Kategorieformate (leer = Standardformat)</label>
+                                <div id="sys-ticket-category-formats" class="ticket-number-category-formats"></div>
                             </div>
                             <div class="settings-section-title">Konto-Selbstverwaltung</div>
                             <div class="hint">Welche Angaben dürfen Benutzer in ihrem Konto selbst ändern?</div>
@@ -1913,34 +1991,54 @@ export const AdminBoard = {
                 };
             });
 
-            modal.querySelectorAll('.close-m').forEach(b => b.onclick = () => modal.classList.remove('open'));
+            modal.querySelectorAll('.close-m').forEach(b => b.onclick = () => {
+                modal.classList.remove('open');
+                clearTimeout(AdminBoard.updatePollTimer);
+            });
+            q('#sys-update-check').onclick = () => AdminBoard.renderUpdateStatus();
+            q('#sys-update-run').onclick = async () => {
+                q('#sys-update-run').disabled = true;
+                UI.toast('Update wurde gestartet. Die Anwendung wird gleich neu gebaut und kurz neu gestartet.');
+                await Store.runUpdate();
+                await AdminBoard.renderUpdateStatus();
+            };
         }
 
         const settings = await Store.getSettings();
         const general = settings.generalConfig || {};
         const company = settings.companyConfig || {};
         const security = settings.securityConfig || {};
-        const notifications = settings.notificationConfig || {};
         const emailAdvanced = settings.emailAdvancedConfig || {};
         const outlook = settings.outlookConfig || {};
         const companyBranding = settings.companyBrandingConfig || {};
 
         q('#sys-portal-name').value = general.portalName || 'Support Portal';
         q('#sys-auto-archive').value = general.autoArchiveDays || 0;
+        q('#sys-default-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(general.defaultPrio) ? general.defaultPrio : 'Normal';
         q('#sys-wait-remind').value = general.waitingReminderDays ?? 2;
         q('#sys-wait-close').value = general.waitingAutoCloseDays ?? 7;
         const slaHours = general.slaHours || {};
-        q('#sys-sla-low').value = slaHours.low ?? 72;
-        q('#sys-sla-normal').value = slaHours.normal ?? 48;
-        q('#sys-sla-high').value = slaHours.high ?? 24;
-        q('#sys-sla-critical').value = slaHours.critical ?? 4;
+        AdminBoard.setSlaField('low', slaHours.low ?? 72);
+        AdminBoard.setSlaField('normal', slaHours.normal ?? 48);
+        AdminBoard.setSlaField('high', slaHours.high ?? 24);
+        AdminBoard.setSlaField('critical', slaHours.critical ?? 4);
+        q('#sys-sla-show-users').checked = !!general.showSlaToUsers;
 
         const businessHours = general.businessHours || {};
         q('#sys-bh-enabled').checked = !!businessHours.enabled;
-        q('#sys-bh-start').value = businessHours.start || '08:00';
-        q('#sys-bh-end').value = businessHours.end || '17:00';
         const bhDays = businessHours.days && businessHours.days.length ? businessHours.days : [1, 2, 3, 4, 5];
-        qa('#sys-bh-days .bh-day-enabled').forEach(cb => { cb.checked = bhDays.includes(Number(cb.value)); });
+        qa('#sys-bh-days .business-day-row').forEach(row => {
+            const day = Number(row.dataset.day);
+            const cfg = businessHours.perDay?.[day] || businessHours.perDay?.[String(day)] || {
+                enabled: bhDays.includes(day),
+                start: businessHours.start || '08:00',
+                end: businessHours.end || '17:00'
+            };
+            row.querySelector('.bh-day-enabled').checked = !!cfg.enabled;
+            row.querySelector('.bh-day-start').value = cfg.start || '08:00';
+            row.querySelector('.bh-day-end').value = cfg.end || '17:00';
+        });
+        q('#sys-bh-holidays').value = (businessHours.holidays || []).map(d => /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : d).join('\n');
 
         q('#sys-company-name').value = company.name || '';
         q('#sys-company-logo').value = companyBranding.logoDataUrl || '';
@@ -1949,8 +2047,19 @@ export const AdminBoard = {
         q('#sys-company-address').value = companyBranding.address || '';
         q('#sys-company-imprint').value = companyBranding.imprintUrl || '';
         q('#sys-company-privacy').value = companyBranding.privacyUrl || '';
+        q('#sys-ticket-number-format').value = company.ticketNumberFormat || '{prefix}-{number}';
         q('#sys-ticket-number-prefix').value = company.ticketNumberPrefix || '';
         q('#sys-ticket-number-padding').value = company.ticketNumberPadding || 5;
+        {
+            const categoryFormatList = q('#sys-ticket-category-formats');
+            const categoryFormatValues = { ...(company.ticketNumberCategoryFormats || {}) };
+            const categories = (await Store.getCategories()).filter(c => !c.archived);
+            categoryFormatList.innerHTML = categories.length ? categories.map(c => `
+                <div class="ticket-number-category-row">
+                    <label>${Utils.esc(c.name)}</label>
+                    <input type="text" data-ticket-category="${Utils.esc(c.name)}" placeholder="{prefix}-{number}" value="${Utils.esc(categoryFormatValues[c.name] || '')}">
+                </div>`).join('') : '<div class="empty-state compact">Keine Kategorien angelegt.</div>';
+        }
 
         q('#sys-sec-pass-min').value = security.passwordMinLength ?? 14;
         q('#sys-sec-session').value = security.sessionTimeoutMinutes ?? 480;
@@ -1958,13 +2067,7 @@ export const AdminBoard = {
         q('#sys-sec-2fa-admins').checked = !!security.require2faForAdmins;
         q('#sys-sec-permanent').checked = !!security.allowPermanentSessions;
 
-        q('#sys-notify-new-ticket').checked = notifications.notifyNewTicket !== false;
-        q('#sys-notify-status').checked = notifications.notifyStatusChange !== false;
-        q('#sys-notify-message').checked = notifications.notifyNewMessage !== false;
-        q('#sys-notify-closed').checked = notifications.notifyTicketClosed !== false;
-        q('#sys-notify-account').checked = notifications.notifyAccountApproved !== false;
-        q('#sys-notify-digest').checked = !!notifications.digestEnabled;
-        q('#sys-notify-digest-hour').value = notifications.digestHour || '08:00';
+        AdminBoard.renderNotifMatrix(q('#sys-notif-matrix'), await Store.getNotifPolicy());
 
         q('#sys-email-replyto').value = emailAdvanced.replyTo || '';
         q('#sys-email-bcc').value = emailAdvanced.bccArchive || '';
@@ -2063,9 +2166,10 @@ export const AdminBoard = {
 
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
+        AdminBoard.renderUpdateStatus();
 
         q('#sys-save').onclick = async () => {
-            const padding = Math.max(1, Math.min(10, parseInt(q('#sys-ticket-number-padding').value, 10) || 5));
+            const padding = Math.max(1, Math.min(12, parseInt(q('#sys-ticket-number-padding').value, 10) || 5));
             const accountSelfServiceFields = ['name', 'email', 'department'].filter(f => q(`#sys-acc-${f === 'department' ? 'dept' : f}`).checked);
             const ok = await Store.updateServerSettings({
                 companyName: q('#sys-company-name').value.trim(),
@@ -2074,17 +2178,37 @@ export const AdminBoard = {
                     autoArchiveClosedAfterDays: Math.max(0, parseInt(q('#sys-auto-archive').value, 10) || 0),
                     waitingReminderDays: Math.max(1, parseInt(q('#sys-wait-remind').value, 10) || 2),
                     waitingAutoCloseDays: Math.max(1, parseInt(q('#sys-wait-close').value, 10) || 7),
+                    defaultPrio: ['Niedrig', 'Normal', 'Hoch'].includes(q('#sys-default-prio').value) ? q('#sys-default-prio').value : 'Normal',
+                    showSlaToUsers: !!q('#sys-sla-show-users').checked,
+                    // slaHoursByPriority verlangt ganze Stunden (siehe settings.ts) -- Eingaben in
+                    // Tagen oder mit Nachkommastellen werden hier in volle Stunden umgerechnet.
                     slaHoursByPriority: {
-                        Niedrig: Math.max(1, parseInt(q('#sys-sla-low').value, 10) || 72),
-                        Normal: Math.max(1, parseInt(q('#sys-sla-normal').value, 10) || 48),
-                        Hoch: Math.max(1, parseInt(q('#sys-sla-high').value, 10) || 24),
-                        Kritisch: Math.max(1, parseInt(q('#sys-sla-critical').value, 10) || 4)
+                        Niedrig: Math.max(1, Math.round(AdminBoard.getSlaField('low', 72))),
+                        Normal: Math.max(1, Math.round(AdminBoard.getSlaField('normal', 48))),
+                        Hoch: Math.max(1, Math.round(AdminBoard.getSlaField('high', 24))),
+                        Kritisch: Math.max(1, Math.round(AdminBoard.getSlaField('critical', 4)))
                     },
-                    businessHours: q('#sys-bh-enabled').checked ? {
-                        start: q('#sys-bh-start').value || '08:00',
-                        end: q('#sys-bh-end').value || '17:00',
-                        days: qa('#sys-bh-days .bh-day-enabled:checked').map(cb => Number(cb.value))
-                    } : undefined,
+                    // "enabled" immer explizit mitschicken (auch false) -- sonst würde ein Ausschalten
+                    // nie beim Server ankommen, weil PATCH /settings bestehende Werte nur ergänzt,
+                    // nicht ersetzt, und ein weggelassenes Feld folglich den alten Stand behält.
+                    businessHours: {
+                        enabled: q('#sys-bh-enabled').checked,
+                        start: q('#sys-bh-start')?.value || '08:00',
+                        end: q('#sys-bh-end')?.value || '17:00',
+                        days: qa('#sys-bh-days .bh-day-enabled:checked').map(cb => Number(cb.value)),
+                        perDay: Object.fromEntries(qa('#sys-bh-days .business-day-row').map(row => [
+                            row.dataset.day,
+                            {
+                                enabled: row.querySelector('.bh-day-enabled').checked,
+                                start: row.querySelector('.bh-day-start').value || '08:00',
+                                end: row.querySelector('.bh-day-end').value || '17:00'
+                            }
+                        ])),
+                        holidays: (q('#sys-bh-holidays')?.value || '').split('\n').map(s => s.trim()).filter(Boolean).map(value => {
+                            const match = value.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+                            return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
+                        }).filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value))
+                    },
                     securityConfig: {
                         passwordMinLength: Math.max(8, Math.min(128, parseInt(q('#sys-sec-pass-min').value, 10) || 14)),
                         sessionTimeoutMinutes: Math.max(5, Math.min(10080, parseInt(q('#sys-sec-session').value, 10) || 480)),
@@ -2092,15 +2216,7 @@ export const AdminBoard = {
                         require2faForAdmins: q('#sys-sec-2fa-admins').checked,
                         allowPermanentSessions: q('#sys-sec-permanent').checked
                     },
-                    notificationConfig: {
-                        notifyNewTicket: q('#sys-notify-new-ticket').checked,
-                        notifyStatusChange: q('#sys-notify-status').checked,
-                        notifyNewMessage: q('#sys-notify-message').checked,
-                        notifyTicketClosed: q('#sys-notify-closed').checked,
-                        notifyAccountApproved: q('#sys-notify-account').checked,
-                        digestEnabled: q('#sys-notify-digest').checked,
-                        digestHour: q('#sys-notify-digest-hour').value || '08:00'
-                    },
+                    notifPolicy: AdminBoard.readNotifMatrix(q('#sys-notif-matrix')),
                     emailAdvancedConfig: {
                         replyTo: q('#sys-email-replyto').value.trim() || null,
                         bccArchive: q('#sys-email-bcc').value.trim() || null,
@@ -2128,8 +2244,14 @@ export const AdminBoard = {
                     },
                     ticketNumberFormat: {
                         prefix: q('#sys-ticket-number-prefix').value.trim(),
-                        padding
+                        padding,
+                        format: q('#sys-ticket-number-format').value.trim() || undefined
                     },
+                    ticketNumberCategoryFormats: Object.fromEntries(
+                        qa('#sys-ticket-category-formats [data-ticket-category]')
+                            .map(input => [input.dataset.ticketCategory, input.value.trim()])
+                            .filter(([, format]) => format)
+                    ),
                     accountSelfServiceFields,
                     approvalWorkflow: {
                         enabled: q('#sys-appr-enabled').checked,
@@ -3185,6 +3307,10 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    // Setzt/plant/aktualisiert die Abwesenheit einer Person über die echten Server-Endpunkte
+    // (POST /users/:id/absence bzw. /users/me/absence) -- vorher mutierte diese Funktion nur
+    // ein lokales JS-Objekt und "speicherte" es über Store.saveUsers, das das absence-Feld gar
+    // nicht kennt; Abwesenheiten für ANDERE Personen wurden dadurch nie wirklich gespeichert.
     setAbsence: async (username, active, substituteUsername, visible = false, fromMs = null, untilMs = null) => {
         const users = await Store.getUsers();
         const target = users.find(u => u.username === username);
@@ -3197,77 +3323,64 @@ export const AdminBoard = {
         const now = Date.now();
         const substitute = substituteUsername ? users.find(u => u.username === substituteUsername) : null;
         const fmt = ms => new Date(ms).toLocaleDateString('de-DE');
+        const me = await Store.currentUser();
+        // VOR dem Server-Aufruf abfragen: applyUserAbsence haengt die Tickets server-seitig
+        // sofort um, danach zeigt t.owner bereits die Vertretung, nicht mehr "username".
+        const openTickets = (await Store.getTickets()).filter(t => t.owner === username && t.status !== 'Geschlossen' && !t.archived);
+        const payload = {
+            active: true,
+            from_at: fromMs ? new Date(fromMs).toISOString() : undefined,
+            until_at: untilMs ? new Date(untilMs).toISOString() : undefined,
+            substitute_user_id: substitute?.id || undefined,
+            visible: !!visible
+        };
+        const isSelf = me?.id === target.id;
+        const result = await Store.setUserAbsence(isSelf ? null : target.id, payload);
+        if (!result) {
+            UI.toast('Abwesenheit speichern fehlgeschlagen.');
+            return;
+        }
         if (fromMs && fromMs > now) {
-            target.absence = { active: false, pending: true, substitute: substitute?.username || null, visible: !!visible, fromMs, untilMs: untilMs || null, transferredIds: [], returnPending: target.absence?.returnPending || [] };
-            await Store.saveUsers(users);
             await Store.addGlobalLog('Abwesenheit geplant', `Benutzer: ${target.name || username}, von ${fmt(fromMs)} bis ${untilMs ? fmt(untilMs) : 'offen'}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, Anzeige für andere Admins: ${visible ? 'ja' : 'nein'}`);
             UI.toast(`Abwesenheit geplant ab ${fmt(fromMs)}.`);
             await AdminBoard.render();
             return;
         }
-        if (target.absence?.active) {
-            target.absence = { ...target.absence, substitute: substitute?.username || null, visible: !!visible, untilMs: untilMs || target.absence.untilMs || null };
-            await Store.saveUsers(users);
-            await Store.addGlobalLog('Abwesenheit geändert', `Benutzer: ${target.name || username}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, bis ${untilMs ? fmt(untilMs) : 'offen'}, Anzeige: ${visible ? 'ja' : 'nein'}`);
-            UI.toast('Abwesenheit aktualisiert.');
-            await AdminBoard.render();
-            return;
-        }
-
-        const tickets = await Store.getTickets();
-        const openTickets = tickets.filter(t => t.owner === username && t.status !== 'Geschlossen' && !t.archived);
-        const transferred = [];
+        // Server hat bereits umgehaengt (applyUserAbsence) -- openTickets ist der Stand davor,
+        // genau fuer die Protokoll-/Benachrichtigungsmeldung. Die Vertretung zusaetzlich als
+        // Beteiligte eintragen (macht applyUserAbsence serverseitig bewusst nicht, da dort nur
+        // der Hauptverantwortliche gewechselt wird) -- eigener API-Aufruf pro Ticket.
         const addedAsParticipant = [];
-        const transferredIds = [];
-        for (const t of openTickets) {
-            if (substitute) {
+        if (substitute && openTickets.length) {
+            for (const t of openTickets) {
                 const existingParticipants = await Store.getTicketParticipants(t.id);
                 const wasParticipant = existingParticipants.some(p => p.userId === substitute.id);
-                if (!wasParticipant && t.owner !== substitute.username) addedAsParticipant.push(t);
-                t.owner = substitute.username;
-                t.ownerUserId = substitute.id;
-                if (!wasParticipant) await Store.setTicketParticipants(t.id, [...existingParticipants.map(p => p.userId), substitute.id]);
-                await Store.addLog(t, `Hauptverantwortlicher wegen Abwesenheit geändert: ${target.name || username} → ${substitute.name || substitute.username}`);
-                transferred.push(t);
-                transferredIds.push(t.id);
-            } else {
-                t.owner = '';
-                t.ownerUserId = null;
-                await Store.addLog(t, `Ticket wegen Abwesenheit von ${target.name || username} zurück ins Team gelegt`);
+                if (!wasParticipant) {
+                    await Store.setTicketParticipants(t.id, [...existingParticipants.map(p => p.userId), substitute.id]);
+                    addedAsParticipant.push(t);
+                }
             }
         }
-        target.absence = { active: true, pending: false, substitute: substitute?.username || null, visible: !!visible, since: Utils.nowISO(), fromMs: fromMs || null, untilMs: untilMs || null, transferredIds, returnPending: target.absence?.returnPending || [] };
-        await Store.saveUsers(users);
         if (openTickets.length) {
-            await Store.saveTickets(tickets);
             const ticketLines = openTickets.map(t => `${t.ticketNumber || t.id} „${t.title}“: Hauptverantwortlicher ${target.name || username} → ${substitute ? (substitute.name || substitute.username) : 'Team (keiner)'}`);
             await Store.addGlobalLog('Abwesenheit aktiviert', `Benutzer: ${target.name || username}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, bis ${untilMs ? fmt(untilMs) : 'offen'}, ${openTickets.length} Ticket(s)\n${ticketLines.join('\n')}`);
         } else {
             await Store.addGlobalLog('Abwesenheit aktiviert', `Benutzer: ${target.name || username}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, bis ${untilMs ? fmt(untilMs) : 'offen'}, keine offenen Tickets`);
         }
-        if (substitute) await AdminBoard.notifySubstituteAbsence(substitute, target, transferred, addedAsParticipant);
-        UI.toast(`${openTickets.length} Ticket(s) ${substitute ? 'übergeben' : 'zurück ins Team gelegt'}.`);
+        if (substitute && openTickets.length) await AdminBoard.notifySubstituteAbsence(substitute, target, openTickets, addedAsParticipant);
+        UI.toast(openTickets.length ? `${openTickets.length} Ticket(s) übergeben.` : 'Abwesenheit aktiviert.');
         await AdminBoard.render();
     },
 
     endAbsence: async (target, users) => {
-        const absence = target.absence || {};
-        const tickets = await Store.getTickets();
-        const returnIds = absence.active ? (absence.transferredIds || []) : [];
-        const lines = tickets.filter(t => returnIds.includes(t.id)).map(t => `${t.ticketNumber || t.id} „${t.title}“ · Status: ${Lang.status(t.status)} · Hauptverantwortlicher jetzt: ${t.owner || '–'}`);
-        target.absence = {
-            active: false,
-            pending: false,
-            substitute: null,
-            visible: false,
-            since: null,
-            fromMs: null,
-            untilMs: null,
-            transferredIds: [],
-            returnPending: [...new Set([...(absence.returnPending || []), ...returnIds])]
-        };
-        await Store.saveUsers(users);
-        await Store.addGlobalLog('Abwesenheit beendet', `Benutzer: ${target.name || target.username}${lines.length ? '\n' + lines.join('\n') : '\nKeine Tickets zu übernehmen.'}`);
+        const me = await Store.currentUser();
+        const isSelf = me?.id === target.id;
+        const result = await Store.setUserAbsence(isSelf ? null : target.id, { active: false });
+        if (!result) {
+            UI.toast('Abwesenheit beenden fehlgeschlagen.');
+            return;
+        }
+        await Store.addGlobalLog('Abwesenheit beendet', `Benutzer: ${target.name || target.username}`);
         UI.toast('Abwesenheit beendet.');
     },
 
@@ -3285,6 +3398,10 @@ export const AdminBoard = {
         }
     },
 
+    // Holt ausgewählte, waehrend einer Abwesenheit an die Vertretung übergebene Tickets zurück.
+    // "returnPending" gibt es im normalisierten Schema nicht mehr als gespeicherte Liste -- ein
+    // zurückgeholtes Ticket taucht einfach nicht mehr in Store.getTransferredTickets auf, sobald
+    // assigned_to_user_id wieder die abwesende Person selbst ist.
     returnTickets: async (absentUsername, ticketIds) => {
         const users = await Store.getUsers();
         const absent = users.find(u => u.username === absentUsername);
@@ -3299,9 +3416,7 @@ export const AdminBoard = {
             await Store.addLog(t, `Ticket von ${absent?.name || absentUsername} zurückgeholt (vorher Vertretung: ${fromUser || '–'})`);
             if (fromUser) byFrom.set(fromUser, [...(byFrom.get(fromUser) || []), t]);
         }
-        if (absent) absent.absence = { ...(absent.absence || {}), returnPending: [] };
-        await Store.saveUsers(users);
-        if (byFrom.size) await Store.saveTickets(tickets);
+        if (ticketIds.length) await Store.saveTickets(tickets);
         for (const [fromUser, list] of byFrom) {
             const message = `${absent?.name || absentUsername} hat ${list.length} Ticket(s) zurückgeholt:\n` + list.map(t => `${t.ticketNumber || t.id} „${t.title}“ · Status: ${Lang.status(t.status)}`).join('\n');
             await Store.addNotifications([fromUser], { id: null }, message, null, 'absence');
@@ -3312,9 +3427,8 @@ export const AdminBoard = {
 
     openAbsenceReturnPopup: async (user) => {
         if (!user) return;
-        const me = (await Store.getUsers()).find(u => u.username === user.username);
-        const ids = me?.absence?.returnPending || [];
         q('#absence-return-popup')?.remove();
+        const ids = await Store.getTransferredTickets(user.id);
         if (!ids.length) return;
         const users = await Store.getUsers();
         const tickets = (await Store.getTickets()).filter(t => ids.includes(t.id) && !t.archived);
@@ -3398,12 +3512,12 @@ export const AdminBoard = {
         return true;
     },
 
-    can: (user, key) => {
-        if (!user) return false;
-        if (user.role === 'superadmin') return true;
-        if (key === 'kb') return ['read', 'edit'].includes(user.permissions?.kb);
-        return !!user.permissions?.[key];
-    },
+    // Frühere, granulare Einzelrechte (user.permissions.kb/.textBlocks/...) gibt es im aktuellen
+    // Rollenmodell nicht mehr (bewusst entfernt, siehe README "Daten Und Funktionen") -- jede
+    // Admin- oder Superadmin-Person darf diese Bereiche sehen, wie bei praktisch jeder anderen
+    // Admin-Funktion in diesem Board auch. Vorher prüfte dies ein nie existierendes
+    // user.permissions-Objekt, wodurch normale Admins (nicht Superadmin) diese Buttons nie sahen.
+    can: (user) => !!user && (user.role === 'admin' || user.role === 'superadmin'),
 
     groupTopbarMenu: (user) => {
         const right = q('.topbar-right');
@@ -3603,10 +3717,10 @@ export const AdminBoard = {
             const since = Date.now() - range * 86400000;
             const all = await Store.getTickets();
             const created = all.filter(t => new Date(t.createdAt).getTime() >= since);
-            const closedAt = t => {
-                const entry = (t.logs || []).find(l => /zu Geschlossen|als gelöst geschlossen|Automatisch geschlossen/.test(l.msg || ''));
-                return entry ? new Date(entry.date).getTime() : null;
-            };
+            // t.logs ist aus der Listenansicht absichtlich immer leer (siehe Store.mapApiTicketToLegacy
+            // -- das echte Protokoll wird erst pro Ticket einzeln nachgeladen); die serverseitig
+            // gesetzte closed_at-Spalte (tickets.ts PATCH-Handler) liefert den Zeitpunkt stattdessen direkt.
+            const closedAt = t => t.closedAt ? new Date(t.closedAt).getTime() : null;
             const firstResponse = t => {
                 const times = [...(t.chat || []).filter(c => c.role !== 'user'), ...(t.comments || [])].map(c => new Date(c.date).getTime()).sort((a, b) => a - b);
                 return times.length ? times[0] - new Date(t.createdAt).getTime() : null;
@@ -4086,11 +4200,14 @@ export const AdminBoard = {
         const tickets = await Store.getTickets();
         let changed = 0;
         if (target.role === 'user') {
-            tickets.filter(t => t.author === target.username && !t.archived && t.status !== 'Geschlossen').forEach(t => {
-                t.authorArchived = !restoring;
-                changed++;
-            });
-            if (!restoring) await Store.addGlobalLog('Ticket-Ersteller archiviert', `Benutzer: ${target.username}, offene Tickets: ${changed}`);
+            const ownTickets = tickets.filter(t => t.author === target.username && !t.archived && t.status !== 'Geschlossen');
+            if (!restoring) {
+                await Store.addGlobalLog('Ticket-Ersteller archiviert', `Benutzer: ${target.username}, offene Tickets: ${ownTickets.length}`);
+            } else {
+                // Bei Reaktivierung die "Weiter bearbeiten"-Bestaetigung zuruecksetzen, damit ein
+                // spaeterer erneuter Archivierungs-Zyklus den Hinweis-Dialog wieder zeigt.
+                ownTickets.filter(t => t.archivedAuthorAck).forEach(t => { t.archivedAuthorAck = false; changed++; });
+            }
         } else if (!restoring) {
             tickets.filter(t => t.owner === target.username && !t.archived && t.status !== 'Geschlossen').forEach(t => {
                 t.owner = '';
@@ -4106,7 +4223,7 @@ export const AdminBoard = {
     openArchivedAuthorDecisions: async (user) => {
         if (!user || !(user.role === 'admin' || user.role === 'superadmin')) return;
         const tickets = await Store.getTickets();
-        const open = tickets.filter(t => t.owner === user.username && t.authorArchived && !t.archived && t.status !== 'Geschlossen');
+        const open = tickets.filter(t => t.owner === user.username && t.authorArchived && !t.archivedAuthorAck && !t.archived && t.status !== 'Geschlossen');
         q('#archived-author-modal')?.remove();
         if (!open.length) return;
         const users = await Store.getUsers();
@@ -4144,7 +4261,6 @@ export const AdminBoard = {
                 const t = all.find(x => x.id === id);
                 if (!t) return;
                 mutate(t);
-                t.authorArchived = false;
                 await Store.addLog(t, logText);
                 await Store.saveTickets(all);
                 modal.querySelector(`.aa-row[data-id="${id}"]`)?.remove();
@@ -4164,7 +4280,7 @@ export const AdminBoard = {
                     t.ownerUserId = admins.find(a => a.username === newOwner)?.id || null;
                 }, `Ticket nach Archivierung des Erstellers neu zugeordnet an ${newOwner}`);
             };
-            row.querySelector('.aa-keep').onclick = () => updateTicket(id, () => {}, 'Ticket nach Archivierung des Erstellers weiter bearbeitet (Ersteller kann nicht antworten)');
+            row.querySelector('.aa-keep').onclick = () => updateTicket(id, t => { t.archivedAuthorAck = true; }, 'Ticket nach Archivierung des Erstellers weiter bearbeitet (Ersteller kann nicht antworten)');
             row.querySelector('.aa-archive').onclick = () => UI.confirm('Ticket archivieren?', () => updateTicket(id, t => { t.archived = true; }, 'Ticket nach Archivierung des Erstellers archiviert'));
         });
         if (window.lucide) lucide.createIcons();
@@ -5514,6 +5630,12 @@ export const AdminBoard = {
             }
         } else if (/\.(docx|xlsx|xls|pptx)$/.test(name)) {
             try {
+                // Diese drei Bibliotheken sind zusammen >1,6 MB und werden nur fuer die
+                // Vorschau genau dieses Dateityps gebraucht -- deshalb erst hier, nicht mehr
+                // auf jedem Seitenaufruf blockierend im <head>, nachladen (siehe Utils.loadVendorScript).
+                if (name.endsWith('.docx') && !window.mammoth) await Utils.loadVendorScript('/vendor/mammoth.browser.min.js').catch(() => {});
+                else if (/\.(xlsx|xls)$/.test(name) && !window.XLSX) await Utils.loadVendorScript('/vendor/xlsx.full.min.js').catch(() => {});
+                else if (name.endsWith('.pptx') && !window.JSZip) await Utils.loadVendorScript('/vendor/jszip.min.js').catch(() => {});
                 const buffer = await (await fetch(previewSrc)).arrayBuffer();
                 if (name.endsWith('.docx') && window.mammoth) {
                     const result = await window.mammoth.extractRawText({

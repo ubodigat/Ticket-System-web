@@ -84,6 +84,7 @@ export const Store = {
         email: u.email,
         role: u.role,
         department_group_id: u.department_group_id ?? null,
+        department: u.department || '',
         supervisorUserId: u.supervisor_user_id ?? null,
         accountArchived: !!u.account_archived,
         accountLocked: !!u.locked_permanent,
@@ -100,7 +101,10 @@ export const Store = {
         canManage2FA: u.role === 'admin' || u.role === 'superadmin',
         canManageRequests: u.role === 'admin' || u.role === 'superadmin',
         canViewLogs: u.role === 'admin' || u.role === 'superadmin',
-        absence: null
+        // Echte, serverseitig berechnete Abwesenheit (siehe users.ts buildAbsence) --
+        // war hier bisher hart auf null gesetzt, wodurch Abwesenheits-Badges/Vertretungslogik
+        // nie griffen, obwohl die Daten in der Datenbank korrekt gespeichert waren.
+        absence: u.absence ?? null
     }),
     getUsers: async () => {
         const res = await fetch('/api/v2/users', { credentials: 'same-origin' });
@@ -134,6 +138,7 @@ export const Store = {
                         email: u.email || '',
                         role: u.role === 'admin' ? 'admin' : 'user',
                         department_group_id: u.department_group_id ?? null,
+        department: u.department || '',
                         supervisor_user_id: u.supervisorUserId ?? null
                     })
                 });
@@ -144,6 +149,7 @@ export const Store = {
             if (u.email !== prev.email) patch.email = u.email;
             if (u.role !== prev.role && (u.role === 'user' || u.role === 'admin')) patch.role = u.role;
             if (u.department_group_id !== prev.department_group_id) patch.department_group_id = u.department_group_id ?? null;
+            if ((u.department || '') !== (prev.department || '')) patch.department = u.department || '';
             if (u.supervisorUserId !== prev.supervisorUserId) patch.supervisor_user_id = u.supervisorUserId ?? null;
             if (!!u.accountArchived !== prev.accountArchived) patch.account_archived = !!u.accountArchived;
             if (!!u.accountLocked !== prev.accountLocked) patch.locked_permanent = !!u.accountLocked;
@@ -167,6 +173,27 @@ export const Store = {
         Store._usersCache = null;
         const after = await Store.getUsers();
         await LogDiff.users(before, after);
+    },
+    // Abwesenheit & Vertretung: echte Server-Endpunkte statt der frueheren client-seitigen
+    // Mutation von user.absence + Store.saveUsers (das absence-Feld dort nie kannte und daher
+    // nie wirklich etwas speicherte). userId=null -> eigene Abwesenheit (/users/me/absence).
+    setUserAbsence: async (userId, payload) => {
+        const path = userId ? `/api/v2/users/${encodeURIComponent(userId)}/absence` : '/api/v2/users/me/absence';
+        const res = await fetch(path, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).catch(() => null);
+        if (!res || !res.ok) return null;
+        Store._usersCache = null;
+        return res.json();
+    },
+    // Tickets, die wegen einer (laufenden oder beendeten) Abwesenheit dieser Person an eine
+    // Vertretung übergegangen und noch nicht zurückgeholt sind -- aus dem Audit-Log abgeleitet.
+    getTransferredTickets: async (userId) => {
+        const res = await fetch(`/api/v2/users/${encodeURIComponent(userId)}/absence/transferred-tickets`, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return [];
+        return (await res.json()).ticketIds || [];
     },
     // Gruppen laufen über die echte /api/v2/groups-API. Mitgliedschaft gibt es im Backend NICHT
     // als Array auf der Gruppe, sondern als department_group_id auf dem Benutzer (eine Gruppe pro
@@ -263,10 +290,21 @@ export const Store = {
         logs: [],
         archived: !!t.archived_at,
         archivedAt: t.archived_at,
+        closedAt: t.closed_at || null,
+        // Echte Zählungen/letzter Nachrichtenabsender aus der Listen-API (siehe tickets.ts GET
+        // /api/v2/tickets) -- chat/comments/todos bleiben bewusst [] (siehe oben), diese Felder
+        // sind fuer die Kanban-Karte gedacht, die keine vollen Inhalte braucht, nur Zahlen/Status.
+        chatCount: Number(t.message_count) || 0,
+        noteCount: Number(t.note_count) || 0,
+        todoTotal: Number(t.todo_count) || 0,
+        todoDone: Number(t.todo_done_count) || 0,
+        attachmentCount: Number(t.attachment_count) || 0,
+        awaitingReply: t.last_message_role === 'user',
         isMajorIncident: t.type === 'incident',
         incidentNotice: t.incident_notice || null,
         linkedIncidentId: t.incident_id || null,
-        authorArchived: false,
+        authorArchived: !!t.author_archived,
+        archivedAuthorAck: !!t.archived_author_ack,
         customDueAt: t.custom_due_at,
         slaDueAt: t.sla_due_at,
         createdByAdmin: t.filed_by_username || null,
@@ -432,6 +470,7 @@ export const Store = {
             }
             if (t.customDueAt !== prev.customDueAt) patch.custom_due_at = t.customDueAt ?? null;
             if (!!t.archived !== !!prev.archived) patch.archived = !!t.archived;
+            if (!!t.archivedAuthorAck !== !!prev.archivedAuthorAck) patch.archived_author_ack = !!t.archivedAuthorAck;
             if (Object.keys(patch).length) {
                 await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}`, {
                     method: 'PATCH',
@@ -540,6 +579,9 @@ export const Store = {
                 autoArchiveDays: cfg.autoArchiveClosedAfterDays ?? 0,
                 waitingReminderDays: cfg.waitingReminderDays ?? 2,
                 waitingAutoCloseDays: cfg.waitingAutoCloseDays ?? 7,
+                defaultPrio: cfg.defaultPrio || 'Normal',
+                showSlaToUsers: !!cfg.showSlaToUsers,
+                notifPolicy: cfg.notifPolicy || {},
                 slaHours: {
                     low: cfg.slaHoursByPriority?.Niedrig ?? 72,
                     normal: cfg.slaHoursByPriority?.Normal ?? 48,
@@ -547,10 +589,15 @@ export const Store = {
                     critical: cfg.slaHoursByPriority?.Kritisch ?? 4
                 },
                 businessHours: {
-                    enabled: !!cfg.businessHours,
+                    enabled: !!cfg.businessHours?.enabled,
                     start: cfg.businessHours?.start || '08:00',
                     end: cfg.businessHours?.end || '17:00',
-                    days: cfg.businessHours?.days || [1, 2, 3, 4, 5]
+                    days: cfg.businessHours?.days || [1, 2, 3, 4, 5],
+                    // Individuelle Zeiten je Wochentag und Feiertage -- siehe
+                    // apps/server/src/domain/sla.ts (dieselbe Struktur wird dort serverseitig
+                    // fuer die tatsaechliche Frist ausgewertet, nicht nur fuer die Anzeige hier).
+                    perDay: cfg.businessHours?.perDay || {},
+                    holidays: cfg.businessHours?.holidays || []
                 }
             };
             settings.approvalConfig = {
@@ -561,9 +608,10 @@ export const Store = {
             settings.companyConfig = {
                 ...(settings.companyConfig || {}),
                 name: serverSettings.companyName || '',
-                ticketNumberFormat: cfg.ticketNumberFormat?.prefix ? '{prefix}-{number}' : '{number}',
-                ticketNumberPrefix: cfg.ticketNumberFormat?.prefix || 'TS',
-                ticketNumberPadding: cfg.ticketNumberFormat?.padding || 5
+                ticketNumberFormat: cfg.ticketNumberFormat?.format || (cfg.ticketNumberFormat?.prefix ? '{prefix}-{number}' : '{number}'),
+                ticketNumberPrefix: cfg.ticketNumberFormat?.prefix || '',
+                ticketNumberPadding: cfg.ticketNumberFormat?.padding || 5,
+                ticketNumberCategoryFormats: cfg.ticketNumberCategoryFormats || {}
             };
             settings.accountConfig = {
                 editable: {
@@ -660,6 +708,16 @@ export const Store = {
         }).catch(() => null);
         if (!res || !res.ok) return false;
         return (await res.json()).success === true;
+    },
+    getUpdateStatus: async () => {
+        const res = await fetch('/api/v2/update/status', { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return null;
+        return res.json();
+    },
+    runUpdate: async () => {
+        const res = await fetch('/api/v2/update/run', { method: 'POST', credentials: 'same-origin' }).catch(() => null);
+        if (!res) return null;
+        return res.json().catch(() => null);
     },
 
     // Textbausteine: echte /api/v2/text-blocks-API statt settings.textBlocks-Blob.

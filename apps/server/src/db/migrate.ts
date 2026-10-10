@@ -27,6 +27,8 @@ import { migration_0017_user_supervisor } from './migrations/0017_user_superviso
 import { migration_0018_smtp_config } from './migrations/0018_smtp_config.js';
 import { migration_0019_ldap_config } from './migrations/0019_ldap_config.js';
 import { migration_0020_ticket_relations } from './migrations/0020_ticket_relations.js';
+import { migration_0021_user_department } from './migrations/0021_user_department.js';
+import { migration_0022_ticket_archived_author_ack } from './migrations/0022_ticket_archived_author_ack.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -48,7 +50,9 @@ const migrations: Record<string, Migration> = {
   '0017_user_supervisor': migration_0017_user_supervisor,
   '0018_smtp_config': migration_0018_smtp_config,
   '0019_ldap_config': migration_0019_ldap_config,
-  '0020_ticket_relations': migration_0020_ticket_relations
+  '0020_ticket_relations': migration_0020_ticket_relations,
+  '0021_user_department': migration_0021_user_department,
+  '0022_ticket_archived_author_ack': migration_0022_ticket_archived_author_ack
 };
 
 const provider: MigrationProvider = {

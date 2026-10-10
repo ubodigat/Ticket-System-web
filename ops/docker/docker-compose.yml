@@ -6,6 +6,11 @@ networks:
     internal: true
   edge:
     driver: bridge
+  # Eigenes, NICHT isoliertes Netz nur für den Updater (git fetch gegen GitHub braucht
+  # Internetzugang, "internal: true" bei "internal" würde das komplett blockieren). Getrennt
+  # von "edge" gehalten, damit der Updater nicht von Caddy aus erreichbar wird.
+  egress:
+    driver: bridge
 
 volumes:
   mariadb-data:
@@ -57,6 +62,8 @@ services:
       COOKIE_SECRET: ${COOKIE_SECRET}
       INSTALLATION_ID: ${INSTALLATION_ID}
       TRUSTED_PROXY_HOPS: "1"
+      UPDATE_SERVICE_URL: http://updater:3099
+      UPDATE_TOKEN: ${UPDATE_TOKEN}
     volumes:
       - ../secrets/app.kek:/run/secrets/app.kek:ro
       - ../tls/mariadb/ca.pem:/run/secrets/mariadb-ca.pem:ro
@@ -65,6 +72,29 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 20s
+
+  updater:
+    build:
+      context: ../..
+      dockerfile: ops/docker/Dockerfile.updater
+    restart: unless-stopped
+    # internal: damit "app" den Updater unter dem Namen "updater" erreicht.
+    # egress: damit "git fetch origin" GitHub erreichen kann (siehe Netz-Definition oben).
+    networks: [internal, egress]
+    environment:
+      PORT: "3099"
+      REPO_DIR: /workspace
+      UPDATE_BRANCH: main
+      UPDATE_TOKEN: ${UPDATE_TOKEN}
+    volumes:
+      - ../..:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3099/status',{headers:{authorization:'Bearer '+process.env.UPDATE_TOKEN}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 20s
 
   caddy:

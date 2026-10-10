@@ -56,6 +56,7 @@ export interface UsersTable {
   password_hash: string;
   role: 'user' | 'admin' | 'superadmin';
   department_group_id: string | null;
+  department: Nullable<string>;
   supervisor_user_id: Nullable<string>;
   account_archived: ColumnType<boolean, boolean, boolean>;
   locked_until: NullableTimestamp;
@@ -223,6 +224,7 @@ export interface TicketsTable {
   custom_due_at: NullableTimestamp;
   archived_at: NullableTimestamp;
   closed_at: NullableTimestamp;
+  archived_author_ack: Generated<boolean>;
   approval_status: Nullable<string>;
   approval_requested_by: Nullable<string>;
   approval_text: Nullable<string>;

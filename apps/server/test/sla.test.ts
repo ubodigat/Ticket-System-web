@@ -54,4 +54,29 @@ describe('calculateSlaDueAt', () => {
       slaHoursByPriority: { Niedrig: 0 }
     })).toBeNull();
   });
+
+  it('nutzt individuelle Geschäftszeiten je Wochentag aus "perDay", wenn vorhanden', () => {
+    // Montag (Wochentag 1) hat per "perDay" nur 09:00-12:00 (statt des globalen 08:00-17:00).
+    // Erstellung 10:00, 1h Frist -> endet 11:00, noch am selben Vormittag.
+    const due = calculateSlaDueAt(new Date('2026-03-02T10:00:00Z'), 'Hoch', {
+      slaHoursByPriority: { Hoch: 1 },
+      businessHours: {
+        start: '08:00', end: '17:00', days: [1, 2, 3, 4, 5],
+        perDay: { '1': { enabled: true, start: '09:00', end: '12:00' } }
+      }
+    });
+    expect(due?.toISOString()).toBe('2026-03-02T11:00:00.000Z');
+  });
+
+  it('überspringt als Feiertag markierte Tage, auch wenn der Wochentag sonst ein Geschäftstag ist', () => {
+    // Montag 2026-03-02 ist als Feiertag markiert -> Frist beginnt erst am Dienstag um 08:00.
+    const due = calculateSlaDueAt(new Date('2026-03-01T20:00:00Z'), 'Hoch', {
+      slaHoursByPriority: { Hoch: 2 },
+      businessHours: {
+        start: '08:00', end: '17:00', days: [1, 2, 3, 4, 5],
+        holidays: ['2026-03-02']
+      }
+    });
+    expect(due?.toISOString()).toBe('2026-03-03T10:00:00.000Z');
+  });
 });

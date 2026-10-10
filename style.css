@@ -910,6 +910,10 @@ body[data-guard="admin"] .topbar {
     --tone-rgb: var(--success-rgb);
 }
 
+.callout-danger {
+    --tone-rgb: var(--danger-rgb);
+}
+
 .hint,
 .note {
     margin-top: var(--space-2);
@@ -5783,6 +5787,68 @@ button:disabled {
 
 .settings-section-title:first-child {
     margin-top: 0;
+}
+
+.settings-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.summary-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card-bg);
+    padding: 12px;
+    min-width: 0;
+}
+
+.summary-card span,
+.summary-card small {
+    display: block;
+    color: var(--text-sec);
+    overflow-wrap: anywhere;
+}
+
+.summary-card strong {
+    display: block;
+    margin: 5px 0;
+    overflow-wrap: anywhere;
+}
+
+.update-log {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--card-bg);
+}
+
+.update-log.ok {
+    border-color: rgba(var(--success-rgb), .45);
+}
+
+.update-log.running {
+    border-color: rgba(var(--warning-rgb), .45);
+}
+
+.update-log.failed {
+    border-color: rgba(var(--danger-rgb), .55);
+}
+
+.update-log pre {
+    margin: 10px 0 0;
+    max-height: 260px;
+    overflow: auto;
+    white-space: pre-wrap;
+    font-size: 12px;
+}
+
+.button-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 
