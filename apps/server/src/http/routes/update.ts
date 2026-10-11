@@ -14,12 +14,21 @@ async function callUpdater(env: Env, path: '/status' | '/run', method: 'GET' | '
   if (!env.UPDATE_SERVICE_URL || !env.UPDATE_TOKEN) {
     return { ok: false, status: 503, payload: { error: 'update_service_not_configured' } };
   }
-  const res = await fetch(`${env.UPDATE_SERVICE_URL}${path}`, {
-    method,
-    headers: { authorization: `Bearer ${env.UPDATE_TOKEN}` }
-  });
-  const payload = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, payload };
+  try {
+    // Ohne Zeitlimit haengt diese Anfrage genauso lang wie ein haengender Befehl im Updater-
+    // Sidecar (siehe updater-server.mjs) -- Caddy wartet nicht ewig auf die Antwort dieses
+    // App-Containers und beendet die Verbindung dann selbst mit 502 Bad Gateway, was im Browser
+    // wie ein kompletter Ausfall aussieht, obwohl der App-Container die ganze Zeit lief.
+    const res = await fetch(`${env.UPDATE_SERVICE_URL}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${env.UPDATE_TOKEN}` },
+      signal: AbortSignal.timeout(20000)
+    });
+    const payload = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, payload };
+  } catch {
+    return { ok: false, status: 504, payload: { error: 'update_service_unreachable' } };
+  }
 }
 
 export function registerUpdateRoutes(app: FastifyInstance, deps: UpdateRouteDeps): void {

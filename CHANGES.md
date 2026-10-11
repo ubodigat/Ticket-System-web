@@ -1,5 +1,51 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-11 - Update-Status-Abfrage ohne Zeitlimit: haengender "git fetch" fuehrte zu 502 Bad Gateway
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Befund (vom Nutzer gemeldet): `GET /api/v2/update/status` antwortete mit 502 Bad Gateway,
+  obwohl der App-Container lief -- "Updater ist nicht erreichbar oder nicht konfiguriert"
+  erschien dadurch auch dann, wenn er es war.
+- Ursache: `collectStatus()` im Updater-Sidecar (`ops/docker/updater-server.mjs`) fuehrt bei
+  JEDER Status-Abfrage einen echten `git fetch` gegen GitHub aus, bisher ganz ohne Zeitlimit.
+  Haengt dieser eine Netzwerkaufruf (instabiles/langsames Internet zum GitHub-Host), haengt die
+  gesamte Anfrage -- und Caddy wartet nicht unbegrenzt auf eine Antwort des App-Containers,
+  sondern beendet die Verbindung irgendwann selbst mit 502, was im Browser wie ein kompletter
+  Ausfall aussieht, obwohl der App-Container die ganze Zeit normal lief.
+- Fix:
+  - `ops/docker/updater-server.mjs`: `run()` kennt jetzt ein optionales Zeitlimit (killt den
+    Kindprozess bei Überschreitung); der `git fetch` in `collectStatus()` bekommt 15 Sekunden.
+  - `apps/server/src/http/routes/update.ts`: `callUpdater()` setzt zusätzlich ein eigenes
+    20-Sekunden-Zeitlimit auf die Anfrage an den Updater-Sidecar (Verteidigung in der Tiefe,
+    falls der Sidecar aus einem anderen Grund haengt) und gibt bei Zeitüberschreitung einen
+    sauberen 504 statt eines unkontrollierten Hängers zurück.
+  - `js/store.js`/`js/admin-board.js`: die Update-Anzeige unterscheidet jetzt zwischen "nie
+    konfiguriert" (503), "Server nicht erreichbar" (Netzwerkfehler) und "Updater antwortet
+    gerade nicht, z.B. wegen laufendem Neustart" (502/504, mit direktem "Erneut prüfen"-Knopf)
+    statt immer dieselbe, irreführende Meldung zu zeigen.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-11 - Update-Anzeige: Fortschrittsbalken ergänzt, fehlenden Abstand unter der Konsolenansicht behoben
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Anlass: Rückmeldung, dass die Update-Anzeige in Systemeinstellungen > Update während eines
+  laufenden Updates nur "Schritt: build" als Text zeigte (kein Überblick, wie weit das Update
+  ist) und der Bereich unter der Konsolenausgabe ohne Abstand direkt an "Nur Superadmins können
+  Updates starten." stieß.
+- `ops/docker/updater-server.mjs`: `job.step` bleibt bei einem Fehler jetzt auf dem Namen des
+  zuletzt gestarteten Schritts stehen (z.B. "build"), statt auf die generische Zeichenkette
+  "failed" überschrieben zu werden -- ein neues `job.failed`-Feld zeigt den Fehlschlag getrennt
+  an. Vorher konnte das Frontend nach einem Fehler nicht mehr erkennen, bei welchem der fünf
+  Schritte (Abrufen/Zurücksetzen/Bauen/Neustarten/Migrieren) es hakte.
+- `js/admin-board.js`: neue `AdminBoard.renderUpdateProgress(job)` -- Fortschrittsbalken plus
+  Schritt-Leiste (jeder der fünf Schritte als erledigt/aktiv/fehlgeschlagen/ausstehend markiert),
+  wird während und nach einem Update in Systemeinstellungen > Update angezeigt.
+- `style.css`: `.update-status`/`.update-log` bekommen jetzt `margin-bottom`, dazu die neuen
+  `.update-progress*`-Klassen (an die bestehenden Design-Tokens `--success`/`--warning`/
+  `--danger`/`--radius-pill`/`--card-hover` angelehnt, gleiches Muster wie die bereits
+  vorhandene Teilaufgaben-Fortschrittsleiste `.todo-progress-bar`).
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
 ## 2026-10-11 - Architekturfehler in AdminBoard.render() gefunden: Board aktualisierte sich bei fehlgeschlagenem /users/me-Abruf gar nicht mehr
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Anlass: weitere Suche nach den vier noch offenen, vom Nutzer gemeldeten Problemen (Chat senden,

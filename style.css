@@ -5817,11 +5817,72 @@ button:disabled {
     overflow-wrap: anywhere;
 }
 
+.update-status {
+    margin-bottom: 16px;
+}
+
 .update-log {
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 12px;
+    margin-bottom: 16px;
     background: var(--card-bg);
+}
+
+.update-progress {
+    margin-top: 10px;
+}
+
+.update-progress-bar {
+    height: 8px;
+    border-radius: var(--radius-pill);
+    background: var(--card-hover);
+    overflow: hidden;
+}
+
+.update-progress-fill {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--warning);
+    transition: width var(--ease);
+}
+
+.update-progress-fill.ok {
+    background: var(--success);
+}
+
+.update-progress-fill.failed {
+    background: var(--danger);
+}
+
+.update-progress-steps {
+    display: flex;
+    justify-content: space-between;
+    gap: 4px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-sec);
+}
+
+.update-progress-step {
+    flex: 1;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
+.update-progress-step.done {
+    color: var(--success);
+    font-weight: 600;
+}
+
+.update-progress-step.active {
+    color: var(--warning);
+    font-weight: 600;
+}
+
+.update-progress-step.failed {
+    color: var(--danger);
+    font-weight: 600;
 }
 
 .update-log.ok {

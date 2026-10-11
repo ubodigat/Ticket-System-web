@@ -1734,6 +1734,36 @@ export const AdminBoard = {
         modal.querySelector('#generic-save-head')?.remove();
     },
 
+    // Übersichtlicher Fortschritt statt nur "Schritt: build" als Text -- ein docker build
+    // --no-cache kann mehrere Minuten dauern, ohne sichtbaren Fortschritt wirkt das wie ein
+    // Hänger. job.step bleibt auch nach einem Fehler auf dem Namen des zuletzt gestarteten
+    // Schritts stehen (updater-server.mjs), job.failed zeigt den Fehlschlag separat an.
+    updateSteps: [
+        { key: 'fetch', label: 'Abrufen' },
+        { key: 'reset', label: 'Zurücksetzen' },
+        { key: 'build', label: 'Bauen' },
+        { key: 'restart', label: 'Neustarten' },
+        { key: 'migrate', label: 'Migrieren' }
+    ],
+    renderUpdateProgress: (job) => {
+        const steps = AdminBoard.updateSteps;
+        const done = job.step === 'done' || job.ok;
+        let currentIndex = steps.findIndex(s => s.key === job.step);
+        if (done) currentIndex = steps.length;
+        if (currentIndex === -1 && !done) currentIndex = 0; // "starting" -- noch vor dem ersten Schritt
+        const percent = done ? 100 : Math.round((currentIndex / steps.length) * 100);
+        return `
+            <div class="update-progress">
+                <div class="update-progress-bar"><div class="update-progress-fill ${job.failed ? 'failed' : done ? 'ok' : ''}" style="width:${percent}%"></div></div>
+                <div class="update-progress-steps">
+                    ${steps.map((s, i) => {
+                        const state = job.failed && i === currentIndex ? 'failed' : (i < currentIndex || done) ? 'done' : i === currentIndex ? 'active' : '';
+                        return `<span class="update-progress-step${state ? ' ' + state : ''}">${Utils.esc(s.label)}</span>`;
+                    }).join('')}
+                </div>
+            </div>`;
+    },
+
     // pollTimer: läuft ein Update, fragt diese Funktion den Status alle 4s erneut ab, damit der
     // Fortschritt live sichtbar ist (ein docker build --no-cache kann mehrere Minuten dauern) --
     // ohne dass die Person manuell auf "Prüfen" klicken muss.
@@ -1745,8 +1775,23 @@ export const AdminBoard = {
         area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} Update-Status wird geprüft...</div>`;
         const status = await Store.getUpdateStatus();
         if (!q('#sys-update-status')) return; // Modal inzwischen geschlossen
-        if (!status) {
-            area.innerHTML = `<div class="callout callout-danger">Updater ist nicht erreichbar oder nicht konfiguriert. Bitte Docker-Stack mit dem aktuellen Compose neu starten.</div>`;
+        // httpStatus unterscheidet, WARUM der Abruf fehlschlug -- vorher zeigte jeder Fehlschlag
+        // (auch ein voruebergehender Gateway-Timeout waehrend eines laufenden Updates) dieselbe,
+        // irrefuehrende "nicht konfiguriert"-Meldung.
+        if (status.httpStatus === 0) {
+            area.innerHTML = `<div class="callout callout-danger">Server nicht erreichbar. Bitte Internetverbindung prüfen und erneut versuchen.</div>`;
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+        if (status.httpStatus === 503) {
+            area.innerHTML = `<div class="callout callout-danger">Updater ist nicht konfiguriert (UPDATE_SERVICE_URL/UPDATE_TOKEN fehlen). Bitte Docker-Stack mit dem aktuellen Compose neu starten.</div>`;
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+        if (status.httpStatus === 504 || status.httpStatus === 502) {
+            area.innerHTML = `<div class="callout callout-danger">Updater antwortet gerade nicht (${Utils.esc(String(status.httpStatus))}) -- kann an einem laufenden Neustart des App-Containers liegen. In Kürze erneut versuchen.</div>
+                <button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}Erneut prüfen</button>`;
+            q('#sys-update-retry').onclick = () => AdminBoard.renderUpdateStatus();
             if (window.lucide) lucide.createIcons();
             return;
         }
@@ -1763,9 +1808,9 @@ export const AdminBoard = {
                 <div class="summary-card"><span>GitHub Version</span><strong>${Utils.esc((status.remoteCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.remoteSubject || '')}</small></div>
                 <div class="summary-card"><span>Status</span><strong>${updateAvailable ? `${status.commitsBehind || 1} Update(s) verfügbar` : 'Aktuell'}</strong><small>${Utils.esc(status.branch || 'main')}</small></div>
             </div>
-            ${job ? `<div class="update-log ${job.ok ? 'ok' : job.running ? 'running' : 'failed'}">
-                <strong>${job.running ? 'Update läuft...' : job.ok ? 'Letztes Update erfolgreich' : 'Letztes Update fehlgeschlagen'}</strong>
-                <span>Schritt: ${Utils.esc(job.step || '-')}</span>
+            ${job ? `<div class="update-log ${job.failed ? 'failed' : job.ok ? 'ok' : 'running'}">
+                <strong>${job.running ? 'Update läuft...' : job.ok ? 'Letztes Update erfolgreich' : job.failed ? 'Letztes Update fehlgeschlagen' : ''}</strong>
+                ${AdminBoard.renderUpdateProgress(job)}
                 <pre>${Utils.esc((job.log || []).slice(-18).join('\n'))}</pre>
             </div>` : ''}
         `;

@@ -766,8 +766,13 @@ export const Store = {
     },
     getUpdateStatus: async () => {
         const res = await fetch('/api/v2/update/status', { credentials: 'same-origin' }).catch(() => null);
-        if (!res || !res.ok) return null;
-        return res.json();
+        // HTTP-Status wird mitgegeben, auch bei Fehlschlag -- renderUpdateStatus kann so zwischen
+        // "nie konfiguriert" (503), "Updater antwortet nicht/Netzwerkproblem" (504) und einem
+        // reinen Gateway-/Proxy-Fehler (502, z.B. App-Container restartet gerade) unterscheiden,
+        // statt pauschal "nicht erreichbar oder nicht konfiguriert" zu melden.
+        if (!res) return { httpStatus: 0 };
+        const body = await res.json().catch(() => ({}));
+        return { ...body, httpStatus: res.status };
     },
     runUpdate: async () => {
         const res = await fetch('/api/v2/update/run', { method: 'POST', credentials: 'same-origin' }).catch(() => null);

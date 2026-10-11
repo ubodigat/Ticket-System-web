@@ -35,20 +35,37 @@ function auth(req, res) {
   return true;
 }
 
+// Ohne Zeitlimit konnte ein haengender "git fetch" (instabiles/langsames Internet zum GitHub-
+// Host) GET /status unbegrenzt blockieren -- Caddy wartet nicht ewig auf die Antwort des
+// App-Containers und gibt dann 502 Bad Gateway zurueck, obwohl der App-Container selbst laeuft.
+// timeoutMs: 15s fuer /status-Abfragen (git fetch/rev-parse/rev-list), unbegrenzt fuer den
+// eigentlichen Build/Deploy-Lauf (kann je nach Hardware mehrere Minuten dauern).
 function run(command, args, options = {}) {
+  const { timeoutMs = 0, ...spawnOptions } = options;
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: repoDir, shell: false, ...options });
+    const child = spawn(command, args, { cwd: repoDir, shell: false, ...spawnOptions });
     let out = '';
     let err = '';
+    let timedOut = false;
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeoutMs) : null;
     child.stdout.on('data', chunk => { out += chunk.toString(); });
     child.stderr.on('data', chunk => { err += chunk.toString(); });
-    child.on('close', code => resolve({ code, out: out.trim(), err: err.trim() }));
-    child.on('error', error => resolve({ code: 1, out, err: String(error?.message || error) }));
+    child.on('close', code => {
+      if (timer) clearTimeout(timer);
+      resolve(timedOut ? { code: 1, out, err: `Zeitlimit (${timeoutMs}ms) ueberschritten` } : { code, out: out.trim(), err: err.trim() });
+    });
+    child.on('error', error => {
+      if (timer) clearTimeout(timer);
+      resolve({ code: 1, out, err: String(error?.message || error) });
+    });
   });
 }
 
 async function collectStatus() {
-  const fetchResult = await run('git', ['fetch', 'origin', branch, '--quiet']);
+  const fetchResult = await run('git', ['fetch', 'origin', branch, '--quiet'], { timeoutMs: 15000 });
   if (fetchResult.code !== 0) {
     // Ohne erfolgreichen fetch wäre "origin/<branch>" ein veralteter, irreführender Stand --
     // lieber ehrlich "nicht erreichbar" melden als eine falsche Diff-Anzeige.
@@ -76,7 +93,12 @@ async function collectStatus() {
 }
 
 async function runUpdate() {
-  job = { running: true, startedAt: new Date().toISOString(), finishedAt: null, ok: false, step: 'starting', log: [] };
+  // job.step bleibt bei einem Fehler auf dem Namen des zuletzt gestarteten Schritts stehen
+  // (job.failed zeigt getrennt an, dass er fehlgeschlagen ist) -- vorher wurde step auf die
+  // generische Zeichenkette "failed" ueberschrieben, wodurch das Frontend nicht mehr wusste,
+  // bei welchem der fuenf Schritte es tatsaechlich hakte, und keinen sinnvollen Fortschritt
+  // mehr anzeigen konnte.
+  job = { running: true, startedAt: new Date().toISOString(), finishedAt: null, ok: false, failed: false, step: 'starting', log: [] };
   const step = async (label, command, args) => {
     job.step = label;
     job.log.push(`$ ${command} ${args.join(' ')}`);
@@ -99,7 +121,7 @@ async function runUpdate() {
     job.step = 'done';
   } catch (error) {
     job.ok = false;
-    job.step = 'failed';
+    job.failed = true;
     job.log.push(String(error?.message || error));
   } finally {
     job.running = false;
