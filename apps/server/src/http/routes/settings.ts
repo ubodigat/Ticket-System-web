@@ -96,8 +96,8 @@ const settingsConfigSchema = z.object({
   // Limit", siehe apps/server/src/domain/securityPolicy.ts fuer die serverseitige Auswertung.
   securityConfig: z.object({
     force2FA: z.enum(['none', 'all', 'admin', 'user']).optional(),
-    sessionTimeout: z.number().int().min(0).max(10080).optional(),
-    maxLoginAttempts: z.number().int().min(0).max(50).optional(),
+    sessionTimeout: z.number().int().min(5).max(10080).optional(),
+    maxLoginAttempts: z.number().int().min(1).max(50).optional(),
     lockoutAction: z.enum(['lock', 'temp', 'none']).optional(),
     lockoutMinutes: z.number().int().min(1).max(10080).optional()
   }).optional(),
@@ -177,6 +177,32 @@ const ldapConfigSchema = z.object({
   userFilter: z.string().trim().min(1).max(255).default('(uid={username})')
 });
 
+function removeWriteOnlyMailSecrets(config: Record<string, any>): Record<string, any> {
+  const clone = JSON.parse(JSON.stringify(config || {}));
+  if (clone.emailAdvancedConfig) {
+    delete clone.emailAdvancedConfig.smimePrivateKeyPem;
+    delete clone.emailAdvancedConfig.smimePassphrase;
+    delete clone.emailAdvancedConfig.dkimPrivateKeyPem;
+  }
+  return clone;
+}
+
+function mergeSettingsConfig(existing: Record<string, any>, incoming: Record<string, any>): Record<string, any> {
+  const merged = { ...existing, ...incoming };
+  if (incoming.emailAdvancedConfig) {
+    const currentEmail = existing.emailAdvancedConfig || {};
+    const nextEmail = { ...currentEmail, ...incoming.emailAdvancedConfig };
+    for (const key of ['smimePrivateKeyPem', 'smimePassphrase', 'dkimPrivateKeyPem']) {
+      if (incoming.emailAdvancedConfig[key] === '' || incoming.emailAdvancedConfig[key] === undefined) {
+        if (currentEmail[key] !== undefined) nextEmail[key] = currentEmail[key];
+        else delete nextEmail[key];
+      }
+    }
+    merged.emailAdvancedConfig = nextEmail;
+  }
+  return merged;
+}
+
 export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRouteDeps): void {
   // GET /api/v2/settings - gelesen von jedem angemeldeten Benutzer (SLA/Geschäftszeiten
   // werden z.B. im Frontend für Fristanzeigen gebraucht), nicht nur Admins.
@@ -187,7 +213,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
         .select(['company_name', 'portal_name', 'config_json'])
         .where('id', '=', 1)
         .executeTakeFirstOrThrow();
-      const config = row.config_json ? JSON.parse(row.config_json) : {};
+      const config = removeWriteOnlyMailSecrets(row.config_json ? JSON.parse(row.config_json) : {});
       return reply.send({ companyName: row.company_name, portalName: row.portal_name, config });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -208,7 +234,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
         const parsed = settingsConfigSchema.safeParse(body.config);
         if (!parsed.success) return reply.code(400).send({ error: 'invalid_config', details: parsed.error.flatten() });
         const existing = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirstOrThrow();
-        const merged = { ...(existing.config_json ? JSON.parse(existing.config_json) : {}), ...parsed.data };
+        const merged = mergeSettingsConfig(existing.config_json ? JSON.parse(existing.config_json) : {}, parsed.data);
         updates.config_json = JSON.stringify(merged);
       }
 

@@ -54,11 +54,22 @@ function ctx(deps: KnowledgeRouteDeps, tableName: string, recordId: string, fiel
 }
 
 export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRouteDeps): void {
+  async function hasPermission(session: { uid: string; role: string }, key: 'textBlocks' | 'kb', value?: string): Promise<boolean> {
+    if (session.role === 'superadmin') return true;
+    if (session.role !== 'admin') return false;
+    const row = await app.db.selectFrom('users').select('permissions_json').where('id', '=', session.uid).executeTakeFirst();
+    let permissions: Record<string, unknown> = {};
+    try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
+    if (key === 'kb') return value ? permissions.kb === value : permissions.kb === 'read' || permissions.kb === 'edit';
+    return permissions[key] === true;
+  }
+
   // --- Wissensdatenbank ---
 
   app.get('/api/v2/kb/articles', async (req, reply) => {
     try {
-      requireSession(req);
+      const session = requireSession(req);
+      if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('kb_articles').selectAll().orderBy('updated_at', 'desc').execute();
       const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
       const contentDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.content');
@@ -76,6 +87,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
   app.post('/api/v2/kb/articles', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = createArticleSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
@@ -97,7 +109,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
 
   app.patch('/api/v2/kb/articles/:id', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const parsed = createArticleSchema.partial().safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
@@ -120,7 +133,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
 
   app.delete('/api/v2/kb/articles/:id', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       await app.db.deleteFrom('kb_articles').where('id', '=', id).execute();
       return reply.send({ success: true });
@@ -134,7 +148,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
 
   app.get('/api/v2/kb/articles/:id/attachments', async (req, reply) => {
     try {
-      requireSession(req);
+      const session = requireSession(req);
+      if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const rows = await app.db.selectFrom('kb_article_attachments')
         .select(['id', 'filename', 'mime_type', 'size_bytes', 'uploaded_by_username', 'created_at'])
@@ -152,7 +167,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
 
   app.get('/api/v2/kb/attachments/:attachmentId', async (req, reply) => {
     try {
-      requireSession(req);
+      const session = requireSession(req);
+      if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const { attachmentId } = req.params as { attachmentId: string };
       const row = await app.db.selectFrom('kb_article_attachments').selectAll().where('id', '=', attachmentId).executeTakeFirst();
       if (!row) return reply.code(404).send({ error: 'not_found' });
@@ -169,6 +185,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
   app.post('/api/v2/kb/articles/:id/attachments', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const article = await app.db.selectFrom('kb_articles').select('id').where('id', '=', id).executeTakeFirst();
       if (!article) return reply.code(404).send({ error: 'article_not_found' });
@@ -204,7 +221,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
 
   app.delete('/api/v2/kb/attachments/:attachmentId', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
       const { attachmentId } = req.params as { attachmentId: string };
       await app.db.deleteFrom('kb_article_attachments').where('id', '=', attachmentId).execute();
       return reply.send({ success: true });
@@ -217,7 +235,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
 
   app.get('/api/v2/text-blocks', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'textBlocks'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('text_blocks').selectAll().orderBy('title', 'asc').execute();
       const contentDek = await ensureDek(app.db, deps.keyProvider, 'text_blocks.content');
       const blocks = rows.map(row => ({
@@ -233,6 +252,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
   app.post('/api/v2/text-blocks', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'textBlocks'))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = createTextBlockSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
@@ -252,7 +272,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
 
   app.delete('/api/v2/text-blocks/:id', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'textBlocks'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       await app.db.deleteFrom('text_blocks').where('id', '=', id).execute();
       return reply.send({ success: true });

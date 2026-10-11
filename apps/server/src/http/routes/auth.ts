@@ -15,7 +15,7 @@ import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
-import { APP_JS, AUTH_CSS, LOGIN_HTML, LOGIN_JS } from '../assets/authPage.js';
+import { APP_JS, AUTH_CSS, LOGIN_JS } from '../assets/authPage.js';
 import { authenticateLdap } from '../../auth/ldap.js';
 import { loadSecurityPolicy, force2faAppliesToRole, type SecurityPolicy } from '../../domain/securityPolicy.js';
 
@@ -32,6 +32,7 @@ interface AuthRouteDeps {
 }
 
 interface SessionPayload {
+  sid: string;
   uid: string;
   username: string;
   role: 'user' | 'admin' | 'superadmin';
@@ -54,10 +55,10 @@ function encodeSession(payload: SessionPayload): string {
 function decodeSession(value: string, sessionTimeoutMinutes: number): SessionPayload | null {
   try {
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<SessionPayload>;
-    if (!parsed.uid || typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number') return null;
+    if (!parsed.sid || typeof parsed.sid !== 'string' || !parsed.uid || typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number') return null;
     if (sessionTimeoutMinutes > 0 && Date.now() - parsed.iat > sessionTimeoutMinutes * 60 * 1000) return null;
     const role = parsed.role === 'superadmin' ? 'superadmin' : parsed.role === 'admin' ? 'admin' : 'user';
-    return { uid: parsed.uid, username: typeof parsed.username === 'string' ? parsed.username : '', role, iat: parsed.iat };
+    return { sid: parsed.sid, uid: parsed.uid, username: typeof parsed.username === 'string' ? parsed.username : '', role, iat: parsed.iat };
   } catch {
     return null;
   }
@@ -184,6 +185,12 @@ async function currentUser(req: FastifyRequest, app: FastifyInstance, deps: Auth
   const policy = await loadSecurityPolicy(app.db);
   const session = decodeSession(unsigned.value, policy.sessionTimeoutMinutes);
   if (!session) return null;
+  const dbSession = await app.db.selectFrom('sessions')
+    .select(['id', 'revoked_at', 'expires_at'])
+    .where('id', '=', session.sid)
+    .where('user_id', '=', session.uid)
+    .executeTakeFirst();
+  if (!dbSession || dbSession.revoked_at || new Date(dbSession.expires_at).getTime() <= Date.now()) return null;
   const user = await app.db
     .selectFrom('users')
     .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until'])
@@ -219,6 +226,25 @@ async function resetFailedLogins(app: FastifyInstance, userId: string): Promise<
   await app.db.updateTable('users').set({ failed_login_count: 0 }).where('id', '=', userId).execute();
 }
 
+async function issueSession(app: FastifyInstance, req: FastifyRequest, reply: FastifyReply, user: { id: string; username: string; role: string }, policy: SecurityPolicy): Promise<void> {
+  const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
+  const sid = randomUUID();
+  const expiresAt = new Date(Date.now() + policy.sessionTimeoutMinutes * 60 * 1000);
+  await app.db.insertInto('sessions').values({
+    id: sid,
+    user_id: user.id,
+    user_agent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'].slice(0, 512) : null,
+    ip_address: req.ip?.slice(0, 64) ?? null,
+    expires_at: expiresAt.toISOString(),
+    revoked_at: null
+  }).execute();
+  reply.setCookie(
+    sessionCookieName(req),
+    encodeSession({ sid, uid: user.id, username: user.username, role, iat: Date.now() }),
+    cookieOptions(req, policy.sessionTimeoutMinutes)
+  );
+}
+
 // Unzureichendes Security Logging (Anforderungsliste: Mittel) -- fehlgeschlagene Logins landen
 // im selben globalen Audit-Log wie alle anderen sicherheitsrelevanten Aktionen.
 async function logSecurityEvent(app: FastifyInstance, action: string, username: string, detail?: string): Promise<void> {
@@ -251,7 +277,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     if (!(await setupCompleted(app))) return reply.redirect('/setup', 302);
     const user = await currentUser(req, app, deps);
     if (user) return reply.redirect('/app', 302);
-    return reply.type('text/html; charset=utf-8').send(LOGIN_HTML);
+    return reply.redirect('/index.html', 302);
   });
 
   app.post('/api/v1/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
@@ -285,6 +311,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       await logSecurityEvent(app, 'login.wrong_password', input.username);
       return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
     }
+    const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
+    if (!user.totp_enabled && force2faAppliesToRole(policy, role)) {
+      await logSecurityEvent(app, 'login.rejected_mfa_required', input.username);
+      return authProblem(reply, 403, '2FA erforderlich', 'Für dieses Konto ist 2FA verpflichtend. Bitte lasse 2FA durch einen Superadmin einrichten oder zurücksetzen.');
+    }
     if (user.totp_enabled) {
       // Noch KEIN Session-Cookie und noch KEIN Zurücksetzen der Fehlversuche -- der Login ist
       // erst nach erfolgreicher TOTP-Prüfung abgeschlossen (siehe /api/v1/auth/mfa-verify).
@@ -294,18 +325,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     }
 
     await resetFailedLogins(app, user.id);
-    const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
-    reply.setCookie(
-      sessionCookieName(req),
-      encodeSession({ uid: user.id, username: user.username, role, iat: Date.now() }),
-      cookieOptions(req, policy.sessionTimeoutMinutes)
-    );
-    // "2FA erzwingen" (Systemeinstellungen > Sicherheit): betroffene Personen ohne eingerichtete
-    // 2FA werden beim Login darauf hingewiesen, der Zugang selbst wird dadurch nicht blockiert --
-    // entspricht dem Hinweistext der lokalen Version vom 07.10.2026 ("...werden beim Login
-    // aufgefordert, 2FA einzurichten, wenn sie betroffen sind").
-    const mfaSetupRequired = !user.totp_enabled && force2faAppliesToRole(policy, role);
-    return reply.send({ success: true, user: await decryptUser(app, deps, user), mfaSetupRequired });
+    await issueSession(app, req, reply, user, policy);
+    return reply.send({ success: true, user: await decryptUser(app, deps, user), mfaSetupRequired: false });
   });
 
   app.post(
@@ -346,17 +367,22 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       }
       await resetFailedLogins(app, user.id);
 
-      const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
-      reply.setCookie(
-        sessionCookieName(req),
-        encodeSession({ uid: user.id, username: user.username, role, iat: Date.now() }),
-        cookieOptions(req, policy.sessionTimeoutMinutes)
-      );
+      await issueSession(app, req, reply, user, policy);
       return reply.send({ success: true, user: await decryptUser(app, deps, user) });
     }
   );
 
   app.post('/api/v1/auth/logout', async (req, reply) => {
+    const raw = req.cookies[sessionCookieName(req)] || req.cookies[PROD_SESSION_COOKIE] || req.cookies[DEV_SESSION_COOKIE];
+    if (raw) {
+      const unsigned = req.unsignCookie(raw);
+      if (unsigned.valid && unsigned.value) {
+        const session = decodeSession(unsigned.value, 365 * 24 * 60);
+        if (session) {
+          await app.db.updateTable('sessions').set({ revoked_at: new Date().toISOString() }).where('id', '=', session.sid).execute();
+        }
+      }
+    }
     // __Host-ticket_session ist ein "__Host-"-Cookie: der Browser akzeptiert dafür NUR
     // Set-Cookie-Antworten mit dem Secure-Attribut, auch zum Löschen -- ohne "secure: true" hier
     // verwirft der Browser die Löschung still und die Sitzung bleibt bestehen (Logout wirkungslos

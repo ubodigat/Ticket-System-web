@@ -88,15 +88,22 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const unsigned = req.unsignCookie(raw);
     if (!unsigned.valid || !unsigned.value) { req.ticketSession = null; return; }
     try {
-      const parsed = JSON.parse(Buffer.from(unsigned.value, 'base64url').toString('utf8')) as { uid?: unknown; iat?: unknown };
-      if (typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number') {
+      const parsed = JSON.parse(Buffer.from(unsigned.value, 'base64url').toString('utf8')) as { sid?: unknown; uid?: unknown; iat?: unknown };
+      if (typeof parsed.sid !== 'string' || typeof parsed.uid !== 'string' || typeof parsed.iat !== 'number') {
         req.ticketSession = null;
         return;
       }
-      // sessionTimeoutMinutes === 0 bedeutet "kein Timeout" (Systemeinstellungen > Sicherheit),
-      // sonst gilt genau dasselbe Limit wie beim Ausstellen des Cookies in auth.ts.
       const policy = await loadSecurityPolicy(deps.db);
-      if (policy.sessionTimeoutMinutes > 0 && Date.now() - parsed.iat > policy.sessionTimeoutMinutes * 60 * 1000) {
+      if (Date.now() - parsed.iat > policy.sessionTimeoutMinutes * 60 * 1000) {
+        req.ticketSession = null;
+        return;
+      }
+      const dbSession = await deps.db.selectFrom('sessions')
+        .select(['revoked_at', 'expires_at'])
+        .where('id', '=', parsed.sid)
+        .where('user_id', '=', parsed.uid)
+        .executeTakeFirst();
+      if (!dbSession || dbSession.revoked_at || new Date(dbSession.expires_at).getTime() <= Date.now()) {
         req.ticketSession = null;
         return;
       }

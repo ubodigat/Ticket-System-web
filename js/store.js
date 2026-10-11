@@ -153,7 +153,7 @@ export const Store = {
                         password: u.password || Utils.secureToken(),
                         name: u.name || u.username,
                         email: u.email || '',
-                        role: u.role === 'admin' ? 'admin' : 'user',
+                        role: u.role === 'superadmin' ? 'superadmin' : (u.role === 'admin' ? 'admin' : 'user'),
                         department_group_id: u.department_group_id ?? null,
                         department: u.department || '',
                         supervisor_user_id: u.supervisorUserId ?? null,
@@ -498,10 +498,12 @@ export const Store = {
     saveTickets: async (tickets) => {
         const before = Store._ticketsCache || await Store.getTickets();
         const beforeById = new Map(before.map(t => [t.id, t]));
+        let ok = true;
         for (const t of tickets) {
             const prev = t.id ? beforeById.get(t.id) : null;
             if (!prev) {
-                await Store.createTicket(t);
+                const created = await Store.createTicket(t);
+                if (!created) ok = false;
                 continue;
             }
             const patch = {};
@@ -523,15 +525,17 @@ export const Store = {
             if (!!t.archived !== !!prev.archived) patch.archived = !!t.archived;
             if (!!t.archivedAuthorAck !== !!prev.archivedAuthorAck) patch.archived_author_ack = !!t.archivedAuthorAck;
             if (Object.keys(patch).length) {
-                await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}`, {
+                const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}`, {
                     method: 'PATCH',
                     credentials: 'same-origin',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify(patch)
-                });
+                }).catch(() => null);
+                if (!res || !res.ok) ok = false;
             }
         }
         Store._ticketsCache = null;
+        return ok;
     },
     // Kontoanfragen laufen über die echte /api/v2/account-requests-API. Die Entscheidung
     // (annehmen/ablehnen) wird dort vermerkt (status/reviewed_by_user_id) -- das tatsächliche
@@ -715,7 +719,16 @@ export const Store = {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(patch)
         }).catch(() => null);
-        return !!res && res.ok;
+        if (!res) {
+            Store.lastError = 'network';
+            return false;
+        }
+        if (!res.ok) {
+            Store.lastError = await res.text().catch(() => `HTTP ${res.status}`);
+            return false;
+        }
+        Store.lastError = null;
+        return true;
     },
     // SMTP: eigene, separat verschlüsselte Spalten (nicht Teil von config_json) -- das Passwort
     // wird nie vom Server zurückgegeben, siehe settings.ts.

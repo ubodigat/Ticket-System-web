@@ -1654,6 +1654,10 @@ export const AdminBoard = {
                     UI.toast('Passwort fehlt');
                     return;
                 }
+                if (pVal.length < 12) {
+                    UI.toast('Passwort muss mindestens 12 Zeichen lang sein.');
+                    return;
+                }
                 users.push({
                     id: Utils.uid(),
                     username: uVal,
@@ -2230,9 +2234,9 @@ export const AdminBoard = {
         }
 
         q('#sys-2fa-enforce').value = security.force2FA || 'none';
-        q('#sys-session-timeout').value = security.sessionTimeout ?? 0;
-        q('#sys-max-login-attempts').value = security.maxLoginAttempts ?? 0;
-        q('#sys-lockout-action').value = security.lockoutAction || 'lock';
+        q('#sys-session-timeout').value = security.sessionTimeout ?? 480;
+        q('#sys-max-login-attempts').value = security.maxLoginAttempts ?? 5;
+        q('#sys-lockout-action').value = security.lockoutAction || 'temp';
         q('#sys-lockout-minutes').value = security.lockoutMinutes || 15;
 
         q('#notif-account-approved').checked = !!notif.accountApproved;
@@ -2386,8 +2390,8 @@ export const AdminBoard = {
                     },
                     securityConfig: {
                         force2FA: q('#sys-2fa-enforce').value,
-                        sessionTimeout: Math.max(0, parseInt(q('#sys-session-timeout').value, 10) || 0),
-                        maxLoginAttempts: Math.max(0, parseInt(q('#sys-max-login-attempts').value, 10) || 0),
+                        sessionTimeout: Math.max(5, parseInt(q('#sys-session-timeout').value, 10) || 480),
+                        maxLoginAttempts: Math.max(1, parseInt(q('#sys-max-login-attempts').value, 10) || 5),
                         lockoutAction: q('#sys-lockout-action').value,
                         lockoutMinutes: Math.max(1, parseInt(q('#sys-lockout-minutes').value, 10) || 15)
                     },
@@ -2449,7 +2453,10 @@ export const AdminBoard = {
                     }
                 }
             });
-            if (!ok) return UI.toast('Systemeinstellungen speichern fehlgeschlagen.');
+            if (!ok) {
+                console.error('Systemeinstellungen speichern fehlgeschlagen:', Store.lastError);
+                return UI.toast('Systemeinstellungen speichern fehlgeschlagen. Details stehen in der Konsole.');
+            }
             if (q('.kanban-board')) await AdminBoard.render();
             if (q('#user-tickets')) await UserDash.renderList();
             modal.classList.remove('open');
@@ -2983,7 +2990,12 @@ export const AdminBoard = {
             }
         }
 
-        await Store.saveTickets(tickets);
+        const saved = await Store.saveTickets(tickets);
+        if (!saved) {
+            ticket.status = oldStatus;
+            UI.toast('Status konnte nicht gespeichert werden. Bitte Seite neu laden und erneut versuchen.');
+            return false;
+        }
         if (newStatus === 'Geschlossen' && ticket.isMajorIncident) {
             await AdminBoard.notifyLinkedIncidentTickets(ticket, ticket.desc);
         }

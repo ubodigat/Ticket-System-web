@@ -250,6 +250,14 @@ function decryptNote<T extends { id: string; content: Buffer }>(row: T, dek: Res
 }
 
 export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRouteDeps): void {
+  async function hasAdminPermission(session: { uid: string; role: string }, key: 'approvals' | 'reports'): Promise<boolean> {
+    if (session.role === 'superadmin') return true;
+    if (session.role !== 'admin') return false;
+    const row = await app.db.selectFrom('users').select('permissions_json').where('id', '=', session.uid).executeTakeFirst();
+    let permissions: Record<string, unknown> = {};
+    try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
+    return permissions[key] === true;
+  }
 
   // GET /api/v2/tickets - Alle Tickets (RBAC: Admins sehen alle, Users nur eigene)
   app.get('/api/v2/tickets', async (req, reply) => {
@@ -349,7 +357,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   // die nur dieser eine Report braucht.
   app.get('/api/v2/tickets/first-response-times', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'reports'))) return reply.code(403).send({ error: 'forbidden' });
       const { since } = req.query as { since?: string };
       let query = app.db.selectFrom('tickets')
         .select(eb => [
@@ -983,6 +992,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   app.post('/api/v2/tickets/:id/request-approval', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'approvals'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const parsed = requestApprovalSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });

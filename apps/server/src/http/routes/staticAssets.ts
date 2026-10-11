@@ -17,6 +17,7 @@ import { join, normalize } from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 
 const ASSETS: Record<string, { file: string; contentType: string; root: 'app' | 'vendor' }> = {
+  '/index.html': { file: 'index.html', contentType: 'text/html; charset=utf-8', root: 'app' },
   '/dashboard.html': { file: 'dashboard.html', contentType: 'text/html; charset=utf-8', root: 'app' },
   '/admin.html': { file: 'admin.html', contentType: 'text/html; charset=utf-8', root: 'app' },
   '/script.js': { file: 'script.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },

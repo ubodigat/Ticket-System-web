@@ -6,6 +6,7 @@ const port = Number(process.env.PORT || 3099);
 const token = process.env.UPDATE_TOKEN || '';
 const repoDir = process.env.REPO_DIR || '/workspace';
 const branch = process.env.UPDATE_BRANCH || 'main';
+const allowMainDeploy = process.env.UPDATE_ALLOW_MAIN_DEPLOY === 'true';
 const composeFile = `${repoDir}/ops/docker/docker-compose.yml`;
 const envFile = `${repoDir}/ops/docker/.env`;
 
@@ -138,6 +139,7 @@ createServer(async (req, res) => {
     if (!auth(req, res)) return;
     if (req.method === 'GET' && req.url === '/status') return json(res, 200, await collectStatus());
     if (req.method === 'POST' && req.url === '/run') {
+      if (!allowMainDeploy) return json(res, 403, { error: 'update_runner_disabled', message: 'Automatische Deployments von main sind deaktiviert. Aktiviere UPDATE_ALLOW_MAIN_DEPLOY=true nur bewusst und zeitlich begrenzt.' });
       if (job?.running) return json(res, 409, { error: 'update_already_running', job });
       runUpdate();
       return json(res, 202, { ok: true, job });

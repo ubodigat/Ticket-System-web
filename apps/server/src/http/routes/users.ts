@@ -44,7 +44,7 @@ const createUserSchema = z.object({
   password: z.string().min(12).max(512), // Mindestlänge 12 Zeichen erzwingen
   name: z.string().trim().min(1).max(255),
   email: z.string().email().max(255),
-  role: z.enum(['user', 'admin']),
+  role: z.enum(['user', 'admin', 'superadmin']),
   department_group_id: z.string().nullable().optional(),
   department: z.string().trim().max(255).nullable().optional(),
   supervisor_user_id: z.string().nullable().optional(),
@@ -170,6 +170,15 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     };
   }
 
+  async function hasAdminPermission(session: { uid: string; role: string }, key: 'canManageRequests' | 'canManageUsers' | 'canViewLogs' | 'canManage2FA'): Promise<boolean> {
+    if (session.role === 'superadmin') return true;
+    if (session.role !== 'admin') return false;
+    const row = await app.db.selectFrom('users').select('permissions_json').where('id', '=', session.uid).executeTakeFirst();
+    let permissions: Record<string, unknown> = {};
+    try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
+    return permissions[key] === true;
+  }
+
   function buildAbsence(row: { absence_from_at?: Date | string | null; absence_until_at?: Date | string | null; absence_visible?: boolean | null; absence_substitute_username?: string | null }) {
     // Keine aktive Abwesenheitszeile für diese Person gefunden -- alle vier Unterabfragen
     // liefern dann NULL (absence_visible ist eine Boolean-Spalte, NULL heisst hier "keine Zeile",
@@ -193,7 +202,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   // GET /api/v2/users - Alle Benutzer (nur Admin)
   app.get('/api/v2/users', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers')) && !(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
         .select(eb => [
           'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json',
@@ -271,8 +281,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   app.post('/api/v2/users', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = createUserSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+      if (parsed.data.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
 
       // Doppelten Benutzernamen verhindern
       const existing = await app.db.selectFrom('users').select('id').where('username', '=', parsed.data.username).executeTakeFirst();
@@ -339,9 +351,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const { id } = req.params as { id: string };
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      const canManageUsers = isAdmin ? await hasAdminPermission(session, 'canManageUsers') : false;
 
       // User kann nur sich selbst ändern (nur Name/Email), Admin kann alles
-      if (!isAdmin && session.uid !== id) return reply.code(403).send({ error: 'forbidden' });
+      if (!canManageUsers && session.uid !== id) return reply.code(403).send({ error: 'forbidden' });
 
       const parsed = updateUserSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
@@ -376,7 +389,9 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (parsed.data.department !== undefined) updates.department = parsed.data.department;
 
       // Nur Admin darf Rolle, Gruppe, Vorgesetzte Person, Archivierung und Sperrung ändern
-      if (isAdmin) {
+      if (canManageUsers) {
+        const target = await app.db.selectFrom('users').select('role').where('id', '=', id).executeTakeFirst();
+        if (target?.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
         if (parsed.data.role !== undefined) updates.role = parsed.data.role;
         if (parsed.data.department_group_id !== undefined) updates.department_group_id = parsed.data.department_group_id;
         if (parsed.data.supervisor_user_id !== undefined) updates.supervisor_user_id = parsed.data.supervisor_user_id;
@@ -392,7 +407,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
       await app.db.updateTable('users').set(updates).where('id', '=', id).execute();
 
-      if (isAdmin && (parsed.data.role !== undefined || parsed.data.account_archived !== undefined || parsed.data.locked_permanent !== undefined)) {
+      if (canManageUsers && (parsed.data.role !== undefined || parsed.data.account_archived !== undefined || parsed.data.locked_permanent !== undefined)) {
         await app.db.insertInto('global_audit_log').values({
           id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
           action: 'user.updated', target_type: 'user', target_id: id,
@@ -412,6 +427,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   app.delete('/api/v2/users/:id', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       if (id === session.uid) return reply.code(400).send({ error: 'cannot_delete_self' });
 
@@ -448,7 +464,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   app.post('/api/v2/users/:id/mfa-reset', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
+      const target = await app.db.selectFrom('users').select('role').where('id', '=', id).executeTakeFirst();
+      if (target?.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
       await app.db.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null }).where('id', '=', id).execute();
       await app.db.insertInto('global_audit_log').values({
         id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
@@ -466,7 +485,12 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const { id } = req.params as { id: string };
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
-      if (!isAdmin && session.uid !== id) return reply.code(403).send({ error: 'forbidden' });
+      const canManageUsers = isAdmin ? await hasAdminPermission(session, 'canManageUsers') : false;
+      if (!canManageUsers && session.uid !== id) return reply.code(403).send({ error: 'forbidden' });
+      if (canManageUsers && session.uid !== id) {
+        const target = await app.db.selectFrom('users').select('role').where('id', '=', id).executeTakeFirst();
+        if (target?.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
+      }
 
       const parsed = changePasswordSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
@@ -510,6 +534,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   app.post('/api/v2/groups', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = createGroupSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
       const id = randomUUID();
@@ -528,6 +553,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   app.patch('/api/v2/groups/:id', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const parsed = updateGroupSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
@@ -551,6 +577,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   app.delete('/api/v2/groups/:id', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       await app.db.deleteFrom('groups').where('id', '=', id).execute();
       await app.db.insertInto('global_audit_log').values({
@@ -701,7 +728,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   // GET /api/v2/users/export.csv - nur Admin
   app.get('/api/v2/users/export.csv', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
         .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'totp_enabled', 'created_at'])
         .orderBy('username', 'asc')
@@ -743,6 +771,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   app.post('/api/v2/users/import.csv', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = z.object({ csv: z.string().min(1).max(5 * 1024 * 1024) }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 

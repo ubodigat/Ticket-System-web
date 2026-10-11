@@ -27,9 +27,19 @@ const createRuleSchema = z.object({
 });
 
 export function registerRecurringRoutes(app: FastifyInstance): void {
+  async function hasRecurringPermission(session: { uid: string; role: string }): Promise<boolean> {
+    if (session.role === 'superadmin') return true;
+    if (session.role !== 'admin') return false;
+    const row = await app.db.selectFrom('users').select('permissions_json').where('id', '=', session.uid).executeTakeFirst();
+    let permissions: Record<string, unknown> = {};
+    try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
+    return permissions.recurring === true;
+  }
+
   app.get('/api/v2/recurring-rules', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasRecurringPermission(session))) return reply.code(403).send({ error: 'forbidden' });
       const rules = await app.db.selectFrom('recurring_ticket_rules').selectAll().orderBy('next_run_at', 'asc').execute();
       return reply.send({ rules });
     } catch (e: any) {
@@ -40,6 +50,7 @@ export function registerRecurringRoutes(app: FastifyInstance): void {
   app.post('/api/v2/recurring-rules', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasRecurringPermission(session))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = createRuleSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
       const id = randomUUID();
@@ -63,7 +74,8 @@ export function registerRecurringRoutes(app: FastifyInstance): void {
 
   app.patch('/api/v2/recurring-rules/:id', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasRecurringPermission(session))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const parsed = z.object({ active: z.boolean() }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
@@ -76,7 +88,8 @@ export function registerRecurringRoutes(app: FastifyInstance): void {
 
   app.delete('/api/v2/recurring-rules/:id', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasRecurringPermission(session))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       await app.db.deleteFrom('recurring_ticket_rules').where('id', '=', id).execute();
       return reply.send({ success: true });
@@ -89,7 +102,8 @@ export function registerRecurringRoutes(app: FastifyInstance): void {
   // Erzeugt noch KEINE Tickets -- siehe Datei-Kommentar oben.
   app.get('/api/v2/recurring-rules/due', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasRecurringPermission(session))) return reply.code(403).send({ error: 'forbidden' });
       const due = await app.db.selectFrom('recurring_ticket_rules')
         .selectAll()
         .where('active', '=', true)

@@ -99,6 +99,14 @@ export async function createNotification(
 }
 
 export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDeps): void {
+  async function hasAdminPermission(session: { uid: string; role: string }, key: 'canManageRequests' | 'canViewLogs'): Promise<boolean> {
+    if (session.role === 'superadmin') return true;
+    if (session.role !== 'admin') return false;
+    const row = await app.db.selectFrom('users').select('permissions_json').where('id', '=', session.uid).executeTakeFirst();
+    let permissions: Record<string, unknown> = {};
+    try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
+    return permissions[key] === true;
+  }
 
   // --- Benachrichtigungen ---
 
@@ -256,7 +264,8 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
   // GET /api/v2/account-requests - Alle Anfragen (nur Admin)
   app.get('/api/v2/account-requests', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageRequests'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('account_requests')
         .selectAll().orderBy('created_at', 'desc').execute();
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.name');
@@ -286,6 +295,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
   app.patch('/api/v2/account-requests/:id', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageRequests'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const parsed = z.object({ status: z.enum(['approved', 'rejected']) }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
@@ -424,7 +434,8 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
   // GET /api/v2/audit-log (nur Admin)
   app.get('/api/v2/audit-log', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canViewLogs'))) return reply.code(403).send({ error: 'forbidden' });
       const log = await app.db.selectFrom('global_audit_log')
         .selectAll().orderBy('created_at', 'desc').limit(500).execute();
       return reply.send({ log });

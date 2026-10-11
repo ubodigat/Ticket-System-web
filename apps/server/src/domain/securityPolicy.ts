@@ -28,7 +28,7 @@ const SAFE_DEFAULTS: SecurityPolicy = {
   force2FA: 'none',
   sessionTimeoutMinutes: 480,
   maxLoginAttempts: 5,
-  lockoutAction: 'lock',
+  lockoutAction: 'temp',
   lockoutMinutes: 15
 };
 
@@ -38,8 +38,8 @@ export async function loadSecurityPolicy(db: Kysely<Database>): Promise<Security
   const sec = config.securityConfig ?? {};
   return {
     force2FA: ['none', 'all', 'admin', 'user'].includes(sec.force2FA) ? sec.force2FA : SAFE_DEFAULTS.force2FA,
-    sessionTimeoutMinutes: typeof sec.sessionTimeout === 'number' ? sec.sessionTimeout : SAFE_DEFAULTS.sessionTimeoutMinutes,
-    maxLoginAttempts: typeof sec.maxLoginAttempts === 'number' ? sec.maxLoginAttempts : SAFE_DEFAULTS.maxLoginAttempts,
+    sessionTimeoutMinutes: typeof sec.sessionTimeout === 'number' && sec.sessionTimeout > 0 ? sec.sessionTimeout : SAFE_DEFAULTS.sessionTimeoutMinutes,
+    maxLoginAttempts: typeof sec.maxLoginAttempts === 'number' && sec.maxLoginAttempts > 0 ? sec.maxLoginAttempts : SAFE_DEFAULTS.maxLoginAttempts,
     lockoutAction: ['lock', 'temp', 'none'].includes(sec.lockoutAction) ? sec.lockoutAction : SAFE_DEFAULTS.lockoutAction,
     lockoutMinutes: typeof sec.lockoutMinutes === 'number' && sec.lockoutMinutes > 0 ? sec.lockoutMinutes : SAFE_DEFAULTS.lockoutMinutes
   };

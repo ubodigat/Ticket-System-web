@@ -62,8 +62,6 @@ services:
       COOKIE_SECRET: ${COOKIE_SECRET}
       INSTALLATION_ID: ${INSTALLATION_ID}
       TRUSTED_PROXY_HOPS: "1"
-      UPDATE_SERVICE_URL: http://updater:3099
-      UPDATE_TOKEN: ${UPDATE_TOKEN}
     volumes:
       - ../secrets/app.kek:/run/secrets/app.kek:ro
       - ../tls/mariadb/ca.pem:/run/secrets/mariadb-ca.pem:ro
@@ -79,6 +77,7 @@ services:
       context: ../..
       dockerfile: ops/docker/Dockerfile.updater
     restart: unless-stopped
+    profiles: ["dangerous-updater"]
     # internal: damit "app" den Updater unter dem Namen "updater" erreicht.
     # egress: damit "git fetch origin" GitHub erreichen kann (siehe Netz-Definition oben).
     networks: [internal, egress]
@@ -87,6 +86,7 @@ services:
       REPO_DIR: /workspace
       UPDATE_BRANCH: main
       UPDATE_TOKEN: ${UPDATE_TOKEN}
+      UPDATE_ALLOW_MAIN_DEPLOY: "false"
     volumes:
       - ../..:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
