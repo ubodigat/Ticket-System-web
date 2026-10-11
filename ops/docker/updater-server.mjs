@@ -146,6 +146,7 @@ createServer(async (req, res) => {
     }
     json(res, 404, { error: 'not_found' });
   } catch (error) {
-    json(res, 500, { error: 'update_service_error', message: String(error?.message || error), job });
+    console.error('update-service request failed', error);
+    json(res, 500, { error: 'update_service_error', message: 'internal server error', job });
   }
 }).listen(port, '0.0.0.0');
