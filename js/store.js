@@ -789,8 +789,9 @@ export const Store = {
     },
     runUpdate: async () => {
         const res = await fetch('/api/v2/update/run', { method: 'POST', credentials: 'same-origin' }).catch(() => null);
-        if (!res) return null;
-        return res.json().catch(() => null);
+        if (!res) return { httpStatus: 0 };
+        const body = await res.json().catch(() => ({}));
+        return { ...body, httpStatus: res.status };
     },
 
     // Textbausteine: echte /api/v2/text-blocks-API statt settings.textBlocks-Blob.

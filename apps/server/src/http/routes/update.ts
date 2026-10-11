@@ -22,12 +22,12 @@ async function callUpdater(env: Env, path: '/status' | '/run', method: 'GET' | '
     const res = await fetch(`${env.UPDATE_SERVICE_URL}${path}`, {
       method,
       headers: { authorization: `Bearer ${env.UPDATE_TOKEN}` },
-      signal: AbortSignal.timeout(20000)
+      signal: AbortSignal.timeout(3000)
     });
     const payload = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, payload };
   } catch {
-    return { ok: false, status: 504, payload: { error: 'update_service_unreachable' } };
+    return { ok: false, status: 503, payload: { error: 'update_service_disabled' } };
   }
 }
 

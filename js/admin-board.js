@@ -1787,8 +1787,17 @@ export const AdminBoard = {
             if (window.lucide) lucide.createIcons();
             return;
         }
-        if (status.httpStatus === 503) {
-            area.innerHTML = `<div class="callout callout-danger">Updater ist nicht konfiguriert (UPDATE_SERVICE_URL/UPDATE_TOKEN fehlen). Bitte Docker-Stack mit dem aktuellen Compose neu starten.</div>`;
+        if (status.httpStatus === 503 || status.error === 'update_service_disabled' || status.error === 'update_service_not_configured') {
+            area.innerHTML = `<div class="callout callout-info">Online-Updates sind aus SicherheitsgrÃ¼nden in der Standardinstallation deaktiviert. Installiere Updates per Server-Command oder aktiviere den Updater bewusst nur temporÃ¤r.</div>`;
+            const runBtn = q('#sys-update-run');
+            if (runBtn) runBtn.disabled = true;
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+        if (status.error === 'update_runner_disabled') {
+            area.innerHTML = `<div class="callout callout-info">Der Updater-Dienst ist erreichbar, darf aber keine Deployments starten. UPDATE_ALLOW_MAIN_DEPLOY ist deaktiviert.</div>`;
+            const runBtn = q('#sys-update-run');
+            if (runBtn) runBtn.disabled = true;
             if (window.lucide) lucide.createIcons();
             return;
         }
@@ -2164,8 +2173,13 @@ export const AdminBoard = {
             q('#sys-update-check').onclick = () => AdminBoard.renderUpdateStatus();
             q('#sys-update-run').onclick = async () => {
                 q('#sys-update-run').disabled = true;
+                const result = await Store.runUpdate();
+                if (!result || ![200, 202].includes(result.httpStatus)) {
+                    UI.toast('Online-Update ist deaktiviert oder nicht erreichbar.');
+                    await AdminBoard.renderUpdateStatus();
+                    return;
+                }
                 UI.toast('Update wurde gestartet. Die Anwendung wird gleich neu gebaut und kurz neu gestartet.');
-                await Store.runUpdate();
                 await AdminBoard.renderUpdateStatus();
             };
         }

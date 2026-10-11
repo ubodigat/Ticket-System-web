@@ -341,7 +341,28 @@ open_firewall_ports
 
 log "Building and starting Docker stack"
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" build --no-cache app
-run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate --remove-orphans mariadb
+
+log "Waiting for database healthcheck"
+ATTEMPTS=0
+MAX_ATTEMPTS=40
+until run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" ps mariadb --format json \
+  | grep -q '"Health":"healthy"'; do
+  ATTEMPTS=$((ATTEMPTS + 1))
+  if [[ $ATTEMPTS -ge $MAX_ATTEMPTS ]]; then
+    echo "The database did not become healthy after ${MAX_ATTEMPTS} attempts." >&2
+    echo "Check logs with:" >&2
+    echo "docker compose -f '$COMPOSE_DIR/docker-compose.yml' --env-file '$ENV_FILE' logs mariadb" >&2
+    exit 1
+  fi
+  sleep 3
+done
+
+log "Running database migrations"
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps app node dist/db/migrate.js
+
+log "Starting application stack"
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate --remove-orphans app caddy
 
 log "Waiting for app healthcheck"
 ATTEMPTS=0
@@ -357,9 +378,6 @@ until run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$
   fi
   sleep 3
 done
-
-log "Running database migrations"
-run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T app node dist/db/migrate.js
 
 # shellcheck disable=SC1090
 source "$ENV_FILE"
