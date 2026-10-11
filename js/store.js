@@ -62,14 +62,27 @@ export const Store = {
     },
     // Eigenes Profil inkl. Rollen-/Sperr-/2FA-Status -- /api/v2/users/me ist für JEDE angemeldete
     // Person erreichbar (im Gegensatz zu /api/v2/users, das nur Admins die ganze Liste zeigt).
+    // Kurzlebiger Zwischenspeicher (3s): AdminBoard.render() ruft Store.currentUser() bei JEDER
+    // Ticket-Aktion und zusätzlich per 60-Sekunden-Timer auf -- ohne Zwischenspeicher bedeutete
+    // das einen frischen Netzwerk-Request pro Render-Durchlauf, rein für die Rollenanzeige. Ein
+    // einzelner fehlgeschlagener Abruf (Netzwerk-Hänger, kurzzeitige Serverlast) kostete dadurch
+    // unnötig oft die komplette Render-Aktualisierung. Rechteprüfungen selbst laufen weiterhin
+    // serverseitig bei jeder einzelnen API-Anfrage neu (siehe app.ts onRequest-Hook) -- dieser
+    // Zwischenspeicher betrifft nur die Anzeige, nie eine Sicherheitsentscheidung.
+    _meCache: null,
+    _meCacheAt: 0,
     fetchSessionUser: async () => {
+        if (Store._meCache && Date.now() - Store._meCacheAt < 3000) return Store._meCache;
         try {
             const res = await fetch('/api/v2/users/me', { credentials: 'same-origin' });
-            if (!res.ok) return null;
+            if (!res.ok) { Store._meCache = null; return null; }
             const payload = await res.json();
-            return payload.user ? Store.mapApiUserToLegacy(payload.user) : null;
+            const user = payload.user ? Store.mapApiUserToLegacy(payload.user) : null;
+            Store._meCache = user;
+            Store._meCacheAt = Date.now();
+            return user;
         } catch {
-            return null;
+            return Store._meCache;
         }
     },
     // Benutzer laufen NICHT mehr über die generische readPersistent/writePersistent-Brücke
@@ -91,16 +104,15 @@ export const Store = {
         lockedUntil: u.locked_until ? new Date(u.locked_until).getTime() : null,
         failedLogins: 0,
         twoFactorEnabled: !!u.totp_enabled,
-        // Granulare Einzelrechte (canManageUsers, canManage2FA, ...) gibt es im neuen Backend
-        // nicht mehr als Client-Flag -- die Server-Rechteprüfung kennt nur user/admin/superadmin
-        // (siehe docs/AUTHORIZATION_MATRIX.md). Admin/Superadmin bekommen hier alle Flags auf
-        // true, damit die Oberfläche nichts ausblendet, das der Server ohnehin erlaubt; das ist
-        // nur eine UI-Vereinfachung, keine Sicherheitsentscheidung -- die trifft der Server bei
-        // jedem einzelnen API-Aufruf neu.
-        canManageUsers: u.role === 'admin' || u.role === 'superadmin',
-        canManage2FA: u.role === 'admin' || u.role === 'superadmin',
-        canManageRequests: u.role === 'admin' || u.role === 'superadmin',
-        canViewLogs: u.role === 'admin' || u.role === 'superadmin',
+        // Granulare Zusatzrechte fuer normale Admin-Konten -- echte, vom Superadmin vergebene
+        // Werte (users.ts permissions_json), nicht mehr pauschal auf true gesetzt. Superadmin
+        // bekommt ohnehin ueberall zusaetzlich "isSuper ||" davor (siehe AdminBoard.init/can),
+        // braucht diese Flags hier also nicht separat.
+        canManageUsers: !!u.canManageUsers,
+        canManage2FA: !!u.canManage2FA,
+        canManageRequests: !!u.canManageRequests,
+        canViewLogs: !!u.canViewLogs,
+        permissions: u.permissions || {},
         // Echte, serverseitig berechnete Abwesenheit (siehe users.ts buildAbsence) --
         // war hier bisher hart auf null gesetzt, wodurch Abwesenheits-Badges/Vertretungslogik
         // nie griffen, obwohl die Daten in der Datenbank korrekt gespeichert waren.
@@ -120,14 +132,19 @@ export const Store = {
     // Bildet das alte "ganze Liste laden, verändern, komplett zurückschreiben"-Muster auf die
     // v2-API ab: vergleicht gegen den zuletzt bekannten Stand und schickt nur echte Änderungen
     // als gezielte POST/PATCH-Aufrufe -- keine ungeprüfte Blob-Übernahme mehr.
+    // Gibt true zurück nur wenn ALLE Teiloperationen erfolgreich waren -- vorher wurde der
+    // Rückgabewert jeder einzelnen Anfrage ignoriert, sodass z.B. ein vom Server abgelehntes
+    // neues Konto (ungültige/zu kurze Passwort, doppelter Benutzername) der Oberfläche trotzdem
+    // "Gespeichert" meldete, obwohl nichts angelegt wurde.
     saveUsers: async (users) => {
         const before = Store._usersCache || await Store.getUsers();
         const beforeById = new Map(before.map(u => [u.id, u]));
+        let ok = true;
         for (const u of users) {
             const prev = u.id ? beforeById.get(u.id) : null;
             if (!prev) {
                 // Neuer Benutzer: das alte UI legt dafür ein Objekt mit Klartext-Passwort an.
-                await fetch('/api/v2/users', {
+                const res = await fetch('/api/v2/users', {
                     method: 'POST',
                     credentials: 'same-origin',
                     headers: { 'content-type': 'application/json' },
@@ -138,10 +155,12 @@ export const Store = {
                         email: u.email || '',
                         role: u.role === 'admin' ? 'admin' : 'user',
                         department_group_id: u.department_group_id ?? null,
-        department: u.department || '',
-                        supervisor_user_id: u.supervisorUserId ?? null
+                        department: u.department || '',
+                        supervisor_user_id: u.supervisorUserId ?? null,
+                        permissions: u.permissions ?? undefined
                     })
-                });
+                }).catch(() => null);
+                if (!res || !res.ok) ok = false;
                 continue;
             }
             const patch = {};
@@ -153,26 +172,48 @@ export const Store = {
             if (u.supervisorUserId !== prev.supervisorUserId) patch.supervisor_user_id = u.supervisorUserId ?? null;
             if (!!u.accountArchived !== prev.accountArchived) patch.account_archived = !!u.accountArchived;
             if (!!u.accountLocked !== prev.accountLocked) patch.locked_permanent = !!u.accountLocked;
+            // Die vier "Verwaltung"-Schalter (canManageRequests/-Users/canViewLogs/canManage2FA)
+            // kommen serverseitig im selben permissions-Objekt an wie die "Zusatzfunktionen"
+            // (textBlocks/reports/approvals/recurring/kb) -- hier zu einem Patch zusammengeführt,
+            // da das Backend (users.ts) sie nicht getrennt annimmt.
+            const combinedPerms = {
+                ...(u.permissions || {}),
+                canManageRequests: !!u.canManageRequests,
+                canManageUsers: !!u.canManageUsers,
+                canViewLogs: !!u.canViewLogs,
+                canManage2FA: !!u.canManage2FA
+            };
+            const prevCombinedPerms = {
+                ...(prev.permissions || {}),
+                canManageRequests: !!prev.canManageRequests,
+                canManageUsers: !!prev.canManageUsers,
+                canViewLogs: !!prev.canViewLogs,
+                canManage2FA: !!prev.canManage2FA
+            };
+            if (JSON.stringify(combinedPerms) !== JSON.stringify(prevCombinedPerms)) patch.permissions = combinedPerms;
             if (Object.keys(patch).length) {
-                await fetch(`/api/v2/users/${encodeURIComponent(u.id)}`, {
+                const res = await fetch(`/api/v2/users/${encodeURIComponent(u.id)}`, {
                     method: 'PATCH',
                     credentials: 'same-origin',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify(patch)
-                });
+                }).catch(() => null);
+                if (!res || !res.ok) ok = false;
             }
             if (u.password && u.password !== prev.password) {
-                await fetch(`/api/v2/users/${encodeURIComponent(u.id)}/change-password`, {
+                const res = await fetch(`/api/v2/users/${encodeURIComponent(u.id)}/change-password`, {
                     method: 'POST',
                     credentials: 'same-origin',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({ new_password: u.password })
-                });
+                }).catch(() => null);
+                if (!res || !res.ok) ok = false;
             }
         }
         Store._usersCache = null;
         const after = await Store.getUsers();
         await LogDiff.users(before, after);
+        return ok;
     },
     // Abwesenheit & Vertretung: echte Server-Endpunkte statt der frueheren client-seitigen
     // Mutation von user.absence + Store.saveUsers (das absence-Feld dort nie kannte und daher

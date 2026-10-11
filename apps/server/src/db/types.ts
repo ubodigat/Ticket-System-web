@@ -57,6 +57,7 @@ export interface UsersTable {
   role: 'user' | 'admin' | 'superadmin';
   department_group_id: string | null;
   department: Nullable<string>;
+  permissions_json: Nullable<string>;
   supervisor_user_id: Nullable<string>;
   account_archived: ColumnType<boolean, boolean, boolean>;
   locked_until: NullableTimestamp;

@@ -39,6 +39,7 @@ export const Auth = {
         }
         if (res.ok && payload.user) {
             Store._usersCache = null;
+            Store._meCache = null;
             // "2FA erzwingen" (Systemeinstellungen > Sicherheit) betrifft diese Person, hat aber
             // noch keine 2FA eingerichtet -- Login wird dadurch nicht blockiert, nur markiert.
             Auth.mfaSetupRequired = !!payload.mfaSetupRequired;
@@ -64,6 +65,7 @@ export const Auth = {
         if (res.ok && payload.user) {
             Auth.pendingMfaToken = null;
             Store._usersCache = null;
+            Store._meCache = null;
             return payload.user;
         }
         Auth.lastError = 'invalidCode';
@@ -76,6 +78,7 @@ export const Auth = {
             // Ignorieren: zur Login-Seite geht es trotzdem.
         }
         Store._usersCache = null;
+        Store._meCache = null;
         window.location.href = '/login';
     },
     checkGuard: async () => {

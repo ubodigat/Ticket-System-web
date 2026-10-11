@@ -162,7 +162,9 @@ export const Settings = {
             if (stars) stars.style.display = 'none';
         }
     },
-    absencePeriodMarkup: (absence = {}, prefix = 'abs') => `
+    // Default-Parameter greift nur bei "undefined", nicht bei explizitem "null" -- u.absence ist
+    // bei fehlender Abwesenheit immer null (siehe mapApiUserToLegacy), deshalb zusätzlich "|| {}".
+    absencePeriodMarkup: (absence, prefix = 'abs') => { absence = absence || {}; return `
         <div class="form-grid">
             <div class="field">
                 <label for="${prefix}-from">Von (TT.MM.JJJJ, leer = sofort)</label>
@@ -172,7 +174,7 @@ export const Settings = {
                 <label for="${prefix}-until">Bis (TT.MM.JJJJ, leer = offen)</label>
                 ${UI.dateFieldMarkup(`${prefix}-until`, absence.untilMs ? Utils.fmtDateOnly(new Date(absence.untilMs)) : '', `${prefix}-until-dtp`)}
             </div>
-        </div>`,
+        </div>`; },
 
     bindAbsencePeriod: (prefix = 'abs', absence = {}) => {
         UI.bindDateField(`${prefix}-from`, { initialMs: absence.fromMs || null });

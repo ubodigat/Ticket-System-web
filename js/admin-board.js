@@ -634,16 +634,19 @@ export const AdminBoard = {
         const user = await Store.currentUser();
         // currentUser() liefert null sowohl bei 401 (Sitzung abgelaufen, das behandelt bereits
         // Auth.checkGuard() beim Laden der Seite) als auch bei einem vorübergehenden
-        // Serverfehler (z.B. 502 während eines Updates/Neustarts) -- ohne diese Prüfung riss
-        // das hier mit "Cannot read properties of null" ab und der 60-Sekunden-Refresh-Timer
-        // (siehe setInterval weiter oben) wiederholte den Absturz endlos. Einfach überspringen:
-        // der nächste Intervall-Durchlauf versucht es erneut, ohne die Seite zu verlassen.
-        if (!user) return;
+        // Serverfehler (z.B. 502 während eines Updates/Neustarts) -- ein harter Abbruch hier
+        // ("if (!user) return;") verhinderte zwar den alten Absturz, ließ das Board aber bei
+        // JEDEM einzelnen fehlgeschlagenen /users/me-Abruf (z.B. kurzzeitig unter Last, da
+        // render() bei jeder Ticket-Aktion erneut aufgerufen wird) komplett unberührt -- eine
+        // gerade erfolgreich per Drag&Drop geänderte Spalte oder ein frisch angelegtes Ticket
+        // blieb dadurch unsichtbar, obwohl die Änderung auf dem Server längst da war. Jetzt wird
+        // nur noch der abteilungsbezogene Filter übersprungen (sicherer Fallback: alles zeigen),
+        // das eigentliche Board wird unabhängig davon immer neu aufgebaut.
         const rawTickets = await Store.getTickets();
         let tickets = rawTickets.filter(t => !t.archived);
 
         // Filter by Department (if not Superadmin)
-        if (user.role === 'admin') tickets = tickets.filter(ticket => AdminBoard.canAccessTicket(user, ticket));
+        if (user?.role === 'admin') tickets = tickets.filter(ticket => AdminBoard.canAccessTicket(user, ticket));
         const slaSettings = await Store.getSettings();
         await AdminBoard.refreshOverdueIndicator(tickets, user, slaSettings);
         const query = q('#admin-ticket-search')?.value || '';
@@ -1534,6 +1537,28 @@ export const AdminBoard = {
                             <label>Vorgesetzte Person</label>
                             <div id="ue-supervisor"></div>
                         </div>
+                        <div class="field field-wide" id="ue-man-box" style="display:none">
+                            <label>Verwaltung</label>
+                            <div class="perm-grid">
+                                <label class="check-row"><input type="checkbox" id="ue-can-manage-req"><span>Kontoanfragen verwalten</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-manage-users"><span>Benutzerverwaltung (nur User)</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-view-logs"><span>Systemlogs anzeigen</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-manage-2fa"><span>2FA von Benutzern zurücksetzen</span></label>
+                            </div>
+                            <label>Zusatzfunktionen</label>
+                            <div class="perm-grid">
+                                <label class="check-row"><input type="checkbox" data-perm="textBlocks"><span>Textbausteine verwalten</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="reports"><span>Auswertung ansehen</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="approvals"><span>Genehmigungen entscheiden</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="recurring"><span>Wiederkehrende Tickets verwalten</span></label>
+                            </div>
+                            <label for="ue-kb">Wissensdatenbank</label>
+                            <select id="ue-kb">
+                                <option value="none">Kein Zugriff</option>
+                                <option value="read">Nur lesen</option>
+                                <option value="edit">Lesen und bearbeiten</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="modal-footer action-footer">
                         <button class="btn-secondary close-m footer-cancel">Abbrechen</button>
@@ -1565,6 +1590,18 @@ export const AdminBoard = {
             q('#ue-role-box').style.display = 'none'; // Admins cannot change roles
         }
 
+        // Zusatzrechte: nur Superadmin darf sie vergeben, nur bei Rolle "admin" sinnvoll.
+        const manBox = q('#ue-man-box');
+        const updateManBoxVisibility = () => { if (manBox) manBox.style.display = (isSuper && q('#ue-role').value === 'admin') ? '' : 'none'; };
+        q('#ue-can-manage-req').checked = user ? !!user.canManageRequests : false;
+        q('#ue-can-manage-users').checked = user ? !!user.canManageUsers : false;
+        q('#ue-can-view-logs').checked = user ? !!user.canViewLogs : false;
+        q('#ue-can-manage-2fa').checked = user ? !!user.canManage2FA : false;
+        editModal.querySelectorAll('#ue-man-box [data-perm]').forEach(box => { box.checked = !!user?.permissions?.[box.dataset.perm]; });
+        q('#ue-kb').value = user?.permissions?.kb || 'none';
+        roleSel.onchange = updateManBoxVisibility;
+        updateManBoxVisibility();
+
         // Gruppe: höchstens eine pro Person (department_group_id im Backend)
         const groupList = q('#ue-groups-list');
         let groupPicker = null;
@@ -1592,6 +1629,14 @@ export const AdminBoard = {
             const rVal = q('#ue-role').value;
             const groupVal = groupPicker?.getValue() || null;
             const supervisorVal = supervisorPicker?.getValue() || null;
+            const permissionsVal = rVal === 'admin' ? {
+                ...Object.fromEntries([...editModal.querySelectorAll('#ue-man-box [data-perm]')].map(b => [b.dataset.perm, b.checked])),
+                kb: q('#ue-kb').value
+            } : {};
+            const canManageReqVal = rVal === 'admin' ? q('#ue-can-manage-req').checked : false;
+            const canManageUsersVal = rVal === 'admin' ? q('#ue-can-manage-users').checked : false;
+            const canViewLogsVal = rVal === 'admin' ? q('#ue-can-view-logs').checked : false;
+            const canManage2FAVal = rVal === 'admin' ? q('#ue-can-manage-2fa').checked : false;
 
             if (!uVal) {
                 UI.toast('Benutzername fehlt');
@@ -1617,7 +1662,8 @@ export const AdminBoard = {
                     password: pVal,
                     role: rVal,
                     department_group_id: groupVal,
-                    supervisorUserId: supervisorVal
+                    supervisorUserId: supervisorVal,
+                    permissions: isSuper ? { ...permissionsVal, canManageRequests: canManageReqVal, canManageUsers: canManageUsersVal, canViewLogs: canViewLogsVal, canManage2FA: canManage2FAVal } : undefined
                 });
             } else {
                 const target = users.find(x => x.id === user.id);
@@ -1625,12 +1671,23 @@ export const AdminBoard = {
                     target.name = nVal;
                     target.email = eVal;
                     if (pVal) target.password = pVal;
-                    if (isSuper) target.role = rVal;
+                    if (isSuper) {
+                        target.role = rVal;
+                        target.permissions = permissionsVal;
+                        target.canManageRequests = canManageReqVal;
+                        target.canManageUsers = canManageUsersVal;
+                        target.canViewLogs = canViewLogsVal;
+                        target.canManage2FA = canManage2FAVal;
+                    }
                     target.department_group_id = groupVal;
                     target.supervisorUserId = supervisorVal;
                 }
             }
-            await Store.saveUsers(users);
+            const ok = await Store.saveUsers(users);
+            if (!ok) {
+                UI.toast('Speichern fehlgeschlagen -- bitte Eingaben prüfen (z.B. Passwort mind. 12 Zeichen, gültige E-Mail).');
+                return;
+            }
             editModal.classList.remove('open');
             AdminBoard.renderUserManager(viewContext);
             UI.toast('Gespeichert');
@@ -3611,12 +3668,17 @@ export const AdminBoard = {
         return true;
     },
 
-    // Frühere, granulare Einzelrechte (user.permissions.kb/.textBlocks/...) gibt es im aktuellen
-    // Rollenmodell nicht mehr (bewusst entfernt, siehe README "Daten Und Funktionen") -- jede
-    // Admin- oder Superadmin-Person darf diese Bereiche sehen, wie bei praktisch jeder anderen
-    // Admin-Funktion in diesem Board auch. Vorher prüfte dies ein nie existierendes
-    // user.permissions-Objekt, wodurch normale Admins (nicht Superadmin) diese Buttons nie sahen.
-    can: (user) => !!user && (user.role === 'admin' || user.role === 'superadmin'),
+    // Granulare Einzelrechte wie in der lokalen Version vom 07.10.2026: Superadmin darf immer
+    // alles, ein normaler Admin nur, wenn ihm die jeweilige Zusatzfunktion im Benutzer-Editor
+    // explizit zugewiesen wurde (users.ts permissions_json). War zwischenzeitlich auf "jeder
+    // Admin darf alles" vereinfacht, weil das zugrunde liegende user.permissions-Objekt nie
+    // existierte -- jetzt wieder echt, da permissions_json tatsächlich gespeichert wird.
+    can: (user, key) => {
+        if (!user) return false;
+        if (user.role === 'superadmin') return true;
+        if (key === 'kb') return ['read', 'edit'].includes(user.permissions?.kb);
+        return !!user.permissions?.[key];
+    },
 
     groupTopbarMenu: (user) => {
         const right = q('.topbar-right');
@@ -3883,9 +3945,9 @@ export const AdminBoard = {
 
     openKnowledgeBase: async () => {
         const user = await Store.currentUser();
-        // Server erlaubt Schreiben über /api/v2/kb/articles jedem Admin/Superadmin (requireAdmin) --
-        // nicht nur Superadmin, wie das alte, nie durchgesetzte permissions.kb-Flag es vorsah.
-        const canEdit = user?.role === 'admin' || user?.role === 'superadmin';
+        // Wie in der lokalen Version: Superadmin darf immer bearbeiten, ein normaler Admin nur
+        // mit explizit zugewiesenem permissions.kb = 'edit'.
+        const canEdit = user?.role === 'superadmin' || user?.permissions?.kb === 'edit';
         const modal = AdminBoard.openDialog({
             id: 'kb-modal',
             title: 'Wissensdatenbank',

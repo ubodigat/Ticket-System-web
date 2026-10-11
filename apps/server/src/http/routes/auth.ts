@@ -356,9 +356,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     }
   );
 
-  app.post('/api/v1/auth/logout', async (_req, reply) => {
-    reply.clearCookie(PROD_SESSION_COOKIE, { path: '/' });
-    reply.clearCookie(DEV_SESSION_COOKIE, { path: '/' });
+  app.post('/api/v1/auth/logout', async (req, reply) => {
+    // __Host-ticket_session ist ein "__Host-"-Cookie: der Browser akzeptiert dafür NUR
+    // Set-Cookie-Antworten mit dem Secure-Attribut, auch zum Löschen -- ohne "secure: true" hier
+    // verwirft der Browser die Löschung still und die Sitzung bleibt bestehen (Logout wirkungslos
+    // in Produktion/HTTPS). clearCookie() setzt das nicht automatisch, anders als setCookie()
+    // über cookieOptions().
+    reply.clearCookie(PROD_SESSION_COOKIE, { path: '/', secure: true, httpOnly: true, sameSite: 'lax' });
+    reply.clearCookie(DEV_SESSION_COOKIE, { path: '/', secure: isHttpsRequest(req), httpOnly: true, sameSite: 'lax' });
     return reply.send({ success: true });
   });
 

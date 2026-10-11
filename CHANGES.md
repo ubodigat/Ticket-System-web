@@ -1,5 +1,93 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-11 - Architekturfehler in AdminBoard.render() gefunden: Board aktualisierte sich bei fehlgeschlagenem /users/me-Abruf gar nicht mehr
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Anlass: weitere Suche nach den vier noch offenen, vom Nutzer gemeldeten Problemen (Chat senden,
+  Drag&Drop im Board, neu angelegte Großstörungen werden nicht angezeigt, Icons in der Liste),
+  ohne dass dafür Browser-Konsolenausgaben vorlagen.
+- Gefunden: `AdminBoard.render()` (js/admin-board.js) brach mit `if (!user) return;` komplett ab,
+  sobald `Store.currentUser()` aus irgendeinem Grund `null` lieferte -- das sollte ursprünglich
+  nur den Absturz nach dem 502-Vorfall vom 10.10.2026 abfangen (behoben, siehe dortiger Eintrag),
+  hatte aber eine schwerwiegende Nebenwirkung: `render()` wird bei JEDER Ticket-Aktion erneut
+  aufgerufen (nach Drag&Drop, nach dem Anlegen einer Großstörung, nach jeder Chat-Nachricht,
+  zusätzlich alle 60 Sekunden per Timer) -- und `Store.currentUser()` feuerte dabei bei jedem
+  einzelnen Aufruf einen komplett neuen, ungecachten Netzwerk-Request an `/api/v2/users/me`.
+  Jeder einzelne fehlgeschlagene/verzögerte dieser vielen Requests ließ das gesamte Board
+  unverändert stehen -- eine per Drag&Drop geänderte Spalte sprang optisch zurück, eine frisch
+  angelegte Großstörung blieb unsichtbar, obwohl beides auf dem Server bereits korrekt gespeichert
+  war (daher die Erfolgsmeldung bei gleichzeitig fehlender Anzeige).
+- Fix:
+  - `js/admin-board.js`: `render()` bricht nicht mehr komplett ab, wenn `Store.currentUser()`
+    `null` liefert -- nur der abteilungsbezogene Admin-Filter wird dann übersprungen (sicherer
+    Fallback), der Rest des Boards (Spalten, Karten, Zähler) wird immer neu aufgebaut.
+  - `js/store.js` (`Store.fetchSessionUser`): 3 Sekunden Zwischenspeicher, damit nicht mehr bei
+    jedem einzelnen `render()`-Durchlauf ein frischer Request nötig ist; bei einem fehlgeschlagenen
+    Abruf wird der zuletzt bekannte Wert weiterverwendet statt `null`. Rechteprüfungen selbst
+    laufen weiterhin serverseitig bei jeder einzelnen API-Anfrage neu (app.ts onRequest-Hook) --
+    dieser Zwischenspeicher betrifft nur die Anzeige. Cache wird bei Login/MFA-Bestätigung/Logout
+    geleert (`js/auth.js`).
+- Dieser Fund erklärt sehr wahrscheinlich Drag&Drop und die nicht angezeigten Großstörungen
+  vollständig, und mindestens den "Board aktualisiert sich nicht"-Anteil des Chat-Problems.
+  Für das Icon-Problem in der Listenansicht wurde trotz gezielter Prüfung (lucide.createIcons()
+  wird korrekt nach jedem Render aufgerufen) keine konkrete Fehlerquelle gefunden -- dafür bräuchte
+  es weiterhin die tatsächliche Fehlermeldung aus der Browser-Konsole.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-11 - Vier vom Nutzer gegen die echte laufende Installation gefundene Bugs behoben
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Anlass: erster echter Durchklick-Test der laufenden Installation durch den Nutzer (siehe
+  Boot-Smoke-Test-Eintrag oben -- genau das, was von hier aus nicht möglich war). Gefunden und
+  behoben:
+  - **Logout wirkungslos (kritisch):** `__Host-ticket_session` ist ein `__Host-`-Cookie -- ein
+    Browser akzeptiert dafür JEDE Set-Cookie-Antwort, auch eine löschende, nur mit gesetztem
+    `Secure`-Attribut. `reply.clearCookie(PROD_SESSION_COOKIE, { path: '/' })` setzte das nicht,
+    der Browser verwarf die Löschung still, die Sitzung blieb bestehen. Fix:
+    `apps/server/src/http/routes/auth.ts`, `clearCookie` bekommt jetzt dieselben Sicherheits-
+    Attribute wie beim Setzen.
+  - **Neuen Benutzer anlegen meldete "Gespeichert", obwohl nichts angelegt wurde:**
+    `Store.saveUsers` (js/store.js) prüfte den Rückgabewert der POST-Anfrage nie -- jede vom
+    Server abgelehnte Eingabe (zu kurzes Passwort, doppelter Benutzername, ungültige E-Mail)
+    endete trotzdem mit einer Erfolgsmeldung. Fix: prüft jetzt `res.ok` für jede Teiloperation
+    und gibt `false` zurück, wenn irgendetwas fehlschlug; `openEditUserModal` zeigt dann eine
+    konkrete Fehlermeldung statt "Gespeichert".
+  - **Zusatzrechte für Admin-Konten ("Verwaltung"/"Zusatzfunktionen" aus der lokalen Version vom
+    07.10.2026) komplett fehlend:** in einer früheren Runde ersatzlos entfernt, weil das
+    zugrunde liegende `user.permissions`-Objekt serverseitig nie existierte
+    (`AdminBoard.can()` lief dadurch für jeden normalen Admin immer ins Leere). Statt die
+    Oberfläche zu entfernen (wie zuvor geschehen), jetzt wie bei department/ticketNumberFormat
+    real angebunden:
+    - Neue Spalte `permissions_json` auf `users` (Migration `0024_user_permissions.ts`).
+    - `apps/server/src/http/routes/users.ts`: neues Schema `userPermissionsSchema`
+      (canManageRequests/canManageUsers/canViewLogs/canManage2FA/textBlocks/reports/approvals/
+      recurring/kb), in `GET /users`, `/users/me`, `POST /users`, `PATCH /users/:id` verdrahtet.
+      Vergabe der Zusatzrechte für andere Admin-Konten ist selbst privilegiert -- nur Superadmin
+      darf das (`PATCH` ignoriert `permissions` sonst still, wie die Oberfläche es auch nur
+      Superadmin anzeigt).
+    - `js/admin-board.js` (`openEditUserModal`): "Verwaltung"/"Zusatzfunktionen"-Bereich im
+      Benutzer-Editor wieder vorhanden (nur für Superadmin sichtbar, nur bei Rolle "admin").
+      `AdminBoard.can()` prüft wieder echte, vom Superadmin vergebene Rechte statt pauschal
+      "jeder Admin darf alles"; `openKnowledgeBase`s Schreibrecht ebenso an `permissions.kb`
+      gekoppelt.
+    - `js/store.js` (`mapApiUserToLegacy`): `canManageUsers`/`canManage2FA`/`canManageRequests`/
+      `canViewLogs`/`permissions` kommen jetzt aus echten Serverdaten statt pauschal `true` für
+      jeden Admin.
+  - **Abwesenheits-Dialog stürzte bei jedem Öffnen ab, sobald die Zielperson noch keine laufende
+    Abwesenheit hatte:** `Settings.absencePeriodMarkup(absence = {}, ...)` -- ein Default-
+    Parameter greift nur bei `undefined`, nicht bei explizitem `null`, und `target.absence` ist
+    bei fehlender Abwesenheit immer `null` (siehe `mapApiUserToLegacy`). Jeder Öffnen-Versuch
+    endete mit "Cannot read properties of null (reading 'fromMs')", bevor überhaupt etwas
+    gespeichert werden konnte -- das erklärt vermutlich auch, warum zuvor gesetzte Abwesenheiten
+    nirgends in der Benutzerliste auftauchten: der Dialog ließ sich nie erfolgreich bedienen.
+    Fix: `js/settings.js`, expliziter `absence || {}`-Fallback zusätzlich zum Default-Parameter.
+- Noch nicht abschließend geklärt (keine konkrete Fundstelle ohne weitere Fehlermeldungen aus
+  dem Browser): Chat-Nachrichten senden, Ticket per Drag&Drop verschieben, neu angelegte
+  Großstörungen werden nicht angezeigt, Icons laden in der Listenansicht nicht immer korrekt.
+  Code für alle vier Bereiche wurde gelesen, keine offensichtliche Fehlerquelle gefunden --
+  Browser-Konsolenausgabe (wie beim Abwesenheits-Dialog) würde die Suche erheblich verkürzen.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
 ## 2026-10-11 - Boot-/Verdrahtungs-Smoke-Test ergänzt (apps/server/test/appBoot.test.ts)
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Anlass: Nachfrage, ob wirklich ALLE Funktionen fehlerfrei laufen. Ehrlicher Befund dazu: in

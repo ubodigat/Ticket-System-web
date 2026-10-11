@@ -23,6 +23,22 @@ export interface UsersRouteDeps {
   keyProvider: KeyProvider;
 }
 
+// Granulare Zusatzrechte fuer normale Admin-Konten -- gab es in der lokalen Version vom
+// 07.10.2026 im Benutzer-Editor ("Verwaltung"/"Zusatzfunktionen"), war in der Serverversion
+// zwischenzeitlich komplett entfernt statt wie das ueberall sonst in diesem Projekt uebliche
+// Muster real angebunden zu werden (siehe z.B. department/ticketNumberFormat).
+const userPermissionsSchema = z.object({
+  canManageRequests: z.boolean().optional(),
+  canManageUsers: z.boolean().optional(),
+  canViewLogs: z.boolean().optional(),
+  canManage2FA: z.boolean().optional(),
+  textBlocks: z.boolean().optional(),
+  reports: z.boolean().optional(),
+  approvals: z.boolean().optional(),
+  recurring: z.boolean().optional(),
+  kb: z.enum(['none', 'read', 'edit']).optional()
+});
+
 const createUserSchema = z.object({
   username: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.\-]+$/, 'Nur Buchstaben, Zahlen, _, ., - erlaubt'),
   password: z.string().min(12).max(512), // Mindestlänge 12 Zeichen erzwingen
@@ -30,7 +46,9 @@ const createUserSchema = z.object({
   email: z.string().email().max(255),
   role: z.enum(['user', 'admin']),
   department_group_id: z.string().nullable().optional(),
-  supervisor_user_id: z.string().nullable().optional()
+  department: z.string().trim().max(255).nullable().optional(),
+  supervisor_user_id: z.string().nullable().optional(),
+  permissions: userPermissionsSchema.optional()
 });
 
 const updateUserSchema = z.object({
@@ -45,7 +63,8 @@ const updateUserSchema = z.object({
   department: z.string().trim().max(255).nullable().optional(),
   supervisor_user_id: z.string().nullable().optional(),
   account_archived: z.boolean().optional(),
-  locked_permanent: z.boolean().optional()
+  locked_permanent: z.boolean().optional(),
+  permissions: userPermissionsSchema.optional()
 });
 
 const changePasswordSchema = z.object({
@@ -133,6 +152,24 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   // AdminBoard.absenceInfoText/renderUserManager, Settings.renderAbsenceArea). "pending" =
   // eine künftige Abwesenheit ist hinterlegt, aber ihr Beginn liegt noch in der Zukunft;
   // "active" = sie gilt bereits heute.
+  // permissions_json haelt sowohl die vier "Verwaltung"-Schalter (canManageRequests/
+  // canManageUsers/canViewLogs/canManage2FA, in der lokalen Version Top-Level-Felder auf dem
+  // Benutzerobjekt) als auch die "Zusatzfunktionen" (permissions.textBlocks/reports/approvals/
+  // recurring/kb) -- eine Spalte statt neun, aber nach aussen in exakt der Form, die die
+  // Oberflaeche (AdminBoard/Settings) erwartet.
+  function buildPermissionFields(permissionsJson: string | null) {
+    let parsed: Record<string, unknown> = {};
+    try { parsed = permissionsJson ? JSON.parse(permissionsJson) : {}; } catch { parsed = {}; }
+    const { canManageRequests, canManageUsers, canViewLogs, canManage2FA, ...rest } = parsed as Record<string, unknown>;
+    return {
+      canManageRequests: !!canManageRequests,
+      canManageUsers: !!canManageUsers,
+      canViewLogs: !!canViewLogs,
+      canManage2FA: !!canManage2FA,
+      permissions: rest
+    };
+  }
+
   function buildAbsence(row: { absence_from_at?: Date | string | null; absence_until_at?: Date | string | null; absence_visible?: boolean | null; absence_substitute_username?: string | null }) {
     // Keine aktive Abwesenheitszeile für diese Person gefunden -- alle vier Unterabfragen
     // liefern dann NULL (absence_visible ist eine Boolean-Spalte, NULL heisst hier "keine Zeile",
@@ -159,7 +196,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       requireAdmin(req);
       const rows = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json',
           ...absenceSelects(eb)
         ])
         .orderBy('created_at', 'asc')
@@ -179,9 +216,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           ...row,
           name_enc: undefined,
           email_enc: undefined,
+          permissions_json: undefined,
           name: fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
           email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
-          absence: buildAbsence(row as any)
+          absence: buildAbsence(row as any),
+          ...buildPermissionFields(row.permissions_json)
         };
       });
       return reply.send({ users });
@@ -196,7 +235,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const row = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json',
           ...absenceSelects(eb)
         ])
         .where('id', '=', session.uid)
@@ -216,9 +255,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         ...row,
         name_enc: undefined,
         email_enc: undefined,
+        permissions_json: undefined,
         name: fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
         email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
-        absence: buildAbsence(row as any)
+        absence: buildAbsence(row as any),
+        ...buildPermissionFields(row.permissions_json)
       };
       return reply.send({ user });
     } catch (e: any) {
@@ -264,7 +305,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         password_hash,
         role: parsed.data.role,
         department_group_id: parsed.data.department_group_id ?? null,
+        department: parsed.data.department ?? null,
         supervisor_user_id: parsed.data.supervisor_user_id ?? null,
+        // Zusatzrechte nur bei role='admin' sinnvoll (fuer 'user' zeigt der Editor das Feld gar
+        // nicht an), trotzdem hier nicht erzwungen -- ein leeres Objekt bei 'user' ist harmlos.
+        permissions_json: parsed.data.permissions ? JSON.stringify(parsed.data.permissions) : null,
         account_archived: false,
         locked_permanent: false,
         totp_enabled: false,
@@ -337,6 +382,12 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         if (parsed.data.supervisor_user_id !== undefined) updates.supervisor_user_id = parsed.data.supervisor_user_id;
         if (parsed.data.account_archived !== undefined) updates.account_archived = parsed.data.account_archived;
         if (parsed.data.locked_permanent !== undefined) updates.locked_permanent = parsed.data.locked_permanent;
+        // Zusatzrechte für andere Admin-Konten zu vergeben ist selbst ein privilegierter Vorgang
+        // -- nur Superadmin darf das (gleiche Einschränkung wie im Editor, "ue-man-box" war dort
+        // immer nur für isSuper sichtbar).
+        if (parsed.data.permissions !== undefined && session.role === 'superadmin') {
+          updates.permissions_json = JSON.stringify(parsed.data.permissions);
+        }
       }
 
       await app.db.updateTable('users').set(updates).where('id', '=', id).execute();

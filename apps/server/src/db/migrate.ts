@@ -30,6 +30,7 @@ import { migration_0020_ticket_relations } from './migrations/0020_ticket_relati
 import { migration_0021_user_department } from './migrations/0021_user_department.js';
 import { migration_0022_ticket_archived_author_ack } from './migrations/0022_ticket_archived_author_ack.js';
 import { migration_0023_kb_article_attachments } from './migrations/0023_kb_article_attachments.js';
+import { migration_0024_user_permissions } from './migrations/0024_user_permissions.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -54,7 +55,8 @@ const migrations: Record<string, Migration> = {
   '0020_ticket_relations': migration_0020_ticket_relations,
   '0021_user_department': migration_0021_user_department,
   '0022_ticket_archived_author_ack': migration_0022_ticket_archived_author_ack,
-  '0023_kb_article_attachments': migration_0023_kb_article_attachments
+  '0023_kb_article_attachments': migration_0023_kb_article_attachments,
+  '0024_user_permissions': migration_0024_user_permissions
 };
 
 const provider: MigrationProvider = {
