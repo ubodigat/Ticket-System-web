@@ -49,9 +49,8 @@ function encodeSession(payload: SessionPayload): string {
 // Rollenänderung wirkt erst nach erneutem Login, nicht sofort (vgl. die in der Spezifikation
 // geforderte "sofortige Wirkung" -- das ist hier NICHT erfüllt und müsste über eine
 // serverseitige Session-Tabelle mit Invalidierung nachgerüstet werden).
-// sessionTimeoutMinutes === 0 bedeutet "kein Timeout" (Systemeinstellungen > Sicherheit, siehe
-// securityPolicy.ts) -- die Sitzung läuft dann nur über Logout/Cookie-Ablauf aus, nie über
-// dieses Alters-Limit.
+// Werte <= 0 werden in securityPolicy.ts auf sichere Defaults abgebildet. Die Alterspruefung
+// bleibt hier defensiv formuliert, falls eine Altinstallation noch einen solchen Wert traegt.
 function decodeSession(value: string, sessionTimeoutMinutes: number): SessionPayload | null {
   try {
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<SessionPayload>;
@@ -110,9 +109,16 @@ function sessionCookieName(req: FastifyRequest): string {
   return isHttpsRequest(req) ? PROD_SESSION_COOKIE : DEV_SESSION_COOKIE;
 }
 
-// Browser-Cookie-maxAge in Sekunden: 0/kein Timeout wird als ein Jahr abgebildet (das echte
-// Zeitlimit prüft ohnehin decodeSession() serverseitig bei jeder Anfrage) -- ein echtes
-// "niemals abgelaufenes" Cookie unterstützt kein Browser zuverlässig.
+function timestampMillis(value: Date | string | null | undefined): number {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value) ? value.replace(' ', 'T') : value;
+  const millis = new Date(normalized).getTime();
+  return Number.isFinite(millis) ? millis : 0;
+}
+
+// Browser-Cookie-maxAge in Sekunden. Das echte Zeitlimit prueft decodeSession() serverseitig bei
+// jeder Anfrage; der Fallback fuer <= 0 ist nur fuer Altkonfigurationen defensiv.
 function cookieOptions(req: FastifyRequest, sessionTimeoutMinutes: number) {
   const secure = isHttpsRequest(req);
   const maxAge = sessionTimeoutMinutes > 0 ? sessionTimeoutMinutes * 60 : 365 * 24 * 60 * 60;
@@ -190,14 +196,14 @@ async function currentUser(req: FastifyRequest, app: FastifyInstance, deps: Auth
     .where('id', '=', session.sid)
     .where('user_id', '=', session.uid)
     .executeTakeFirst();
-  if (!dbSession || dbSession.revoked_at || new Date(dbSession.expires_at).getTime() <= Date.now()) return null;
+  if (!dbSession || dbSession.revoked_at || timestampMillis(dbSession.expires_at) <= Date.now()) return null;
   const user = await app.db
     .selectFrom('users')
     .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until'])
     .where('id', '=', session.uid)
     .executeTakeFirst();
   if (!user || user.account_archived || user.locked_permanent) return null;
-  if (user.locked_until && new Date(user.locked_until).getTime() > Date.now()) return null;
+  if (timestampMillis(user.locked_until) > Date.now()) return null;
   return decryptUser(app, deps, user);
 }
 
@@ -215,7 +221,7 @@ async function recordFailedLogin(app: FastifyInstance, userId: string, currentCo
     if (policy.lockoutAction === 'lock') {
       updates.locked_permanent = true;
     } else {
-      updates.locked_until = new Date(Date.now() + policy.lockoutMinutes * 60 * 1000).toISOString();
+      updates.locked_until = new Date(Date.now() + policy.lockoutMinutes * 60 * 1000);
     }
     updates.failed_login_count = 0;
   }
@@ -235,7 +241,7 @@ async function issueSession(app: FastifyInstance, req: FastifyRequest, reply: Fa
     user_id: user.id,
     user_agent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'].slice(0, 512) : null,
     ip_address: req.ip?.slice(0, 64) ?? null,
-    expires_at: expiresAt.toISOString(),
+    expires_at: expiresAt,
     revoked_at: null
   }).execute();
   reply.setCookie(
@@ -268,6 +274,10 @@ function authProblem(reply: FastifyReply, status: number, title: string, detail:
   });
 }
 
+function loginFailure(reply: FastifyReply) {
+  return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
+}
+
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
   app.get('/auth/auth.css', async (_req, reply) => reply.type('text/css; charset=utf-8').send(AUTH_CSS));
   app.get('/auth/login.js', async (_req, reply) => reply.type('application/javascript; charset=utf-8').send(LOGIN_JS));
@@ -292,7 +302,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       .where('username', '=', input.username)
       .executeTakeFirst();
 
-    const lockedUntil = user?.locked_until ? new Date(user.locked_until).getTime() : 0;
+    const lockedUntil = timestampMillis(user?.locked_until);
     if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now()) {
       // Absichtlich dieselbe Fehlermeldung wie bei falschem Passwort (kein Account-Enumeration
       // über unterschiedliche Fehlertexte, siehe Anforderungsliste "Account Enumeration").
@@ -345,7 +355,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'totp_secret_enc', 'failed_login_count'])
         .where('id', '=', pending.uid)
         .executeTakeFirst();
-      const lockedUntil = user?.locked_until ? new Date(user.locked_until).getTime() : 0;
+      const lockedUntil = timestampMillis(user?.locked_until);
       if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || !user.totp_enabled || !user.totp_secret_enc) {
         return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Bitte erneut anmelden.');
       }
@@ -379,7 +389,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       if (unsigned.valid && unsigned.value) {
         const session = decodeSession(unsigned.value, 365 * 24 * 60);
         if (session) {
-          await app.db.updateTable('sessions').set({ revoked_at: new Date().toISOString() }).where('id', '=', session.sid).execute();
+          await app.db.updateTable('sessions').set({ revoked_at: new Date() }).where('id', '=', session.sid).execute();
         }
       }
     }

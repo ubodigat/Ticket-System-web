@@ -11,9 +11,9 @@ import type { Database } from '../db/types.js';
 
 export interface SecurityPolicy {
   force2FA: 'none' | 'all' | 'admin' | 'user';
-  // Minuten; 0 bedeutet "kein Timeout" (Sitzung läuft nie durch Zeitablauf ab).
+  // Minuten; Werte <= 0 fallen aus Sicherheitsgruenden auf den sicheren Default zurueck.
   sessionTimeoutMinutes: number;
-  // 0 bedeutet "kein Limit" (kein Brute-Force-Lockout nach Fehlversuchen).
+  // Werte <= 0 fallen aus Sicherheitsgruenden auf den sicheren Default zurueck.
   maxLoginAttempts: number;
   lockoutAction: 'lock' | 'temp' | 'none';
   lockoutMinutes: number;
@@ -21,9 +21,8 @@ export interface SecurityPolicy {
 
 // Sichere Vorgaben, die exakt dem bisherigen, fest einprogrammierten Verhalten entsprechen --
 // solange eine frische Installation securityConfig nie explizit gespeichert hat, bleibt das
-// Verhalten unveraendert (5 Fehlversuche/15 Minuten Sperre/8h Sitzung). Erst ein bewusst
-// gespeicherter Wert (auch 0 fuer "kein Limit"/"kein Timeout", siehe Systemeinstellungen >
-// Sicherheit in der lokalen Version vom 07.10.2026) weicht davon ab.
+// Verhalten unveraendert (5 Fehlversuche/15 Minuten Sperre/8h Sitzung). Unsichere
+// Deaktivierungswerte (0/negativ) werden nicht uebernommen, sondern auf diese Defaults abgebildet.
 const SAFE_DEFAULTS: SecurityPolicy = {
   force2FA: 'none',
   sessionTimeoutMinutes: 480,
@@ -32,9 +31,19 @@ const SAFE_DEFAULTS: SecurityPolicy = {
   lockoutMinutes: 15
 };
 
+function parseSettingsConfig(raw: string | null | undefined): Record<string, any> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function loadSecurityPolicy(db: Kysely<Database>): Promise<SecurityPolicy> {
   const row = await db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
-  const config = row?.config_json ? JSON.parse(row.config_json) : {};
+  const config = parseSettingsConfig(row?.config_json);
   const sec = config.securityConfig ?? {};
   return {
     force2FA: ['none', 'all', 'admin', 'user'].includes(sec.force2FA) ? sec.force2FA : SAFE_DEFAULTS.force2FA,

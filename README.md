@@ -402,11 +402,11 @@ Umgesetzt:
   Dienst, kein clientseitig generiertes Secret
 - Serverseitiger Brute-Force-Schutz, konfigurierbar unter Systemeinstellungen > Sicherheit
   (Schwelle, Aktion -- dauerhaft sperren/zeitweise sperren/nur protokollieren --, Sperrdauer;
-  0 Fehlversuche = kein Limit), unabhängig vom IP-Rate-Limit. Solange nichts explizit gespeichert
+  unsichere Deaktivierungswerte wie 0 werden auf sichere Defaults abgebildet), unabhängig vom IP-Rate-Limit. Solange nichts explizit gespeichert
   wurde, gilt die sichere Vorgabe 5 Fehlversuche/15 Minuten Sperre (apps/server/src/domain/
   securityPolicy.ts). "2FA erzwingen" (Keine/Alle/Nur Admins/Nur Benutzer) weist betroffene
   Personen beim Login auf eine fehlende 2FA-Einrichtung hin, ohne den Login zu blockieren.
-  Sitzungsdauer ebenfalls dort konfigurierbar (0 Minuten = kein Zeit-Timeout).
+  Sitzungsdauer ebenfalls dort konfigurierbar.
 - Rechteprüfung ausschließlich serverseitig (`requireSession`/`requireAdmin`/`requireSuperadmin`),
   IDOR-Schutz auf Ticket-/Anhang-/Genehmigungsebene
 - MariaDB-TLS im Docker-Stack

@@ -1895,12 +1895,14 @@ export const AdminBoard = {
                                 <div class="hint">Benutzer werden beim Login aufgefordert, 2FA einzurichten, wenn sie betroffen sind.</div>
                             </div>
                             <div class="field">
-                                <label>Session-Timeout (Minuten, 0 = kein Timeout)</label>
-                                <input id="sys-session-timeout" type="number" placeholder="0" min="0">
+                                <label>Session-Timeout (Minuten)</label>
+                                <input id="sys-session-timeout" type="number" placeholder="480" min="5">
+                                <div class="hint">Mindestens 5 Minuten. Unbegrenzte Sessions sind aus Sicherheitsgründen deaktiviert.</div>
                             </div>
                             <div class="field">
-                                <label>Max. Fehlversuche beim Login (0 = kein Limit)</label>
-                                <input id="sys-max-login-attempts" type="number" placeholder="0" min="0">
+                                <label>Max. Fehlversuche beim Login</label>
+                                <input id="sys-max-login-attempts" type="number" placeholder="5" min="1">
+                                <div class="hint">Mindestens 1 Versuch. Abschalten der Login-Sperre ist aus Sicherheitsgründen deaktiviert.</div>
                             </div>
                             <div class="field">
                                 <label>Was passiert nach Erreichen der Fehlversuche?</label>
@@ -2967,6 +2969,12 @@ export const AdminBoard = {
             UI.toast('Dieses Ticket wartet noch auf eine Genehmigung.');
             return false;
         }
+        const beforeChange = {
+            status: ticket.status,
+            owner: ticket.owner,
+            ownerUserId: ticket.ownerUserId,
+            waitingMessage: ticket.waitingMessage
+        };
         const oldStatus = ticket.status;
         const actor = await Store.currentUser();
         ticket.status = newStatus;
@@ -3006,8 +3014,15 @@ export const AdminBoard = {
 
         const saved = await Store.saveTickets(tickets);
         if (!saved) {
-            ticket.status = oldStatus;
-            UI.toast('Status konnte nicht gespeichert werden. Bitte Seite neu laden und erneut versuchen.');
+            Object.assign(ticket, beforeChange);
+            linkedForNotify.forEach(lt => {
+                // Der Status der verknuepften Tickets wurde nur optimistisch gesetzt. Bei einem
+                // fehlgeschlagenen Speichern laden wir direkt neu, damit keine falsche Anzeige bleibt.
+                delete lt.waitingMessage;
+            });
+            await AdminBoard.render();
+            console.error('Status speichern fehlgeschlagen:', Store.lastError);
+            UI.toast('Status konnte nicht gespeichert werden. Details stehen in der Konsole.');
             return false;
         }
         if (newStatus === 'Geschlossen' && ticket.isMajorIncident) {

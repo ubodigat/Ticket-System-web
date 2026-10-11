@@ -309,6 +309,19 @@ export const Store = {
     // Teilaufgaben-Tab, internes Protokoll) ist ein eigener, noch ausstehender Arbeitsschritt --
     // siehe README "Daten Und Funktionen".
     _ticketsCache: null,
+    _ticketsSnapshot: null,
+    cloneTicketList: (tickets) => JSON.parse(JSON.stringify(tickets || [])),
+    readResponseError: async (res, fallback = 'request_failed') => {
+        if (!res) return 'network';
+        const text = await res.text().catch(() => '');
+        if (!text) return `HTTP ${res.status}`;
+        try {
+            const parsed = JSON.parse(text);
+            return JSON.stringify(parsed);
+        } catch {
+            return text || fallback;
+        }
+    },
     mapApiTicketToLegacy: (t) => ({
         id: t.id,
         ticketNumber: t.ticket_number,
@@ -368,6 +381,7 @@ export const Store = {
         const payload = await res.json();
         const tickets = (payload.tickets || []).map(Store.mapApiTicketToLegacy);
         Store._ticketsCache = tickets;
+        Store._ticketsSnapshot = Store.cloneTicketList(tickets);
         return tickets;
     },
     // GET /api/v2/tickets schliesst archivierte Tickets serverseitig bewusst aus (Board/Liste
@@ -496,7 +510,7 @@ export const Store = {
     // Gleiches Diff-Prinzip wie Store.saveUsers: nur echte Änderungen an den flachen Feldern
     // werden als POST (neu) bzw. PATCH (geändert) an die v2-API geschickt.
     saveTickets: async (tickets) => {
-        const before = Store._ticketsCache || await Store.getTickets();
+        const before = Store._ticketsSnapshot || Store.cloneTicketList(Store._ticketsCache || await Store.getTickets());
         const beforeById = new Map(before.map(t => [t.id, t]));
         let ok = true;
         for (const t of tickets) {
@@ -531,10 +545,16 @@ export const Store = {
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify(patch)
                 }).catch(() => null);
-                if (!res || !res.ok) ok = false;
+                if (!res || !res.ok) {
+                    Store.lastError = await Store.readResponseError(res, `Ticket ${t.id} konnte nicht gespeichert werden.`);
+                    console.error('Ticket speichern fehlgeschlagen:', Store.lastError, patch);
+                    ok = false;
+                }
             }
         }
         Store._ticketsCache = null;
+        Store._ticketsSnapshot = null;
+        if (ok) Store.lastError = null;
         return ok;
     },
     // Kontoanfragen laufen über die echte /api/v2/account-requests-API. Die Entscheidung
@@ -724,7 +744,7 @@ export const Store = {
             return false;
         }
         if (!res.ok) {
-            Store.lastError = await res.text().catch(() => `HTTP ${res.status}`);
+            Store.lastError = await Store.readResponseError(res, `HTTP ${res.status}`);
             return false;
         }
         Store.lastError = null;

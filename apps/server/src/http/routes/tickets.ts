@@ -583,7 +583,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const session = requireAdmin(req);
       const { id } = req.params as { id: string };
       const parsed = updateTicketSchema.safeParse(req.body);
-      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
 
       const ticket = await app.db.selectFrom('tickets').selectAll().where('id', '=', id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });

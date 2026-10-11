@@ -509,7 +509,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       await app.db.updateTable('users').set({ password_hash, updated_at: new Date().toISOString() }).where('id', '=', id).execute();
 
       // Alle Sessions des Users invalidieren (Sicherheit)
-      await app.db.updateTable('sessions').set({ revoked_at: new Date().toISOString() }).where('user_id', '=', id).execute();
+      await app.db.updateTable('sessions').set({ revoked_at: new Date() }).where('user_id', '=', id).execute();
 
       return reply.send({ success: true });
     } catch (e: any) {

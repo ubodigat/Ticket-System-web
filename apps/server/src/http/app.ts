@@ -28,6 +28,14 @@ import { registerUpdateRoutes } from './routes/update.js';
 import { registerStaticAssetRoutes } from './routes/staticAssets.js';
 import { loadSecurityPolicy } from '../domain/securityPolicy.js';
 
+function timestampMillis(value: Date | string | null | undefined): number {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value) ? value.replace(' ', 'T') : value;
+  const millis = new Date(normalized).getTime();
+  return Number.isFinite(millis) ? millis : 0;
+}
+
 // Strikte CSP, keine CDN-Hosts, kein 'unsafe-inline'/'unsafe-eval' (verbindlich, siehe
 // Anforderungsliste "Fehlende Content Security Policy"/"XSS"/"DOM-Based XSS"). Die alte,
 // inline-onclick-basierte Oberfläche wird NICHT mehr ausgeliefert -- genau deshalb kann diese
@@ -103,7 +111,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         .where('id', '=', parsed.sid)
         .where('user_id', '=', parsed.uid)
         .executeTakeFirst();
-      if (!dbSession || dbSession.revoked_at || new Date(dbSession.expires_at).getTime() <= Date.now()) {
+      if (!dbSession || dbSession.revoked_at || timestampMillis(dbSession.expires_at) <= Date.now()) {
         req.ticketSession = null;
         return;
       }
@@ -111,7 +119,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         .select(['username', 'role', 'account_archived', 'locked_until', 'locked_permanent'])
         .where('id', '=', parsed.uid)
         .executeTakeFirst();
-      const isLocked = !!row && (row.locked_permanent || (!!row.locked_until && new Date(row.locked_until).getTime() > Date.now()));
+      const isLocked = !!row && (row.locked_permanent || timestampMillis(row.locked_until) > Date.now());
       if (!row || row.account_archived || isLocked) {
         req.ticketSession = null;
         return;
