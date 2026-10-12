@@ -156,24 +156,30 @@ async function decryptUser(app: FastifyInstance, deps: AuthRouteDeps, user: {
   email_enc: Buffer;
   role: string;
 }) {
-  const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
-  const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
-  const name = fieldCipher.decryptField(user.name_enc, nameDek.rawDek, {
-    installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'users',
-    recordId: user.id,
-    fieldName: 'name',
-    keyVersion: nameDek.keyVersion
-  });
-  const email = fieldCipher.decryptField(user.email_enc, emailDek.rawDek, {
-    installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'users',
-    recordId: user.id,
-    fieldName: 'email',
-    keyVersion: emailDek.keyVersion
-  });
+  let name = user.username;
+  let email = '';
+  try {
+    const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
+    const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+    name = fieldCipher.decryptField(user.name_enc, nameDek.rawDek, {
+      installationId: deps.env.INSTALLATION_ID,
+      schemaVersion: deps.env.SCHEMA_VERSION,
+      tableName: 'users',
+      recordId: user.id,
+      fieldName: 'name',
+      keyVersion: nameDek.keyVersion
+    });
+    email = fieldCipher.decryptField(user.email_enc, emailDek.rawDek, {
+      installationId: deps.env.INSTALLATION_ID,
+      schemaVersion: deps.env.SCHEMA_VERSION,
+      tableName: 'users',
+      recordId: user.id,
+      fieldName: 'email',
+      keyVersion: emailDek.keyVersion
+    });
+  } catch (err) {
+    app.log.error({ err, userId: user.id }, 'Benutzerprofil konnte nicht entschluesselt werden');
+  }
   return {
     id: user.id,
     username: user.username,
@@ -291,6 +297,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   });
 
   app.post('/api/v1/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
+    try {
     if (!(await setupCompleted(app))) return authProblem(reply, 409, 'Einrichtung erforderlich', 'Die Einrichtung wurde noch nicht abgeschlossen.');
     const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) return authProblem(reply, 400, 'Ungültige Eingabe', 'Benutzername und Passwort sind erforderlich.');
@@ -309,7 +316,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       if (user) await logSecurityEvent(app, 'login.rejected_locked_or_archived', input.username);
       return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
     }
-    let ok = await argon2.verify(user.password_hash, input.password);
+    let ok = false;
+    try {
+      ok = await argon2.verify(user.password_hash, input.password);
+    } catch (err) {
+      app.log.warn({ err, username: input.username }, 'Passwort-Hash konnte nicht geprueft werden');
+      await logSecurityEvent(app, 'login.invalid_password_hash', input.username);
+      return loginFailure(reply);
+    }
     // LDAP ist eine ERGÄNZUNG zum lokalen Passwort, kein Ersatz: nur versucht, wenn das lokale
     // Passwort nicht passt, und nur für ein bereits lokal existierendes Konto (siehe auth/ldap.ts).
     if (!ok) {
@@ -319,7 +333,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     if (!ok) {
       await recordFailedLogin(app, user.id, user.failed_login_count, policy);
       await logSecurityEvent(app, 'login.wrong_password', input.username);
-      return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
+      return loginFailure(reply);
     }
     const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
     if (!user.totp_enabled && force2faAppliesToRole(policy, role)) {
@@ -337,6 +351,10 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     await resetFailedLogins(app, user.id);
     await issueSession(app, req, reply, user, policy);
     return reply.send({ success: true, user: await decryptUser(app, deps, user), mfaSetupRequired: false });
+    } catch (err) {
+      app.log.error({ err }, 'Login fehlgeschlagen');
+      return authProblem(reply, 500, 'Anmeldung fehlgeschlagen', 'Der Login konnte wegen eines Serverfehlers nicht abgeschlossen werden.');
+    }
   });
 
   app.post(

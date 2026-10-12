@@ -16,7 +16,8 @@ import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
-import { sendMailSafe } from '../../mail/mailer.js';
+import { sendMail, sendMailSafe } from '../../mail/mailer.js';
+import { mysqlTimestamp } from '../../db/date.js';
 
 export interface ExtrasRouteDeps {
   env: Env;
@@ -35,6 +36,12 @@ const createNotificationSchema = z.object({
   type: z.string().trim().min(1).max(64),
   ticket_id: z.string().optional(),
   message: z.string().trim().min(1).max(2000)
+});
+
+const sendMailSchema = z.object({
+  to: z.string().email().max(255),
+  subject: z.string().trim().min(1).max(255),
+  body: z.string().trim().min(1).max(50000)
 });
 
 const attachmentSchema = z.object({
@@ -107,6 +114,26 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
     try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
     return permissions[key] === true;
   }
+
+  // POST /api/v2/mail/send - echter SMTP-Versand aus der Oberflaeche.
+  // Vorher loggte Store.sendEmail nur im Browser und meldete trotzdem "gesendet".
+  app.post('/api/v2/mail/send', async (req, reply) => {
+    try {
+      requireSession(req);
+      const parsed = sendMailSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      await sendMail(
+        { db: app.db, env: deps.env, keyProvider: deps.keyProvider },
+        parsed.data.to,
+        parsed.data.subject,
+        parsed.data.body
+      );
+      return reply.send({ success: true });
+    } catch (e: any) {
+      if (e?.message === 'smtp_not_configured') return reply.code(409).send({ error: 'smtp_not_configured' });
+      return routeError(app, reply, e);
+    }
+  });
 
   // --- Benachrichtigungen ---
 
@@ -300,7 +327,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const parsed = z.object({ status: z.enum(['approved', 'rejected']) }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
       await app.db.updateTable('account_requests')
-        .set({ status: parsed.data.status, reviewed_by_user_id: session.uid, updated_at: new Date().toISOString() })
+        .set({ status: parsed.data.status, reviewed_by_user_id: session.uid, updated_at: mysqlTimestamp() })
         .where('id', '=', id).execute();
 
       // "Konto genehmigt"-Automail (Systemeinstellungen > Benachrichtigungen) -- gab es bisher

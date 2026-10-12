@@ -90,6 +90,8 @@ export const Store = {
     // direkt gegen die echte, rechtegeprüfte v2-API. Rückgabeform wird auf die alten Feldnamen
     // abgebildet, damit die bestehenden Aufrufstellen in diesem Modul unverändert bleiben können.
     _usersCache: null,
+    _usersSnapshot: null,
+    cloneUserList: (users) => JSON.parse(JSON.stringify(users || [])),
     mapApiUserToLegacy: (u) => ({
         id: u.id,
         username: u.username,
@@ -113,6 +115,7 @@ export const Store = {
         canManageRequests: !!u.canManageRequests,
         canViewLogs: !!u.canViewLogs,
         permissions: u.permissions || {},
+        notifPrefs: u.notif_prefs || u.notifPrefs || {},
         // Echte, serverseitig berechnete Abwesenheit (siehe users.ts buildAbsence) --
         // war hier bisher hart auf null gesetzt, wodurch Abwesenheits-Badges/Vertretungslogik
         // nie griffen, obwohl die Daten in der Datenbank korrekt gespeichert waren.
@@ -121,12 +124,23 @@ export const Store = {
     getUsers: async () => {
         const res = await fetch('/api/v2/users', { credentials: 'same-origin' });
         if (!res.ok) {
+            if (res.status === 403) {
+                const dirRes = await fetch('/api/v2/users/directory', { credentials: 'same-origin' }).catch(() => null);
+                if (dirRes?.ok) {
+                    const payload = await dirRes.json();
+                    const users = (payload.users || []).map(Store.mapApiUserToLegacy);
+                    Store._usersCache = users;
+                    Store._usersSnapshot = Store.cloneUserList(users);
+                    return users;
+                }
+            }
             if (Store._usersCache) return Store._usersCache;
             throw new Error('Benutzerliste konnte nicht geladen werden.');
         }
         const payload = await res.json();
         const users = (payload.users || []).map(Store.mapApiUserToLegacy);
         Store._usersCache = users;
+        Store._usersSnapshot = Store.cloneUserList(users);
         return users;
     },
     // Bildet das alte "ganze Liste laden, verändern, komplett zurückschreiben"-Muster auf die
@@ -137,7 +151,7 @@ export const Store = {
     // neues Konto (ungültige/zu kurze Passwort, doppelter Benutzername) der Oberfläche trotzdem
     // "Gespeichert" meldete, obwohl nichts angelegt wurde.
     saveUsers: async (users) => {
-        const before = Store._usersCache || await Store.getUsers();
+        const before = Store._usersSnapshot || Store.cloneUserList(await Store.getUsers());
         const beforeById = new Map(before.map(u => [u.id, u]));
         let ok = true;
         for (const u of users) {
@@ -160,7 +174,11 @@ export const Store = {
                         permissions: u.permissions ?? undefined
                     })
                 }).catch(() => null);
-                if (!res || !res.ok) ok = false;
+                if (!res || !res.ok) {
+                    Store.lastError = await Store.readResponseError(res, `Benutzer ${u.username || ''} konnte nicht erstellt werden.`);
+                    console.error('Benutzer erstellen fehlgeschlagen:', Store.lastError, { username: u.username, role: u.role });
+                    ok = false;
+                }
                 continue;
             }
             const patch = {};
@@ -172,6 +190,7 @@ export const Store = {
             if (u.supervisorUserId !== prev.supervisorUserId) patch.supervisor_user_id = u.supervisorUserId ?? null;
             if (!!u.accountArchived !== prev.accountArchived) patch.account_archived = !!u.accountArchived;
             if (!!u.accountLocked !== prev.accountLocked) patch.locked_permanent = !!u.accountLocked;
+            if (JSON.stringify(u.notifPrefs || {}) !== JSON.stringify(prev.notifPrefs || {})) patch.notif_prefs = u.notifPrefs || {};
             // Die vier "Verwaltung"-Schalter (canManageRequests/-Users/canViewLogs/canManage2FA)
             // kommen serverseitig im selben permissions-Objekt an wie die "Zusatzfunktionen"
             // (textBlocks/reports/approvals/recurring/kb) -- hier zu einem Patch zusammengeführt,
@@ -198,7 +217,11 @@ export const Store = {
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify(patch)
                 }).catch(() => null);
-                if (!res || !res.ok) ok = false;
+                if (!res || !res.ok) {
+                    Store.lastError = await Store.readResponseError(res, `Benutzer ${u.username || u.id} konnte nicht gespeichert werden.`);
+                    console.error('Benutzer speichern fehlgeschlagen:', Store.lastError, { userId: u.id, patch });
+                    ok = false;
+                }
             }
             if (u.password && u.password !== prev.password) {
                 const res = await fetch(`/api/v2/users/${encodeURIComponent(u.id)}/change-password`, {
@@ -207,12 +230,18 @@ export const Store = {
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({ new_password: u.password })
                 }).catch(() => null);
-                if (!res || !res.ok) ok = false;
+                if (!res || !res.ok) {
+                    Store.lastError = await Store.readResponseError(res, `Passwort fuer ${u.username || u.id} konnte nicht geaendert werden.`);
+                    console.error('Benutzer-Passwort speichern fehlgeschlagen:', Store.lastError, { userId: u.id });
+                    ok = false;
+                }
             }
         }
         Store._usersCache = null;
+        Store._usersSnapshot = null;
         const after = await Store.getUsers();
         await LogDiff.users(before, after);
+        if (ok) Store.lastError = null;
         return ok;
     },
     // Abwesenheit & Vertretung: echte Server-Endpunkte statt der frueheren client-seitigen
@@ -1407,15 +1436,26 @@ export const Store = {
     addGlobalLog: async () => {},
 
     sendEmail: async (to, subject, body) => {
+        if (location.protocol.startsWith('http')) {
+            const res = await fetch('/api/v2/mail/send', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ to, subject, body })
+            }).catch(() => null);
+            if (!res || !res.ok) {
+                Store.lastError = await Store.readResponseError(res, 'E-Mail konnte nicht gesendet werden.');
+                console.error('E-Mail-Versand fehlgeschlagen:', Store.lastError);
+                return false;
+            }
+            UI.toast(Lang.format('emailSent', { to }));
+            return true;
+        }
         const settings = await Store.getSettings();
         const conf = settings.emailConfig;
         if (!conf || !conf.host) {
-            console.log('Email logging (No SMTP config):', {
-                to,
-                subject,
-                body
-            });
-            return;
+            Store.lastError = 'SMTP ist nicht konfiguriert.';
+            return false;
         }
         const company = settings.companyConfig || {};
         const signature = conf.htmlSignature || company.htmlSignature || company.signature || '';
@@ -1436,6 +1476,7 @@ export const Store = {
         UI.toast(Lang.format('emailSent', {
             to
         }));
+        return true;
     },
 
     // Übernimmt die serverseitig geprüfte Sitzung in den lokalen Zustand, den der restliche

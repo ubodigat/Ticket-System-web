@@ -17,6 +17,7 @@ import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
+import { mysqlTimestamp } from '../../db/date.js';
 
 // Gleiche Blockliste wie Ticket-Anhaenge (extras.ts): image/svg+xml/.html etc. koennen beim
 // direkten Oeffnen im Browser same-origin Skripte ausfuehren (gespeicherte XSS).
@@ -115,7 +116,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const parsed = createArticleSchema.partial().safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
       if (parsed.data.title !== undefined) {
         const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
         updates.title = fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, ctx(deps, 'kb_articles', id, 'title', titleDek.keyVersion));

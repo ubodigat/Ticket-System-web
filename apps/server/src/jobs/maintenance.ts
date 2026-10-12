@@ -22,6 +22,8 @@ import type { KeyProvider } from '../crypto/keyProvider.js';
 import { ensureDek } from '../crypto/dekService.js';
 import { fieldCipher } from '../crypto/fieldCrypto.js';
 import { randomUUID } from 'node:crypto';
+import { mysqlTimestamp } from '../db/date.js';
+import { buildTicketNumber } from '../domain/ticketNumber.js';
 
 const DEFAULT_AUTO_ARCHIVE_DAYS = 3;
 
@@ -34,7 +36,9 @@ interface MaintenanceDeps {
 export async function runAutoArchive(deps: MaintenanceDeps): Promise<number> {
   const settingsRow = await deps.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
   const config = settingsRow?.config_json ? JSON.parse(settingsRow.config_json) : {};
-  const days = Number(config.autoArchiveClosedAfterDays) || DEFAULT_AUTO_ARCHIVE_DAYS;
+  const configuredDays = Number(config.autoArchiveClosedAfterDays);
+  const days = Number.isFinite(configuredDays) ? configuredDays : DEFAULT_AUTO_ARCHIVE_DAYS;
+  if (days <= 0) return 0;
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
   const due = await deps.db.selectFrom('tickets')
@@ -47,7 +51,7 @@ export async function runAutoArchive(deps: MaintenanceDeps): Promise<number> {
 
   for (const ticket of due) {
     await deps.db.updateTable('tickets')
-      .set({ archived_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .set({ archived_at: mysqlTimestamp(), updated_at: mysqlTimestamp() })
       .where('id', '=', ticket.id)
       .execute();
     await deps.db.insertInto('ticket_audit_log').values({
@@ -70,6 +74,8 @@ function advanceDate(date: Date, unit: 'day' | 'week' | 'month', count: number):
 }
 
 export async function runRecurringTickets(deps: MaintenanceDeps): Promise<number> {
+  const settingsRow = await deps.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+  const numberingConfig = settingsRow?.config_json ? JSON.parse(settingsRow.config_json) : {};
   const due = await deps.db.selectFrom('recurring_ticket_rules')
     .selectAll()
     .where('active', '=', true)
@@ -82,11 +88,12 @@ export async function runRecurringTickets(deps: MaintenanceDeps): Promise<number
   const descriptionDek = await ensureDek(deps.db, deps.keyProvider, 'tickets.description');
 
   for (const rule of due) {
-    const maxRow = await deps.db.selectFrom('tickets')
-      .select(deps.db.fn.max('ticket_number').as('max_num'))
-      .executeTakeFirst();
-    const lastNum = parseInt(String(maxRow?.max_num ?? '0').replace(/\D/g, ''), 10) || 0;
-    const ticketNumber = String(lastNum + 1).padStart(5, '0');
+    const rows = await deps.db.selectFrom('tickets').select('ticket_number').execute();
+    const lastNum = rows.reduce((max, row) => {
+      const found = String(row.ticket_number || '').match(/(\d+)(?!.*\d)/);
+      return Math.max(max, found ? Number(found[1]) || 0 : 0);
+    }, 0);
+    const ticketNumber = buildTicketNumber(lastNum + 1, rule.category, numberingConfig);
 
     const newId = randomUUID();
     const ctx = (fieldName: string, keyVersion: number) => ({
@@ -116,7 +123,7 @@ export async function runRecurringTickets(deps: MaintenanceDeps): Promise<number
     }).execute();
 
     await deps.db.updateTable('recurring_ticket_rules')
-      .set({ next_run_at: advanceDate(new Date(rule.next_run_at), rule.interval_unit, rule.interval_count) })
+      .set({ next_run_at: mysqlTimestamp(advanceDate(new Date(rule.next_run_at), rule.interval_unit, rule.interval_count)) })
       .where('id', '=', rule.id)
       .execute();
   }
@@ -163,7 +170,7 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
     const daysWaiting = (now - since) / (24 * 60 * 60 * 1000);
     if (daysWaiting >= autoCloseDays) {
       await deps.db.updateTable('tickets').set({
-        status: 'Geschlossen', closed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        status: 'Geschlossen', closed_at: mysqlTimestamp(), updated_at: mysqlTimestamp(),
         waiting_since: null, waiting_message: null, waiting_reminder_sent: false
       }).where('id', '=', t.id).execute();
       await deps.db.insertInto('ticket_audit_log').values({
@@ -187,12 +194,17 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
 
 export function startMaintenanceScheduler(deps: MaintenanceDeps, intervalMs = 5 * 60 * 1000): NodeJS.Timeout {
   const tick = async () => {
-    try {
-      await runAutoArchive(deps);
-      await runRecurringTickets(deps);
-      await runWaitingTickets(deps);
-    } catch (err) {
-      console.error('Wartungslauf fehlgeschlagen:', err);
+    const jobs = [
+      ['Auto-Archivierung', () => runAutoArchive(deps)],
+      ['Wiederkehrende Tickets', () => runRecurringTickets(deps)],
+      ['Warten-auf-Benutzer', () => runWaitingTickets(deps)]
+    ] as const;
+    for (const [name, job] of jobs) {
+      try {
+        await job();
+      } catch (err) {
+        console.error(`Wartungsjob fehlgeschlagen: ${name}`, err);
+      }
     }
   };
   void tick();

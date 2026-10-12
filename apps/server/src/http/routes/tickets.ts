@@ -20,12 +20,12 @@ import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
 import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
+import { mysqlTimestamp } from '../../db/date.js';
 
 export interface TicketsRouteDeps {
   env: Env;
   keyProvider: KeyProvider;
 }
-
 
 // Alle Ticket-/Chat-/Notiz-Inhalte werden serverseitig AES-256-GCM-verschlüsselt gespeichert
 // (docs-Entscheidung: serverseitig statt Ende-zu-Ende, da Server weiterhin lesen/filtern muss).
@@ -272,7 +272,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       // Antwort"-Symbol nie, unabhängig vom tatsächlichen Stand.
       let query = app.db.selectFrom('tickets')
         .select(eb => [
-          'id', 'ticket_number', 'title', 'status', 'priority', 'category', 'type',
+          'id', 'ticket_number', 'title', 'description', 'status', 'priority', 'category', 'type',
           'created_by_user_id', 'created_by_username', 'assigned_to_user_id', 'assigned_to_username', 'assigned_group_id',
           'sla_due_at', 'custom_due_at', 'archived_at', 'closed_at', 'archived_author_ack',
           'approval_status', 'approval_requested_by', 'approval_reviewer_id', 'approval_text',
@@ -322,6 +322,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const tickets = rows.map(row => ({
         ...row,
         title: decryptTicketField(row.title, deks.title, deps, row.id, 'title'),
+        description: decryptTicketField(row.description, deks.description, deps, row.id, 'description'),
         incident_notice: row.incident_notice
           ? decryptTicketField(row.incident_notice, deks.incidentNotice, deps, row.id, 'incident_notice')
           : null
@@ -332,15 +333,17 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     }
   });
 
-  // GET /api/v2/tickets/archived - Archiv (nur Admin)
+  // GET /api/v2/tickets/archived - Archiv: Admins sehen alle, normale Benutzer nur eigene.
   app.get('/api/v2/tickets/archived', async (req, reply) => {
     try {
-      requireAdmin(req);
-      const rows = await app.db.selectFrom('tickets')
+      const session = requireSession(req);
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      let query = app.db.selectFrom('tickets')
         .selectAll()
         .where('archived_at', 'is not', null)
-        .orderBy('archived_at', 'desc')
-        .execute();
+        .orderBy('archived_at', 'desc');
+      if (!isAdmin) query = query.where('created_by_user_id', '=', session.uid);
+      const rows = await query.execute();
       const deks = await loadTicketDeks(app, deps.keyProvider);
       const tickets = rows.map(row => decryptTicketRow(row, deks, deps));
       return reply.send({ tickets });
@@ -463,7 +466,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
             filed_by_username: filedByUsername,
             assigned_group_id: assignedGroupId,
             status: 'Neu',
-            sla_due_at: slaDueAt ? slaDueAt.toISOString() : null,
+            sla_due_at: slaDueAt ? mysqlTimestamp(slaDueAt) : null,
             installation_id: deps.env.INSTALLATION_ID,
             custom_fields_json: parsed.data.custom_fields ? JSON.stringify(parsed.data.custom_fields) : null
           }).execute();
@@ -509,7 +512,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
             if (approver) {
               await app.db.updateTable('tickets').set({
                 approval_status: 'pending', approval_requested_by: session.username, approval_reviewer_id: approver.id,
-                updated_at: new Date().toISOString()
+                updated_at: mysqlTimestamp()
               }).where('id', '=', newId).execute();
               await app.db.insertInto('ticket_audit_log').values({
                 id: randomUUID(), ticket_id: newId, actor_user_id: session.uid, actor_username: session.username,
@@ -588,7 +591,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const ticket = await app.db.selectFrom('tickets').selectAll().where('id', '=', id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
 
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
       const auditChanges: Array<{ field: string; old: unknown; new: unknown }> = [];
 
       // title/description sind verschlüsselt (Buffer in der DB) -- getrennt behandeln, damit
@@ -622,7 +625,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (parsed.data.archived !== undefined) {
         const wasArchived = ticket.archived_at !== null;
         if (parsed.data.archived !== wasArchived) {
-          updates.archived_at = parsed.data.archived ? new Date().toISOString() : null;
+          updates.archived_at = parsed.data.archived ? mysqlTimestamp() : null;
           auditChanges.push({ field: 'archived', old: wasArchived, new: parsed.data.archived });
         }
       }
@@ -640,7 +643,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       // Status-Spezial: closed_at setzen
       if (parsed.data.status === 'Geschlossen' && ticket.status !== 'Geschlossen') {
-        updates.closed_at = new Date().toISOString();
+        updates.closed_at = mysqlTimestamp();
       }
 
       // "Warten auf Benutzer"/-"...": Start-Zeitpunkt und Hinweistext für die Erinnerung/das
@@ -650,7 +653,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         const wasWaiting = ticket.status.startsWith('Warten auf');
         const isWaitingNow = parsed.data.status.startsWith('Warten auf');
         if (!wasWaiting && isWaitingNow) {
-          updates.waiting_since = new Date().toISOString();
+          updates.waiting_since = mysqlTimestamp();
           updates.waiting_message = parsed.data.waiting_message ?? null;
           updates.waiting_reminder_sent = false;
         } else if (wasWaiting && !isWaitingNow) {
@@ -758,7 +761,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       }).execute();
 
       // Ticket updated_at setzen
-      await app.db.updateTable('tickets').set({ updated_at: new Date().toISOString() }).where('id', '=', id).execute();
+      await app.db.updateTable('tickets').set({ updated_at: mysqlTimestamp() }).where('id', '=', id).execute();
 
       // Benachrichtigung an die jeweils andere Seite (Ersteller <-> zuständige Person).
       if (isAdmin && ticket.created_by_user_id && ticket.created_by_user_id !== session.uid) {
@@ -975,7 +978,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const incident = await app.db.selectFrom('tickets').select(['id', 'type']).where('id', '=', parsed.data.incident_id).executeTakeFirst();
       if (!incident || incident.type !== 'incident') return reply.code(400).send({ error: 'not_an_incident' });
 
-      await app.db.updateTable('tickets').set({ incident_id: parsed.data.incident_id, updated_at: new Date().toISOString() }).where('id', '=', id).execute();
+      await app.db.updateTable('tickets').set({ incident_id: parsed.data.incident_id, updated_at: mysqlTimestamp() }).where('id', '=', id).execute();
       await app.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
         action: 'linked_incident', field: 'incident_id', old_value: null, new_value: parsed.data.incident_id
@@ -1005,7 +1008,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         approval_requested_by: session.username,
         approval_reviewer_id: parsed.data.approver_user_id,
         approval_text: parsed.data.text ?? null,
-        updated_at: new Date().toISOString()
+        updated_at: mysqlTimestamp()
       }).where('id', '=', id).execute();
 
       await app.db.insertInto('ticket_audit_log').values({
@@ -1049,7 +1052,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       await app.db.updateTable('tickets').set({
         approval_status: parsed.data.decision,
         approval_text: parsed.data.reason ?? null,
-        updated_at: new Date().toISOString()
+        updated_at: mysqlTimestamp()
       }).where('id', '=', id).execute();
 
       await app.db.insertInto('ticket_audit_log').values({
@@ -1374,9 +1377,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       await app.db.deleteFrom('ticket_participants').where('ticket_id', '=', source.id).execute();
 
       await app.db.updateTable('tickets').set({
-        archived_at: new Date().toISOString(), merged_into_ticket_id: target.id, updated_at: new Date().toISOString()
+        archived_at: mysqlTimestamp(), merged_into_ticket_id: target.id, updated_at: mysqlTimestamp()
       }).where('id', '=', source.id).execute();
-      await app.db.updateTable('tickets').set({ updated_at: new Date().toISOString() }).where('id', '=', target.id).execute();
+      await app.db.updateTable('tickets').set({ updated_at: mysqlTimestamp() }).where('id', '=', target.id).execute();
 
       await app.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: source.id, actor_user_id: session.uid, actor_username: session.username,

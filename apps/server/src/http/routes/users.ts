@@ -17,10 +17,31 @@ import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, computeBlindIndex } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
+import { mysqlTimestamp } from '../../db/date.js';
 
 export interface UsersRouteDeps {
   env: Env;
   keyProvider: KeyProvider;
+}
+
+function safeUserProfileFields(app: FastifyInstance, deps: UsersRouteDeps, row: Record<string, any>, nameDek: { rawDek: Buffer; keyVersion: number }, emailDek: { rawDek: Buffer; keyVersion: number }): { name: string; email: string } {
+  const ctx = (fieldName: string, keyVersion: number) => ({
+    installationId: deps.env.INSTALLATION_ID,
+    schemaVersion: deps.env.SCHEMA_VERSION,
+    tableName: 'users',
+    recordId: row.id,
+    fieldName,
+    keyVersion
+  });
+  try {
+    return {
+      name: fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
+      email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion))
+    };
+  } catch (err) {
+    app.log.error({ err, userId: row.id }, 'Benutzerprofil konnte nicht entschluesselt werden');
+    return { name: row.username, email: '' };
+  }
 }
 
 // Granulare Zusatzrechte fuer normale Admin-Konten -- gab es in der lokalen Version vom
@@ -64,7 +85,11 @@ const updateUserSchema = z.object({
   supervisor_user_id: z.string().nullable().optional(),
   account_archived: z.boolean().optional(),
   locked_permanent: z.boolean().optional(),
-  permissions: userPermissionsSchema.optional()
+  permissions: userPermissionsSchema.optional(),
+  notif_prefs: z.record(z.object({
+    app: z.boolean().optional(),
+    email: z.boolean().optional()
+  })).optional()
 });
 
 const changePasswordSchema = z.object({
@@ -123,6 +148,15 @@ const setAbsenceSchema = z.object({
   visible: z.boolean().default(false)
 });
 
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  try {
+    const parsed = value ? JSON.parse(value) : {};
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps): void {
 
   // Korrelierte Unterabfragen für die aktuell laufende Abwesenheit (hoechstens eine Zeile mit
@@ -158,8 +192,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   // recurring/kb) -- eine Spalte statt neun, aber nach aussen in exakt der Form, die die
   // Oberflaeche (AdminBoard/Settings) erwartet.
   function buildPermissionFields(permissionsJson: string | null) {
-    let parsed: Record<string, unknown> = {};
-    try { parsed = permissionsJson ? JSON.parse(permissionsJson) : {}; } catch { parsed = {}; }
+    const parsed = parseJsonObject(permissionsJson);
     const { canManageRequests, canManageUsers, canViewLogs, canManage2FA, ...rest } = parsed as Record<string, unknown>;
     return {
       canManageRequests: !!canManageRequests,
@@ -170,12 +203,24 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     };
   }
 
+  function buildNotificationPrefs(notifPrefsJson: string | null | undefined) {
+    return parseJsonObject(notifPrefsJson);
+  }
+
+  async function loadAccountSelfServiceFields(): Promise<Set<string>> {
+    const row = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+    const config = parseJsonObject(row?.config_json);
+    const fields = Array.isArray(config.accountSelfServiceFields)
+      ? config.accountSelfServiceFields.filter(item => typeof item === 'string')
+      : ['name', 'email'];
+    return new Set(fields);
+  }
+
   async function hasAdminPermission(session: { uid: string; role: string }, key: 'canManageRequests' | 'canManageUsers' | 'canViewLogs' | 'canManage2FA'): Promise<boolean> {
     if (session.role === 'superadmin') return true;
     if (session.role !== 'admin') return false;
     const row = await app.db.selectFrom('users').select('permissions_json').where('id', '=', session.uid).executeTakeFirst();
-    let permissions: Record<string, unknown> = {};
-    try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
+    const permissions = parseJsonObject(row?.permissions_json);
     return permissions[key] === true;
   }
 
@@ -206,7 +251,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManageUsers')) && !(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json',
           ...absenceSelects(eb)
         ])
         .orderBy('created_at', 'asc')
@@ -214,23 +259,51 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
       const users = rows.map(row => {
-        const ctx = (fieldName: string, keyVersion: number) => ({
-          installationId: deps.env.INSTALLATION_ID,
-          schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'users',
-          recordId: row.id,
-          fieldName,
-          keyVersion
-        });
+        const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
         return {
           ...row,
           name_enc: undefined,
           email_enc: undefined,
           permissions_json: undefined,
-          name: fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-          email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
+          notif_prefs_json: undefined,
+          name: profile.name,
+          email: profile.email,
+          notif_prefs: buildNotificationPrefs(row.notif_prefs_json),
           absence: buildAbsence(row as any),
           ...buildPermissionFields(row.permissions_json)
+        };
+      });
+      return reply.send({ users });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // GET /api/v2/users/directory - schlankes Personenverzeichnis fuer alle angemeldeten Rollen.
+  // Normale Benutzer brauchen Namen/IDs fuer Ticket-Ansichten, Benachrichtigungen und Auswahlfelder,
+  // duerfen aber keine Admin-Felder wie Sperren, Rechte oder Audit-relevante Status sehen.
+  app.get('/api/v2/users/directory', async (req, reply) => {
+    try {
+      requireSession(req);
+      const rows = await app.db.selectFrom('users')
+        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived'])
+        .where('account_archived', '=', false)
+        .orderBy('username', 'asc')
+        .execute();
+      const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
+      const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+      const users = rows.map(row => {
+        const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
+        return {
+          id: row.id,
+          username: row.username,
+          name: profile.name,
+          email: profile.email,
+          role: row.role,
+          department_group_id: row.department_group_id,
+          department: row.department,
+          supervisor_user_id: row.supervisor_user_id,
+          account_archived: row.account_archived
         };
       });
       return reply.send({ users });
@@ -245,7 +318,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const row = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json',
           ...absenceSelects(eb)
         ])
         .where('id', '=', session.uid)
@@ -253,21 +326,16 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!row) return reply.code(404).send({ error: 'not_found' });
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
-      const ctx = (fieldName: string, keyVersion: number) => ({
-        installationId: deps.env.INSTALLATION_ID,
-        schemaVersion: deps.env.SCHEMA_VERSION,
-        tableName: 'users',
-        recordId: row.id,
-        fieldName,
-        keyVersion
-      });
+      const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
       const user = {
         ...row,
         name_enc: undefined,
         email_enc: undefined,
         permissions_json: undefined,
-        name: fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-        email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
+        notif_prefs_json: undefined,
+        name: profile.name,
+        email: profile.email,
+        notif_prefs: buildNotificationPrefs(row.notif_prefs_json),
         absence: buildAbsence(row as any),
         ...buildPermissionFields(row.permissions_json)
       };
@@ -359,7 +427,24 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const parsed = updateUserSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (!canManageUsers) {
+        const allowedFields = await loadAccountSelfServiceFields();
+        if (parsed.data.name !== undefined && !allowedFields.has('name')) return reply.code(403).send({ error: 'field_not_editable', field: 'name' });
+        if (parsed.data.email !== undefined && !allowedFields.has('email')) return reply.code(403).send({ error: 'field_not_editable', field: 'email' });
+        if (parsed.data.department !== undefined && !allowedFields.has('department')) return reply.code(403).send({ error: 'field_not_editable', field: 'department' });
+        if (
+          parsed.data.role !== undefined ||
+          parsed.data.department_group_id !== undefined ||
+          parsed.data.supervisor_user_id !== undefined ||
+          parsed.data.account_archived !== undefined ||
+          parsed.data.locked_permanent !== undefined ||
+          parsed.data.permissions !== undefined
+        ) {
+          return reply.code(403).send({ error: 'forbidden' });
+        }
+      }
+
+      const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
       if (parsed.data.name !== undefined) {
         const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
         updates.name_enc = fieldCipher.encryptField(parsed.data.name, nameDek.rawDek, {
@@ -387,6 +472,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       // department ist Klartext (kein personenbezogenes Pflichtfeld wie Name/E-Mail, keine
       // Verschlüsselung dafür vorgesehen) -- gleiche Selbst-/Admin-Berechtigung wie Name/E-Mail.
       if (parsed.data.department !== undefined) updates.department = parsed.data.department;
+      if (parsed.data.notif_prefs !== undefined) updates.notif_prefs_json = JSON.stringify(parsed.data.notif_prefs);
 
       // Nur Admin darf Rolle, Gruppe, Vorgesetzte Person, Archivierung und Sperrung ändern
       if (canManageUsers) {
@@ -442,7 +528,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (ticketDisposition === 'delete') {
         await app.db.deleteFrom('tickets').where('created_by_user_id', '=', id).execute();
       } else {
-        await app.db.updateTable('tickets').set({ archived_at: new Date().toISOString() })
+        await app.db.updateTable('tickets').set({ archived_at: mysqlTimestamp() })
           .where('created_by_user_id', '=', id).where('archived_at', 'is', null).execute();
       }
 
@@ -495,21 +581,21 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const parsed = changePasswordSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      // Bei normalem User: altes Passwort prüfen
+      // Bei jeder eigenen Passwortaenderung muss das alte Passwort erneut bestaetigt werden.
+      // Nur ein berechtigter Admin-Reset fuer ein anderes Konto darf ohne Altpasswort laufen.
       if (!isAdmin || session.uid === id) {
         const user = await app.db.selectFrom('users').select('password_hash').where('id', '=', id).executeTakeFirst();
         if (!user) return reply.code(404).send({ error: 'not_found' });
-        if (parsed.data.old_password) {
-          const ok = await argon2.verify(user.password_hash, parsed.data.old_password);
-          if (!ok) return reply.code(401).send({ error: 'wrong_password' });
-        }
+        if (!parsed.data.old_password) return reply.code(400).send({ error: 'old_password_required' });
+        const ok = await argon2.verify(user.password_hash, parsed.data.old_password);
+        if (!ok) return reply.code(401).send({ error: 'wrong_password' });
       }
 
       const password_hash = await argon2.hash(parsed.data.new_password, { type: argon2.argon2id });
-      await app.db.updateTable('users').set({ password_hash, updated_at: new Date().toISOString() }).where('id', '=', id).execute();
+      await app.db.updateTable('users').set({ password_hash, updated_at: mysqlTimestamp() }).where('id', '=', id).execute();
 
       // Alle Sessions des Users invalidieren (Sicherheit)
-      await app.db.updateTable('sessions').set({ revoked_at: new Date() }).where('user_id', '=', id).execute();
+      await app.db.updateTable('sessions').set({ revoked_at: mysqlTimestamp() }).where('user_id', '=', id).execute();
 
       return reply.send({ success: true });
     } catch (e: any) {
@@ -602,7 +688,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     // Laufende Abwesenheit derselben Person beenden, bevor eine neue beginnt -- nie zwei
     // gleichzeitig aktive Zeilen für dieselbe Person.
     await app.db.updateTable('user_absences')
-      .set({ active: false, ended_at: new Date().toISOString() })
+      .set({ active: false, ended_at: mysqlTimestamp() })
       .where('user_id', '=', targetUserId)
       .where('active', '=', true)
       .execute();
@@ -633,7 +719,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (reassigned.length > 0) {
         const substitute = await app.db.selectFrom('users').select('username').where('id', '=', data.substitute_user_id).executeTakeFirst();
         await app.db.updateTable('tickets')
-          .set({ assigned_to_user_id: data.substitute_user_id, assigned_to_username: substitute?.username ?? null, updated_at: new Date().toISOString() })
+          .set({ assigned_to_user_id: data.substitute_user_id, assigned_to_username: substitute?.username ?? null, updated_at: mysqlTimestamp() })
           .where('assigned_to_user_id', '=', targetUserId)
           .where('archived_at', 'is', null)
           .execute();
@@ -778,7 +864,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const rawLines = parsed.data.csv.split(/\r?\n/).filter(l => l.trim().length > 0);
       if (rawLines.length < 2) return reply.code(400).send({ error: 'empty_csv' });
       const header = parseCsvLine(rawLines[0]!).map(h => h.trim().toLowerCase());
-      const results: Array<{ username: string; status: string }> = [];
+      const results: Array<{ username: string; status: string; temporaryPassword?: string }> = [];
 
       for (const line of rawLines.slice(1)) {
         const cells = parseCsvLine(line);
@@ -820,7 +906,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           totp_enabled: false,
           installation_id: deps.env.INSTALLATION_ID
         }).execute();
-        results.push({ username: rowParsed.data.username, status: 'created' });
+        results.push({ username: rowParsed.data.username, status: 'created', temporaryPassword: tempPassword });
       }
       await app.db.insertInto('global_audit_log').values({
         id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,

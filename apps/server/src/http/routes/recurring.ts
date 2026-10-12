@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { requireAdmin } from './session.js';
 import { routeError } from './routeError.js';
+import { mysqlTimestamp } from '../../db/date.js';
 
 const createRuleSchema = z.object({
   title: z.string().trim().min(1).max(255),
@@ -62,7 +63,7 @@ export function registerRecurringRoutes(app: FastifyInstance): void {
         priority: parsed.data.priority,
         interval_unit: parsed.data.interval_unit,
         interval_count: parsed.data.interval_count,
-        next_run_at: parsed.data.next_run_at,
+        next_run_at: mysqlTimestamp(new Date(parsed.data.next_run_at)),
         active: true,
         created_by_user_id: session.uid
       }).execute();

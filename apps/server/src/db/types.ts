@@ -58,6 +58,7 @@ export interface UsersTable {
   department_group_id: string | null;
   department: Nullable<string>;
   permissions_json: Nullable<string>;
+  notif_prefs_json: Nullable<string>;
   supervisor_user_id: Nullable<string>;
   account_archived: ColumnType<boolean, boolean, boolean>;
   locked_until: NullableTimestamp;

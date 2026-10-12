@@ -18,6 +18,7 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { sendMail, isSmtpConfigured } from '../../mail/mailer.js';
 import { authenticateLdap, isLdapEnabled } from '../../auth/ldap.js';
+import { mysqlTimestamp } from '../../db/date.js';
 
 export interface SettingsRouteDeps {
   env: Env;
@@ -225,7 +226,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
     try {
       const session = requireSuperadmin(req);
       const body = req.body as { companyName?: string; portalName?: string; config?: unknown };
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
 
       if (typeof body.companyName === 'string') updates.company_name = body.companyName.trim().slice(0, 255);
       if (typeof body.portalName === 'string') updates.portal_name = body.portalName.trim().slice(0, 255);
@@ -285,7 +286,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
         smtp_user: parsed.data.user ?? null,
         smtp_from: parsed.data.from,
         smtp_from_name: parsed.data.fromName ?? null,
-        updated_at: new Date().toISOString()
+        updated_at: mysqlTimestamp()
       };
       if (parsed.data.password) {
         const dek = await ensureDek(app.db, deps.keyProvider, 'app_settings.smtp_password');
@@ -362,7 +363,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
         ldap_bind_dn: parsed.data.bindDn,
         ldap_base_dn: parsed.data.baseDn,
         ldap_user_filter: parsed.data.userFilter,
-        updated_at: new Date().toISOString()
+        updated_at: mysqlTimestamp()
       };
       if (parsed.data.bindPassword) {
         const dek = await ensureDek(app.db, deps.keyProvider, 'app_settings.ldap_bind_password');
@@ -451,7 +452,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       const parsed = updateCategorySchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
       if (parsed.data.name !== undefined) updates.name = parsed.data.name;
       if (parsed.data.auto_assign_group_id !== undefined) updates.auto_assign_group_id = parsed.data.auto_assign_group_id;
       if (parsed.data.custom_fields !== undefined) updates.custom_fields_json = JSON.stringify(parsed.data.custom_fields);

@@ -1642,6 +1642,10 @@ export const AdminBoard = {
                 UI.toast('Benutzername fehlt');
                 return;
             }
+            if (!eVal || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eVal)) {
+                UI.toast('Gültige E-Mail-Adresse fehlt');
+                return;
+            }
 
             const users = await Store.getUsers();
 
@@ -1939,15 +1943,15 @@ export const AdminBoard = {
 
                         <!-- Outlook -->
                         <div id="sys-outlook" class="tab-content">
-                            <div class="callout">Outlook/Microsoft Graph kann hier vorbereitet werden. Für den produktiven Mailimport muss im Backend ein Graph-Connector mit den hinterlegten Daten betrieben werden.</div>
+                            <div class="callout">Outlook/Microsoft Graph kann hier vorbereitet werden. Die Serverinstallation enthält aktuell noch keinen aktiven Mailbox-Sync; die Importfunktionen bleiben deshalb deaktiviert, bis ein Graph-Connector angebunden ist.</div>
                             <label class="check-row"><input type="checkbox" id="sys-outlook-enabled"><span><strong>Outlook/Graph Integration aktivieren</strong></span></label>
                             <div class="form-grid">
                                 <div class="field"><label>Tenant-ID</label><input id="sys-outlook-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
                                 <div class="field"><label>Client-ID</label><input id="sys-outlook-client" type="text" placeholder="App Registration Client-ID"></div>
                             </div>
                             <div class="field"><label>Support-Postfach</label><input id="sys-outlook-mailbox" type="email" placeholder="support@example.com"></div>
-                            <label class="check-row"><input type="checkbox" id="sys-outlook-sync"><span>Eingehende E-Mails synchronisieren</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-outlook-create"><span>Aus E-Mails automatisch Tickets erstellen</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-sync" disabled><span>Eingehende E-Mails synchronisieren</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-create" disabled><span>Aus E-Mails automatisch Tickets erstellen</span></label>
                         </div>
 
                         <!-- Update -->
@@ -2435,8 +2439,8 @@ export const AdminBoard = {
                         tenantId: q('#sys-outlook-tenant').value.trim(),
                         clientId: q('#sys-outlook-client').value.trim(),
                         mailbox: q('#sys-outlook-mailbox').value.trim(),
-                        syncIncoming: q('#sys-outlook-sync').checked,
-                        createTicketsFromMail: q('#sys-outlook-create').checked
+                        syncIncoming: false,
+                        createTicketsFromMail: false
                     },
                     companyBrandingConfig: {
                         department: q('#sys-company-dept').value.trim(),
