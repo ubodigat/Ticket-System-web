@@ -11,6 +11,8 @@ const composeFile = `${repoDir}/ops/docker/docker-compose.yml`;
 const envFile = `${repoDir}/ops/docker/.env`;
 
 let job = null;
+let lastStatus = null;
+let statusRequest = null;
 
 function json(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
@@ -66,12 +68,13 @@ function run(command, args, options = {}) {
 }
 
 async function collectStatus() {
+  if (job?.running) return { ...lastStatus, enabled: allowMainDeploy, job };
   const fetchResult = await run('git', ['fetch', 'origin', branch, '--quiet'], { timeoutMs: 15000 });
   if (fetchResult.code !== 0) {
     // Ohne erfolgreichen fetch wäre "origin/<branch>" ein veralteter, irreführender Stand --
     // lieber ehrlich "nicht erreichbar" melden als eine falsche Diff-Anzeige.
     return {
-      branch, localCommit: null, remoteCommit: null, localSubject: null, remoteSubject: null,
+      enabled: allowMainDeploy, branch, localCommit: null, remoteCommit: null, localSubject: null, remoteSubject: null,
       updateAvailable: false, commitsBehind: 0, job,
       error: 'github_unreachable', errorDetail: fetchResult.err || fetchResult.out
     };
@@ -81,7 +84,8 @@ async function collectStatus() {
   const localSubject = await run('git', ['log', '-1', '--pretty=%s', 'HEAD']);
   const remoteSubject = await run('git', ['log', '-1', '--pretty=%s', `origin/${branch}`]);
   const behind = await run('git', ['rev-list', '--count', `HEAD..origin/${branch}`]);
-  return {
+  lastStatus = {
+    enabled: allowMainDeploy,
     branch,
     localCommit: local.out,
     remoteCommit: remote.out,
@@ -91,6 +95,7 @@ async function collectStatus() {
     commitsBehind: Number(behind.out || 0),
     job
   };
+  return lastStatus;
 }
 
 async function runUpdate() {
@@ -103,7 +108,7 @@ async function runUpdate() {
   const step = async (label, command, args) => {
     job.step = label;
     job.log.push(`$ ${command} ${args.join(' ')}`);
-    const result = await run(command, args);
+    const result = await run(command, args, { timeoutMs: command === 'git' ? 15000 : 1800000 });
     if (result.out) job.log.push(result.out);
     if (result.err) job.log.push(result.err);
     if (result.code !== 0) throw new Error(`${label} failed`);
@@ -111,13 +116,14 @@ async function runUpdate() {
 
   try {
     await step('fetch', 'git', ['fetch', 'origin', branch]);
-    // reset --hard statt pull --ff-only: diese Installation wird nie von Hand bearbeitet, daher
-    // ist ein deterministisches "genau wie auf GitHub" wichtiger als divergierende lokale
-    // Änderungen zu erhalten -- und es kann nicht an einem abgelehnten Fast-Forward scheitern.
-    await step('reset', 'git', ['reset', '--hard', `origin/${branch}`]);
+    const dirty = await run('git', ['status', '--porcelain']);
+    if (dirty.code !== 0 || dirty.out) throw new Error('Lokale Aenderungen vorhanden. Update abgebrochen; Dateien bleiben erhalten.');
+    const target = await run('git', ['rev-parse', `origin/${branch}`]);
+    if (target.code !== 0 || !/^[0-9a-f]{40}$/.test(target.out)) throw new Error('Ungueltiger Update-Commit');
+    await step('reset', 'git', ['merge', '--ff-only', target.out]);
     await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'build', '--no-cache', 'app']);
-    await step('restart', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', '--force-recreate', 'app']);
-    await step('migrate', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'exec', '-T', 'app', 'node', 'dist/db/migrate.js']);
+    await step('migrate', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'run', '--rm', '--no-deps', 'app', 'node', 'dist/db/migrate.js']);
+    await step('restart', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', '--no-deps', '--force-recreate', '--wait', '--wait-timeout', '180', 'app']);
     job.ok = true;
     job.step = 'done';
   } catch (error) {
@@ -137,7 +143,11 @@ await run('git', ['config', '--global', '--add', 'safe.directory', repoDir]);
 createServer(async (req, res) => {
   try {
     if (!auth(req, res)) return;
-    if (req.method === 'GET' && req.url === '/status') return json(res, 200, await collectStatus());
+    if (req.method === 'GET' && req.url === '/health') return json(res, 200, { status: 'ok' });
+    if (req.method === 'GET' && req.url === '/status') {
+      if (!statusRequest) statusRequest = collectStatus().finally(() => { statusRequest = null; });
+      return json(res, 200, await statusRequest);
+    }
     if (req.method === 'POST' && req.url === '/run') {
       if (!allowMainDeploy) return json(res, 403, { error: 'update_runner_disabled', message: 'Automatische Deployments von main sind deaktiviert. Aktiviere UPDATE_ALLOW_MAIN_DEPLOY=true nur bewusst und zeitlich begrenzt.' });
       if (job?.running) return json(res, 409, { error: 'update_already_running', job });

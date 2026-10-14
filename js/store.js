@@ -92,6 +92,18 @@ export const Store = {
     _usersCache: null,
     _usersSnapshot: null,
     cloneUserList: (users) => JSON.parse(JSON.stringify(users || [])),
+    getUserDirectory: async () => {
+        const res = await fetch('/api/v2/users/directory', { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) {
+            if (Store._usersCache) return Store._usersCache;
+            throw new Error('Benutzerverzeichnis konnte nicht geladen werden.');
+        }
+        const payload = await res.json();
+        const users = (payload.users || []).map(Store.mapApiUserToLegacy);
+        Store._usersCache = users;
+        Store._usersSnapshot = Store.cloneUserList(users);
+        return users;
+    },
     mapApiUserToLegacy: (u) => ({
         id: u.id,
         username: u.username,
@@ -122,17 +134,16 @@ export const Store = {
         absence: u.absence ?? null
     }),
     getUsers: async () => {
+        const sessionUser = Store._sessionUserCache || Store._meCache || await Store.fetchSessionUser();
+        const mayReadAdminUsers = sessionUser && (
+            sessionUser.role === 'superadmin' ||
+            (sessionUser.role === 'admin' && (sessionUser.canManageUsers || sessionUser.canManage2FA))
+        );
+        if (location.protocol.startsWith('http') && !mayReadAdminUsers) return Store.getUserDirectory();
         const res = await fetch('/api/v2/users', { credentials: 'same-origin' });
         if (!res.ok) {
             if (res.status === 403) {
-                const dirRes = await fetch('/api/v2/users/directory', { credentials: 'same-origin' }).catch(() => null);
-                if (dirRes?.ok) {
-                    const payload = await dirRes.json();
-                    const users = (payload.users || []).map(Store.mapApiUserToLegacy);
-                    Store._usersCache = users;
-                    Store._usersSnapshot = Store.cloneUserList(users);
-                    return users;
-                }
+                return Store.getUserDirectory();
             }
             if (Store._usersCache) return Store._usersCache;
             throw new Error('Benutzerliste konnte nicht geladen werden.');
@@ -591,6 +602,8 @@ export const Store = {
     // Anlegen des Benutzerkontos bei Annahme läuft weiterhin über Store.saveUsers (neuer
     // Eintrag im Array -> POST /api/v2/users, siehe AdminBoard.confirmApprove).
     getRequests: async () => {
+        const user = Store._sessionUserCache || Store._meCache || await Store.fetchSessionUser();
+        if (location.protocol.startsWith('http') && !(user?.role === 'superadmin' || user?.canManageRequests)) return [];
         const res = await fetch('/api/v2/account-requests', { credentials: 'same-origin' });
         if (!res.ok) return [];
         const payload = await res.json();
@@ -1064,6 +1077,8 @@ export const Store = {
     // nachgebaut: die entsprechenden Server-seitigen Aktionen erzeugen ihre Benachrichtigungen
     // bereits selbst, z.B. neues Ticket/Statusänderung/Genehmigung in tickets.ts).
     addNotifications: async (recipients, ticket, message, actorUsername, type = 'generic') => {
+        const actor = Store._sessionUserCache || Store._meCache || await Store.fetchSessionUser();
+        if (!(actor?.role === 'admin' || actor?.role === 'superadmin')) return;
         const users = await Store.getUsers();
         const targets = [...new Set((recipients || []).filter(username => username && username !== actorUsername))];
         const allowed = [];

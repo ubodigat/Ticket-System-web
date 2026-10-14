@@ -874,6 +874,7 @@ export const AdminBoard = {
         const visibleLogs = await AdminBoard.getFilteredGlobalLogs();
         const settings = await Store.getSettings();
         const company = settings.companyConfig || {};
+        const companyLogo = company.logoUrl || settings.companyBranding?.logoDataUrl || '';
         const actor = await Store.currentUser();
         const rows = visibleLogs.map(l => `
             <tr>
@@ -899,7 +900,7 @@ export const AdminBoard = {
                     <h1>System-Protokoll</h1>
                     <div class="meta">Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))} &middot; ${visibleLogs.length} Einträge</div>
                 </div>
-                ${company.logoUrl ? `<img src="${Utils.esc(company.logoUrl)}" alt="Logo">` : ''}
+                ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}
             </div>
             <table><thead><tr><th>Datum/Uhrzeit</th><th>Benutzer</th><th>Aktion</th><th>Details</th></tr></thead>
             <tbody>${rows || '<tr><td colspan="4">Keine Einträge gefunden.</td></tr>'}</tbody></table>
@@ -1428,6 +1429,7 @@ export const AdminBoard = {
         modal.querySelector('#gm-print').onclick = async () => {
             const settings = await Store.getSettings();
             const company = settings.companyConfig || {};
+            const companyLogo = company.logoUrl || settings.companyBranding?.logoDataUrl || '';
             const actor = await Store.currentUser();
             const users = await Store.getUsers();
             const members = users.filter(u => (group.members || []).includes(u.username));
@@ -1438,7 +1440,7 @@ export const AdminBoard = {
                 table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}</style></head>
                 <body><div class="print-head"><div><h1>${Utils.esc(company.name || 'Support Portal')} · Gruppe ${Utils.esc(group.name)}</h1>
                 <div class="meta">${members.length} Mitglieder &middot; Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div></div>
-                ${company.logoUrl ? `<img src="${Utils.esc(company.logoUrl)}" alt="Logo">` : ''}</div>
+                ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}</div>
                 <table><thead><tr><th>Name</th><th>Benutzername</th><th>E-Mail</th><th>Rolle</th></tr></thead><tbody>
                 ${members.map(u => `<tr><td>${Utils.esc(u.name || '-')}</td><td>${Utils.esc(u.username)}</td><td>${Utils.esc(u.email || '-')}</td><td>${Utils.esc(u.role)}</td></tr>`).join('')}
                 </tbody></table></body></html>`);
@@ -1728,7 +1730,7 @@ export const AdminBoard = {
         return modal;
     },
 
-    // Das generische Modal versteckt seine Fußzeile standardmäßig (Speichern läuft über das
+    // Das generische Modal versteckt seine Fußzeile standardmäßig (Speichern l&auml;uft über das
     // Disketten-Icon im Kopf). Für Dialoge, bei denen ein eindeutig beschrifteter Button
     // klarer ist, blendet diese Funktion die Fußzeile sichtbar ein (nur für das übergebene,
     // bereits individualisierte Modal-Element -- nie das geteilte #generic-modal selbst).
@@ -1744,14 +1746,14 @@ export const AdminBoard = {
 
     // Übersichtlicher Fortschritt statt nur "Schritt: build" als Text -- ein docker build
     // --no-cache kann mehrere Minuten dauern, ohne sichtbaren Fortschritt wirkt das wie ein
-    // Hänger. job.step bleibt auch nach einem Fehler auf dem Namen des zuletzt gestarteten
+    // Haenger. job.step bleibt auch nach einem Fehler auf dem Namen des zuletzt gestarteten
     // Schritts stehen (updater-server.mjs), job.failed zeigt den Fehlschlag separat an.
     updateSteps: [
         { key: 'fetch', label: 'Abrufen' },
-        { key: 'reset', label: 'Zurücksetzen' },
+        { key: 'reset', label: 'Aktualisieren' },
         { key: 'build', label: 'Bauen' },
-        { key: 'restart', label: 'Neustarten' },
-        { key: 'migrate', label: 'Migrieren' }
+        { key: 'migrate', label: 'Migrieren' },
+        { key: 'restart', label: 'Neustarten' }
     ],
     renderUpdateProgress: (job) => {
         const steps = AdminBoard.updateSteps;
@@ -1772,49 +1774,60 @@ export const AdminBoard = {
             </div>`;
     },
 
-    // pollTimer: läuft ein Update, fragt diese Funktion den Status alle 4s erneut ab, damit der
+    // pollTimer: l&auml;uft ein Update, fragt diese Funktion den Status alle 4s erneut ab, damit der
     // Fortschritt live sichtbar ist (ein docker build --no-cache kann mehrere Minuten dauern) --
-    // ohne dass die Person manuell auf "Prüfen" klicken muss.
+    // ohne dass die Person manuell auf "Pruefen" klicken muss.
     updatePollTimer: null,
     renderUpdateStatus: async () => {
         const area = q('#sys-update-status');
         if (!area) return;
         clearTimeout(AdminBoard.updatePollTimer);
-        area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} Update-Status wird geprüft...</div>`;
+        if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
+        const actor = await Store.currentUser();
+        if (actor?.role !== 'superadmin') {
+            area.textContent = 'Nur Superadmins können Updates prüfen und starten.';
+            return;
+        }
+        area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} Update-Status wird gepr&uuml;ft...</div>`;
         const status = await Store.getUpdateStatus();
         if (!q('#sys-update-status')) return; // Modal inzwischen geschlossen
         // httpStatus unterscheidet, WARUM der Abruf fehlschlug -- vorher zeigte jeder Fehlschlag
         // (auch ein voruebergehender Gateway-Timeout waehrend eines laufenden Updates) dieselbe,
         // irrefuehrende "nicht konfiguriert"-Meldung.
         if (status.httpStatus === 0) {
-            area.innerHTML = `<div class="callout callout-danger">Server nicht erreichbar. Bitte Internetverbindung prüfen und erneut versuchen.</div>`;
+            area.innerHTML = `<div class="callout callout-danger">Server nicht erreichbar. Bitte Internetverbindung pr&uuml;fen und erneut versuchen.</div>`;
             if (window.lucide) lucide.createIcons();
             return;
         }
-        if (status.httpStatus === 503 || status.error === 'update_service_disabled' || status.error === 'update_service_not_configured') {
-            area.innerHTML = `<div class="callout callout-info">Online-Updates sind aus SicherheitsgrÃ¼nden in der Standardinstallation deaktiviert. Installiere Updates per Server-Command oder aktiviere den Updater bewusst nur temporÃ¤r.</div>`;
+        if (status.error === 'update_service_disabled' || status.error === 'update_service_not_configured') {
+            area.innerHTML = `<div class="callout callout-info">Online-Updates sind aus Sicherheitsgr&uuml;nden in der Standardinstallation deaktiviert. Installiere Updates per Server-Command oder aktiviere den Updater bewusst nur tempor&auml;r.</div>`;
             const runBtn = q('#sys-update-run');
             if (runBtn) runBtn.disabled = true;
             if (window.lucide) lucide.createIcons();
             return;
         }
-        if (status.error === 'update_runner_disabled') {
+        if (status.error === 'update_runner_disabled' || status.enabled === false) {
             area.innerHTML = `<div class="callout callout-info">Der Updater-Dienst ist erreichbar, darf aber keine Deployments starten. UPDATE_ALLOW_MAIN_DEPLOY ist deaktiviert.</div>`;
             const runBtn = q('#sys-update-run');
             if (runBtn) runBtn.disabled = true;
             if (window.lucide) lucide.createIcons();
             return;
         }
-        if (status.httpStatus === 504 || status.httpStatus === 502) {
-            area.innerHTML = `<div class="callout callout-danger">Updater antwortet gerade nicht (${Utils.esc(String(status.httpStatus))}) -- kann an einem laufenden Neustart des App-Containers liegen. In Kürze erneut versuchen.</div>
-                <button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}Erneut prüfen</button>`;
+        if (status.httpStatus === 503 || status.httpStatus === 504 || status.httpStatus === 502) {
+            area.innerHTML = `<div class="callout callout-danger">Updater antwortet gerade nicht (${Utils.esc(String(status.httpStatus))}) -- kann an einem laufenden Neustart des App-Containers liegen. In K&uuml;rze erneut versuchen.</div>
+                <button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}Erneut pr&uuml;fen</button>`;
             q('#sys-update-retry').onclick = () => AdminBoard.renderUpdateStatus();
             if (window.lucide) lucide.createIcons();
             return;
         }
         if (status.error === 'github_unreachable') {
-            area.innerHTML = `<div class="callout callout-danger">GitHub ist vom Server aus nicht erreichbar -- Internetverbindung des Updater-Dienstes prüfen.</div>`;
+            area.innerHTML = `<div class="callout callout-danger">GitHub ist vom Server aus nicht erreichbar -- Internetverbindung des Updater-Dienstes pr&uuml;fen.</div>`;
+            if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
             if (window.lucide) lucide.createIcons();
+            return;
+        }
+        if (status.error || status.httpStatus !== 200) {
+            area.innerHTML = `<div class="callout callout-danger">Update-Status konnte nicht geladen werden (${Utils.esc(String(status.httpStatus))}).</div>`;
             return;
         }
         const job = status.job;
@@ -1823,10 +1836,10 @@ export const AdminBoard = {
             <div class="settings-summary-grid">
                 <div class="summary-card"><span>Lokale Version</span><strong>${Utils.esc((status.localCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.localSubject || '')}</small></div>
                 <div class="summary-card"><span>GitHub Version</span><strong>${Utils.esc((status.remoteCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.remoteSubject || '')}</small></div>
-                <div class="summary-card"><span>Status</span><strong>${updateAvailable ? `${status.commitsBehind || 1} Update(s) verfügbar` : 'Aktuell'}</strong><small>${Utils.esc(status.branch || 'main')}</small></div>
+                <div class="summary-card"><span>Status</span><strong>${updateAvailable ? `${status.commitsBehind || 1} Update(s) verf&uuml;gbar` : 'Aktuell'}</strong><small>${Utils.esc(status.branch || 'main')}</small></div>
             </div>
             ${job ? `<div class="update-log ${job.failed ? 'failed' : job.ok ? 'ok' : 'running'}">
-                <strong>${job.running ? 'Update läuft...' : job.ok ? 'Letztes Update erfolgreich' : job.failed ? 'Letztes Update fehlgeschlagen' : ''}</strong>
+                <strong>${job.running ? 'Update l&auml;uft...' : job.ok ? 'Letztes Update erfolgreich' : job.failed ? 'Letztes Update fehlgeschlagen' : ''}</strong>
                 ${AdminBoard.renderUpdateProgress(job)}
                 <pre>${Utils.esc((job.log || []).slice(-18).join('\n'))}</pre>
             </div>` : ''}
@@ -1884,7 +1897,7 @@ export const AdminBoard = {
                     </nav>
                     <div class="modal-body sys-settings-content">
                         <div class="callout" hidden>Microsoft-Graph/Outlook-Integration gibt es im aktuellen Backend nicht -- dieses Feld
-                            wurde entfernt statt ungespeichert vorzutäuschen. Automatische Zuweisung läuft über die Kategorie
+                            wurde entfernt statt ungespeichert vorzutäuschen. Automatische Zuweisung l&auml;uft über die Kategorie
                             (Benutzerverwaltung → Kategorien → „Automatische Zuweisung an Gruppe").</div>
                         <!-- Sicherheit -->
                         <div id="sys-security" class="tab-content">
@@ -1956,14 +1969,14 @@ export const AdminBoard = {
 
                         <!-- Update -->
                         <div id="sys-update" class="tab-content">
-                            <div class="callout">Prüft den aktuellen Stand gegen GitHub und aktualisiert die Serverinstallation per internem Updater. Während des Updates wird der App-Container neu gebaut und kurz neu gestartet.</div>
+                            <div class="callout">Pr&uuml;ft den aktuellen Stand gegen GitHub und aktualisiert die Serverinstallation per internem Updater. W&auml;hrend des Updates wird der App-Container neu gebaut und kurz neu gestartet.</div>
                             <div class="update-status" id="sys-update-status">
-                                <div class="empty-state compact">Noch nicht geprüft.</div>
+                                <div class="empty-state compact">Noch nicht gepr&uuml;ft.</div>
                             </div>
                             <div class="setting-row">
                                 <span class="hint">Nur Superadmins können Updates starten.</span>
                                 <div class="button-row">
-                                    <button class="btn-secondary btn-sm" id="sys-update-check" type="button">${Icon('refresh-cw', 15)}Prüfen</button>
+                                    <button class="btn-secondary btn-sm" id="sys-update-check" type="button">${Icon('refresh-cw', 15)}Pr&uuml;fen</button>
                                     <button class="btn-primary btn-sm" id="sys-update-run" type="button">${Icon('download-cloud', 15)}Update installieren</button>
                                 </div>
                             </div>
@@ -2027,7 +2040,7 @@ export const AdminBoard = {
                             <div class="callout"><strong>E-Mail Sicherheit:</strong> Zertifikate und Schlüssel werden gespeichert und für Backend/SMTP-Integration bereitgestellt.</div>
                             <div class="form-grid">
                                 <div class="field"><label>Transport-Sicherheit</label><select id="sys-email-transport"><option value="starttls">STARTTLS erzwingen</option><option value="tls">TLS/SSL erzwingen</option><option value="opportunistic">Opportunistisch</option></select></div>
-                                <div class="field"><label>Zertifikatsprüfung</label><select id="sys-email-cert-mode"><option value="strict">Strikt prüfen</option><option value="allow-self-signed">Self-signed erlauben</option><option value="disabled">Deaktiviert</option></select></div>
+                                <div class="field"><label>Zertifikatsprüfung</label><select id="sys-email-cert-mode"><option value="strict">Strikt pr&uuml;fen</option><option value="allow-self-signed">Self-signed erlauben</option><option value="disabled">Deaktiviert</option></select></div>
                             </div>
                             <div class="field field-wide"><label>S/MIME Zertifikat (PEM)</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
                             <div class="field field-wide"><label>S/MIME Private Key (PEM)</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
@@ -2081,7 +2094,7 @@ export const AdminBoard = {
                             <div class="settings-section-title">Geschäftszeiten für Fristen</div>
                             <label class="check-row">
                                 <input type="checkbox" id="sys-bh-enabled">
-                                <span class="check-text"><strong>Geschäftszeiten berücksichtigen</strong><span>Außerhalb dieser Zeiten sowie an Feiertagen läuft die Lösungsfrist nicht weiter.</span></span>
+                                <span class="check-text"><strong>Geschäftszeiten berücksichtigen</strong><span>Außerhalb dieser Zeiten sowie an Feiertagen l&auml;uft die Lösungsfrist nicht weiter.</span></span>
                             </label>
                             <div class="field field-wide">
                                 <label>Geschäftszeiten je Tag</label>
@@ -2168,6 +2181,8 @@ export const AdminBoard = {
                     btn.classList.add('active');
                     modal.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                     q('#' + btn.dataset.tab).classList.add('active');
+                    if (btn.dataset.tab === 'sys-update') AdminBoard.renderUpdateStatus();
+                    else clearTimeout(AdminBoard.updatePollTimer);
                     if (window.lucide) lucide.createIcons();
                 };
             });
@@ -2365,7 +2380,7 @@ export const AdminBoard = {
 
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
-        AdminBoard.renderUpdateStatus();
+        if (q('#sys-update')?.classList.contains('active')) AdminBoard.renderUpdateStatus();
 
         q('#sys-save').onclick = async () => {
             const padding = Math.max(1, Math.min(12, parseInt(q('#sys-ticket-number-padding').value, 10) || 5));
@@ -3032,16 +3047,18 @@ export const AdminBoard = {
         if (newStatus === 'Geschlossen' && ticket.isMajorIncident) {
             await AdminBoard.notifyLinkedIncidentTickets(ticket, ticket.desc);
         }
-        if (linkedForNotify.length) {
-            await Store.addNotifications(linkedForNotify.map(lt => lt.author).filter(Boolean), ticket, `Status der Großstörung wurde auf "${Lang.status(newStatus)}" geändert.`, actor?.username, 'statusChange');
-        }
+        // Die In-App-Benachrichtigung an die jeweiligen Ticketersteller erzeugt die Server-PATCH-
+        // Route bereits pro geaendertem Ticket. Hier keine zweite Client-Benachrichtigung senden.
         const requestDetails = newStatus === 'Warten auf Benutzer' ? `\nAnforderung: ${ticket.waitingMessage}` : '';
         await Store.addGlobalLog('Ticket Status geändert', `Ticket: ${ticket.title}, Status: ${newStatus}${requestDetails}`);
         const notificationMessage = newStatus === 'Warten auf Benutzer' ?
             `Wir benötigen noch folgende Angaben: ${ticket.waitingMessage}` :
             `Status geändert: ${Lang.status(newStatus)}`;
         const statusNotifType = newStatus === 'Geschlossen' ? 'ticketClosed' : 'statusChange';
-        await Store.addNotifications([ticket.author, ...(ticket.participants || [])], ticket, notificationMessage, actor?.username, statusNotifType);
+        const participantRecipients = (ticket.participants || []).filter(name => name && name !== ticket.author);
+        if (participantRecipients.length) {
+            await Store.addNotifications(participantRecipients, ticket, notificationMessage, actor?.username, statusNotifType);
+        }
 
         const settings = await Store.getSettings();
         const author = (await Store.getUsers()).find(user => user.username === ticket.author);
@@ -3937,6 +3954,7 @@ export const AdminBoard = {
             const html = modal.querySelector('#rep-body').innerHTML;
             const settings = await Store.getSettings();
             const company = settings.companyConfig || {};
+            const companyLogo = company.logoUrl || settings.companyBranding?.logoDataUrl || '';
             const actor = await Store.currentUser();
             const rangeLabel = modal.querySelector('#rep-range').selectedOptions[0]?.textContent || '';
             UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Auswertung</title>
@@ -3955,7 +3973,7 @@ export const AdminBoard = {
                         <h1>${Utils.esc(company.name || 'Support Portal')} · Auswertung</h1>
                         <div class="meta">Zeitraum: ${Utils.esc(rangeLabel)} &middot; Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div>
                     </div>
-                    ${company.logoUrl ? `<img src="${Utils.esc(company.logoUrl)}" alt="Logo">` : ''}
+                    ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}
                 </div>
                 ${html}</body></html>`);
         };
@@ -4191,7 +4209,7 @@ export const AdminBoard = {
         UI.toast('Als Wissensartikel gespeichert.');
     },
 
-    // Ausführung läuft serverseitig per Timer (jobs/maintenance.ts runRecurringTickets),
+    // Ausführung l&auml;uft serverseitig per Timer (jobs/maintenance.ts runRecurringTickets),
     // next_run_at wird dort nach jedem Lauf automatisch weitergerechnet -- kein Client-Trigger
     // und kein "Tag im Monat/Wochentag"-Modell mehr, sondern ein konkreter Start-Zeitpunkt.
     openRecurring: async () => {
@@ -4204,7 +4222,7 @@ export const AdminBoard = {
             size: 'md',
             body: `
                 <div id="rec-list"></div>
-                <div class="field"><label for="rec-title">Betreff</label><input id="rec-title" type="text" placeholder="z. B. Backup prüfen"></div>
+                <div class="field"><label for="rec-title">Betreff</label><input id="rec-title" type="text" placeholder="z. B. Backup pr&uuml;fen"></div>
                 <div class="field"><label for="rec-desc">Beschreibung</label><textarea id="rec-desc" rows="3"></textarea></div>
                 <div class="form-grid">
                     <div class="field"><label for="rec-cat">Kategorie</label><select id="rec-cat">${categories.map(c => `<option value="${Utils.esc(c)}">${Utils.esc(c)}</option>`).join('')}</select></div>
@@ -4263,7 +4281,7 @@ export const AdminBoard = {
     },
 
     // approval_status/approval_reviewer_id/... sind keine flachen Store.saveTickets-Felder --
-    // Entscheidung läuft direkt über den dedizierten Endpunkt, der auch die Prüfer-Autorisierung
+    // Entscheidung l&auml;uft direkt über den dedizierten Endpunkt, der auch die Prüfer-Autorisierung
     // (IDOR-Schutz: nur die eingetragene Person oder Superadmin) serverseitig durchsetzt.
     decideApproval: async (ticketId, status, reason) => {
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticketId)}/approval-decision`, {
@@ -5170,6 +5188,7 @@ export const AdminBoard = {
         };
         const settings = await Store.getSettings();
         const company = settings.companyConfig || {};
+        const companyLogo = company.logoUrl || settings.companyBranding?.logoDataUrl || '';
         const actor = await Store.currentUser();
         const slaCountdown = Store.formatSlaCountdown(t, settings);
         // Die Ticket-Liste (Store.getTickets) liefert bewusst nur Zaehlungen, keine vollen
@@ -5246,7 +5265,7 @@ export const AdminBoard = {
                     <h1>${Utils.esc(t.ticketNumber || t.id)} &middot; ${Utils.esc(t.title)}</h1>
                     <div class="meta">Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div>
                 </div>
-                ${company.logoUrl ? `<img src="${Utils.esc(company.logoUrl)}" alt="Logo">` : ''}
+                ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}
             </div>
             <div class="grid">
                 <div><strong>Von</strong>${Utils.esc(nameFor(t.author) || t.author)}</div>
@@ -5876,7 +5895,7 @@ export const AdminBoard = {
     // data: URIs werden von Chrome in iframes/embed häufig blockiert ("Diese Seite wurde von
     // Chrome blockiert"). blob:-URLs aus demselben Origin sind davon nicht betroffen -- daher
     // wird jeder Anhang vor der Anzeige einmal in ein Blob umgewandelt.
-    dataUriToBlobUrl: (dataUri, mime) => {
+    dataUriToBlob: (dataUri, mime) => {
         const commaIdx = dataUri.indexOf(',');
         const meta = dataUri.slice(5, commaIdx);
         const isBase64 = meta.includes(';base64');
@@ -5884,8 +5903,10 @@ export const AdminBoard = {
         const byteString = isBase64 ? atob(payload) : decodeURIComponent(payload);
         const bytes = new Uint8Array(byteString.length);
         for (let i = 0; i < byteString.length; i++) bytes[i] = byteString.charCodeAt(i);
-        const blob = new Blob([bytes], { type: mime || meta.split(';')[0] || 'application/octet-stream' });
-        return URL.createObjectURL(blob);
+        return new Blob([bytes], { type: mime || meta.split(';')[0] || 'application/octet-stream' });
+    },
+    dataUriToBlobUrl: (dataUri, mime) => {
+        return URL.createObjectURL(AdminBoard.dataUriToBlob(dataUri, mime));
     },
 
     openAttachmentPreview: async (file) => {
@@ -5899,8 +5920,10 @@ export const AdminBoard = {
             AdminBoard._lastPreviewBlobUrl = null;
         }
         let blobUrl = null;
+        let previewBlob = null;
         try {
-            blobUrl = AdminBoard.dataUriToBlobUrl(attachment.data, attachment.type);
+            previewBlob = AdminBoard.dataUriToBlob(attachment.data, attachment.type);
+            blobUrl = URL.createObjectURL(previewBlob);
             AdminBoard._lastPreviewBlobUrl = blobUrl;
         } catch (error) {
             console.error(error);
@@ -5975,7 +5998,7 @@ export const AdminBoard = {
             body.append(image);
         } else if (/\.(txt|csv|tsv|json|xml|md|log|html?)$/.test(name) || mime.startsWith('text/')) {
             try {
-                addText(await (await fetch(previewSrc)).text());
+                addText(previewBlob ? await previewBlob.text() : 'Diese Datei kann nicht als Text gelesen werden.');
             } catch {
                 addText('Diese Datei kann nicht als Text gelesen werden.');
             }
@@ -5987,7 +6010,8 @@ export const AdminBoard = {
                 if (name.endsWith('.docx') && !window.mammoth) await Utils.loadVendorScript('/vendor/mammoth.browser.min.js').catch(() => {});
                 else if (/\.(xlsx|xls)$/.test(name) && !window.XLSX) await Utils.loadVendorScript('/vendor/xlsx.full.min.js').catch(() => {});
                 else if (name.endsWith('.pptx') && !window.JSZip) await Utils.loadVendorScript('/vendor/jszip.min.js').catch(() => {});
-                const buffer = await (await fetch(previewSrc)).arrayBuffer();
+                const buffer = previewBlob ? await previewBlob.arrayBuffer() : null;
+                if (!buffer) throw new Error('preview_blob_missing');
                 if (name.endsWith('.docx') && window.mammoth) {
                     const result = await window.mammoth.extractRawText({
                         arrayBuffer: buffer

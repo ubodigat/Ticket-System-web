@@ -61,7 +61,7 @@ const userPermissionsSchema = z.object({
 });
 
 const createUserSchema = z.object({
-  username: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.\-]+$/, 'Nur Buchstaben, Zahlen, _, ., - erlaubt'),
+  username: z.string().trim().min(1).max(64).regex(/^[\p{L}\p{N}_.-]+$/u, 'Nur Buchstaben, Zahlen, _, ., - erlaubt'),
   password: z.string().min(12).max(512), // Mindestlänge 12 Zeichen erzwingen
   name: z.string().trim().min(1).max(255),
   email: z.string().email().max(255),
@@ -702,8 +702,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       id,
       user_id: targetUserId,
       active: true,
-      from_at: data.from_at ?? null,
-      until_at: data.until_at ?? null,
+      from_at: data.from_at ? mysqlTimestamp(new Date(data.from_at)) : null,
+      until_at: data.until_at ? mysqlTimestamp(new Date(data.until_at)) : null,
       substitute_user_id: data.substitute_user_id ?? null,
       visible: data.visible
     }).execute();
@@ -845,7 +845,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   });
 
   const importRowSchema = z.object({
-    username: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.\-]+$/),
+    username: z.string().trim().min(1).max(64).regex(/^[\p{L}\p{N}_.-]+$/u),
     name: z.string().trim().min(1).max(255),
     email: z.string().email().max(255),
     role: z.enum(['user', 'admin']).default('user')

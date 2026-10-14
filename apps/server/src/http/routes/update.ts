@@ -12,22 +12,19 @@ export interface UpdateRouteDeps {
 
 async function callUpdater(env: Env, path: '/status' | '/run', method: 'GET' | 'POST') {
   if (!env.UPDATE_SERVICE_URL || !env.UPDATE_TOKEN) {
-    return { ok: false, status: 503, payload: { error: 'update_service_not_configured' } };
+    return { ok: false, status: method === 'GET' ? 200 : 503, payload: { enabled: false, error: 'update_service_not_configured' } };
   }
   try {
-    // Ohne Zeitlimit haengt diese Anfrage genauso lang wie ein haengender Befehl im Updater-
-    // Sidecar (siehe updater-server.mjs) -- Caddy wartet nicht ewig auf die Antwort dieses
-    // App-Containers und beendet die Verbindung dann selbst mit 502 Bad Gateway, was im Browser
-    // wie ein kompletter Ausfall aussieht, obwohl der App-Container die ganze Zeit lief.
+    // Allow the updater's bounded Git fetch (15s) to finish before timing out the proxy.
     const res = await fetch(`${env.UPDATE_SERVICE_URL}${path}`, {
       method,
       headers: { authorization: `Bearer ${env.UPDATE_TOKEN}` },
-      signal: AbortSignal.timeout(3000)
+      signal: AbortSignal.timeout(25000)
     });
     const payload = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, payload };
   } catch {
-    return { ok: false, status: 503, payload: { error: 'update_service_disabled' } };
+    return { ok: false, status: 503, payload: { error: 'update_service_unreachable' } };
   }
 }
 

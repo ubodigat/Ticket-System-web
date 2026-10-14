@@ -358,10 +358,8 @@ export const UserDash = {
                 ticket.status = 'Geschlossen';
                 ticket.slaPausedSince = null;
                 await Store.addLog(ticket, 'Vom Benutzer als gelöst geschlossen');
-                await Store.saveTickets(all);
-                const actor = await Store.currentUser();
-                const admins = (await Store.getUsers()).filter(u => u.role === 'admin' || u.role === 'superadmin').map(u => u.username);
-                await Store.addNotifications(admins, ticket, `${actor?.name || actor?.username}: Ticket wurde vom Benutzer als gelöst geschlossen.`, actor?.username, 'ticketClosed');
+                const saved = await Store.saveTickets(all);
+                if (!saved) return UI.toast('Ticket konnte nicht geschlossen werden.');
                 await Notifications.refresh();
                 UI.toast('Ticket geschlossen.');
                 await UserDash.openModal(t.id);
@@ -436,7 +434,7 @@ export const UserDash = {
 
         // Bearbeiter = Hauptverantwortlicher + Beteiligte Personen (der Hauptverantwortliche fehlte hier bisher)
         if (q('#u-m-assignee')) {
-            const allUsers = await Store.getUsers();
+            const allUsers = await Store.getUserDirectory();
             const handlers = [...new Set([t.owner, ...(t.assignees || [])].filter(Boolean))];
             if (handlers.length > 0) {
                 const names = handlers.map(u => {

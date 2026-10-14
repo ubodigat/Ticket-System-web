@@ -15,11 +15,13 @@ REPO_URL="${REPO_URL:-https://github.com/ubodigat/Ticket-System-web.git}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/ticket-system}"
 DEV_MODE=false
 ASSUME_YES=true
+ENABLE_UPDATES=false
 
 for arg in "$@"; do
   case "$arg" in
     --dev) DEV_MODE=true ;;
     --no-assume-yes) ASSUME_YES=false ;;
+    --enable-updates) ENABLE_UPDATES=true ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -299,6 +301,14 @@ fi
 
 ensure_public_env_defaults
 
+if [[ "$ENABLE_UPDATES" == "true" ]]; then
+  log "Enabling in-app updates (the updater requires Docker host privileges)"
+  set_env_var "COMPOSE_PROFILES" "dangerous-updater" "$ENV_FILE"
+  set_env_var "UPDATE_SERVICE_URL" "http://updater:3099" "$ENV_FILE"
+  set_env_var "UPDATE_ALLOW_MAIN_DEPLOY" "true" "$ENV_FILE"
+  set_env_var "UPDATE_REPO_DIR" "$SCRIPT_DIR" "$ENV_FILE"
+fi
+
 KEK_PATH="$SECRETS_DIR/app.kek"
 if [[ -f "$KEK_PATH" ]]; then
   log "Existing KEK found; keeping it"
@@ -362,6 +372,9 @@ log "Running database migrations"
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps app node dist/db/migrate.js
 
 log "Starting application stack"
+if grep -q '^UPDATE_ALLOW_MAIN_DEPLOY=true$' "$ENV_FILE"; then
+  run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile dangerous-updater up -d --build --force-recreate updater
+fi
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate --remove-orphans app caddy
 
 log "Waiting for app healthcheck"

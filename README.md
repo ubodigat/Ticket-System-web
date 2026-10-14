@@ -88,6 +88,21 @@ docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env exec 
 Der optionale In-App-Updater ist aus Sicherheitsgruenden nicht der Standardweg. Er benoetigt einen
 separaten Updater-Container mit Docker-Socket-Zugriff und sollte nur bewusst aktiviert werden.
 
+Fuer Updates direkt unter **System → Update** aktiviere ihn einmalig (auch bei einer bestehenden
+Installation; Datenbank und Zugangsdaten bleiben erhalten):
+
+```bash
+cd /opt/ticket-system && git pull --ff-only && bash install.sh --enable-updates
+```
+
+Bei einer Neuinstallation kann derselbe Schalter an den Installer angehaengt werden.
+Der Installer konfiguriert die interne Verbindung, startet den Updater und speichert die
+Aktivierung fuer weitere Container-Neustarts. Nur Superadmins koennen Updates starten.
+Der Dienst ist nicht auf einem Host-Port erreichbar, hat aber ueber den Docker-Socket
+Host-Rechte. Aktiviere ihn nur auf einem Server, auf dem du diese Berechtigung erlaubst.
+Updates verwenden Fast-Forward und brechen bei lokalen Aenderungen ab. Nach Build und
+Migration wartet der Updater auf den erfolgreichen App-Healthcheck.
+
 ## Projektstatus
 
 Die Serverversion nutzt MariaDB als zentrale Datenbank. Die alte lokale Oberflaeche

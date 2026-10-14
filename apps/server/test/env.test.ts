@@ -27,4 +27,15 @@ describe('loadEnv', () => {
       })
     ).toThrow();
   });
+
+  it('accepts empty optional updater variables from Docker Compose', () => {
+    const env = freshLoadEnv({
+      DB_HOST: 'localhost', DB_NAME: 'ticketsystem', DB_USER: 'app', DB_PASSWORD: 'secret',
+      KEK_FILE_PATH: '/run/secrets/kek', COOKIE_SECRET: 'x'.repeat(32),
+      INSTALLATION_ID: '123e4567-e89b-12d3-a456-426614174000',
+      UPDATE_SERVICE_URL: '', UPDATE_TOKEN: ''
+    });
+    expect(env.UPDATE_SERVICE_URL).toBeUndefined();
+    expect(env.UPDATE_TOKEN).toBeUndefined();
+  });
 });

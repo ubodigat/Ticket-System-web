@@ -580,16 +580,29 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     }
   });
 
-  // PATCH /api/v2/tickets/:id - Ticket aktualisieren (nur Admin)
+  // PATCH /api/v2/tickets/:id - Ticket aktualisieren.
+  // Admins duerfen alle freigegebenen Felder bearbeiten; normale Benutzer duerfen nur ihr
+  // eigenes, offenes Ticket als geloest schliessen.
   app.patch('/api/v2/tickets/:id', async (req, reply) => {
     try {
-      const session = requireAdmin(req);
+      const session = requireSession(req);
       const { id } = req.params as { id: string };
       const parsed = updateTicketSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
 
       const ticket = await app.db.selectFrom('tickets').selectAll().where('id', '=', id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      const patchKeys = Object.entries(parsed.data)
+        .filter(([, value]) => value !== undefined)
+        .map(([key]) => key);
+      const isSelfClose = !isAdmin
+        && ticket.created_by_user_id === session.uid
+        && ticket.archived_at === null
+        && ticket.status !== 'Geschlossen'
+        && parsed.data.status === 'Geschlossen'
+        && patchKeys.every(key => key === 'status');
+      if (!isAdmin && !isSelfClose) return reply.code(403).send({ error: 'forbidden' });
 
       const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
       const auditChanges: Array<{ field: string; old: unknown; new: unknown }> = [];
@@ -634,8 +647,20 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         if (key === 'title' || key === 'description' || key === 'incident_notice' || key === 'archived' || key === 'waiting_message') continue;
         if (value !== undefined) {
           const oldValue = (ticket as any)[key];
-          if (oldValue !== value) {
-            updates[key] = value;
+          let nextValue = value;
+          if (key === 'custom_due_at' || key === 'sla_due_at') {
+            if (value === null || value === '') {
+              nextValue = null;
+            } else {
+              const parsedDate = new Date(String(value));
+              if (Number.isNaN(parsedDate.getTime())) {
+                return reply.code(400).send({ error: 'invalid_datetime', field: key });
+              }
+              nextValue = mysqlTimestamp(parsedDate);
+            }
+          }
+          if (oldValue !== nextValue) {
+            updates[key] = nextValue;
             auditChanges.push({ field: key, old: oldValue, new: value });
           }
         }
