@@ -95,13 +95,12 @@ export const Store = {
     getUserDirectory: async () => {
         const res = await fetch('/api/v2/users/directory', { credentials: 'same-origin' }).catch(() => null);
         if (!res || !res.ok) {
-            if (Store._usersCache) return Store._usersCache;
+            if (Store._directoryCache) return Store._directoryCache;
             throw new Error('Benutzerverzeichnis konnte nicht geladen werden.');
         }
         const payload = await res.json();
         const users = (payload.users || []).map(Store.mapApiUserToLegacy);
-        Store._usersCache = users;
-        Store._usersSnapshot = Store.cloneUserList(users);
+        Store._directoryCache = users;
         return users;
     },
     mapApiUserToLegacy: (u) => ({
@@ -1339,6 +1338,7 @@ export const Store = {
                     await Store.markNotificationRead(selected.id);
                     q('#notification-modal')?.classList.remove('open');
                     await Notifications.refresh();
+                    if (selected.type === 'todo_assigned') document.dispatchEvent(new Event('open-todos'));
                     if (selected.ticketId) {
                         if (q('.kanban-board')) await AdminBoard.openModal(selected.ticketId);
                         else await UserDash.openModal(selected.ticketId);

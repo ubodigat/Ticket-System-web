@@ -4,6 +4,12 @@ Selbst gehostetes Helpdesk- und Ticketsystem mit Weboberflaeche, Fastify-Backend
 MariaDB, Docker Compose, serverseitigem Login, Tickets, Benutzerverwaltung,
 Einstellungen, Benachrichtigungen, Anhaengen und Audit-Logs.
 
+Admins haben eine Todo-Liste in der Kopfzeile: Ticket-Teilaufgaben mit Ticketfrist sowie
+eigene und geteilte Aufgaben mit optionaler Faelligkeit. Erledigte Aufgaben lassen sich
+einblenden; Entfernen wirkt nur auf die eigene Liste. Benutzer sehen beim Anmelden eine
+Uebersicht ausstehender Rueckfragen. Excel-Anhaenge bieten eine Blattvorschau mit
+verbundenen Zellen und Spaltenbreiten (keine vollstaendige Excel-Darstellung).
+
 ## Schnellinstallation
 
 Auf einem frischen Debian-/Ubuntu-Server als `root` ausfuehren:

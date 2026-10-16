@@ -72,6 +72,7 @@ export const Auth = {
         return null;
     },
     logout: async () => {
+        try { sessionStorage.removeItem('reply-reminder'); } catch { /* Storage is optional. */ }
         try {
             await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' });
         } catch {

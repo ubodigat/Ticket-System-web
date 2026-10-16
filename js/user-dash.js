@@ -267,6 +267,34 @@ export const UserDash = {
         }
 
         await UserDash.renderList();
+        await UserDash.showReplyReminder();
+    },
+
+    showReplyReminder: async () => {
+        const user = await Store.currentUser();
+        if (!user || user.role !== 'user') return;
+        const tickets = (await Store.getTickets()).filter(t => t.author === user.username && !t.archived && t.status === 'Warten auf Benutzer');
+        if (!tickets.length) return;
+        const signature = `${user.id}:${tickets.map(t => `${t.id}:${t.slaPausedSince || ''}`).sort().join('|')}`;
+        try { if (sessionStorage.getItem('reply-reminder') === signature) return; } catch { /* Storage may be disabled. */ }
+        let modal = q('#reply-reminder');
+        if (modal) modal.remove();
+        modal = document.createElement('div'); modal.id = 'reply-reminder'; modal.className = 'modal-overlay open';
+        modal.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="reply-reminder-title">
+            <div class="modal-header"><h3 id="reply-reminder-title">${Icon('message-circle-warning', 18)}Deine Rückmeldung wird benötigt (${tickets.length})</h3>
+            <button class="btn-ghost btn-icon" data-close title="Schließen" aria-label="Schließen">${Icon('x', 18)}</button></div>
+            <div class="modal-body">${tickets.map(t => `<button class="reply-reminder-item" data-ticket="${Utils.esc(t.id)}"><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span>${Utils.esc(t.waitingMessage || 'Bitte öffne den Chat und beantworte die Rückfrage des Supports.')}</span></button>`).join('')}</div></div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('[data-close]').onclick = () => modal.remove();
+        modal.addEventListener('keydown', e => { if (e.key === 'Escape') modal.remove(); });
+        modal.querySelectorAll('[data-ticket]').forEach(b => b.onclick = async () => {
+            modal.remove(); await UserDash.openModal(b.dataset.ticket);
+            q('#u-ticket-modal [data-tab="u-chat"]')?.click();
+            q('#u-chat-input')?.focus();
+        });
+        try { sessionStorage.setItem('reply-reminder', signature); } catch { /* No persistent storage required. */ }
+        modal.querySelector('[data-close]').focus();
+        if (window.lucide) lucide.createIcons();
     },
 
     renderFilePreview: () => {
@@ -546,7 +574,8 @@ export const UserDash = {
             toDisplay.forEach(t => {
                 const isOverdue = !!slaSettings.generalConfig?.showSlaToUsers && Store.isTicketOverdue(t, slaSettings);
                 const el = document.createElement('div');
-                el.className = `table-row user-ticket-row${t.archived ? ' is-archived' : ''}${isOverdue ? ' is-overdue-dezent' : ''}`;
+                const needsReply = t.status === 'Warten auf Benutzer' && !t.archived;
+                el.className = `table-row user-ticket-row${needsReply ? ' needs-reply' : ''}${t.archived ? ' is-archived' : ''}${isOverdue ? ' is-overdue-dezent' : ''}`;
 
                 const cats = Array.isArray(t.category) ? t.category : [t.category || '-'];
                 const catBadges = cats.map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('');
@@ -560,6 +589,7 @@ export const UserDash = {
                     <div class="ticket-row-main">
                         <div class="row-title" title="${Utils.esc(t.title)}">${Utils.esc(t.title)}</div>
                         <div class="ticket-row-cats"><span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>${catBadges}${archivedBadge}${overdueBadge}${approvalBadge}</div>
+                        ${needsReply ? `<div class="reply-required">${Icon('message-circle-warning', 15)}<span>Deine Antwort fehlt${t.waitingMessage ? ': ' + Utils.esc(t.waitingMessage) : ''}</span></div>` : ''}
                     </div>
                     <div class="ticket-row-status${String(t.status).startsWith('Warten auf') ? ' is-waiting' : ''}"><span class="status-badge">${pendingApproval ? 'Wartet auf Genehmigung' : Lang.status(t.status)}</span></div>
                     <div class="ticket-row-date date">${Utils.fmtDate(t.createdAt)}</div>

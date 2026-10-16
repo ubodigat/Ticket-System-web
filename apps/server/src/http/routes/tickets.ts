@@ -764,7 +764,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       // IDOR-Schutz
       const ticket = await app.db.selectFrom('tickets')
-        .select(['id', 'ticket_number', 'created_by_user_id', 'created_by_username', 'assigned_to_user_id', 'assigned_to_username'])
+        .select(['id', 'ticket_number', 'created_by_user_id', 'created_by_username', 'assigned_to_user_id', 'assigned_to_username', 'status', 'archived_at'])
         .where('id', '=', id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
@@ -773,20 +773,30 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const msgId = randomUUID();
       const msgDeks = await loadMessageDeks(app, deps.keyProvider);
       const encrypted = encryptMessage(deps, msgDeks, msgId, parsed.data.content, parsed.data.content_html ?? null);
-      await app.db.insertInto('ticket_messages').values({
-        id: msgId,
-        ticket_id: id,
-        sender_user_id: session.uid,
-        sender_username: session.username,
-        sender_name: session.username, // wird im Frontend mit echtem Namen aufgelöst
-        sender_role: session.role,
-        content: encrypted.content,
-        content_html: encrypted.content_html,
-        has_attachments: false
-      }).execute();
+      await app.db.transaction().execute(async trx => {
+        const current = await trx.selectFrom('tickets').select(['status', 'archived_at']).where('id', '=', id).forUpdate().executeTakeFirstOrThrow();
+        await trx.insertInto('ticket_messages').values({
+          id: msgId,
+          ticket_id: id,
+          sender_user_id: session.uid,
+          sender_username: session.username,
+          sender_name: session.username,
+          sender_role: session.role,
+          content: encrypted.content,
+          content_html: encrypted.content_html,
+          has_attachments: false
+        }).execute();
 
-      // Ticket updated_at setzen
-      await app.db.updateTable('tickets').set({ updated_at: mysqlTimestamp() }).where('id', '=', id).execute();
+        // Resolve the pending request without granting users general status-edit rights.
+        const resumed = !isAdmin && !current.archived_at && ['Warten auf Benutzer', 'Geschlossen'].includes(current.status);
+        await trx.updateTable('tickets').set({ updated_at: mysqlTimestamp(),
+          ...(resumed ? { status: 'In Bearbeitung', waiting_since: null, waiting_message: null, waiting_reminder_sent: false, closed_at: null } : {})
+        }).where('id', '=', id).execute();
+        if (resumed) await trx.insertInto('ticket_audit_log').values({
+          id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
+          action: 'updated', field: 'status', old_value: current.status, new_value: 'In Bearbeitung'
+        }).execute();
+      });
 
       // Benachrichtigung an die jeweils andere Seite (Ersteller <-> zuständige Person).
       if (isAdmin && ticket.created_by_user_id && ticket.created_by_user_id !== session.uid) {

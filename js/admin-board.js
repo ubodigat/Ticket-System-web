@@ -11,8 +11,9 @@ import { Lang } from './lang.js';
 import { Store, Notifications } from './store.js';
 import { UI } from './ui.js';
 import { Settings } from './settings.js';
+import { renderWorkbook } from './excel-preview.js';
 import { UserDash } from './user-dash.js';
-import { getStatusColor, getPrioValue, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
+import { getStatusColor, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
 
 export const AdminBoard = {
     selectedFiles: [],
@@ -25,7 +26,7 @@ export const AdminBoard = {
     orderTopbar: () => {
         const nav = q('.topbar-right');
         if (!nav) return;
-        ['btn-to-dash', 'btn-archive', 'btn-global-logs', 'btn-manage-users', 'btn-sys-settings', 'btn-notifications', 'theme-toggle', 'btn-settings', 'logout'].forEach(id => {
+        ['btn-to-dash', 'btn-archive', 'btn-global-logs', 'btn-manage-users', 'btn-sys-settings', 'btn-todos', 'btn-notifications', 'theme-toggle', 'btn-settings', 'logout'].forEach(id => {
             const el = q(`#${id}`);
             if (el && el.parentElement === nav) nav.appendChild(el);
         });
@@ -653,13 +654,8 @@ export const AdminBoard = {
         if (query.trim()) tickets = tickets.filter(ticket => Utils.matchesSearch(query, ticket));
         // Superadmin sees all (no filter)
 
-        // Sort by Priority then Date
-        tickets.sort((a, b) => {
-            const pA = getPrioValue(a.prio);
-            const pB = getPrioValue(b.prio);
-            if (pA !== pB) return pB - pA;
-            return new Date(b.createdAt) - new Date(a.createdAt);
-        });
+        const deadlines = new Map(tickets.map(t => [t.id, Store.ticketSlaDueAt(t, slaSettings)]));
+        tickets.sort((a, b) => compareTicketUrgency(a, b, t => deadlines.get(t.id)));
 
         const cols = {
             'Neu': q('#list-new'),
@@ -2502,7 +2498,7 @@ export const AdminBoard = {
     // Listenansicht: Tabelle mit sortierbaren Spalten, Filtern, gespeicherten Ansichten
     // und Mehrfachauswahl für Sammelaktionen -- für Admins mit vielen offenen Tickets,
     // wo ein Kanban-Board nicht mehr überschaubar ist.
-    listViewState: { sortKey: 'createdAt', sortDir: 'desc', selected: new Set() },
+    listViewState: { sortKey: 'prio', sortDir: 'desc', selected: new Set() },
 
     openListView: async () => {
         const container = q('#list-view');
@@ -2570,7 +2566,7 @@ export const AdminBoard = {
                         AdminBoard.listViewState.sortDir = AdminBoard.listViewState.sortDir === 'asc' ? 'desc' : 'asc';
                     } else {
                         AdminBoard.listViewState.sortKey = key;
-                        AdminBoard.listViewState.sortDir = 'asc';
+                        AdminBoard.listViewState.sortDir = key === 'prio' ? 'desc' : 'asc';
                     }
                     AdminBoard.renderListView();
                 };
@@ -2712,17 +2708,20 @@ export const AdminBoard = {
         if (slaRiskOnly) visible = visible.filter(t => { const c = Store.formatSlaCountdown(t, settings); return c && (c.tone === 'warning' || c.tone === 'danger'); });
 
         const { sortKey, sortDir } = AdminBoard.listViewState;
+        const deadlines = new Map(visible.map(t => [t.id, Store.ticketSlaDueAt(t, settings)]));
+        const urgency = (a, b) => compareTicketUrgency(a, b, t => deadlines.get(t.id));
         const sortValue = (t) => {
+            if (sortKey === 'prio') return getPrioValue(t.prio);
             if (sortKey === 'category') return (Array.isArray(t.category) ? t.category[0] : t.category) || '';
             if (sortKey === 'owner') return nameFor(t.owner);
-            if (sortKey === 'sla') { const d = Store.ticketSlaDueAt(t, settings); return d ?? Infinity; }
+            if (sortKey === 'sla') { const d = deadlines.get(t.id); return d ?? Infinity; }
             if (sortKey === 'createdAt') return new Date(t.createdAt).getTime();
             return t[sortKey] || '';
         };
         visible.sort((a, b) => {
             const va = sortValue(a), vb = sortValue(b);
-            const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
-            return sortDir === 'asc' ? cmp : -cmp;
+            const cmp = va === vb ? 0 : typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
+            return (sortDir === 'asc' ? cmp : -cmp) || urgency(a, b);
         });
 
         qa('.list-view-table th[data-sort]').forEach(th => {
@@ -6019,27 +6018,9 @@ export const AdminBoard = {
                     addText(result.value || 'Das Dokument enthält keinen extrahierbaren Text.');
                 } else if (/\.(xlsx|xls)$/.test(name) && window.XLSX) {
                     const workbook = window.XLSX.read(buffer, {
-                        type: 'array'
+                        type: 'array', cellStyles: true, cellNF: true
                     });
-                    workbook.SheetNames.forEach(sheetName => {
-                        const heading = document.createElement('h4');
-                        heading.textContent = sheetName;
-                        body.appendChild(heading);
-                        const rows = window.XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-                            header: 1,
-                            raw: false
-                        }).slice(0, 300);
-                        const table = document.createElement('table');
-                        table.className = 'attachment-spreadsheet-preview';
-                        rows.forEach(row => {
-                            const tr = table.insertRow();
-                            row.forEach(value => {
-                                const cell = tr.insertCell();
-                                cell.textContent = String(value ?? '');
-                            });
-                        });
-                        body.appendChild(table);
-                    });
+                    renderWorkbook(workbook, body, window.XLSX);
                 } else if (name.endsWith('.pptx') && window.JSZip) {
                     const archive = await window.JSZip.loadAsync(buffer);
                     const slides = Object.keys(archive.files)
@@ -6142,14 +6123,11 @@ export const AdminBoard = {
             return;
         }
 
-        // Benutzer-Antwort öffnet ein geschlossenes/wartendes Ticket automatisch wieder.
+        // Statuswechsel nach einer Benutzerantwort erfolgt zusammen mit der Nachricht auf dem Server.
         if (role === 'user') {
-            const tickets = await Store.getTickets();
-            const t = tickets.find(x => x.id === id);
-            if (t && !t.archived && (t.status === 'Geschlossen' || String(t.status).startsWith('Warten auf Benutzer'))) {
-                t.status = 'In Bearbeitung';
-                await Store.saveTickets(tickets);
-            }
+            Store._ticketsCache = null;
+            Store._ticketsSnapshot = null;
+            await UserDash.renderList();
         }
 
         txtInput.value = '';
@@ -6158,7 +6136,7 @@ export const AdminBoard = {
             await AdminBoard.renderChat(t, '#m-chat-msgs');
             await AdminBoard.render();
         } else {
-            await AdminBoard.renderChat(t, '#u-chat-msgs');
+            await UserDash.openModal(id);
         }
         UI.toast('Nachricht gesendet');
     },
@@ -6178,6 +6156,28 @@ export const AdminBoard = {
         const deptField = q('#a-dept-field');
 
         q('#a-role').value = 'user';
+        q('#approve-modal .modal').classList.remove('approval-admin-mode');
+        let permissions = q('#a-permissions');
+        if (!permissions) {
+            permissions = document.createElement('div'); permissions.id = 'a-permissions';
+            permissions.innerHTML = `<label>Admin-Rechte</label><div class="perm-grid">${[
+                ['canManageRequests', 'Kontoanfragen verwalten'], ['canManageUsers', 'Benutzerverwaltung (nur User)'],
+                ['canViewLogs', 'Systemlogs anzeigen'], ['canManage2FA', '2FA zurücksetzen'],
+                ['textBlocks', 'Textbausteine verwalten'], ['reports', 'Auswertung ansehen'],
+                ['approvals', 'Genehmigungen entscheiden'], ['recurring', 'Wiederkehrende Tickets verwalten']
+            ].map(([key, label]) => `<label class="check-row"><input type="checkbox" data-permission="${key}"><span>${label}</span></label>`).join('')}</div>
+            <label for="a-kb">Wissensdatenbank</label><select id="a-kb"><option value="none">Kein Zugriff</option><option value="read">Nur lesen</option><option value="edit">Lesen und bearbeiten</option></select>`;
+            q('#a-dept-field').after(permissions);
+        }
+        permissions.hidden = true;
+        permissions.querySelectorAll('input').forEach(box => { box.checked = false; });
+        q('#a-kb').value = 'none';
+        q('#a-role').onchange = () => {
+            const show = isSuper && q('#a-role').value === 'admin';
+            permissions.hidden = !show;
+            q('#approve-modal .modal').classList.toggle('approval-admin-mode', show);
+            if (deptField) deptField.style.display = show ? '' : 'none';
+        };
         if (deptField) deptField.style.display = 'none';
 
         if (roleField) roleField.style.display = isSuper ? 'block' : 'none';
@@ -6343,11 +6343,14 @@ export const AdminBoard = {
             role: role
         };
 
-        if (isSuper && role === 'admin') newUser.dept = dept;
+        if (isSuper && role === 'admin') {
+            newUser.department = dept;
+            newUser.permissions = { ...Object.fromEntries([...q('#a-permissions').querySelectorAll('[data-permission]')].map(b => [b.dataset.permission, b.checked])), kb: q('#a-kb').value };
+        }
 
         users.push(newUser);
-        await Store.saveUsers(users);
-        await Store.decideAccountRequest(AdminBoard.currentReq.id, 'approved');
+        if (!await Store.saveUsers(users)) return UI.toast(Store.lastError || 'Benutzer konnte nicht erstellt werden.');
+        if (!await Store.decideAccountRequest(AdminBoard.currentReq.id, 'approved')) return UI.toast('Benutzer erstellt; Kontoanfrage konnte nicht aktualisiert werden.');
 
         AdminBoard.closeApprove();
         await AdminBoard.renderRequests();

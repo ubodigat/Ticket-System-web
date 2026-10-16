@@ -14,6 +14,7 @@ import { Settings } from './js/settings.js';
 import { Auth } from './js/auth.js';
 import { UserDash } from './js/user-dash.js';
 import { AdminBoard } from './js/admin-board.js';
+import { TodoList } from './js/todos.js';
 import './js/context-menu.js';
 // --- Main Init ---
 // --- Main Init ---
@@ -28,12 +29,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     await Settings.init(); // Initialize Settings with Theme logic
     await Notifications.init();
+    await TodoList.init();
     UI.initTooltips();
     if (q('#stars')) UI.starfield();
 
     // Login Page
     if (q('#btn-login')) {
         const goToApp = (user) => {
+            try { sessionStorage.removeItem('reply-reminder'); } catch { /* Storage is optional. */ }
             UI.toast(Auth.mfaSetupRequired
                 ? `Willkommen ${user.name || user.username} – bitte richte die Zwei-Faktor-Anmeldung in deinem Konto ein.`
                 : `Willkommen ${user.name || user.username}`);

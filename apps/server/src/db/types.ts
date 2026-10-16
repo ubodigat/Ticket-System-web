@@ -382,6 +382,19 @@ export interface GlobalAuditLogTable {
 }
 
 export interface Database {
+  admin_todos: {
+    id: string;
+    content: Buffer;
+    created_by_user_id: Nullable<string>;
+    due_at: NullableTimestamp;
+    done: ColumnType<boolean, boolean, boolean>;
+    created_at: CreatedAt;
+  };
+  admin_todo_members: {
+    todo_id: string;
+    user_id: string;
+    hidden: ColumnType<boolean, boolean, boolean>;
+  };
   // Kern
   installations: InstallationsTable;
   data_encryption_keys: DataEncryptionKeysTable;

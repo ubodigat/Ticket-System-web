@@ -25,6 +25,7 @@ import { registerKnowledgeRoutes } from './routes/knowledge.js';
 import { registerRecurringRoutes } from './routes/recurring.js';
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerUpdateRoutes } from './routes/update.js';
+import { registerTodoRoutes } from './routes/todos.js';
 import { registerStaticAssetRoutes } from './routes/staticAssets.js';
 import { loadSecurityPolicy } from '../domain/securityPolicy.js';
 
@@ -151,6 +152,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerSettingsRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerKnowledgeRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerRecurringRoutes(app);
+  registerTodoRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerMfaRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerUpdateRoutes(app, { env: deps.env });
   registerStaticAssetRoutes(app);

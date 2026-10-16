@@ -25,6 +25,20 @@ export function getPrioValue(p) {
     return 0;
 }
 
+export function compareTicketUrgency(a, b, dueAt) {
+    const priority = getPrioValue(b.prio) - getPrioValue(a.prio);
+    if (priority) return priority;
+    const timestamp = value => {
+        if (value === null || value === undefined || value === '') return Infinity;
+        const ms = typeof value === 'number' ? value : new Date(value).getTime();
+        return Number.isFinite(ms) ? ms : Infinity;
+    };
+    const dueA = timestamp(dueAt(a)), dueB = timestamp(dueAt(b));
+    if (dueA !== dueB) return dueA < dueB ? -1 : 1;
+    const createdA = timestamp(a.createdAt), createdB = timestamp(b.createdAt);
+    return createdA === createdB ? 0 : createdA < createdB ? -1 : 1;
+}
+
 // approval.approver ist die User-ID des eingetragenen Prüfers (approval_reviewer_id im Backend).
 export function isPendingApprover(approval, userId) {
     return approval.status === 'pending' && approval.approver === userId;

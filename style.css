@@ -5259,17 +5259,53 @@ button:disabled {
 }
 
 .attachment-spreadsheet-preview {
-    width: 100%;
+    width: max-content;
+    min-width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
     font-size: var(--fs-sm);
 }
 
 .attachment-spreadsheet-preview td {
-    max-width: 320px;
     padding: 6px 8px;
     border: 1px solid var(--border);
-    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    vertical-align: top;
 }
+
+.excel-viewport { overflow: auto; max-height: 66vh; width: 100%; }
+.excel-sheet-tabs { display: flex; gap: 6px; overflow: auto; margin-bottom: 12px; }
+.excel-number { text-align: right; }
+.chat-bubble a, .chat-bubble a:visited { color: inherit; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; font-weight: 600; }
+.chat-bubble a:hover { color: inherit; text-decoration-thickness: 3px; }
+.note-body a, .rich-content a { text-decoration: underline; text-underline-offset: 3px; font-weight: 600; }
+.todo-modal { width: min(860px, calc(100vw - 24px)); max-width: 860px; }
+.modal.approval-admin-mode { max-width: 720px; }
+.todo-toolbar, .todo-tabs, .todo-form-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.todo-tabs { flex: 1; }
+#todo-search { width: 100%; margin: 14px 0; }
+#todo-form { padding: 12px 0; border-block: 1px solid var(--border); }
+#todo-form[hidden] { display: none; }
+#todo-form textarea { width: 100%; }
+.todo-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0; }
+.todo-recipients { max-height: 160px; overflow: auto; }
+.todo-form-actions { justify-content: flex-end; }
+.todo-row { display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.todo-row > input { width: 18px; height: 18px; flex: 0 0 18px; margin-top: 3px; }
+.todo-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.todo-title { white-space: pre-wrap; }
+.todo-copy small, .todo-copy time { display: flex; gap: 5px; align-items: center; margin-top: 5px; font-size: 12px; }
+.todo-ticket { white-space: normal; text-align: left; font-size: 12px; padding: 4px 0; height: auto; overflow-wrap: anywhere; }
+.todo-overdue { color: var(--danger, #dc3545); font-weight: 600; }
+.todo-row.is-done .todo-title { text-decoration: line-through; opacity: 0.65; }
+.user-ticket-row.needs-reply { border-left: 4px solid #e49b18; background: rgba(228, 155, 24, 0.08); }
+.reply-required { color: var(--text); font-weight: 600; display: flex; gap: 6px; align-items: flex-start; margin-top: 8px; font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+.reply-required svg { flex-shrink: 0; color: #e49b18; }
+.reply-reminder-item { display: block; width: 100%; text-align: left; padding: 14px 0; border-bottom: 1px solid var(--border); color: var(--text); background: none; border-radius: 0; }
+.reply-reminder-item strong, .reply-reminder-item span { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
+.reply-reminder-item span { margin-top: 8px; font-weight: 400; }
+@media (max-width: 600px) { .todo-form-grid { grid-template-columns: 1fr; } .todo-tabs { flex-basis: 100%; } }
 
 .attachment-download-fallback {
     width: 100%;

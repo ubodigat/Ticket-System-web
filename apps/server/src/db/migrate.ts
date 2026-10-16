@@ -33,6 +33,7 @@ import { migration_0023_kb_article_attachments } from './migrations/0023_kb_arti
 import { migration_0024_user_permissions } from './migrations/0024_user_permissions.js';
 import { migration_0025_app_settings_config_mediumtext } from './migrations/0025_app_settings_config_mediumtext.js';
 import { migration_0026_user_notification_preferences } from './migrations/0026_user_notification_preferences.js';
+import { migration_0027_admin_todos } from './migrations/0027_admin_todos.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -60,7 +61,8 @@ const migrations: Record<string, Migration> = {
   '0023_kb_article_attachments': migration_0023_kb_article_attachments,
   '0024_user_permissions': migration_0024_user_permissions,
   '0025_app_settings_config_mediumtext': migration_0025_app_settings_config_mediumtext,
-  '0026_user_notification_preferences': migration_0026_user_notification_preferences
+  '0026_user_notification_preferences': migration_0026_user_notification_preferences,
+  '0027_admin_todos': migration_0027_admin_todos
 };
 
 const provider: MigrationProvider = {

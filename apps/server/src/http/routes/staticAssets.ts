@@ -35,6 +35,8 @@ const ASSETS: Record<string, { file: string; contentType: string; root: 'app' | 
   '/js/ticket-helpers.js': { file: 'js/ticket-helpers.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/admin-board.js': { file: 'js/admin-board.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/context-menu.js': { file: 'js/context-menu.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/todos.js': { file: 'js/todos.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/excel-preview.js': { file: 'js/excel-preview.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/style.css': { file: 'style.css', contentType: 'text/css; charset=utf-8', root: 'app' },
   '/favicon.ico': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
   '/picture/favicon.png': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
