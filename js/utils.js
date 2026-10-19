@@ -19,8 +19,16 @@ import { Lang } from './lang.js';
     const originalFetch = window.fetch.bind(window);
     const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
     const readCookie = (name) => {
-        const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[-]/g, '\\$&') + '=([^;]*)'));
-        return match ? decodeURIComponent(match[1]) : null;
+        if (typeof document === 'undefined' || !document.cookie) return null;
+        const prefix = name + '=';
+        const parts = document.cookie.split(';');
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i].trim();
+            if (part.startsWith(prefix)) {
+                return decodeURIComponent(part.substring(prefix.length));
+            }
+        }
+        return null;
     };
     const wrapped = (input, init = {}) => {
         const method = (init.method || (input instanceof Request ? input.method : 'GET') || 'GET').toUpperCase();
