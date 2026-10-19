@@ -1,5 +1,22 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-20 - Fehlgeschlagenes Update erneut installierbar
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Bisher war der Knopf "Update installieren" deaktiviert, sobald kein neuer Commit auf GitHub
+  vorlag -- war der letzte Lauf aber z.B. beim Build, der Datenbank-Migration oder dem Neustart
+  fehlgeschlagen (lokaler Stand bereits auf der neuesten Version, nur die restlichen Schritte
+  nicht durchgelaufen), ließ sich dieser Lauf nicht wiederholen, solange GitHub nichts Neues
+  hatte. Der Updater-Dienst (`ops/docker/updater-server.mjs`) führte den vollen Zyklus
+  (fetch/merge/build/migrate/restart) bei `/run` ohnehin schon immer unabhängig vom
+  Update-Verfügbarkeits-Status erneut aus (ein `git merge --ff-only` auf denselben Commit ist
+  ein folgenloses No-Op) -- die einzige Sperre war die UI.
+  Jetzt zeigt der Update-Tab in den Systemeinstellungen bei "kein neues Update, aber letzter Lauf
+  fehlgeschlagen" einen Hinweis und beschriftet den Knopf als "Letztes Update erneut
+  installieren"; der Klick wiederholt Build, Migration und Neustart für die aktuelle Version
+  (`js/admin-board.js`, `renderUpdateStatus`).
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
 ## 2026-10-20 - Sicherheits-Selbstaudit (SQLi/XSS/CSRF/IDOR/Upload/Business-Logic u.a.) und Behebung der gefundenen Lücken
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Vollständiger Selbstaudit der Anwendung gegen die OWASP-nahe Liste aus der Anforderung (SQLi,

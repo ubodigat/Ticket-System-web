@@ -1938,7 +1938,21 @@ export const AdminBoard = {
             </div>` : ''}
         `;
         const runBtn = q('#sys-update-run');
-        if (runBtn) runBtn.disabled = !updateAvailable || !!job?.running;
+        // Ist kein neues Update verfügbar, der letzte Lauf aber fehlgeschlagen (z.B. Build/
+        // Migration/Neustart abgebrochen), bleibt die Installation trotzdem anklickbar: der
+        // lokale Stand ist bereits auf der neuesten Version, nur die restlichen Schritte
+        // (Build/Migration/Neustart) müssen erneut laufen. Ohne das könnte man einen
+        // fehlgeschlagenen Lauf nie wiederholen, solange GitHub keinen weiteren Commit liefert.
+        const canRetryFailed = !updateAvailable && !!job?.failed;
+        if (runBtn) {
+            runBtn.disabled = (!updateAvailable && !canRetryFailed) || !!job?.running;
+            runBtn.innerHTML = canRetryFailed
+                ? `${Icon('refresh-cw', 15)}Letztes Update erneut installieren`
+                : `${Icon('download-cloud', 15)}Update installieren`;
+        }
+        if (canRetryFailed) {
+            area.insertAdjacentHTML('beforeend', `<div class="callout callout-info">Kein neuer Commit auf GitHub, aber der letzte Installationslauf ist fehlgeschlagen. Die Installation kann für die aktuelle Version erneut gestartet werden (wiederholt Build, Migration und Neustart).</div>`);
+        }
         if (window.lucide) lucide.createIcons();
         if (job?.running) {
             AdminBoard.updatePollTimer = setTimeout(() => AdminBoard.renderUpdateStatus(), 4000);
