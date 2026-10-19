@@ -690,6 +690,7 @@ export const UI = {
                     <span class="dtp-month-label"></span>
                     <button type="button" class="dtp-nav dtp-next" aria-label="Nächster Monat">${Icon('chevron-right', 16)}</button>
                 </div>
+                <div class="dtp-manual"><label>Datum<input type="text" class="dtp-manual-date" inputmode="numeric" placeholder="dd.mm.jjjj" aria-label="Datum manuell eingeben"></label><label>Uhrzeit<input type="text" class="dtp-manual-time" inputmode="numeric" placeholder="HH:mm" aria-label="Uhrzeit manuell eingeben"></label><button type="button" class="btn-secondary btn-icon dtp-manual-apply" title="Datum übernehmen" aria-label="Datum übernehmen">${Icon('check', 15)}</button></div>
                 <div class="dtp-weekdays"><span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span></div>
                 <div class="dtp-grid"></div>
                 <div class="dtp-time-row">
@@ -751,6 +752,9 @@ export const UI = {
         const grid = root.querySelector('.dtp-grid');
         const hourSel = root.querySelector('.dtp-hour');
         const minuteSel = root.querySelector('.dtp-minute');
+        const manualDate = root.querySelector('.dtp-manual-date');
+        const manualTime = root.querySelector('.dtp-manual-time');
+        if (dateOnly) manualTime.parentElement.hidden = true;
         const monthNames = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 
         let hourVal = 0;
@@ -775,6 +779,9 @@ export const UI = {
         const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
         const renderLabel = () => {
+            manualDate.value = selected ? fmt(selected).slice(0, 10) : '';
+            manualTime.value = selected ? fmt(selected).slice(11) : '';
+            manualDate.setCustomValidity(''); manualTime.setCustomValidity('');
             if (selected) {
                 valueLabel.textContent = fmt(selected);
                 valueLabel.classList.remove('is-placeholder');
@@ -825,6 +832,20 @@ export const UI = {
             renderLabel();
             if (onChange) onChange(selected.getTime());
         };
+        const applyManual = () => {
+            const ms = Utils.parseGermanDateTime(manualDate.value, dateOnly ? '00:00' : (manualTime.value || '00:00'));
+            if (!Number.isFinite(ms)) { manualDate.setCustomValidity('Bitte Datum als dd.mm.jjjj und Uhrzeit als HH:mm eingeben.'); manualDate.reportValidity(); return; }
+            selected = new Date(ms); hourVal = selected.getHours(); minuteVal = selected.getMinutes();
+            viewDate = new Date(selected.getFullYear(), selected.getMonth(), 1);
+            renderTimeCols(); renderGrid(); renderLabel();
+            if (onChange) onChange(ms);
+            return true;
+        };
+        root.querySelector('.dtp-manual-apply').onclick = () => { if (applyManual()) close(); };
+        [manualDate, manualTime].forEach(input => {
+            input.oninput = () => manualDate.setCustomValidity('');
+            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); if (applyManual()) close(); } };
+        });
         if (selected) {
             hourVal = selected.getHours();
             minuteVal = selected.getMinutes();

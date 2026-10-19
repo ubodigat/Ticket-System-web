@@ -57,6 +57,10 @@ export interface UsersTable {
   role: 'user' | 'admin' | 'superadmin';
   department_group_id: string | null;
   department: Nullable<string>;
+  phone: Nullable<string>;
+  mobile: Nullable<string>;
+  job_title: Nullable<string>;
+  office_location: Nullable<string>;
   permissions_json: Nullable<string>;
   notif_prefs_json: Nullable<string>;
   supervisor_user_id: Nullable<string>;
@@ -382,6 +386,18 @@ export interface GlobalAuditLogTable {
 }
 
 export interface Database {
+  recurring_admin_todos: {
+    id: string;
+    content: Buffer;
+    created_by_user_id: string;
+    recipient_ids_json: string;
+    interval_unit: 'day' | 'week' | 'month';
+    interval_count: number;
+    due_after_hours: Nullable<number>;
+    next_run_at: ColumnType<Date, string | Date, string | Date>;
+    active: ColumnType<boolean, boolean, boolean>;
+    created_at: CreatedAt;
+  };
   admin_todos: {
     id: string;
     content: Buffer;

@@ -366,7 +366,7 @@ export const UserDash = {
             const fieldsSettings = await Store.getSettings();
             UI.renderCustomFieldsDisplay(q('#u-m-custom-fields-display'), Store.getCustomFieldsForCategories(t.category, fieldsSettings), t.customFieldValues || {});
         }
-        await AdminBoard.renderTicketAttachments(t, '#u-m-ticket-attachments');
+        await AdminBoard.renderTicketAttachments(t, '#u-m-ticket-attachments', { manage: true });
 
         // Read-only check for archived
         const uChatInput = q('#u-chat-input');

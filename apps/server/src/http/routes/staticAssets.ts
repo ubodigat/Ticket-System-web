@@ -11,12 +11,13 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 // der Anfrage -- Path Traversal ist dadurch strukturell ausgeschlossen (siehe Anforderungsliste
 // "Path Traversal"/"Directory Listing"). Diese Dateien enthalten selbst keine Geheimnisse; der
 // eigentliche Schutz liegt in der v2-API, die sie aufrufen (Session-Cookie + Rechteprüfung).
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, normalize } from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 
-const ASSETS: Record<string, { file: string; contentType: string; root: 'app' | 'vendor' }> = {
+type Asset = { file: string; contentType: string; root: 'app' | 'vendor' | 'pdfjs' };
+const ASSETS: Record<string, Asset> = {
   '/index.html': { file: 'index.html', contentType: 'text/html; charset=utf-8', root: 'app' },
   '/dashboard.html': { file: 'dashboard.html', contentType: 'text/html; charset=utf-8', root: 'app' },
   '/admin.html': { file: 'admin.html', contentType: 'text/html; charset=utf-8', root: 'app' },
@@ -37,6 +38,9 @@ const ASSETS: Record<string, { file: string; contentType: string; root: 'app' | 
   '/js/context-menu.js': { file: 'js/context-menu.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/todos.js': { file: 'js/todos.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/excel-preview.js': { file: 'js/excel-preview.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/pdf-preview.js': { file: 'js/pdf-preview.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/vendor/pdfjs/pdf.mjs': { file: 'build/pdf.mjs', contentType: 'application/javascript; charset=utf-8', root: 'pdfjs' },
+  '/vendor/pdfjs/pdf.worker.mjs': { file: 'build/pdf.worker.mjs', contentType: 'application/javascript; charset=utf-8', root: 'pdfjs' },
   '/style.css': { file: 'style.css', contentType: 'text/css; charset=utf-8', root: 'app' },
   '/favicon.ico': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
   '/picture/favicon.png': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
@@ -62,8 +66,13 @@ function vendorRoot(): string {
   return candidates.find(dir => existsSync(join(dir, 'lucide.min.js'))) ?? candidates[0]!;
 }
 
-async function sendAsset(app: FastifyInstance, reply: FastifyReply, asset: { file: string; contentType: string; root: 'app' | 'vendor' }) {
-  const root = normalize(asset.root === 'vendor' ? vendorRoot() : appRoot());
+function pdfjsRoot(): string {
+  const candidates = [join(process.cwd(), 'node_modules', 'pdfjs-dist'), join(process.cwd(), '..', '..', 'node_modules', 'pdfjs-dist')];
+  return candidates.find(dir => existsSync(join(dir, 'build', 'pdf.mjs'))) ?? candidates[0]!;
+}
+
+async function sendAsset(app: FastifyInstance, reply: FastifyReply, asset: Asset) {
+  const root = normalize(asset.root === 'vendor' ? vendorRoot() : asset.root === 'pdfjs' ? pdfjsRoot() : appRoot());
   const full = normalize(join(root, asset.file));
   try {
     const data = await readFile(full);
@@ -77,5 +86,14 @@ async function sendAsset(app: FastifyInstance, reply: FastifyReply, asset: { fil
 export function registerStaticAssetRoutes(app: FastifyInstance): void {
   for (const [path, asset] of Object.entries(ASSETS)) {
     app.get(path, async (_req, reply) => sendAsset(app, reply, asset));
+  }
+  // Enumerate only installed public font/CMap files; no request-controlled filesystem paths.
+  for (const directory of ['cmaps', 'standard_fonts']) {
+    const full = join(pdfjsRoot(), directory);
+    if (!existsSync(full)) continue;
+    for (const name of readdirSync(full).filter(n => /^[a-zA-Z0-9_.-]+\.(bcmap|pfb|ttf)$/.test(n))) {
+      app.get(`/vendor/pdfjs/${directory}/${name}`, async (_req, reply) => sendAsset(app, reply,
+        { root: 'pdfjs', file: `${directory}/${name}`, contentType: 'application/octet-stream' }));
+    }
   }
 }

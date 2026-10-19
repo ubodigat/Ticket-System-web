@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerTodoRoutes, createAdminTodoSchema } from '../src/http/routes/todos.js';
-import { createNotification } from '../src/http/routes/extras.js';
+import { advanceTodoDate } from '../src/domain/adminTodos.js';
 
 vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
 vi.mock('../src/http/routes/extras.js', () => ({ createNotification: vi.fn().mockResolvedValue(undefined) }));
@@ -68,8 +68,10 @@ describe('admin todos', () => {
     expect(calls.find(c => c.table === 'admin_todo_members')!.values).toEqual([
       { todo_id: task.id, user_id: creator, hidden: false }, { todo_id: task.id, user_id: recipient, hidden: false }
     ]);
-    expect(createNotification).toHaveBeenCalledTimes(1);
-    expect(createNotification).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ recipientUserId: recipient, type: 'todo_assigned' }));
+    const notifications = calls.find(c => c.table === 'notifications')!.values as any[];
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({ recipient_user_id: recipient, type: 'todo_assigned' });
+    expect(Buffer.isBuffer(notifications[0].message)).toBe(true);
   });
 
   it('rejects recipients outside the active admin directory without creating a task', async () => {
@@ -93,5 +95,19 @@ describe('admin todos', () => {
     const denied = database([undefined]);
     expect((await request('PATCH', denied.db, { done: false })).statusCode).toBe(404);
     expect(denied.calls.some(c => c.operation === 'update')).toBe(false);
+  });
+
+  it('allows only the creator to edit content or deadline', async () => {
+    const own = database([{ todo_id: 'task-id' }, { created_by_user_id: creator }]);
+    expect((await request('PATCH', own.db, { content: 'Edited task', due_at: null })).statusCode).toBe(200);
+    expect(own.calls.at(-1)?.values).toMatchObject({ due_at: null });
+    const received = database([{ todo_id: 'task-id' }, { created_by_user_id: recipient }]);
+    expect((await request('PATCH', received.db, { content: 'Not mine' })).statusCode).toBe(403);
+    expect(received.calls.some(c => c.operation === 'update')).toBe(false);
+  });
+
+  it('advances monthly recurrences without overflowing short months', () => {
+    expect(advanceTodoDate(new Date('2028-01-31T12:30:00Z'), 'month', 1).toISOString()).toBe('2028-02-29T12:30:00.000Z');
+    expect(advanceTodoDate(new Date('2026-10-19T12:30:00Z'), 'week', 2).toISOString()).toBe('2026-11-02T12:30:00.000Z');
   });
 });

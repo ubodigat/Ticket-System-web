@@ -1,9 +1,9 @@
-# Betrieb (Phase 1 – Grundgerüst)
+# Docker-Betrieb
 
-Dieses Verzeichnis enthält den Docker-Stack für das Server-/MariaDB-Backend. Es deckt den in
-`docs/PROGRESS.md` als "Phase 1" bezeichneten Umfang ab: Datenbankverbindung, Schlüsselverwaltung,
-Healthcheck, Migrationen. Die Geschäftslogik (Tickets, Authentifizierung, Chat, …) folgt in
-späteren Phasen.
+Dieses Verzeichnis enthält den Docker-Stack mit MariaDB, Anwendung, Caddy und der isolierten
+Office-Dokumentkonvertierung (`office`, Gotenberg/LibreOffice). Der Office-Dienst hat keine
+Host-Ports, Secrets oder Datenbankverbindung und darf keine externen Inhalte nachladen.
+Die aktuelle Installations- und Update-Anleitung steht in der [README](../../README.md).
 
 ## Installation (einmalig)
 
@@ -18,7 +18,7 @@ Das Skript (im Projektwurzelverzeichnis):
    siehe `docs/CRYPTOGRAPHY.md`;
 3. erzeugt eine selbstsignierte TLS-Zertifikatskette für die Verbindung App↔MariaDB
    (`ops/tls/mariadb/`) – siehe `docs/CRYPTOGRAPHY.md` §8;
-4. baut und startet den Stack (`mariadb`, `app`, `caddy`) über `docker compose`;
+4. baut und startet den Stack (`mariadb`, `app`, `office`, `caddy`) über `docker compose`;
 5. wartet auf den Healthcheck der Anwendung;
 6. führt die Datenbankmigrationen aus;
 7. gibt die erreichbare URL aus.

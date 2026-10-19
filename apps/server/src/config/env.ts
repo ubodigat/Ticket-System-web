@@ -31,6 +31,7 @@ const envSchema = z.object({
   SCHEMA_VERSION: z.coerce.number().int().positive().default(1),
 
   TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(1),
+  OFFICE_PREVIEW_URL: z.string().url().optional(),
   UPDATE_SERVICE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   UPDATE_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional())
 });

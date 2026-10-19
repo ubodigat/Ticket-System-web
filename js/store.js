@@ -111,6 +111,10 @@ export const Store = {
         role: u.role,
         department_group_id: u.department_group_id ?? null,
         department: u.department || '',
+        phone: u.phone || '',
+        mobile: u.mobile || '',
+        jobTitle: u.job_title || '',
+        officeLocation: u.office_location || '',
         supervisorUserId: u.supervisor_user_id ?? null,
         accountArchived: !!u.account_archived,
         accountLocked: !!u.locked_permanent,
@@ -160,6 +164,17 @@ export const Store = {
     // Rückgabewert jeder einzelnen Anfrage ignoriert, sodass z.B. ein vom Server abgelehntes
     // neues Konto (ungültige/zu kurze Passwort, doppelter Benutzername) der Oberfläche trotzdem
     // "Gespeichert" meldete, obwohl nichts angelegt wurde.
+    // Hinweis auf bestehende/ähnliche Benutzer beim Anlegen -- die harte Blockierung bei
+    // exakter Übereinstimmung läuft trotzdem zusätzlich serverseitig in POST /users (E-Mail per
+    // Blind-Index), das hier ist nur die vorab sichtbare Warnung in der Oberfläche.
+    checkSimilarUser: async (name, email) => {
+        const params = new URLSearchParams();
+        if (name) params.set('name', name);
+        if (email) params.set('email', email);
+        const res = await fetch(`/api/v2/users/check-similar?${params}`, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return { exact: false, similar: [] };
+        return res.json();
+    },
     saveUsers: async (users) => {
         const before = Store._usersSnapshot || Store.cloneUserList(await Store.getUsers());
         const beforeById = new Map(before.map(u => [u.id, u]));
@@ -180,6 +195,10 @@ export const Store = {
                         role: u.role === 'superadmin' ? 'superadmin' : (u.role === 'admin' ? 'admin' : 'user'),
                         department_group_id: u.department_group_id ?? null,
                         department: u.department || '',
+                        phone: u.phone || '',
+                        mobile: u.mobile || '',
+                        job_title: u.jobTitle || '',
+                        office_location: u.officeLocation || '',
                         supervisor_user_id: u.supervisorUserId ?? null,
                         permissions: u.permissions ?? undefined
                     })
@@ -197,6 +216,10 @@ export const Store = {
             if (u.role !== prev.role && (u.role === 'user' || u.role === 'admin')) patch.role = u.role;
             if (u.department_group_id !== prev.department_group_id) patch.department_group_id = u.department_group_id ?? null;
             if ((u.department || '') !== (prev.department || '')) patch.department = u.department || '';
+            if ((u.phone || '') !== (prev.phone || '')) patch.phone = u.phone || '';
+            if ((u.mobile || '') !== (prev.mobile || '')) patch.mobile = u.mobile || '';
+            if ((u.jobTitle || '') !== (prev.jobTitle || '')) patch.job_title = u.jobTitle || '';
+            if ((u.officeLocation || '') !== (prev.officeLocation || '')) patch.office_location = u.officeLocation || '';
             if (u.supervisorUserId !== prev.supervisorUserId) patch.supervisor_user_id = u.supervisorUserId ?? null;
             if (!!u.accountArchived !== prev.accountArchived) patch.account_archived = !!u.accountArchived;
             if (!!u.accountLocked !== prev.accountLocked) patch.locked_permanent = !!u.accountLocked;
@@ -733,7 +756,11 @@ export const Store = {
                 editable: {
                     name: !cfg.accountSelfServiceFields || cfg.accountSelfServiceFields.includes('name'),
                     email: !cfg.accountSelfServiceFields || cfg.accountSelfServiceFields.includes('email'),
-                    department: !!cfg.accountSelfServiceFields?.includes('department')
+                    department: !!cfg.accountSelfServiceFields?.includes('department'),
+                    phone: !!cfg.accountSelfServiceFields?.includes('phone'),
+                    mobile: !!cfg.accountSelfServiceFields?.includes('mobile'),
+                    jobTitle: !!cfg.accountSelfServiceFields?.includes('jobTitle'),
+                    officeLocation: !!cfg.accountSelfServiceFields?.includes('officeLocation')
                 }
             };
             settings.securityConfig = {
@@ -850,6 +877,15 @@ export const Store = {
     },
     runUpdate: async () => {
         const res = await fetch('/api/v2/update/run', { method: 'POST', credentials: 'same-origin' }).catch(() => null);
+        if (!res) return { httpStatus: 0 };
+        const body = await res.json().catch(() => ({}));
+        return { ...body, httpStatus: res.status };
+    },
+    // Unabhängig vom vollen Update-Zyklus, immer verfügbar (nicht durch "kein Update verfügbar"
+    // blockiert) -- holt die Datenbank wieder auf den Schema-Stand des bereits laufenden Codes,
+    // falls ein früherer Update-Lauf vor dem Migrations-Schritt abgebrochen ist.
+    runMigrate: async () => {
+        const res = await fetch('/api/v2/update/migrate', { method: 'POST', credentials: 'same-origin' }).catch(() => null);
         if (!res) return { httpStatus: 0 };
         const body = await res.json().catch(() => ({}));
         return { ...body, httpStatus: res.status };
@@ -1410,7 +1446,7 @@ export const Store = {
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticketId)}/attachments`, { credentials: 'same-origin' });
         if (!res.ok) return [];
         return ((await res.json()).attachments || []).map(a => ({
-            id: a.id, attachmentId: a.id, name: a.filename, type: a.mime_type, size: a.size_bytes
+            id: a.id, attachmentId: a.id, name: a.filename, type: a.mime_type, size: a.size_bytes, uploadedByUserId: a.uploaded_by_user_id
         }));
     },
     downloadAttachment: async (id) => {
@@ -1472,9 +1508,8 @@ export const Store = {
             Store.lastError = 'SMTP ist nicht konfiguriert.';
             return false;
         }
-        const company = settings.companyConfig || {};
-        const signature = conf.htmlSignature || company.htmlSignature || company.signature || '';
-        const textSignature = company.signature || '';
+        const signature = conf.htmlSignature || '';
+        const textSignature = conf.signature || '';
         const textBody = textSignature ? `${body || ''}\n\n${textSignature}` : body;
         const htmlBody = conf.htmlEnabled ?
             `${String(body || '').replace(/\n/g, '<br>')}${signature ? `<br><br>${signature}` : ''}` :

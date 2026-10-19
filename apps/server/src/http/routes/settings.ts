@@ -83,7 +83,7 @@ const settingsConfigSchema = z.object({
   }).optional(),
   // Pro Kategorie ein eigenes Format (überschreibt ticketNumberFormat.format für diese Kategorie).
   ticketNumberCategoryFormats: z.record(z.string(), z.string().trim().max(64)).optional(),
-  accountSelfServiceFields: z.array(z.enum(['name', 'email', 'department'])).optional(),
+  accountSelfServiceFields: z.array(z.enum(['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation'])).optional(),
   autoArchiveClosedAfterDays: z.number().int().min(0).max(3650).optional(),
   waitingReminderDays: z.number().int().min(1).max(365).optional(),
   waitingAutoCloseDays: z.number().int().min(1).max(365).optional(),
@@ -117,6 +117,11 @@ const settingsConfigSchema = z.object({
     bccArchive: z.string().trim().max(255).nullable().optional(),
     template: z.string().max(20000).optional(),
     htmlEnabled: z.boolean().optional(),
+    // Einzige Signatur-Einstellung im System (vorher zusätzlich doppelt in
+    // companyBrandingConfig.signature/htmlSignature -- selber Zweck, zwei Orte, keine davon
+    // tatsächlich beim Versand genutzt). "signature" ist die Klartext-Fallback-Variante für
+    // Mails ohne HTML, "htmlSignature" wird nur angehängt, wenn htmlEnabled aktiv ist.
+    signature: z.string().max(5000).optional(),
     htmlSignature: z.string().max(10000).optional(),
     // Werte wie in der lokalen Version vom 07.10.2026 -- "opportunistic" gehoert zur
     // Transportverschluesselung (nicht zur Zertifikatspruefung wie zuvor hier abweichend
@@ -148,9 +153,9 @@ const settingsConfigSchema = z.object({
     // Felder aus der lokalen Version vom 07.10.2026, die bisher auf dieser Seite fehlten.
     department: z.string().trim().max(255).optional(),
     timezone: z.string().trim().max(100).optional(),
-    location: z.string().trim().max(255).optional(),
-    signature: z.string().max(5000).optional(),
-    htmlSignature: z.string().max(10000).optional()
+    location: z.string().trim().max(255).optional()
+    // signature/htmlSignature gibt es hier bewusst nicht mehr -- siehe emailAdvancedConfig
+    // (einzige E-Mail-Signatur-Einstellung, war vorher sinnlos doppelt).
   }).optional(),
   // "Konto genehmigt"-Automail -- bisher komplett ohne Gegenstueck im Backend (siehe
   // account-requests.ts: die Genehmigungs-Mail ging immer unbedingt raus).

@@ -34,6 +34,8 @@ import { migration_0024_user_permissions } from './migrations/0024_user_permissi
 import { migration_0025_app_settings_config_mediumtext } from './migrations/0025_app_settings_config_mediumtext.js';
 import { migration_0026_user_notification_preferences } from './migrations/0026_user_notification_preferences.js';
 import { migration_0027_admin_todos } from './migrations/0027_admin_todos.js';
+import { migration_0028_recurring_admin_todos } from './migrations/0028_recurring_admin_todos.js';
+import { migration_0029_user_contact_fields } from './migrations/0029_user_contact_fields.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -62,7 +64,9 @@ const migrations: Record<string, Migration> = {
   '0024_user_permissions': migration_0024_user_permissions,
   '0025_app_settings_config_mediumtext': migration_0025_app_settings_config_mediumtext,
   '0026_user_notification_preferences': migration_0026_user_notification_preferences,
-  '0027_admin_todos': migration_0027_admin_todos
+  '0027_admin_todos': migration_0027_admin_todos,
+  '0028_recurring_admin_todos': migration_0028_recurring_admin_todos,
+  '0029_user_contact_fields': migration_0029_user_contact_fields
 };
 
 const provider: MigrationProvider = {

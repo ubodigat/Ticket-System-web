@@ -122,6 +122,7 @@ async function runUpdate() {
     if (target.code !== 0 || !/^[0-9a-f]{40}$/.test(target.out)) throw new Error('Ungueltiger Update-Commit');
     await step('reset', 'git', ['merge', '--ff-only', target.out]);
     await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'build', '--no-cache', 'app']);
+    await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', 'office']);
     await step('migrate', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'run', '--rm', '--no-deps', 'app', 'node', 'dist/db/migrate.js']);
     await step('restart', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', '--no-deps', '--force-recreate', '--wait', '--wait-timeout', '180', 'app']);
     job.ok = true;
@@ -153,6 +154,16 @@ createServer(async (req, res) => {
       if (job?.running) return json(res, 409, { error: 'update_already_running', job });
       runUpdate();
       return json(res, 202, { ok: true, job });
+    }
+    // Eigener Endpunkt, unabhaengig vom vollen Deploy-Zyklus und nicht durch "kein Update
+    // verfuegbar" blockiert: holt den laufenden App-Container und die Datenbank wieder auf
+    // denselben Schema-Stand, z.B. wenn ein frueherer Lauf vor dem Migrations-Schritt
+    // abgebrochen ist (Container laeuft bereits mit neuem Code, DB-Spalten fehlen aber noch --
+    // aeussert sich als generische 500er auf vielen, scheinbar unzusammenhaengenden Routen).
+    if (req.method === 'POST' && req.url === '/migrate') {
+      if (job?.running) return json(res, 409, { error: 'update_already_running', job });
+      const result = await run('docker', ['compose', '-f', composeFile, '--env-file', envFile, 'run', '--rm', '--no-deps', 'app', 'node', 'dist/db/migrate.js'], { timeoutMs: 120000 });
+      return json(res, result.code === 0 ? 200 : 500, { ok: result.code === 0, log: [result.out, result.err].filter(Boolean).join('\n') });
     }
     json(res, 404, { error: 'not_found' });
   } catch (error) {

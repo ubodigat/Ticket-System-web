@@ -21,6 +21,8 @@ import { loadSecurityPolicy, force2faAppliesToRole, type SecurityPolicy } from '
 
 const PROD_SESSION_COOKIE = '__Host-ticket_session';
 const DEV_SESSION_COOKIE = 'ticket_session';
+const PROD_CSRF_COOKIE = '__Host-csrf_token';
+const DEV_CSRF_COOKIE = 'csrf_token';
 const loginSchema = z.object({
   username: z.string().trim().min(1).max(64),
   password: z.string().min(1).max(512)
@@ -107,6 +109,10 @@ function isHttpsRequest(req: FastifyRequest): boolean {
 
 function sessionCookieName(req: FastifyRequest): string {
   return isHttpsRequest(req) ? PROD_SESSION_COOKIE : DEV_SESSION_COOKIE;
+}
+
+export function csrfCookieName(req: FastifyRequest): string {
+  return isHttpsRequest(req) ? PROD_CSRF_COOKIE : DEV_CSRF_COOKIE;
 }
 
 function timestampMillis(value: Date | string | null | undefined): number {
@@ -213,25 +219,45 @@ async function currentUser(req: FastifyRequest, app: FastifyInstance, deps: Auth
   return decryptUser(app, deps, user);
 }
 
+// Gegen Account Enumeration per Zeitmessung: ein unbekannter Benutzername durchläuft sonst
+// keinen argon2.verify()-Aufruf und wäre dadurch messbar schneller als ein bekannter Benutzername
+// mit falschem Passwort. Einmalig berechneter Dummy-Hash wird in diesem Fall ebenfalls verifiziert,
+// damit beide Pfade eine vergleichbare Laufzeit haben.
+let dummyPasswordHashPromise: Promise<string> | null = null;
+function getDummyPasswordHash(): Promise<string> {
+  if (!dummyPasswordHashPromise) {
+    dummyPasswordHashPromise = argon2.hash(randomUUID(), { type: argon2.argon2id });
+  }
+  return dummyPasswordHashPromise;
+}
+
 // Brute-Force-Schutz (Anforderungsliste "Brute-Force-Angriffe": Hoch). Wird bei jedem
 // fehlgeschlagenen Passwort- ODER TOTP-Versuch aufgerufen; Schwelle, Aktion (dauerhaft sperren/
 // zeitweise sperren/nur protokollieren) und Sperrdauer kommen aus Systemeinstellungen >
 // Sicherheit (securityPolicy.ts) statt wie zuvor fest einprogrammiert zu sein.
 // maxLoginAttempts === 0 bedeutet "kein Limit" -- der Zähler läuft zu Audit-Zwecken trotzdem
 // mit, löst aber nie eine Sperre aus.
-async function recordFailedLogin(app: FastifyInstance, userId: string, currentCount: number, policy: SecurityPolicy): Promise<void> {
-  const nextCount = currentCount + 1;
-  const updates: Record<string, unknown> = { failed_login_count: nextCount };
-  const limitReached = policy.maxLoginAttempts > 0 && nextCount >= policy.maxLoginAttempts;
-  if (limitReached && policy.lockoutAction !== 'none') {
-    if (policy.lockoutAction === 'lock') {
-      updates.locked_permanent = true;
-    } else {
-      updates.locked_until = new Date(Date.now() + policy.lockoutMinutes * 60 * 1000);
+// Läuft in einer Transaktion mit Zeilensperre (SELECT ... FOR UPDATE), damit parallele
+// fehlgeschlagene Login-Versuche für dasselbe Konto sich nicht gegenseitig überschreiben --
+// ein reines Read-Modify-Write ohne Sperre könnte unter Last Erhöhungen verlieren und so die
+// konfigurierte Sperrschwelle (maxLoginAttempts) umgehbar machen.
+async function recordFailedLogin(app: FastifyInstance, userId: string, _currentCount: number, policy: SecurityPolicy): Promise<void> {
+  await app.db.transaction().execute(async trx => {
+    const row = await trx.selectFrom('users').select(['failed_login_count']).where('id', '=', userId).forUpdate().executeTakeFirst();
+    if (!row) return;
+    const nextCount = (row.failed_login_count ?? 0) + 1;
+    const updates: Record<string, unknown> = { failed_login_count: nextCount };
+    const limitReached = policy.maxLoginAttempts > 0 && nextCount >= policy.maxLoginAttempts;
+    if (limitReached && policy.lockoutAction !== 'none') {
+      if (policy.lockoutAction === 'lock') {
+        updates.locked_permanent = true;
+      } else {
+        updates.locked_until = new Date(Date.now() + policy.lockoutMinutes * 60 * 1000);
+      }
+      updates.failed_login_count = 0;
     }
-    updates.failed_login_count = 0;
-  }
-  await app.db.updateTable('users').set(updates).where('id', '=', userId).execute();
+    await trx.updateTable('users').set(updates).where('id', '=', userId).execute();
+  });
 }
 
 async function resetFailedLogins(app: FastifyInstance, userId: string): Promise<void> {
@@ -255,6 +281,18 @@ async function issueSession(app: FastifyInstance, req: FastifyRequest, reply: Fa
     encodeSession({ sid, uid: user.id, username: user.username, role, iat: Date.now() }),
     cookieOptions(req, policy.sessionTimeoutMinutes)
   );
+  // CSRF-Schutz (Double-Submit-Cookie): bewusst NICHT httpOnly, da das Frontend den Wert lesen
+  // und als x-csrf-token-Header auf jede mutierende Anfrage legen muss (siehe js/utils.js
+  // installCsrfFetch()). SameSite=Lax allein schützt moderne Browser bereits gegen die meisten
+  // CSRF-Fälle, ist aber ein Single Point of Failure -- dieses Token ist die zweite,
+  // unabhängige Verteidigungsschicht (siehe app.ts onRequest-Hook, der ihn gegenprüft).
+  reply.setCookie(csrfCookieName(req), randomUUID(), {
+    path: '/',
+    httpOnly: false,
+    sameSite: 'lax',
+    secure: isHttpsRequest(req),
+    maxAge: cookieOptions(req, policy.sessionTimeoutMinutes).maxAge
+  });
 }
 
 // Unzureichendes Security Logging (Anforderungsliste: Mittel) -- fehlgeschlagene Logins landen
@@ -313,7 +351,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now()) {
       // Absichtlich dieselbe Fehlermeldung wie bei falschem Passwort (kein Account-Enumeration
       // über unterschiedliche Fehlertexte, siehe Anforderungsliste "Account Enumeration").
-      if (user) await logSecurityEvent(app, 'login.rejected_locked_or_archived', input.username);
+      if (user) {
+        await logSecurityEvent(app, 'login.rejected_locked_or_archived', input.username);
+      } else {
+        // Dummy-Verify gegen Timing-basierte Enumeration unbekannter Benutzernamen (siehe oben).
+        await argon2.verify(await getDummyPasswordHash(), input.password).catch(() => false);
+      }
       return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
     }
     let ok = false;
@@ -418,6 +461,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     // über cookieOptions().
     reply.clearCookie(PROD_SESSION_COOKIE, { path: '/', secure: true, httpOnly: true, sameSite: 'lax' });
     reply.clearCookie(DEV_SESSION_COOKIE, { path: '/', secure: isHttpsRequest(req), httpOnly: true, sameSite: 'lax' });
+    reply.clearCookie(PROD_CSRF_COOKIE, { path: '/', secure: true, httpOnly: false, sameSite: 'lax' });
+    reply.clearCookie(DEV_CSRF_COOKIE, { path: '/', secure: isHttpsRequest(req), httpOnly: false, sameSite: 'lax' });
     return reply.send({ success: true });
   });
 

@@ -12,6 +12,7 @@ import { Store, Notifications } from './store.js';
 import { UI } from './ui.js';
 import { Settings } from './settings.js';
 import { renderWorkbook } from './excel-preview.js';
+import { renderPdfPreview } from './pdf-preview.js';
 import { UserDash } from './user-dash.js';
 import { getStatusColor, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
 
@@ -275,27 +276,54 @@ export const AdminBoard = {
 
     // ticket.attachments gibt es in der v2-API nicht (nie persistiert) -- echte Liste kommt über
     // GET /api/v2/tickets/:id/attachments.
-    renderTicketAttachments: async (ticket, selector) => {
+    renderTicketAttachments: async (ticket, selector, { manage = false } = {}) => {
         const container = typeof selector === 'string' ? q(selector) : selector;
         if (!container) return;
         const attachments = await Store.getTicketAttachments(ticket.id);
+        const actor = await Store.currentUser();
+        const mayManage = manage && ['admin', 'superadmin'].includes(actor?.role) && !ticket.archived;
         container.innerHTML = '';
-        container.hidden = attachments.length === 0;
-        if (!attachments.length) return;
+        container.hidden = attachments.length === 0 && !mayManage;
+        if (!attachments.length && !mayManage) return;
         const heading = document.createElement('h4');
         heading.className = 'section-title';
         heading.textContent = 'Anhänge';
         const list = document.createElement('div');
         list.className = 'ticket-attachment-list';
         attachments.forEach((file, index) => {
+            const item = document.createElement('div'); item.className = 'ticket-attachment-item';
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'file-chip';
             button.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name || 'Anhang')}</span>`;
             button.onclick = () => AdminBoard.openAttachmentPreview(attachments[index]);
-            list.appendChild(button);
+            item.appendChild(button);
+            if (mayManage && file.uploadedByUserId === actor.id) {
+                const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-ghost btn-icon btn-sm';
+                remove.title = 'Eigenen Anhang entfernen'; remove.setAttribute('aria-label', 'Eigenen Anhang entfernen'); remove.innerHTML = Icon('trash-2', 15);
+                remove.onclick = () => UI.confirm('Eigenen Anhang entfernen?', async () => {
+                    const response = await fetch(`/api/v2/attachments/${encodeURIComponent(file.id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
+                    if (!response?.ok) return UI.toast('Anhang konnte nicht entfernt werden.');
+                    await AdminBoard.renderTicketAttachments(ticket, container, { manage });
+                });
+                item.appendChild(remove);
+            }
+            list.appendChild(item);
         });
         container.append(heading, list);
+        if (mayManage) {
+            const add = document.createElement('label'); add.className = 'btn-secondary btn-icon attachment-add';
+            add.title = 'Anhänge hinzufügen'; add.setAttribute('aria-label', 'Anhänge hinzufügen'); add.tabIndex = 0;
+            add.innerHTML = `${Icon('paperclip', 16)}<input type="file" multiple hidden>`;
+            const input = add.querySelector('input');
+            add.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } };
+            input.onchange = async () => {
+                try { for (const file of input.files) await Store.saveAttachment(file, { ticketId: ticket.id }); }
+                catch { UI.toast('Ein Anhang konnte nicht hochgeladen werden (maximal 15 MB pro Datei).'); }
+                await AdminBoard.renderTicketAttachments(ticket, container, { manage });
+            };
+            container.appendChild(add);
+        }
         if (window.lucide) lucide.createIcons();
     },
 
@@ -1525,7 +1553,17 @@ export const AdminBoard = {
                         <div class="field"><label>Benutzername</label><input id="ue-user" type="text"></div>
                         <div class="field"><label>Name</label><input id="ue-name" type="text"></div>
                         <div class="field"><label>E-Mail</label><input id="ue-email" type="email"></div>
+                        <div class="field field-wide" id="ue-similar-hint" hidden></div>
                         <div class="field"><label>Passwort (leer = unverändert)</label><input id="ue-pass" type="password"></div>
+                        <div class="field field-wide" id="ue-contact-box">
+                            <label>Kontaktdaten</label>
+                            <div class="perm-grid">
+                                <div class="field"><label>Telefon</label><input id="ue-phone" type="text"></div>
+                                <div class="field"><label>Mobil</label><input id="ue-mobile" type="text"></div>
+                                <div class="field"><label>Position / Jobtitel</label><input id="ue-job-title" type="text"></div>
+                                <div class="field"><label>Standort</label><input id="ue-office-location" type="text"></div>
+                            </div>
+                        </div>
                         <div class="field field-wide" id="ue-role-box"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
                         <div class="field field-wide" id="ue-groups-box">
                             <label>Gruppe</label>
@@ -1579,6 +1617,45 @@ export const AdminBoard = {
         q('#ue-name').value = isNew ? '' : (user.name || '');
         q('#ue-email').value = isNew ? '' : (user.email || '');
         q('#ue-pass').value = '';
+        q('#ue-phone').value = isNew ? '' : (user.phone || '');
+        q('#ue-mobile').value = isNew ? '' : (user.mobile || '');
+        q('#ue-job-title').value = isNew ? '' : (user.jobTitle || '');
+        q('#ue-office-location').value = isNew ? '' : (user.officeLocation || '');
+
+        // Prüfung auf bestehende/ähnliche Benutzer -- nur beim Neuanlegen sinnvoll (beim
+        // Bearbeiten würde die Person immer "sich selbst" als Treffer bekommen). Bei exakter
+        // Übereinstimmung (Name UND E-Mail gleich, oder E-Mail bereits vergeben) wird das
+        // Anlegen blockiert; bei nur ähnlichem Namen gibt es lediglich einen Hinweis.
+        const hintBox = q('#ue-similar-hint');
+        let hasExactDuplicate = false;
+        if (isNew && hintBox) {
+            hintBox.hidden = true;
+            hintBox.innerHTML = '';
+            let similarCheckTimer = null;
+            const runSimilarCheck = () => {
+                clearTimeout(similarCheckTimer);
+                similarCheckTimer = setTimeout(async () => {
+                    const name = q('#ue-name').value.trim();
+                    const email = q('#ue-email').value.trim();
+                    if (!name && !email) { hintBox.hidden = true; hasExactDuplicate = false; return; }
+                    const result = await Store.checkSimilarUser(name, email);
+                    hasExactDuplicate = !!result.exact;
+                    if (!result.similar || !result.similar.length) { hintBox.hidden = true; return; }
+                    const describe = (s) => `${Utils.esc(s.name)} (${Utils.esc(s.username)}, ${Utils.esc(s.email)})`;
+                    hintBox.hidden = false;
+                    hintBox.className = `field field-wide callout ${result.exact ? 'callout-danger' : ''}`;
+                    hintBox.innerHTML = result.exact
+                        ? `<strong>Dieser Benutzer existiert bereits:</strong> ${result.similar.map(describe).join(', ')}. Anlegen ist blockiert.`
+                        : `<strong>Ähnliche(r) Benutzer gefunden:</strong> ${result.similar.map(describe).join(', ')}. Trotzdem fortfahren ist möglich.`;
+                }, 350);
+            };
+            q('#ue-name').oninput = runSimilarCheck;
+            q('#ue-email').oninput = runSimilarCheck;
+        } else if (hintBox) {
+            hintBox.hidden = true;
+            q('#ue-name').oninput = null;
+            q('#ue-email').oninput = null;
+        }
 
         const roleSel = q('#ue-role');
         roleSel.value = isNew ? (viewContext === 'admins' ? 'admin' : 'user') : user.role;
@@ -1624,6 +1701,10 @@ export const AdminBoard = {
             const nVal = q('#ue-name').value.trim();
             const eVal = q('#ue-email').value.trim();
             const pVal = q('#ue-pass').value.trim();
+            const phoneVal = q('#ue-phone').value.trim();
+            const mobileVal = q('#ue-mobile').value.trim();
+            const jobTitleVal = q('#ue-job-title').value.trim();
+            const officeLocationVal = q('#ue-office-location').value.trim();
             const rVal = q('#ue-role').value;
             const groupVal = groupPicker?.getValue() || null;
             const supervisorVal = supervisorPicker?.getValue() || null;
@@ -1642,6 +1723,10 @@ export const AdminBoard = {
             }
             if (!eVal || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eVal)) {
                 UI.toast('Gültige E-Mail-Adresse fehlt');
+                return;
+            }
+            if (isNew && hasExactDuplicate) {
+                UI.toast('Dieser Benutzer existiert bereits -- Anlegen abgebrochen.');
                 return;
             }
 
@@ -1669,6 +1754,10 @@ export const AdminBoard = {
                     role: rVal,
                     department_group_id: groupVal,
                     supervisorUserId: supervisorVal,
+                    phone: phoneVal,
+                    mobile: mobileVal,
+                    jobTitle: jobTitleVal,
+                    officeLocation: officeLocationVal,
                     permissions: isSuper ? { ...permissionsVal, canManageRequests: canManageReqVal, canManageUsers: canManageUsersVal, canViewLogs: canViewLogsVal, canManage2FA: canManage2FAVal } : undefined
                 });
             } else {
@@ -1687,11 +1776,19 @@ export const AdminBoard = {
                     }
                     target.department_group_id = groupVal;
                     target.supervisorUserId = supervisorVal;
+                    target.phone = phoneVal;
+                    target.mobile = mobileVal;
+                    target.jobTitle = jobTitleVal;
+                    target.officeLocation = officeLocationVal;
                 }
             }
             const ok = await Store.saveUsers(users);
             if (!ok) {
-                UI.toast('Speichern fehlgeschlagen -- bitte Eingaben prüfen (z.B. Passwort mind. 12 Zeichen, gültige E-Mail).');
+                const errText = Store.lastError || '';
+                const friendly = errText.includes('email_taken') ? 'Diese E-Mail-Adresse wird bereits von einem anderen Konto verwendet.'
+                    : errText.includes('username_taken') ? 'Dieser Benutzername ist bereits vergeben.'
+                    : 'Speichern fehlgeschlagen -- bitte Eingaben prüfen (z.B. Passwort mind. 12 Zeichen, gültige E-Mail).';
+                UI.toast(friendly);
                 return;
             }
             editModal.classList.remove('open');
@@ -1934,6 +2031,10 @@ export const AdminBoard = {
                             <label class="check-row"><input type="checkbox" id="sys-acc-name"><span>Name</span></label>
                             <label class="check-row"><input type="checkbox" id="sys-acc-email"><span>E-Mail</span></label>
                             <label class="check-row"><input type="checkbox" id="sys-acc-dept"><span>Einrichtung / Abteilung</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-phone"><span>Telefon</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-mobile"><span>Mobil</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-jobTitle"><span>Position / Jobtitel</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-officeLocation"><span>Standort</span></label>
                         </div>
 
                         <!-- Benachrichtigungen -->
@@ -1974,6 +2075,12 @@ export const AdminBoard = {
                                 <div class="button-row">
                                     <button class="btn-secondary btn-sm" id="sys-update-check" type="button">${Icon('refresh-cw', 15)}Pr&uuml;fen</button>
                                     <button class="btn-primary btn-sm" id="sys-update-run" type="button">${Icon('download-cloud', 15)}Update installieren</button>
+                                </div>
+                            </div>
+                            <div class="setting-row">
+                                <span class="hint">Datenbank hängt dem Code hinterher (z.B. nach einem abgebrochenen Update) -- äußert sich als Fehler &quot;500&quot; beim Speichern an vielen Stellen. Holt die Datenbank ohne Code-Update auf den aktuellen Stand.</span>
+                                <div class="button-row">
+                                    <button class="btn-secondary btn-sm" id="sys-update-migrate" type="button">${Icon('database', 15)}Datenbank-Migrationen ausf&uuml;hren</button>
                                 </div>
                             </div>
                         </div>
@@ -2025,13 +2132,14 @@ export const AdminBoard = {
                             </div>
                             <div class="settings-section-title">${Icon('mail-check', 15)}Vorlage und Signatur</div>
                             <div class="field field-wide"><label>E-Mail-Vorlage</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
+                            <div class="field field-wide"><label>Signatur (Text)</label><textarea id="sys-email-text-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
                             <div class="field">
                                 <label class="check-row">
                                     <input type="checkbox" id="sys-email-html-enabled">
-                                    <span class="check-text"><strong>HTML-E-Mails aktivieren</strong><span>Benachrichtigungen mit HTML-Signatur und formatiertem Inhalt vorbereiten.</span></span>
+                                    <span class="check-text"><strong>HTML-E-Mails aktivieren</strong><span>Benachrichtigungen zusätzlich mit HTML-Signatur und formatiertem Inhalt verschicken.</span></span>
                                 </label>
                             </div>
-                            <div class="field field-wide"><label>HTML-Signatur</label><textarea id="sys-email-signature" rows="5" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
+                            <div class="field field-wide"><label>Signatur (HTML, nur bei aktiviertem HTML-Versand)</label><textarea id="sys-email-signature" rows="5" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
                             <div class="settings-section-title">${Icon('shield-check', 15)}Sicherheit und Zertifikate</div>
                             <div class="callout"><strong>E-Mail Sicherheit:</strong> Zertifikate und Schlüssel werden gespeichert und für Backend/SMTP-Integration bereitgestellt.</div>
                             <div class="form-grid">
@@ -2118,7 +2226,14 @@ export const AdminBoard = {
                                 <div class="field"><label>Support-Abteilung</label><input id="sys-company-dept" type="text" placeholder="IT Service Desk"></div>
                             </div>
                             <div class="settings-section-title">Branding &amp; Kontaktdaten</div>
-                            <div class="field"><label>Firmenlogo / Logo-URL</label><input id="sys-company-logo" type="text" placeholder="https://example.com/logo.png oder Data-URL"></div>
+                            <div class="field">
+                                <label>Firmenlogo / Logo-URL</label>
+                                <div class="form-grid" style="grid-template-columns:1fr auto;align-items:end;gap:var(--space-2)">
+                                    <input id="sys-company-logo" type="text" placeholder="https://example.com/logo.png oder hochladen">
+                                    <label class="btn btn-secondary btn-sm" style="white-space:nowrap">${Icon('upload', 15)}Hochladen<input type="file" id="sys-company-logo-file" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" style="display:none"></label>
+                                </div>
+                                <div class="hint" id="sys-company-logo-hint"></div>
+                            </div>
                             <div class="form-grid">
                                 <div class="field"><label>Support-E-Mail</label><input id="sys-company-support" type="email" placeholder="support@example.com"></div>
                                 <div class="field"><label>Telefon</label><input id="sys-company-phone" type="text" placeholder="+49 ..."></div>
@@ -2132,8 +2247,7 @@ export const AdminBoard = {
                                 <div class="field"><label>Impressum-URL</label><input id="sys-company-imprint" type="url" placeholder="https://example.com/impressum"></div>
                                 <div class="field"><label>Datenschutz-URL</label><input id="sys-company-privacy" type="url" placeholder="https://example.com/datenschutz"></div>
                             </div>
-                            <div class="field field-wide"><label>E-Mail Signatur</label><textarea id="sys-company-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
-                            <div class="field field-wide"><label>HTML-E-Mail-Signatur</label><textarea id="sys-company-html-signature" rows="4" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
+                            <div class="hint">Die E-Mail-Signatur wird zentral unter E-Mail Einstellungen / Benachrichtigungen &gt; Vorlage und Signatur gepflegt.</div>
                             <div class="settings-section-title">Ticketnummern für neue Tickets</div>
                             <div class="callout">Formatvorlagen unterstützen <code>{prefix}</code>, <code>{category}</code> (Code der ersten Ticketkategorie) und <code>{number}</code>. Jede Vorlage muss <code>{number}</code> enthalten. Bestehende Ticketnummern bleiben unverändert.</div>
                             <div class="form-grid">
@@ -2199,6 +2313,18 @@ export const AdminBoard = {
                 UI.toast('Update wurde gestartet. Die Anwendung wird gleich neu gebaut und kurz neu gestartet.');
                 await AdminBoard.renderUpdateStatus();
             };
+            q('#sys-update-migrate').onclick = async () => {
+                const btn = q('#sys-update-migrate');
+                btn.disabled = true;
+                UI.toast('Datenbank-Migrationen laufen...');
+                const result = await Store.runMigrate();
+                btn.disabled = false;
+                if (!result || result.httpStatus !== 200) {
+                    UI.toast(result?.log ? `Migrationen fehlgeschlagen: ${result.log.slice(0, 200)}` : 'Migrationen fehlgeschlagen oder Updater nicht erreichbar.');
+                    return;
+                }
+                UI.toast('Datenbank ist jetzt auf dem aktuellen Stand.');
+            };
         }
 
         const settings = await Store.getSettings();
@@ -2241,6 +2367,23 @@ export const AdminBoard = {
         q('#sys-company-name').value = company.name || '';
         q('#sys-company-dept').value = companyBranding.department || '';
         q('#sys-company-logo').value = companyBranding.logoDataUrl || '';
+        q('#sys-company-logo-hint').textContent = (companyBranding.logoDataUrl || '').startsWith('data:') ? 'Hochgeladenes Bild gespeichert.' : '';
+        q('#sys-company-logo-file').value = '';
+        q('#sys-company-logo-file').onchange = async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
+            // logoDataUrl ist serverseitig auf 1 MB Zeichenlänge begrenzt (settings.ts) -- Base64
+            // vergrößert die Rohdatei um ca. 1/3, deshalb hier konservativ bei 650 KB abschneiden
+            // statt die kryptische Fehlermeldung des Servers abzuwarten.
+            if (file.size > 650 * 1024) {
+                UI.toast('Bild ist zu groß (max. ca. 650 KB). Bitte kleineres Logo verwenden.');
+                return;
+            }
+            const dataUrl = await Store.readFile(file);
+            q('#sys-company-logo').value = dataUrl;
+            q('#sys-company-logo-hint').textContent = `Hochgeladen: ${file.name} (${Math.round(file.size / 1024)} KB)`;
+        };
         q('#sys-company-support').value = companyBranding.supportEmail || '';
         q('#sys-company-phone').value = companyBranding.phone || '';
         q('#sys-company-timezone').value = companyBranding.timezone || 'Europe/Berlin';
@@ -2248,8 +2391,6 @@ export const AdminBoard = {
         q('#sys-company-address').value = companyBranding.address || '';
         q('#sys-company-imprint').value = companyBranding.imprintUrl || '';
         q('#sys-company-privacy').value = companyBranding.privacyUrl || '';
-        q('#sys-company-signature').value = companyBranding.signature || '';
-        q('#sys-company-html-signature').value = companyBranding.htmlSignature || '';
         q('#sys-ticket-number-format').value = company.ticketNumberFormat || '{prefix}-{number}';
         q('#sys-ticket-number-prefix').value = company.ticketNumberPrefix || '';
         q('#sys-ticket-number-padding').value = company.ticketNumberPadding || 5;
@@ -2276,6 +2417,7 @@ export const AdminBoard = {
         q('#sys-email-replyto').value = emailAdvanced.replyTo || '';
         q('#sys-email-bcc').value = emailAdvanced.bccArchive || '';
         q('#sys-email-template').value = emailAdvanced.template || '';
+        q('#sys-email-text-signature').value = emailAdvanced.signature || '';
         q('#sys-email-html-enabled').checked = !!emailAdvanced.htmlEnabled;
         q('#sys-email-signature').value = emailAdvanced.htmlSignature || '';
         q('#sys-email-transport').value = emailAdvanced.transportSecurity || 'starttls';
@@ -2298,6 +2440,10 @@ export const AdminBoard = {
         q('#sys-acc-name').checked = accEditable.name !== false;
         q('#sys-acc-email').checked = accEditable.email !== false;
         q('#sys-acc-dept').checked = !!accEditable.department;
+        q('#sys-acc-phone').checked = !!accEditable.phone;
+        q('#sys-acc-mobile').checked = !!accEditable.mobile;
+        q('#sys-acc-jobTitle').checked = !!accEditable.jobTitle;
+        q('#sys-acc-officeLocation').checked = !!accEditable.officeLocation;
 
         const appr = settings.approvalConfig || {};
         q('#sys-appr-enabled').checked = !!appr.enabled;
@@ -2380,7 +2526,8 @@ export const AdminBoard = {
 
         q('#sys-save').onclick = async () => {
             const padding = Math.max(1, Math.min(12, parseInt(q('#sys-ticket-number-padding').value, 10) || 5));
-            const accountSelfServiceFields = ['name', 'email', 'department'].filter(f => q(`#sys-acc-${f === 'department' ? 'dept' : f}`).checked);
+            const accFieldIdMap = { department: 'dept' };
+            const accountSelfServiceFields = ['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation'].filter(f => q(`#sys-acc-${accFieldIdMap[f] || f}`).checked);
             const ok = await Store.updateServerSettings({
                 companyName: q('#sys-company-name').value.trim(),
                 portalName: q('#sys-portal-name').value.trim() || 'Support Portal',
@@ -2434,6 +2581,7 @@ export const AdminBoard = {
                         replyTo: q('#sys-email-replyto').value.trim() || null,
                         bccArchive: q('#sys-email-bcc').value.trim() || null,
                         template: q('#sys-email-template').value.trim(),
+                        signature: q('#sys-email-text-signature').value,
                         htmlEnabled: q('#sys-email-html-enabled').checked,
                         htmlSignature: q('#sys-email-signature').value,
                         transportSecurity: q('#sys-email-transport').value,
@@ -2462,9 +2610,7 @@ export const AdminBoard = {
                         location: q('#sys-company-location').value.trim(),
                         address: q('#sys-company-address').value,
                         imprintUrl: q('#sys-company-imprint').value.trim(),
-                        privacyUrl: q('#sys-company-privacy').value.trim(),
-                        signature: q('#sys-company-signature').value.trim(),
-                        htmlSignature: q('#sys-company-html-signature').value.trim()
+                        privacyUrl: q('#sys-company-privacy').value.trim()
                     },
                     ticketNumberFormat: {
                         prefix: q('#sys-ticket-number-prefix').value.trim(),
@@ -4322,6 +4468,7 @@ export const AdminBoard = {
                     <p class="desc-text">${Utils.esc(t.desc || '-')}</p>
                     ${fields.length ? `<div class="apr-fields"></div>` : ''}
                     <div class="apr-attachments"></div>
+                    <div class="field approval-comment"><label>Kommentar zur Entscheidung (bei Freigabe optional)</label><textarea class="apr-comment" rows="3" maxlength="5000" placeholder="Kommentar zur Freigabe oder Begründung der Ablehnung"></textarea></div>
                     <div class="aa-actions">
                         <button class="btn-secondary btn-sm apr-open" type="button">${Icon('external-link', 14)}Ticket öffnen</button>
                         <button class="btn-primary btn-sm apr-yes" type="button">${Icon('check', 14)}Freigeben</button>
@@ -4342,9 +4489,9 @@ export const AdminBoard = {
                     await render();
                     await AdminBoard.render();
                 };
-                row.querySelector('.apr-yes').onclick = () => decide('approved');
+                row.querySelector('.apr-yes').onclick = () => decide('approved', row.querySelector('.apr-comment').value.trim());
                 row.querySelector('.apr-no').onclick = async () => {
-                    const reason = await UI.promptText({ title: 'Genehmigung ablehnen', label: 'Warum lehnst du diese Anfrage ab? Die Begründung sieht die antragstellende Person.', saveLabel: 'Ablehnen' });
+                    const reason = row.querySelector('.apr-comment').value.trim();
                     if (!reason || !reason.trim()) return UI.toast('Bitte eine Begründung angeben.');
                     await decide('rejected', reason.trim());
                 };
@@ -5305,7 +5452,7 @@ export const AdminBoard = {
                 const fieldsSettings = await Store.getSettings();
                 UI.renderCustomFieldsDisplay(q('#m-custom-fields-display'), Store.getCustomFieldsForCategories(t.category, fieldsSettings), t.customFieldValues || {});
             }
-            await AdminBoard.renderTicketAttachments(t, '#m-ticket-attachments');
+            await AdminBoard.renderTicketAttachments(t, '#m-ticket-attachments', { manage: true });
             AdminBoard.renderIncidentLinkedTickets(t, tickets);
 
             const pendingApproval = (t.approvals || []).find(a => a.status === 'pending');
@@ -5317,11 +5464,13 @@ export const AdminBoard = {
                     const approverName = await Store.describeApprover(pendingApproval);
                     q('#m-approval-pending-text').textContent = `Wartet auf Genehmigung durch ${approverName} (seit ${Utils.fmtDate(pendingApproval.requestedAt)})`;
                     // Darf die aktuell angemeldete Person selbst entscheiden, direkt hier Freigeben/Ablehnen anbieten
-                    const canDecideHere = isPendingApprover(pendingApproval, user.username);
+                    const canDecideHere = user.role === 'superadmin' || isPendingApprover(pendingApproval, user.id);
                     if (approvalActions) approvalActions.hidden = !canDecideHere;
                     if (canDecideHere) {
                         q('#m-approval-yes').onclick = async () => {
-                            if (await AdminBoard.decideApproval(t.id, 'approved')) {
+                            const comment = await UI.promptText({ title: 'Genehmigung freigeben', label: 'Kommentar (optional)', multiline: true, saveLabel: 'Freigeben' });
+                            if (comment === null) return;
+                            if (await AdminBoard.decideApproval(t.id, 'approved', comment.trim())) {
                                 UI.toast('Genehmigung erteilt.');
                                 await AdminBoard.openModal(t.id);
                                 await AdminBoard.render();
@@ -5377,19 +5526,19 @@ export const AdminBoard = {
 
             const actionsRow = q('#ticket-modal .actions-row');
             if (actionsRow) {
-                let extra = q('#m-extra-actions');
-                if (!extra) {
-                    extra = document.createElement('div');
-                    extra.id = 'm-extra-actions';
-                    extra.className = 'actions-row';
-                    actionsRow.after(extra);
-                }
+                // #m-extra-actions sitzt als <span style="display:contents"> IN derselben
+                // .actions-row wie die statischen Buttons (admin.html) -- vorher war es ein
+                // eigener, separater .actions-row-Container direkt darunter, wodurch die
+                // Buttons in zwei unabhängig rechtsbündigen Zeilen mit unterschiedlicher
+                // Breite/Lücke auseinanderfielen, statt als eine zusammenhängende Gruppe mit
+                // einheitlichem Abstand zu wirken.
+                const extra = q('#m-extra-actions');
                 let related = q('#m-related');
                 if (!related) {
                     related = document.createElement('div');
                     related.id = 'm-related';
                     related.className = 'incident-linked-list';
-                    extra.after(related);
+                    actionsRow.after(related);
                 }
                 extra.innerHTML = t.archived ? '' : `
                     <button class="btn-secondary" id="m-link-related" type="button">${Icon('link', 16)}Verwandt verknüpfen</button>
@@ -5914,6 +6063,7 @@ export const AdminBoard = {
             attachment = await Store.getAttachment(attachment.attachmentId || attachment.id);
         }
         if (!attachment?.data) return UI.toast('Anhang nicht gefunden.');
+        AdminBoard._pdfViewer?.destroy(); AdminBoard._pdfViewer = null;
         if (AdminBoard._lastPreviewBlobUrl) {
             URL.revokeObjectURL(AdminBoard._lastPreviewBlobUrl);
             AdminBoard._lastPreviewBlobUrl = null;
@@ -5946,9 +6096,9 @@ export const AdminBoard = {
                     <div class="modal-body attachment-preview-body" id="attachment-preview-body"></div>
                 </div>`;
             document.body.appendChild(modal);
-            modal.querySelector('[data-close-preview]').onclick = () => modal.classList.remove('open');
+            modal.querySelector('[data-close-preview]').onclick = () => { modal.classList.remove('open'); AdminBoard._pdfViewer?.destroy(); AdminBoard._pdfViewer = null; };
             modal.onclick = event => {
-                if (event.target === modal) modal.classList.remove('open');
+                if (event.target === modal) modal.querySelector('[data-close-preview]').click();
             };
         }
         const name = String(attachment.name || '').toLowerCase();
@@ -5967,6 +6117,25 @@ export const AdminBoard = {
         }
         const body = q('#attachment-preview-body');
         body.replaceChildren();
+        modal.classList.add('open');
+        const savedId = attachment.attachmentId || attachment.id;
+        if (savedId && /\.(pdf|docx|doc|odt|xlsx|xls|ods|pptx|ppt|odp)$/.test(name)) {
+            const documentUrl = `/api/v2/attachments/${encodeURIComponent(savedId)}/preview`;
+            body.textContent = 'Dokumentvorschau wird erstellt...';
+            try {
+                const response = await fetch(documentUrl, { credentials: 'same-origin' });
+                if (!response.ok || !response.headers.get('content-type')?.includes('application/pdf')) throw new Error('preview_unavailable');
+                AdminBoard._pdfViewer = await renderPdfPreview(await response.arrayBuffer(), body);
+                topOpen.href = documentUrl;
+                if (window.lucide) lucide.createIcons();
+                return;
+            } catch {
+                body.replaceChildren();
+                const hint = document.createElement('p'); hint.className = 'callout';
+                hint.textContent = 'Die Dokumentansicht ist momentan nicht verfügbar. Vereinfachte Vorschau; die Originaldatei steht zum Download bereit.';
+                body.appendChild(hint);
+            }
+        }
         const addText = text => {
             const pre = document.createElement('pre');
             pre.className = 'attachment-text-preview';
@@ -5974,15 +6143,9 @@ export const AdminBoard = {
             body.appendChild(pre);
         };
         if (mime === 'application/pdf' || name.endsWith('.pdf')) {
-            if (blobUrl) {
-                const frameWrap = document.createElement('div');
-                frameWrap.className = 'attachment-document-frame-wrap';
-                const frame = document.createElement('iframe');
-                frame.className = 'attachment-document-frame';
-                frame.src = blobUrl;
-                frame.title = attachment.name || 'PDF-Vorschau';
-                frameWrap.appendChild(frame);
-                body.appendChild(frameWrap);
+            if (previewBlob) {
+                try { AdminBoard._pdfViewer = await renderPdfPreview(await previewBlob.arrayBuffer(), body); }
+                catch { addText('PDF-Vorschau konnte nicht geladen werden. Die Originaldatei steht zum Download bereit.'); }
             } else {
                 const message = document.createElement('div');
                 message.className = 'attachment-download-fallback';

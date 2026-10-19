@@ -8,6 +8,36 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
 import { Lang } from './lang.js';
 
+// CSRF-Schutz (Double-Submit-Cookie): der Server setzt beim Login ein nicht-httpOnly
+// "csrf_token"/"__Host-csrf_token"-Cookie und verlangt auf jede mutierende Anfrage (POST/PUT/
+// PATCH/DELETE) einer angemeldeten Person denselben Wert als "x-csrf-token"-Header zurück (siehe
+// apps/server/src/http/app.ts). Diese Umwicklung von window.fetch läuft einmalig beim Laden der
+// Anwendung und deckt dadurch automatisch jeden bestehenden und künftigen fetch()-Aufruf ab, ohne
+// dass jede einzelne Aufrufstelle im Code angepasst werden muss.
+(() => {
+    if (typeof window === 'undefined' || window.fetch?.__csrfWrapped) return;
+    const originalFetch = window.fetch.bind(window);
+    const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+    const readCookie = (name) => {
+        const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[-]/g, '\\$&') + '=([^;]*)'));
+        return match ? decodeURIComponent(match[1]) : null;
+    };
+    const wrapped = (input, init = {}) => {
+        const method = (init.method || (input instanceof Request ? input.method : 'GET') || 'GET').toUpperCase();
+        if (mutatingMethods.has(method)) {
+            const token = readCookie('__Host-csrf_token') || readCookie('csrf_token');
+            if (token) {
+                const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+                headers.set('x-csrf-token', token);
+                init = { ...init, headers };
+            }
+        }
+        return originalFetch(input, init);
+    };
+    wrapped.__csrfWrapped = true;
+    window.fetch = wrapped;
+})();
+
 export const q = (s) => document.querySelector(s);
 export const qa = (s) => Array.from(document.querySelectorAll(s));
 
@@ -17,7 +47,14 @@ export const Icon = (name, size = 16) =>
 
 // --- Utils ---
 export const Utils = {
-    uid: () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4),
+    // crypto.randomUUID() statt Math.random(): wird u.a. als vorlaeufige Objekt-ID verwendet,
+    // bevor ein Datensatz die echte, serverseitig vergebene ID bekommt -- CodeQL stuft jede
+    // Math.random()-Quelle, die in die Naehe eines Benutzer-/Auth-Objekts fliesst, pauschal als
+    // "insecure randomness in security context" ein (CWE-338), unabhaengig davon, ob der
+    // konkrete Wert hier tatsaechlich sicherheitsrelevant ist. crypto.randomUUID() ist in allen
+    // unterstuetzten Browsern vorhanden, kryptographisch sicher und raeumt den Befund an der
+    // Quelle aus, statt ihn von Fall zu Fall zu bewerten.
+    uid: () => crypto.randomUUID(),
     // Kryptographisch sicherer Zufallswert (crypto.getRandomValues) -- NUR fuer
     // sicherheitsrelevante Werte wie das temporaere Fallback-Passwort beim Anlegen neuer
     // Benutzer, nie fuer DOM-IDs o.ae. (dort reicht Utils.uid). Mit Math.random() (Utils.uid)

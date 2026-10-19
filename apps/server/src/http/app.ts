@@ -16,7 +16,7 @@ import type { Database } from '../db/types.js';
 import type { KeyProvider } from '../crypto/keyProvider.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerSetupRoutes } from './routes/setup.js';
-import { registerAuthRoutes } from './routes/auth.js';
+import { registerAuthRoutes, csrfCookieName } from './routes/auth.js';
 import { registerTicketsV2Routes } from './routes/tickets.js';
 import { registerUsersV2Routes } from './routes/users.js';
 import { registerExtrasV2Routes } from './routes/extras.js';
@@ -45,9 +45,10 @@ const CSP_DIRECTIVES = {
   defaultSrc: ["'self'"],
   scriptSrc: ["'self'"],
   styleSrc: ["'self'", "'unsafe-inline'"],
-  imgSrc: ["'self'", 'data:'],
+  imgSrc: ["'self'", 'data:', 'blob:'],
   fontSrc: ["'self'"],
   connectSrc: ["'self'"],
+  frameSrc: ["'self'"],
   frameAncestors: ["'none'"],
   baseUri: ["'none'"],
   formAction: ["'self'"],
@@ -128,6 +129,23 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       req.ticketSession = { uid: parsed.uid, username: row.username, role: row.role };
     } catch {
       req.ticketSession = null;
+    }
+  });
+
+  // CSRF-Schutz (Double-Submit-Cookie), zweite Verteidigungsschicht zusätzlich zu
+  // SameSite=Lax/fehlender CORS-Freigabe: jede mutierende Anfrage einer angemeldeten Person muss
+  // den Wert aus dem (nicht-httpOnly) CSRF-Cookie als x-csrf-token-Header zurückgeben. Eine
+  // fremde Seite kann diesen Header nicht mitschicken (kein Zugriff auf das Cookie wegen
+  // Same-Origin-Policy), selbst wenn SameSite künftig umgangen würde. Gilt nur, wenn bereits eine
+  // gültige Session erkannt wurde -- Login/Setup/MFA-Verify sind unauthentifiziert und daher
+  // ausgenommen (für sie greift stattdessen das Rate-Limit + der Account-Lockout).
+  const CSRF_PROTECTED_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.ticketSession || !CSRF_PROTECTED_METHODS.has(req.method)) return;
+    const cookieToken = req.cookies?.[csrfCookieName(req)];
+    const headerToken = req.headers['x-csrf-token'];
+    if (!cookieToken || typeof headerToken !== 'string' || headerToken !== cookieToken) {
+      reply.code(403).send({ error: 'csrf_failed' });
     }
   });
 

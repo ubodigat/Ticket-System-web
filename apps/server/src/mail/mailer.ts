@@ -59,12 +59,37 @@ export async function isSmtpConfigured(deps: MailDeps): Promise<boolean> {
   return (await loadSmtpConfig(deps)) !== null;
 }
 
+interface EmailAdvancedConfig {
+  replyTo?: string | null;
+  bccArchive?: string | null;
+  signature?: string;
+  htmlEnabled?: boolean;
+  htmlSignature?: string;
+}
+
+// Systemeinstellungen > E-Mail > "Vorlage und Signatur" (replyTo/bccArchive/signature/
+// htmlSignature) standen bisher nur in app_settings, wurden aber beim tatsaechlichen Versand nie
+// gelesen -- die gespeicherte Signatur erschien nie in einer echten Mail. htmlSignature war
+// zusaetzlich sinnlos doppelt in companyBrandingConfig vorhanden (jetzt entfernt, siehe
+// settings.ts); das hier ist die einzige verbleibende, jetzt auch tatsaechlich genutzte Stelle.
+async function loadEmailAdvancedConfig(deps: MailDeps): Promise<EmailAdvancedConfig> {
+  const row = await deps.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+  if (!row?.config_json) return {};
+  try {
+    const parsed = JSON.parse(row.config_json);
+    return (parsed && typeof parsed === 'object' && parsed.emailAdvancedConfig) || {};
+  } catch {
+    return {};
+  }
+}
+
 // Best-effort: wird aus createNotification() aufgerufen, darf eine Benachrichtigung niemals
 // blockieren, wenn SMTP nicht konfiguriert ist oder der Versand fehlschlaegt (Netzwerk, falsche
 // Zugangsdaten, ...) -- deshalb fängt jeder Aufrufer selbst ab bzw. nutzt sendMailSafe.
 export async function sendMail(deps: MailDeps, to: string, subject: string, text: string): Promise<void> {
   const loaded = await loadSmtpConfig(deps);
   if (!loaded) throw new Error('smtp_not_configured');
+  const emailConfig = await loadEmailAdvancedConfig(deps);
   const transport = nodemailer.createTransport({
     host: loaded.config.host,
     port: loaded.config.port,
@@ -75,11 +100,19 @@ export async function sendMail(deps: MailDeps, to: string, subject: string, text
     requireTLS: !loaded.config.secure,
     auth: loaded.config.user ? { user: loaded.config.user, pass: loaded.password ?? undefined } : undefined
   });
+  const textSignature = emailConfig.signature?.trim();
+  const finalText = textSignature ? `${text}\n\n${textSignature}` : text;
+  const html = emailConfig.htmlEnabled
+    ? `${text.replace(/\n/g, '<br>')}${emailConfig.htmlSignature ? `<br><br>${emailConfig.htmlSignature}` : ''}`
+    : undefined;
   await transport.sendMail({
     from: loaded.config.fromName ? `${loaded.config.fromName} <${loaded.config.from}>` : loaded.config.from,
     to,
+    ...(emailConfig.replyTo ? { replyTo: emailConfig.replyTo } : {}),
+    ...(emailConfig.bccArchive ? { bcc: emailConfig.bccArchive } : {}),
     subject,
-    text
+    text: finalText,
+    ...(html ? { html } : {})
   });
 }
 

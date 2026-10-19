@@ -18,11 +18,7 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
-
-// Gleiche Blockliste wie Ticket-Anhaenge (extras.ts): image/svg+xml/.html etc. koennen beim
-// direkten Oeffnen im Browser same-origin Skripte ausfuehren (gespeicherte XSS).
-const KB_ATTACHMENT_BLOCKED_MIME = ['text/html', 'application/javascript', 'application/x-php', 'application/x-sh', 'image/svg+xml'];
-const KB_ATTACHMENT_BLOCKED_EXT = ['.exe', '.php', '.sh', '.bat', '.cmd', '.ps1', '.py', '.rb', '.js', '.html', '.svg', '.svgz', '.htm', '.xhtml'];
+import { validateUploadedFile } from '../../domain/fileValidation.js';
 
 const createKbAttachmentSchema = z.object({
   filename: z.string().trim().min(1).max(255).refine(
@@ -193,13 +189,12 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const parsed = createKbAttachmentSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
 
-      if (KB_ATTACHMENT_BLOCKED_MIME.includes(parsed.data.mime_type.toLowerCase())) {
-        return reply.code(400).send({ error: 'blocked_mime_type' });
-      }
-      const ext = parsed.data.filename.toLowerCase().split('.').pop() ?? '';
-      if (KB_ATTACHMENT_BLOCKED_EXT.includes('.' + ext)) {
-        return reply.code(400).send({ error: 'blocked_extension' });
-      }
+      const validated = await validateUploadedFile({
+        filename: parsed.data.filename,
+        declaredMimeType: parsed.data.mime_type,
+        dataB64: parsed.data.data_b64,
+        maxSizeBytes: 15 * 1024 * 1024
+      });
 
       const attachmentId = randomUUID();
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.filename');
@@ -209,12 +204,12 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
         kb_article_id: id,
         uploaded_by_user_id: session.uid,
         uploaded_by_username: session.username,
-        filename: fieldCipher.encryptField(parsed.data.filename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', attachmentId, 'filename', filenameDek.keyVersion)),
-        mime_type: parsed.data.mime_type,
-        size_bytes: parsed.data.size_bytes,
+        filename: fieldCipher.encryptField(validated.safeFilename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', attachmentId, 'filename', filenameDek.keyVersion)),
+        mime_type: validated.mimeType,
+        size_bytes: validated.sizeBytes,
         data_b64: fieldCipher.encryptField(parsed.data.data_b64, dataDek.rawDek, ctx(deps, 'kb_article_attachments', attachmentId, 'data', dataDek.keyVersion))
       }).execute();
-      return reply.code(201).send({ id: attachmentId, filename: parsed.data.filename, mime_type: parsed.data.mime_type, size_bytes: parsed.data.size_bytes });
+      return reply.code(201).send({ id: attachmentId, filename: validated.safeFilename, mime_type: validated.mimeType, size_bytes: validated.sizeBytes });
     } catch (e: any) {
       return routeError(app, reply, e);
     }

@@ -68,6 +68,13 @@ const createUserSchema = z.object({
   role: z.enum(['user', 'admin', 'superadmin']),
   department_group_id: z.string().nullable().optional(),
   department: z.string().trim().max(255).nullable().optional(),
+  // Weitere, typischerweise aus einem AD synchronisierbare Kontakt-/Organisationsfelder
+  // (telephoneNumber/mobile/title/physicalDeliveryOfficeName) -- gleiches Muster wie department:
+  // Klartext, keine Pflichtfelder.
+  phone: z.string().trim().max(64).nullable().optional(),
+  mobile: z.string().trim().max(64).nullable().optional(),
+  job_title: z.string().trim().max(255).nullable().optional(),
+  office_location: z.string().trim().max(255).nullable().optional(),
   supervisor_user_id: z.string().nullable().optional(),
   permissions: userPermissionsSchema.optional()
 });
@@ -82,6 +89,10 @@ const updateUserSchema = z.object({
   // accountConfig.editable.department (Systemeinstellungen), nicht diese Schema-Prüfung hier;
   // dasselbe Muster wie bei name/email oben.
   department: z.string().trim().max(255).nullable().optional(),
+  phone: z.string().trim().max(64).nullable().optional(),
+  mobile: z.string().trim().max(64).nullable().optional(),
+  job_title: z.string().trim().max(255).nullable().optional(),
+  office_location: z.string().trim().max(255).nullable().optional(),
   supervisor_user_id: z.string().nullable().optional(),
   account_archived: z.boolean().optional(),
   locked_permanent: z.boolean().optional(),
@@ -138,6 +149,30 @@ export function parseCsvLine(line: string): string[] {
   }
   cells.push(current);
   return cells.map(cell => (cell.startsWith("'") && /^[=+\-@]/.test(cell.slice(1)) ? cell.slice(1) : cell));
+}
+
+// Einfache Levenshtein-Distanz, nur fuer "ähnlicher Name"-Hinweise bei der Benutzeranlage
+// (check-similar) -- bricht frueh ab statt die volle DP-Tabelle zu berechnen, sobald eine
+// Distanz > 2 feststeht, da hier nur "<= 2" interessiert (z.B. Tippfehler), kein exakter Wert.
+function levenshteinWithinTwo(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 2) return false;
+  if (a === b) return true;
+  const m = a.length, n = b.length;
+  const prev = new Array(n + 1);
+  const curr = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    let rowMin = curr[0];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      rowMin = Math.min(rowMin, curr[j]);
+    }
+    if (rowMin > 2) return false;
+    for (let j = 0; j <= n; j++) prev[j] = curr[j];
+  }
+  return prev[n] <= 2;
 }
 
 const setAbsenceSchema = z.object({
@@ -251,7 +286,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManageUsers')) && !(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json',
           ...absenceSelects(eb)
         ])
         .orderBy('created_at', 'asc')
@@ -286,7 +321,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     try {
       requireSession(req);
       const rows = await app.db.selectFrom('users')
-        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived'])
+        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived'])
         .where('account_archived', '=', false)
         .orderBy('username', 'asc')
         .execute();
@@ -302,6 +337,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           role: row.role,
           department_group_id: row.department_group_id,
           department: row.department,
+          phone: row.phone,
+          mobile: row.mobile,
+          job_title: row.job_title,
+          office_location: row.office_location,
           supervisor_user_id: row.supervisor_user_id,
           account_archived: row.account_archived
         };
@@ -318,7 +357,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const row = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json',
           ...absenceSelects(eb)
         ])
         .where('id', '=', session.uid)
@@ -345,8 +384,52 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     }
   });
 
+  // GET /api/v2/users/check-similar?name=...&email=... (nur Admin) -- Hinweis beim Anlegen
+  // eines neuen Benutzers, ob bereits ein gleiches oder ähnliches Konto existiert. "exact" blockt
+  // das Anlegen in der Oberfläche (E-Mail wird serverseitig ohnehin zusätzlich hart per
+  // Blind-Index geprüft, siehe POST /users), "similar" ist nur ein Hinweis, kein Blocker.
+  app.get('/api/v2/users/check-similar', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
+      const query = req.query as { name?: string; email?: string };
+      const nameInput = (query.name || '').trim();
+      const emailInput = (query.email || '').trim().toLowerCase();
+      if (!nameInput && !emailInput) return reply.send({ exact: false, similar: [] });
+
+      const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
+      const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+      const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
+      const emailBlindIdx = emailInput ? computeBlindIndex(blindIndexDek.rawDek, emailInput) : null;
+
+      const rows = await app.db.selectFrom('users')
+        .select(['id', 'username', 'name_enc', 'email_enc', 'email_blind_idx', 'account_archived'])
+        .execute();
+
+      const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+      const normalizedName = normalize(nameInput);
+      let exact = false;
+      const similar: Array<{ id: string; username: string; name: string; email: string; reason: string }> = [];
+
+      for (const row of rows) {
+        const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
+        const sameEmail = emailBlindIdx !== null && row.email_blind_idx === emailBlindIdx;
+        const sameName = normalizedName.length > 0 && normalize(profile.name) === normalizedName;
+        if (sameEmail && sameName) { exact = true; similar.push({ id: row.id, username: row.username, name: profile.name, email: profile.email, reason: 'name_and_email' }); continue; }
+        if (sameEmail) { similar.push({ id: row.id, username: row.username, name: profile.name, email: profile.email, reason: 'email' }); continue; }
+        if (sameName) { similar.push({ id: row.id, username: row.username, name: profile.name, email: profile.email, reason: 'name' }); continue; }
+        if (normalizedName.length > 2 && levenshteinWithinTwo(normalize(profile.name), normalizedName)) {
+          similar.push({ id: row.id, username: row.username, name: profile.name, email: profile.email, reason: 'similar_name' });
+        }
+      }
+      return reply.send({ exact, similar: similar.slice(0, 5) });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
   // POST /api/v2/users - Benutzer erstellen (nur Admin)
-  app.post('/api/v2/users', async (req, reply) => {
+  app.post('/api/v2/users', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
     try {
       const session = requireAdmin(req);
       if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
@@ -376,6 +459,13 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const email_enc = fieldCipher.encryptField(parsed.data.email, emailDek.rawDek, { ...baseCtx, fieldName: 'email', keyVersion: emailDek.keyVersion });
       const email_blind_idx = computeBlindIndex(blindIndexDek.rawDek, parsed.data.email.trim().toLowerCase());
 
+      // E-Mail-Adresse muss eindeutig sein -- der Blind-Index macht einen Gleichheitsvergleich
+      // moeglich, ohne die E-Mail dafuer im Klartext suchen zu muessen (siehe computeBlindIndex).
+      // Zwei Konten mit derselben Adresse ergeben operativ keinen Sinn und waeren beim Login per
+      // "Passwort vergessen"/Benachrichtigungen nicht eindeutig zuordenbar.
+      const emailTaken = await app.db.selectFrom('users').select('id').where('email_blind_idx', '=', email_blind_idx).executeTakeFirst();
+      if (emailTaken) return reply.code(409).send({ error: 'email_taken' });
+
       await app.db.insertInto('users').values({
         id: newId,
         username: parsed.data.username,
@@ -386,6 +476,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         role: parsed.data.role,
         department_group_id: parsed.data.department_group_id ?? null,
         department: parsed.data.department ?? null,
+        phone: parsed.data.phone ?? null,
+        mobile: parsed.data.mobile ?? null,
+        job_title: parsed.data.job_title ?? null,
+        office_location: parsed.data.office_location ?? null,
         supervisor_user_id: parsed.data.supervisor_user_id ?? null,
         // Zusatzrechte nur bei role='admin' sinnvoll (fuer 'user' zeigt der Editor das Feld gar
         // nicht an), trotzdem hier nicht erzwungen -- ein leeres Objekt bei 'user' ist harmlos.
@@ -432,6 +526,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         if (parsed.data.name !== undefined && !allowedFields.has('name')) return reply.code(403).send({ error: 'field_not_editable', field: 'name' });
         if (parsed.data.email !== undefined && !allowedFields.has('email')) return reply.code(403).send({ error: 'field_not_editable', field: 'email' });
         if (parsed.data.department !== undefined && !allowedFields.has('department')) return reply.code(403).send({ error: 'field_not_editable', field: 'department' });
+        if (parsed.data.phone !== undefined && !allowedFields.has('phone')) return reply.code(403).send({ error: 'field_not_editable', field: 'phone' });
+        if (parsed.data.mobile !== undefined && !allowedFields.has('mobile')) return reply.code(403).send({ error: 'field_not_editable', field: 'mobile' });
+        if (parsed.data.job_title !== undefined && !allowedFields.has('jobTitle')) return reply.code(403).send({ error: 'field_not_editable', field: 'job_title' });
+        if (parsed.data.office_location !== undefined && !allowedFields.has('officeLocation')) return reply.code(403).send({ error: 'field_not_editable', field: 'office_location' });
         if (
           parsed.data.role !== undefined ||
           parsed.data.department_group_id !== undefined ||
@@ -472,6 +570,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       // department ist Klartext (kein personenbezogenes Pflichtfeld wie Name/E-Mail, keine
       // Verschlüsselung dafür vorgesehen) -- gleiche Selbst-/Admin-Berechtigung wie Name/E-Mail.
       if (parsed.data.department !== undefined) updates.department = parsed.data.department;
+      if (parsed.data.phone !== undefined) updates.phone = parsed.data.phone;
+      if (parsed.data.mobile !== undefined) updates.mobile = parsed.data.mobile;
+      if (parsed.data.job_title !== undefined) updates.job_title = parsed.data.job_title;
+      if (parsed.data.office_location !== undefined) updates.office_location = parsed.data.office_location;
       if (parsed.data.notif_prefs !== undefined) updates.notif_prefs_json = JSON.stringify(parsed.data.notif_prefs);
 
       // Nur Admin darf Rolle, Gruppe, Vorgesetzte Person, Archivierung und Sperrung ändern
@@ -596,6 +698,15 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
       // Alle Sessions des Users invalidieren (Sicherheit)
       await app.db.updateTable('sessions').set({ revoked_at: mysqlTimestamp() }).where('user_id', '=', id).execute();
+
+      // Unzureichendes Security Logging: eine Passwortänderung ist sicherheitsrelevant,
+      // unabhängig davon ob sie selbst oder durch einen Admin ausgelöst wurde -- bisher blieb
+      // sie im Audit-Log komplett unsichtbar. Es wird nie das Passwort selbst protokolliert.
+      await app.db.insertInto('global_audit_log').values({
+        id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
+        action: session.uid === id ? 'user.password_changed_self' : 'user.password_changed_by_admin',
+        target_type: 'user', target_id: id, detail_json: null
+      }).execute();
 
       return reply.send({ success: true });
     } catch (e: any) {
@@ -817,12 +928,12 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireAdmin(req);
       if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
-        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'totp_enabled', 'created_at'])
+        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'account_archived', 'locked_permanent', 'totp_enabled', 'created_at'])
         .orderBy('username', 'asc')
         .execute();
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
-      const header = ['username', 'name', 'email', 'role', 'account_archived', 'locked_permanent', 'totp_enabled', 'created_at'];
+      const header = ['username', 'name', 'email', 'role', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'account_archived', 'locked_permanent', 'totp_enabled', 'created_at'];
       const lines = [header.map(csvSafeCell).join(',')];
       for (const row of rows) {
         const ctx = (fieldName: string, keyVersion: number) => ({
@@ -833,6 +944,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         const email = fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion));
         lines.push([
           row.username, name, email, row.role,
+          row.department ?? '', row.phone ?? '', row.mobile ?? '', row.job_title ?? '', row.office_location ?? '',
           String(row.account_archived), String(row.locked_permanent), String(row.totp_enabled),
           new Date(row.created_at).toISOString()
         ].map(csvSafeCell).join(','));
@@ -848,7 +960,14 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     username: z.string().trim().min(1).max(64).regex(/^[\p{L}\p{N}_.-]+$/u),
     name: z.string().trim().min(1).max(255),
     email: z.string().email().max(255),
-    role: z.enum(['user', 'admin']).default('user')
+    role: z.enum(['user', 'admin']).default('user'),
+    // Optionale Spalten, leer bleibt leer -- fuer einen AD-Export, der diese Spalten nicht hat,
+    // aendert sich am bisherigen Import-Verhalten dadurch nichts.
+    department: z.string().trim().max(255).optional(),
+    phone: z.string().trim().max(64).optional(),
+    mobile: z.string().trim().max(64).optional(),
+    job_title: z.string().trim().max(255).optional(),
+    office_location: z.string().trim().max(255).optional()
   });
 
   // POST /api/v2/users/import.csv - nur Admin. Erwartet Spalten username,name,email,role.
@@ -901,6 +1020,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           password_hash,
           role: rowParsed.data.role,
           department_group_id: null,
+          department: rowParsed.data.department || null,
+          phone: rowParsed.data.phone || null,
+          mobile: rowParsed.data.mobile || null,
+          job_title: rowParsed.data.job_title || null,
+          office_location: rowParsed.data.office_location || null,
           account_archived: false,
           locked_permanent: false,
           totp_enabled: false,

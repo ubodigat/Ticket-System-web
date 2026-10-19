@@ -6,6 +6,9 @@ networks:
     internal: true
   edge:
     driver: bridge
+  office:
+    driver: bridge
+    internal: true
   # Eigenes, NICHT isoliertes Netz nur für den Updater (git fetch gegen GitHub braucht
   # Internetzugang, "internal: true" bei "internal" würde das komplett blockieren). Getrennt
   # von "edge" gehalten, damit der Updater nicht von Caddy aus erreichbar wird.
@@ -43,10 +46,12 @@ services:
       context: ../..
       dockerfile: ops/docker/Dockerfile.server
     restart: unless-stopped
-    networks: [internal, edge]
+    networks: [internal, edge, office]
     depends_on:
       mariadb:
         condition: service_healthy
+      office:
+        condition: service_started
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
@@ -62,6 +67,7 @@ services:
       COOKIE_SECRET: ${COOKIE_SECRET}
       INSTALLATION_ID: ${INSTALLATION_ID}
       TRUSTED_PROXY_HOPS: "1"
+      OFFICE_PREVIEW_URL: http://office:3000
       UPDATE_SERVICE_URL: ${UPDATE_SERVICE_URL:-}
       UPDATE_TOKEN: ${UPDATE_TOKEN:-}
     volumes:
@@ -73,6 +79,24 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  office:
+    image: gotenberg/gotenberg:8.38.1
+    restart: unless-stopped
+    networks: [office]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 1
+    environment:
+      CHROMIUM_DISABLE_ROUTES: "true"
+      PDFENGINES_DISABLE_ROUTES: "true"
+      API_DISABLE_DOWNLOAD_FROM: "true"
+      API_BODY_LIMIT: 20MB
+      API_TIMEOUT: 40s
+      LIBREOFFICE_DENY_LIST: ".*"
+      WEBHOOK_DENY_LIST: ".*"
+      LIBREOFFICE_MAX_QUEUE_SIZE: "2"
 
   updater:
     build:

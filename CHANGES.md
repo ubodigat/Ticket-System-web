@@ -1,5 +1,140 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-20 - Sicherheits-Selbstaudit (SQLi/XSS/CSRF/IDOR/Upload/Business-Logic u.a.) und Behebung der gefundenen Lücken
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Vollständiger Selbstaudit der Anwendung gegen die OWASP-nahe Liste aus der Anforderung (SQLi,
+  XSS, Command/SSTI/XXE/LDAP/NoSQL-Injection, Broken Auth, Brute-Force, Session-Hijacking/
+  -Fixation, Broken Access Control/IDOR, Privilege Escalation, Mass Assignment, Unrestricted
+  File Upload, Path Traversal, CSRF, Clickjacking, DOM-XSS, CORS, Open Redirect, CSP,
+  Security Misconfiguration, SSRF, Sensitive Data Exposure, Insecure Deserialization, Race
+  Conditions, Business Logic Flaws, Rate Limiting, Security Logging). Ergebnis: die bestehende
+  Härtung (parameterisierte Kysely-Queries, LDAP-Filter-Escaping, `spawn()` ohne Shell,
+  durchgängiges `Utils.esc()`, strikte CSP/Helmet/HSTS, keine CORS-Freigabe, argon2id überall,
+  serverseitige Rollenprüfung bei jeder Anfrage) deckt die meisten Kategorien bereits ab. Konkret
+  gefunden und behoben:
+  - **Business Logic Flaw (behoben):** im Genehmigungsworkflow (`POST /api/v2/tickets/:id/request-approval`)
+    konnte eine Person mit `approvals`-Recht sich selbst als Prüfer eintragen und die eigene
+    Anfrage anschließend selbst genehmigen. Jetzt blockiert: Prüfer darf nicht die anfragende
+    Person und nicht die Ersteller-Person des Tickets sein (`tickets.ts`).
+  - **Race Condition (behoben):** der Fehllogin-Zähler (`recordFailedLogin`, `auth.ts`) war ein
+    ungeschütztes Read-Modify-Write -- parallele Anfragen gegen dasselbe Konto konnten sich
+    gegenseitig überschreiben und so die konfigurierte Sperrschwelle unterlaufen. Läuft jetzt in
+    einer Transaktion mit Zeilensperre (`SELECT ... FOR UPDATE`).
+  - **Account Enumeration per Zeitmessung (behoben):** ein unbekannter Benutzername durchlief
+    bisher keinen `argon2.verify()`-Aufruf und war dadurch messbar schneller als "bekannter
+    Benutzername, falsches Passwort". Ein einmalig berechneter Dummy-Hash wird jetzt auch für
+    unbekannte Benutzernamen verifiziert (`auth.ts`).
+  - **IDOR-artige Logiklücke (behoben, war admin-gated):** Notizen/Todos/Zeiteinträge eines
+    Tickets ließen sich über `PATCH`/`DELETE` ohne Prüfung ansprechen, ob die ID tatsächlich zum
+    Ticket aus dem URL-Pfad gehört. Alle betroffenen Routen prüfen jetzt zusätzlich
+    `ticket_id = :id` (`tickets.ts`).
+  - **Fehlendes Security-Logging (behoben):** jeder 403 wegen fehlender Admin-/Superadmin-Rolle
+    wird jetzt protokolliert (`session.ts`); Passwortänderungen (selbst oder durch Admin) werden
+    jetzt im globalen Audit-Log festgehalten, ohne das Passwort selbst zu speichern (`users.ts`).
+  - **Fehlendes Rate Limiting (behoben):** `POST /api/v2/users` (Benutzeranlage) und
+    `GET /api/v2/users/check-similar` hatten bisher nur das globale 1000/min-Limit.
+  - **CSRF (gehärtet):** bisher einzige Verteidigung war `SameSite=Lax` auf dem Session-Cookie.
+    Ergänzt um ein klassisches Double-Submit-Cookie-Token: beim Login wird ein zweites,
+    nicht-httpOnly Cookie gesetzt, das das Frontend (`js/utils.js`, globaler `fetch()`-Wrapper,
+    deckt automatisch jede bestehende und künftige Anfrage ab) als `x-csrf-token`-Header auf
+    jede mutierende Anfrage zurückschickt; der Server (`app.ts`) vergleicht beide Werte für jede
+    angemeldete, mutierende Anfrage.
+  - **Upload-Typprüfung (gehärtet):** die MIME-/Extension-Blockliste für Ticket- und
+    Wissensdatenbank-Anhänge ließ sich durch MIME-Parameter/Großschreibung/Leerzeichen umgehen.
+    Inzwischen durch eine deutlich umfassendere, inhaltsbasierte Prüfung (`domain/fileValidation.ts`:
+    Magic-Bytes für PE/ELF/Mach-O-Binärdateien, Shebang-Erkennung, Inhaltsscan auf
+    `<script>`/PHP-Tags/SVG/HTML, echte MIME-Erkennung über `file-type`) ersetzt.
+  - Keine ausnutzbaren Funde bei: SQL-Injection, Command-/SSTI-/XXE-/LDAP-/NoSQL-Injection,
+    Path Traversal/LFI/RFI, Clickjacking, DOM-XSS, CORS-Fehlkonfiguration, Open Redirect,
+    fehlende CSP, SSRF, hartcodierte Secrets, Insecure Deserialization, Mass Assignment,
+    Session Hijacking/Fixation, unsichere Passwortspeicherung, fehlende MFA-Durchsetzung.
+  - Verbleibendes, bewusst akzeptiertes Restrisiko: das Login-Rate-Limit ist IP-basiert (10/min);
+    gegen ein verteiltes Credential-Stuffing über viele IPs hinweg schützt primär der echte,
+    pro-Konto geführte Lockout (`securityPolicy.ts`), nicht das IP-Limit selbst.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-20 - Duplikatsprüfung bei Neuanlage, erweiterte Personendaten, Firmenlogo-Upload, Signatur-Konsolidierung, Ticket-Button-Abstände
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Duplikats-/Ähnlichkeitsprüfung beim Anlegen neuer Benutzer: neuer Endpunkt
+  `GET /api/v2/users/check-similar?name=&email=` (admin, `canManageUsers`) vergleicht Name/E-Mail
+  gegen alle bestehenden Konten (Levenshtein-Distanz ≤2 für "ähnlich", exakte Übereinstimmung von
+  Name+E-Mail oder bereits vergebener E-Mail-Adresse für "Duplikat"). Im Benutzer-Bearbeiten-Modal
+  (`js/admin-board.js`) erscheint beim Tippen (debounced, 350ms) ein Hinweis; bei einem 100%
+  identischen Treffer ist "Anlegen" blockiert, bei nur ähnlichem Namen lediglich ein Hinweis.
+  `POST /api/v2/users` lehnt eine bereits vergebene E-Mail-Adresse serverseitig zusätzlich mit
+  `409 email_taken` ab (Schutz auch ohne Nutzung der UI-Prüfung).
+- Erweiterte Personendaten: neue Felder `phone`, `mobile`, `job_title` (Position/Jobtitel) und
+  `office_location` (Standort) je Benutzerkonto -- Klartext-Spalten nach demselben Muster wie das
+  bestehende `department`-Feld (kein personenbezogenes Pflichtfeld wie Name/E-Mail, daher nicht
+  AES-256-GCM-verschlüsselt). Neue Migration `0029_user_contact_fields.ts`. Sichtbar/bearbeitbar
+  im Admin-Benutzer-Editor (neuer Abschnitt "Kontaktdaten"), in CSV-Export/-Import, und -- je nach
+  Freigabe in den Systemeinstellungen -- im eigenen Konto-Bereich der betroffenen Person selbst.
+- Systemeinstellungen > Sicherheit > "Konto-Selbstverwaltung": vier neue Schalter für die neuen
+  Felder ergänzt (bisher nur Name/E-Mail/Abteilung schaltbar), serverseitig über
+  `accountSelfServiceFields` in `settings.ts` und die zugehörigen Freigabe-Prüfungen in
+  `PATCH /api/v2/users/:id` (`users.ts`) durchgesetzt.
+- Firmenbranding: zusätzlich zur bestehenden Logo-URL/Daten-URL kann das Firmenlogo jetzt auch
+  direkt als Datei hochgeladen werden (Systemeinstellungen > Unternehmen, Browser-seitige
+  Größenprüfung bis 650KB, befüllt automatisch das bestehende URL-Feld).
+- E-Mail-Signatur-Wirrwarr behoben: die Signatur gab es bisher doppelt (einmal unter
+  Unternehmen/Branding, einmal unter E-Mail/Versand) ohne dass beide tatsächlich beim Versand
+  genutzt wurden. Jetzt gibt es die Signatur (Text- und HTML-Variante) nur noch unter dem
+  E-Mail-Tab; `apps/server/src/mail/mailer.ts` hängt sie beim tatsächlichen Versand an
+  (`sendMail()`, inkl. `replyTo`/`bcc` aus der E-Mail-Konfiguration) -- vorher wurden diese
+  Einstellungen gespeichert, aber nie wirklich verwendet.
+- Ticket-Modal: die Aktions-Buttons (Status ändern, Zuweisen, etc.) und die kontextabhängigen
+  Zusatz-Buttons saßen in zwei getrennten Flex-Containern mit unterschiedlichen Abständen --
+  dadurch wirkte die Button-Leiste "zerrissen". Beide liegen jetzt in derselben `.actions-row`
+  (Zusatz-Buttons per `display:contents`-Span eingehängt), einheitliche Abstände.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-19 - Diagnose: generische 500er (Systemeinstellungen/Chat/Ticket-Status) durch hinterherhinkende Datenbank-Migrationen
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Befund (vom Nutzer gemeldet, mit vollständiger Konsolenausgabe): `PATCH /api/v2/settings`,
+  `POST /api/v2/tickets/:id/messages` und `PATCH /api/v2/tickets/:id` scheiterten durchgängig
+  mit 500 "internal_error" -- Systemeinstellungen speichern, Chat-Nachrichten senden und
+  Ticket-Status ändern waren dadurch praktisch komplett unbenutzbar.
+- Ursache: Zwischen den letzten Prüfrunden wurden vier neue Migrationen ergänzt (u.a.
+  `0025_app_settings_config_mediumtext.ts` -- deren eigener Kommentar bereits exakt
+  dokumentiert: "TEXT ist dafuer zu klein und fuehrt in MariaDB zu 500ern beim Speichern").
+  Diese Migrationen liegen zwar im Repository, wurden aber auf der laufenden Installation nie
+  angewendet -- vermutlich, weil ein früherer Update-Lauf vor dem Migrations-Schritt
+  abgebrochen ist (siehe 502-Befund vom 11.10., inzwischen behoben). Der App-Container lief
+  bereits mit dem neuen Code, der neue, größere `config_json`-Spaltentyp (und weitere neue
+  Spalten) fehlten aber noch in der Datenbank -- jede Schreiboperation, die diese erwartete,
+  schlug fehl.
+- Fix: neuer, vom vollen Update-Zyklus unabhängiger Weg, die Datenbank ohne Code-Update auf den
+  aktuellen Schema-Stand zu bringen (bisher nur über den kompletten, durch "kein Update
+  verfügbar" blockierten Update-Lauf erreichbar):
+  - `ops/docker/updater-server.mjs`: neuer `POST /migrate`-Endpunkt, führt
+    `docker compose run --rm --no-deps app node dist/db/migrate.js` direkt aus (120s Zeitlimit).
+  - `apps/server/src/http/routes/update.ts`: neue Route `POST /api/v2/update/migrate`
+    (nur Superadmin), proxyt zum Sidecar.
+  - `js/store.js`/`js/admin-board.js`: neuer, immer aktiver Knopf "Datenbank-Migrationen
+    ausführen" in Systemeinstellungen > Update, unabhängig davon ob ein Code-Update verfügbar
+    ist.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-19 - CodeQL "Insecure randomness" (#10, #11) und ungewollt installiertes Playwright entfernt
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- GitHub Code Scanning (CodeQL) meldete zwei offene "High"-Befunde `js/insecure-randomness` in
+  `js/store.js`, zurückverfolgbar auf `Utils.uid()` (`js/utils.js`), das `Math.random()` für
+  vorläufige Objekt-IDs nutzte (u.a. für neu angelegte Benutzer, bevor die echte, serverseitig
+  vergebene ID zurückkommt). Fix: `Utils.uid()` nutzt jetzt `crypto.randomUUID()` statt
+  `Math.random()` -- räumt den Befund an der Quelle aus, unabhängig davon, welcher konkrete
+  Aufrufort als sicherheitsrelevant eingestuft wird. `Utils.secureToken()` (echte
+  Passwort-Fallbacks) nutzte bereits korrekt `crypto.getRandomValues()`.
+- Zusätzlich entfernt: eine komplette Playwright-E2E-Testinfrastruktur
+  (`playwright.config.mjs`, `tests/frontend/`, `@playwright/test`-Abhängigkeit,
+  `test:ui`-Skript), die ohne entsprechende Anforderung installiert worden war -- inklusive
+  349&nbsp;MB heruntergeladener Browser-Binärdateien im lokalen Benutzer-Cache
+  (`~/AppData/Local/ms-playwright`), ebenfalls entfernt.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
 ## 2026-10-11 - Update-Status-Abfrage ohne Zeitlimit: haengender "git fetch" fuehrte zu 502 Bad Gateway
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Befund (vom Nutzer gemeldet): `GET /api/v2/update/status` antwortete mit 502 Bad Gateway,

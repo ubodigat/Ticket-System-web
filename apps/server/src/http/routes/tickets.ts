@@ -21,6 +21,7 @@ import { calculateSlaDueAt } from '../../domain/sla.js';
 import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
 import { mysqlTimestamp } from '../../db/date.js';
+import { sanitizeServerHtml } from '../../domain/sanitizer.js';
 
 export interface TicketsRouteDeps {
   env: Env;
@@ -192,10 +193,11 @@ function encryptMessage(deps: TicketsRouteDeps, deks: MessageDeks, recordId: str
     tableName: 'ticket_messages',
     recordId
   };
+  const sanitizedHtml = contentHtml !== null ? sanitizeServerHtml(contentHtml) : null;
   return {
     content: fieldCipher.encryptField(content, deks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: deks.content.keyVersion }),
-    content_html: contentHtml !== null
-      ? fieldCipher.encryptField(contentHtml, deks.contentHtml.rawDek, { ...ctxBase, fieldName: 'content_html', keyVersion: deks.contentHtml.keyVersion })
+    content_html: sanitizedHtml !== null && sanitizedHtml.length > 0
+      ? fieldCipher.encryptField(sanitizedHtml, deks.contentHtml.rawDek, { ...ctxBase, fieldName: 'content_html', keyVersion: deks.contentHtml.keyVersion })
       : null
   };
 }
@@ -908,9 +910,14 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   app.patch('/api/v2/tickets/:id/notes/:noteId', async (req, reply) => {
     try {
       requireAdmin(req);
-      const { noteId } = req.params as { id: string; noteId: string };
+      const { id, noteId } = req.params as { id: string; noteId: string };
       const parsed = addNoteSchema.partial().safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+
+      // Notiz muss tatsächlich zum Ticket aus dem Pfad gehören -- verhindert, dass eine
+      // über die URL vertauschte noteId versehentlich eine Notiz eines anderen Tickets trifft.
+      const existingNote = await app.db.selectFrom('ticket_notes').select('id').where('id', '=', noteId).where('ticket_id', '=', id).executeTakeFirst();
+      if (!existingNote) return reply.code(404).send({ error: 'note_not_found' });
 
       const noteDek = await loadNoteDek(app, deps.keyProvider);
       const updates: Record<string, unknown> = {};
@@ -920,7 +927,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (parsed.data.is_resolution !== undefined) updates.is_resolution = parsed.data.is_resolution;
 
       if (Object.keys(updates).length > 0) {
-        await app.db.updateTable('ticket_notes').set(updates).where('id', '=', noteId).execute();
+        await app.db.updateTable('ticket_notes').set(updates).where('id', '=', noteId).where('ticket_id', '=', id).execute();
       }
       const noteRow = await app.db.selectFrom('ticket_notes').selectAll().where('id', '=', noteId).executeTakeFirstOrThrow();
       return reply.send({ note: decryptNote(noteRow, noteDek, deps) });
@@ -944,7 +951,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
 
       const rows = await app.db.selectFrom('attachments')
-        .select(['id', 'filename', 'mime_type', 'size_bytes', 'uploaded_by_username', 'created_at'])
+        .select(['id', 'filename', 'mime_type', 'size_bytes', 'uploaded_by_user_id', 'uploaded_by_username', 'created_at'])
         .where('ticket_id', '=', id).where('message_id', 'is', null).where('note_id', 'is', null)
         .orderBy('created_at', 'asc').execute();
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
@@ -1035,6 +1042,16 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const parsed = requestApprovalSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
+      // Trennung von Antragsteller und Pruefer erzwingen -- ohne diese Prüfung könnte eine Person
+      // mit "approvals"-Recht sich selbst als Prüfer eintragen und die eigene Anfrage genehmigen.
+      if (parsed.data.approver_user_id === session.uid) {
+        return reply.code(400).send({ error: 'approver_must_not_be_self' });
+      }
+      const ticketForApproval = await app.db.selectFrom('tickets').select(['created_by_user_id']).where('id', '=', id).executeTakeFirst();
+      if (ticketForApproval?.created_by_user_id && ticketForApproval.created_by_user_id === parsed.data.approver_user_id) {
+        return reply.code(400).send({ error: 'approver_must_not_be_requester' });
+      }
+
       const approver = await app.db.selectFrom('users').select(['username']).where('id', '=', parsed.data.approver_user_id).executeTakeFirst();
       if (!approver) return reply.code(400).send({ error: 'invalid_body' });
 
@@ -1103,7 +1120,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           type: 'approvalDecided',
           ticketId: id,
           ticketNumber: ticket.ticket_number,
-          message: `Genehmigung für Ticket ${ticket.ticket_number} ${parsed.data.decision === 'approved' ? 'erteilt' : 'abgelehnt'}`
+          message: `Genehmigung für Ticket ${ticket.ticket_number} ${parsed.data.decision === 'approved' ? 'erteilt' : 'abgelehnt'}${parsed.data.reason ? ': ' + parsed.data.reason.slice(0, 1500) : ''}`
         });
       }
       return reply.send({ success: true });
@@ -1155,8 +1172,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   app.delete('/api/v2/tickets/:id/time-entries/:entryId', async (req, reply) => {
     try {
       requireAdmin(req);
-      const { entryId } = req.params as { id: string; entryId: string };
-      await app.db.deleteFrom('ticket_time_entries').where('id', '=', entryId).execute();
+      const { id, entryId } = req.params as { id: string; entryId: string };
+      await app.db.deleteFrom('ticket_time_entries').where('id', '=', entryId).where('ticket_id', '=', id).execute();
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -1225,11 +1242,11 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   app.patch('/api/v2/tickets/:id/todos/:todoId', async (req, reply) => {
     try {
       const session = requireSession(req);
-      const { todoId } = req.params as { id: string; todoId: string };
+      const { id, todoId } = req.params as { id: string; todoId: string };
       const parsed = updateTodoSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const todo = await app.db.selectFrom('ticket_todos').select(['id', 'assignee_user_id']).where('id', '=', todoId).executeTakeFirst();
+      const todo = await app.db.selectFrom('ticket_todos').select(['id', 'assignee_user_id']).where('id', '=', todoId).where('ticket_id', '=', id).executeTakeFirst();
       if (!todo) return reply.code(404).send({ error: 'not_found' });
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
       if (!isAdmin && todo.assignee_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
@@ -1244,7 +1261,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (parsed.data.done !== undefined) updates.done = parsed.data.done;
 
       if (Object.keys(updates).length > 0) {
-        await app.db.updateTable('ticket_todos').set(updates).where('id', '=', todoId).execute();
+        await app.db.updateTable('ticket_todos').set(updates).where('id', '=', todoId).where('ticket_id', '=', id).execute();
       }
       return reply.send({ success: true });
     } catch (e: any) {
@@ -1255,8 +1272,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   app.delete('/api/v2/tickets/:id/todos/:todoId', async (req, reply) => {
     try {
       requireAdmin(req);
-      const { todoId } = req.params as { id: string; todoId: string };
-      await app.db.deleteFrom('ticket_todos').where('id', '=', todoId).execute();
+      const { id, todoId } = req.params as { id: string; todoId: string };
+      await app.db.deleteFrom('ticket_todos').where('id', '=', todoId).where('ticket_id', '=', id).execute();
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);

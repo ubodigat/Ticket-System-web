@@ -234,11 +234,15 @@ export const Settings = {
         const area = q('#s-account-area');
         if (!field || !area) return;
         if (!user) { field.hidden = true; return; }
-        const editable = { name: true, email: true, department: false, ...(settings.accountConfig?.editable || {}) };
+        const editable = { name: true, email: true, department: false, phone: false, mobile: false, jobTitle: false, officeLocation: false, ...(settings.accountConfig?.editable || {}) };
         const rows = [
             { key: 'name', label: 'Name', value: user.name || '' },
             { key: 'email', label: 'E-Mail', value: user.email || '' },
             { key: 'department', label: 'Einrichtung / Abteilung', value: user.department || '' },
+            { key: 'phone', label: 'Telefon', value: user.phone || '' },
+            { key: 'mobile', label: 'Mobil', value: user.mobile || '' },
+            { key: 'jobTitle', label: 'Position / Jobtitel', value: user.jobTitle || '' },
+            { key: 'officeLocation', label: 'Standort', value: user.officeLocation || '' },
         ];
         const anyEditable = rows.some(row => editable[row.key]);
         field.hidden = false;

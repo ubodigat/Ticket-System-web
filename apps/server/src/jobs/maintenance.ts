@@ -24,6 +24,7 @@ import { fieldCipher } from '../crypto/fieldCrypto.js';
 import { randomUUID } from 'node:crypto';
 import { mysqlTimestamp } from '../db/date.js';
 import { buildTicketNumber } from '../domain/ticketNumber.js';
+import { runRecurringAdminTodos } from './adminTodos.js';
 
 const DEFAULT_AUTO_ARCHIVE_DAYS = 3;
 
@@ -197,6 +198,7 @@ export function startMaintenanceScheduler(deps: MaintenanceDeps, intervalMs = 5 
     const jobs = [
       ['Auto-Archivierung', () => runAutoArchive(deps)],
       ['Wiederkehrende Tickets', () => runRecurringTickets(deps)],
+      ['Wiederkehrende Aufgaben', () => runRecurringAdminTodos(deps)],
       ['Warten-auf-Benutzer', () => runWaitingTickets(deps)]
     ] as const;
     for (const [name, job] of jobs) {

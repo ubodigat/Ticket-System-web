@@ -18,6 +18,8 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { sendMail, sendMailSafe } from '../../mail/mailer.js';
 import { mysqlTimestamp } from '../../db/date.js';
+import { convertOfficePreview, discardOfficePreview } from '../../documents/officePreview.js';
+import { validateUploadedFile } from '../../domain/fileValidation.js';
 
 export interface ExtrasRouteDeps {
   env: Env;
@@ -406,6 +408,48 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
   });
 
   // POST /api/v2/attachments - Anhang hochladen
+  app.delete('/api/v2/attachments/:id', async (req, reply) => {
+    try {
+      const actor = requireAdmin(req);
+      const { id } = req.params as { id: string };
+      const attachment = await app.db.selectFrom('attachments').select(['id', 'ticket_id', 'uploaded_by_user_id']).where('id', '=', id).executeTakeFirst();
+      if (!attachment) return reply.code(404).send({ error: 'not_found' });
+      if (attachment.uploaded_by_user_id !== actor.uid) return reply.code(403).send({ error: 'forbidden' });
+      await app.db.deleteFrom('attachments').where('id', '=', id).where('uploaded_by_user_id', '=', actor.uid).execute();
+      discardOfficePreview(id);
+      return reply.send({ success: true });
+    } catch (error) { return routeError(app, reply, error); }
+  });
+
+  app.get('/api/v2/attachments/:id/preview', async (req, reply) => {
+    try {
+      const actor = requireSession(req);
+      const { id } = req.params as { id: string };
+      const attachment = await app.db.selectFrom('attachments').selectAll().where('id', '=', id).executeTakeFirst();
+      if (!attachment || !attachment.ticket_id) return reply.code(404).send({ error: 'not_found' });
+      const ticket = await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst();
+      if (!ticket) return reply.code(404).send({ error: 'not_found' });
+      if (!['admin', 'superadmin'].includes(actor.role) && ticket.created_by_user_id !== actor.uid) return reply.code(403).send({ error: 'forbidden' });
+      const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
+      const dataDek = await ensureDek(app.db, deps.keyProvider, 'attachments.data');
+      const filename = fieldCipher.decryptField(attachment.filename, filenameDek.rawDek, attachmentCtx('filename', id, filenameDek.keyVersion));
+      const supported = /\.(pdf|xlsx|xls|ods|docx|doc|odt|pptx|ppt|odp)$/i.test(filename);
+      if (!supported) return reply.code(415).send({ error: 'unsupported_preview' });
+      if (!/\.pdf$/i.test(filename) && !deps.env.OFFICE_PREVIEW_URL) return reply.code(503).send({ error: 'preview_not_configured' });
+      const encoded = fieldCipher.decryptField(attachment.data_b64, dataDek.rawDek, attachmentCtx('data', id, dataDek.keyVersion));
+      const original = Buffer.from(encoded, 'base64');
+      let pdf: Buffer;
+      try { pdf = /\.pdf$/i.test(filename) ? original : await convertOfficePreview(id, filename, original, deps.env.OFFICE_PREVIEW_URL!); }
+      catch (error) {
+        const status = (error as { statusCode?: number }).statusCode;
+        return reply.code(status || 503).send({ error: status ? (error as { message: string }).message : 'preview_unavailable' });
+      }
+      return reply.header('cache-control', 'no-store').header('content-disposition', "inline; filename=preview.pdf")
+        .header('content-security-policy', "default-src 'none'; frame-ancestors 'self'")
+        .type('application/pdf').send(pdf);
+    } catch (error) { return routeError(app, reply, error); }
+  });
+
   app.post('/api/v2/attachments', async (req, reply) => {
     try {
       const session = requireSession(req);
@@ -419,21 +463,13 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
       if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
 
-      // Sicherheit: Gefährliche MIME-Typen ablehnen
-      // image/svg+xml wird ausgefuehrt, sobald es direkt (z.B. ueber einen blob:-Link im neuen
-      // Tab) im Browser geoeffnet wird -- eingebettetes <script> laeuft dann same-origin mit der
-      // Session der oeffnenden Person (gespeicherte XSS via Anhang).
-      const blockedMime = ['text/html', 'application/javascript', 'application/x-php', 'application/x-sh', 'image/svg+xml'];
-      if (blockedMime.includes(parsed.data.mime_type.toLowerCase())) {
-        return reply.code(400).send({ error: 'blocked_mime_type' });
-      }
-
-      // Sicherheit: Dateierweiterungen prüfen
-      const blockedExtensions = ['.exe', '.php', '.sh', '.bat', '.cmd', '.ps1', '.py', '.rb', '.js', '.html', '.svg', '.svgz', '.htm', '.xhtml'];
-      const ext = parsed.data.filename.toLowerCase().split('.').pop() ?? '';
-      if (blockedExtensions.includes('.' + ext)) {
-        return reply.code(400).send({ error: 'blocked_extension' });
-      }
+      // Zero-Trust-Validierung: Dateiname, Erweiterung, Magic Bytes, Skript-Inhalte und echter MIME-Typ
+      const validated = await validateUploadedFile({
+        filename: parsed.data.filename,
+        declaredMimeType: parsed.data.mime_type,
+        dataB64: parsed.data.data_b64,
+        maxSizeBytes: 15 * 1024 * 1024
+      });
 
       const id = randomUUID();
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
@@ -445,13 +481,13 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
         note_id: parsed.data.note_id ?? null,
         uploaded_by_user_id: session.uid,
         uploaded_by_username: session.username,
-        filename: fieldCipher.encryptField(parsed.data.filename, filenameDek.rawDek, attachmentCtx('filename', id, filenameDek.keyVersion)),
-        mime_type: parsed.data.mime_type,
-        size_bytes: parsed.data.size_bytes,
+        filename: fieldCipher.encryptField(validated.safeFilename, filenameDek.rawDek, attachmentCtx('filename', id, filenameDek.keyVersion)),
+        mime_type: validated.mimeType,
+        size_bytes: validated.sizeBytes,
         data_b64: fieldCipher.encryptField(parsed.data.data_b64, dataDek.rawDek, attachmentCtx('data', id, dataDek.keyVersion))
       }).execute();
 
-      return reply.code(201).send({ id, filename: parsed.data.filename, size_bytes: parsed.data.size_bytes, mime_type: parsed.data.mime_type });
+      return reply.code(201).send({ id, filename: validated.safeFilename, size_bytes: validated.sizeBytes, mime_type: validated.mimeType });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
