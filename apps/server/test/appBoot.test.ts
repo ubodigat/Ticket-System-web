@@ -41,8 +41,7 @@ function fakeEnv(): Env {
     KEK_FILE_PATH: '/dev/null',
     COOKIE_SECRET: 'a'.repeat(32),
     INSTALLATION_ID: '123e4567-e89b-12d3-a456-426614174000',
-    SCHEMA_VERSION: 1,
-    TRUSTED_PROXY_HOPS: 0
+    SCHEMA_VERSION: 1
   };
 }
 

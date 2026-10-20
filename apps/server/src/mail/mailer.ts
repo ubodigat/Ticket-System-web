@@ -154,12 +154,16 @@ export async function sendMail(deps: MailDeps, to: string, subject: string, text
       toAddress: to,
       subject,
       text: finalText,
-      html
+      html,
+      replyTo: emailConfig.replyTo ?? undefined
     });
+    // Security-Audit R-5: nodemailer baut bei "raw" (fertige, bereits signierte MIME-Nachricht)
+    // KEINE Header/Umschlag mehr aus `to`/`bcc` -- nur noch `envelope` bestimmt, an wen die
+    // Nachricht tatsächlich per SMTP ausgeliefert wird. Ein `bcc`-Feld neben `raw` wird von
+    // nodemailer stillschweigend ignoriert; das BCC-Archiv ging dadurch bisher bei jeder
+    // S/MIME-signierten Mail verloren, ohne dass das sichtbar gewesen wäre.
     await transport.sendMail({
-      envelope: { from: loaded.config.from, to },
-      ...(emailConfig.replyTo ? { replyTo: emailConfig.replyTo } : {}),
-      ...(emailConfig.bccArchive ? { bcc: emailConfig.bccArchive } : {}),
+      envelope: { from: loaded.config.from, to: emailConfig.bccArchive ? [to, emailConfig.bccArchive] : to },
       raw: raw ?? undefined
     });
     return;

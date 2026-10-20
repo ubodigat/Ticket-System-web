@@ -478,7 +478,7 @@ EOF2
   run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T mariadb sh -c '
     cnf="$1"; db="$2"
     trap "rm -f \"$cnf\"" EXIT
-    exec mariadb --defaults-extra-file="$cnf" "$db"
+    mariadb --defaults-extra-file="$cnf" "$db"
   ' _ "$N9_CNF_PATH" "$(grep '^DB_NAME=' "$ENV_FILE" | cut -d= -f2)" \
     < "$MARIADB_INITDB_DIR/10-runtime-user.sql"
 } >/dev/null 2>&1 \
@@ -486,7 +486,13 @@ EOF2
   || warn "Could not create/verify the restricted runtime database account automatically (DB_USER likely lacks CREATE USER/GRANT privileges on an existing installation). The app will keep using DB_USER for runtime queries until this is resolved manually; see CHANGES.md (N9) for the GRANT statements in $MARIADB_INITDB_DIR/10-runtime-user.sql."
 
 log "Running database migrations"
-run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps app node dist/db/migrate.js
+# Security-Audit N9: DB_USER/DB_PASSWORD (volle DDL-Rechte) stehen nicht mehr in der staendigen
+# Service-Umgebung von "app" (siehe docker-compose.yml) -- nur fuer diesen einen, kurzlebigen
+# Migrations-Aufruf per -e injiziert.
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps \
+  -e DB_USER="$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2)" \
+  -e DB_PASSWORD="$(grep '^DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2)" \
+  app node dist/db/migrate.js
 
 log "Starting application stack"
 if grep -q '^UPDATE_ALLOW_MAIN_DEPLOY=true$' "$ENV_FILE"; then

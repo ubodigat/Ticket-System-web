@@ -73,16 +73,16 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       level: deps.env.NODE_ENV === 'production' ? 'info' : 'debug',
       redact: ['req.headers.cookie', 'req.headers.authorization']
     },
-    // Security-Audit N1: "true" vertraut der GESAMTEN X-Forwarded-For-Kette unbedingt (beliebig
-    // viele, vom Client frei wählbare Hops) -- req.ip könnte dadurch auf eine vom Client
+    // Security-Audit R-1 (Regression, vorher N1): "true" vertraut der GESAMTEN
+    // X-Forwarded-For-Kette unbedingt -- req.ip könnte dadurch auf eine vom Client
     // vorgetäuschte Adresse zeigen und IP-basiertes Rate-Limiting/Logging umgehbar machen.
-    // Fastify/@fastify/proxy-addr mit einer Hop-Zahl vertraut nur so vielen Einträgen, wie
-    // tatsächlich eigene, bekannte Proxys (hier: Caddy) in der Kette stehen.
-    // fastify.d.ts deklariert trustProxy nur als boolean|string|string[]|TrustProxyFunction, aber
-    // @fastify/proxy-addr (das Fastify darunter nutzt) unterstuetzt eine Hop-Zahl zur Laufzeit
-    // sehr wohl (siehe node_modules/fastify/test/trust-proxy.test.js "trustProxy: 1") -- reine
-    // Typdefinitionsluecke, kein Laufzeitproblem.
-    trustProxy: (deps.env.TRUSTED_PROXY_HOPS > 0 ? deps.env.TRUSTED_PROXY_HOPS : false) as unknown as boolean
+    // EINE ZAHL hier waere falsch: Fastify 5.12.5 behandelt eine Hop-Zahl absichtlich als
+    // "keinem Proxy vertrauen" (fail-closed), wodurch req.ip auf die Caddy-IP fuer JEDE Anfrage
+    // zeigen wuerde und sich z.B. alle Nutzer ein einziges Login-Rate-Limit teilen. Eine
+    // CIDR-Angabe (das Docker-Netz, in dem Caddy laeuft) prueft dagegen korrekt nur die Adresse
+    // des direkten Gegenuebers; Caddy selbst ueberschreibt X-Forwarded-For bereits, Clients
+    // koennen den Wert also nicht faelschen.
+    trustProxy: deps.env.TRUSTED_PROXY_CIDR ?? false
   });
 
   app.decorate('db', deps.db);

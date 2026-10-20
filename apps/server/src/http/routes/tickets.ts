@@ -14,7 +14,7 @@ import { requireSession, requireAdmin } from './session.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek, type ResolvedDek } from '../../crypto/dekService.js';
-import { fieldCipher } from '../../crypto/fieldCrypto.js';
+import { fieldCipher, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
 import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
@@ -22,6 +22,7 @@ import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { sanitizeServerHtml } from '../../domain/sanitizer.js';
+import { loadOutlookSettings, getGraphAccessToken, createCalendarEvent } from '../../domain/graphClient.js';
 
 export interface TicketsRouteDeps {
   env: Env;
@@ -69,6 +70,27 @@ function encryptTicketField(
   });
 }
 
+// Security-Audit R-2: NUR für approval_text/waiting_message (per Migration 0034 nachträglich auf
+// verschlüsselt umgestellt, siehe db/reencryptLegacy.ts) -- title/description/incident_notice
+// waren von Anfang an verschlüsselt, ein Entschlüsselungsfehler dort bleibt bewusst ein echter
+// Fehler (Hinweis auf Manipulation/Korruption), statt ihn als "war wohl Klartext" zu kaschieren.
+function decryptTicketFieldTolerant(
+  stored: Buffer,
+  dek: ResolvedDek,
+  deps: TicketsRouteDeps,
+  recordId: string,
+  fieldName: string
+): string {
+  return decryptFieldTolerant(stored, dek.rawDek, {
+    installationId: deps.env.INSTALLATION_ID,
+    schemaVersion: deps.env.SCHEMA_VERSION,
+    tableName: 'tickets',
+    recordId,
+    fieldName,
+    keyVersion: dek.keyVersion
+  });
+}
+
 function decryptTicketField(
   stored: Buffer,
   dek: ResolvedDek,
@@ -102,10 +124,10 @@ function decryptTicketRow<T extends {
     out.incident_notice = decryptTicketField(row.incident_notice, deks.incidentNotice, deps, row.id, 'incident_notice');
   }
   if (row.approval_text) {
-    out.approval_text = decryptTicketField(row.approval_text, deks.approvalText, deps, row.id, 'approval_text');
+    out.approval_text = decryptTicketFieldTolerant(row.approval_text, deks.approvalText, deps, row.id, 'approval_text');
   }
   if (row.waiting_message) {
-    out.waiting_message = decryptTicketField(row.waiting_message, deks.waitingMessage, deps, row.id, 'waiting_message');
+    out.waiting_message = decryptTicketFieldTolerant(row.waiting_message, deks.waitingMessage, deps, row.id, 'waiting_message');
   }
   return out;
 }
@@ -346,10 +368,10 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           ? decryptTicketField(row.incident_notice, deks.incidentNotice, deps, row.id, 'incident_notice')
           : null,
         approval_text: row.approval_text
-          ? decryptTicketField(row.approval_text, deks.approvalText, deps, row.id, 'approval_text')
+          ? decryptTicketFieldTolerant(row.approval_text, deks.approvalText, deps, row.id, 'approval_text')
           : null,
         waiting_message: row.waiting_message
-          ? decryptTicketField(row.waiting_message, deks.waitingMessage, deps, row.id, 'waiting_message')
+          ? decryptTicketFieldTolerant(row.waiting_message, deks.waitingMessage, deps, row.id, 'waiting_message')
           : null
       }));
       return reply.send({ tickets });
@@ -1308,7 +1330,12 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       }
       if (isAdmin && parsed.data.assignee_user_id !== undefined) updates.assignee_user_id = parsed.data.assignee_user_id;
       if (isAdmin && parsed.data.assignee_username !== undefined) updates.assignee_username = parsed.data.assignee_username;
-      if (parsed.data.done !== undefined) updates.done = parsed.data.done;
+      if (parsed.data.done !== undefined) {
+        updates.done = parsed.data.done;
+        // Zeigt in der Oberfläche an, wann die Teilaufgabe erledigt wurde; beim erneuten
+        // Öffnen (done=false) wird der Zeitpunkt wieder entfernt, da sie dann nicht mehr erledigt ist.
+        updates.done_at = parsed.data.done ? mysqlTimestamp() : null;
+      }
 
       if (Object.keys(updates).length > 0) {
         await app.db.updateTable('ticket_todos').set(updates).where('id', '=', todoId).where('ticket_id', '=', id).execute();
@@ -1438,6 +1465,91 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       await app.db.deleteFrom('ticket_relations').where('ticket_id', '=', id).where('related_ticket_id', '=', relatedId).execute();
       await app.db.deleteFrom('ticket_relations').where('ticket_id', '=', relatedId).where('related_ticket_id', '=', id).execute();
       return reply.send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // --- Outlook-Kalendertermine ---
+  // Legt über Microsoft Graph (App-only, siehe domain/graphClient.ts) einen echten Termin im
+  // konfigurierten Postfach an und verknüpft ihn mit dem Ticket -- z.B. um eine SLA-/Custom-
+  // Frist direkt als Kalendertermin sichtbar zu machen.
+
+  const createCalendarEventSchema = z.object({
+    subject: z.string().trim().min(1).max(512),
+    notes: z.string().trim().max(5000).optional(),
+    start_at: z.string().min(1),
+    end_at: z.string().min(1),
+    attendee_emails: z.array(z.string().trim().email()).max(20).optional()
+  });
+
+  app.get('/api/v2/tickets/:id/calendar-events', async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      const { id } = req.params as { id: string };
+      const ticket = await app.db.selectFrom('tickets').select(['id', 'created_by_user_id']).where('id', '=', id).executeTakeFirst();
+      if (!ticket) return reply.code(404).send({ error: 'not_found' });
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
+
+      const events = await app.db.selectFrom('ticket_calendar_events').selectAll().where('ticket_id', '=', id).orderBy('start_at', 'asc').execute();
+      return reply.send({ events });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.post('/api/v2/tickets/:id/calendar-event', async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      const { id } = req.params as { id: string };
+      const parsed = createCalendarEventSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+
+      const ticket = await app.db.selectFrom('tickets').select(['id', 'created_by_user_id']).where('id', '=', id).executeTakeFirst();
+      if (!ticket) return reply.code(404).send({ error: 'not_found' });
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
+
+      const startAt = new Date(parsed.data.start_at);
+      const endAt = new Date(parsed.data.end_at);
+      if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) {
+        return reply.code(400).send({ error: 'invalid_time_range' });
+      }
+
+      const outlook = await loadOutlookSettings(app.db, deps.env, deps.keyProvider);
+      if (!outlook) return reply.code(409).send({ error: 'outlook_not_configured' });
+
+      let accessToken: string;
+      try {
+        accessToken = await getGraphAccessToken(outlook.tenantId, outlook.clientId, outlook.clientSecret);
+      } catch {
+        return reply.code(502).send({ error: 'outlook_auth_failed' });
+      }
+
+      let created;
+      try {
+        created = await createCalendarEvent(accessToken, outlook.mailbox, {
+          subject: parsed.data.subject,
+          bodyText: parsed.data.notes || `Ticket ${id}`,
+          startAt, endAt,
+          attendeeEmails: parsed.data.attendee_emails
+        });
+      } catch {
+        return reply.code(502).send({ error: 'outlook_event_create_failed' });
+      }
+
+      const eventId = randomUUID();
+      await app.db.insertInto('ticket_calendar_events').values({
+        id: eventId, ticket_id: id, graph_event_id: created.graphEventId, web_link: created.webLink,
+        subject: parsed.data.subject, start_at: mysqlTimestamp(startAt), end_at: mysqlTimestamp(endAt),
+        created_by_user_id: session.uid
+      }).execute();
+      await app.db.insertInto('ticket_audit_log').values({
+        id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
+        action: 'calendar_event_created', field: 'calendar_event', old_value: null, new_value: parsed.data.subject
+      }).execute();
+      return reply.code(201).send({ id: eventId, webLink: created.webLink });
     } catch (e: any) {
       return routeError(app, reply, e);
     }

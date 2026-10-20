@@ -19,14 +19,19 @@ const envSchema = z.object({
   DB_HOST: z.string().min(1),
   DB_PORT: z.coerce.number().int().positive().default(3306),
   DB_NAME: z.string().min(1),
-  DB_USER: z.string().min(1),
-  DB_PASSWORD: z.string().min(1),
+  // Security-Audit N9: DB_USER/DB_PASSWORD (volle DDL-Rechte) sind jetzt OPTIONAL -- der lang
+  // laufende App-Prozess bekommt sie seit diesem Update gar nicht mehr (nur noch DB_RUNTIME_*,
+  // siehe docker-compose.yml); nur der kurzlebige Migrations-Aufruf ("docker compose run ...
+  // migrate.js") bekommt sie noch injiziert. createDb() in connection.ts wirft einen klaren
+  // Fehler, wenn das für den jeweiligen Zweck (migrate/runtime) nötige Konto fehlt, statt mit
+  // einer kryptischen mysql2-Fehlermeldung über eine undefinierte Verbindung zu scheitern.
+  DB_USER: z.string().min(1).optional(),
+  DB_PASSWORD: z.string().min(1).optional(),
   DB_SSL_CA_PATH: z.string().min(1).optional(),
   DB_SSL_REJECT_UNAUTHORIZED: z.coerce.boolean().default(true),
-  // Security-Audit N9: optionales, eingeschränktes DB-Konto für den Laufzeitbetrieb (nur
-  // SELECT/INSERT/UPDATE/DELETE, kein ALTER/CREATE/DROP) -- Migrationen laufen weiterhin mit
-  // DB_USER/DB_PASSWORD (volle Rechte). Fehlen diese Variablen, nutzt die Laufzeit wie bisher
-  // DB_USER/DB_PASSWORD (Rückwärtskompatibilität fuer Installationen vor diesem Update).
+  // Eingeschränktes DB-Konto für den Laufzeitbetrieb (nur SELECT/INSERT/UPDATE/DELETE, kein
+  // ALTER/CREATE/DROP) -- für den normalen App-Betrieb jetzt die einzigen DB-Zugangsdaten, die
+  // der App-Container überhaupt zu sehen bekommt.
   DB_RUNTIME_USER: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
   DB_RUNTIME_PASSWORD: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
 
@@ -36,7 +41,14 @@ const envSchema = z.object({
   INSTALLATION_ID: z.string().uuid(),
   SCHEMA_VERSION: z.coerce.number().int().positive().default(1),
 
-  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(1),
+  // Security-Audit R-1: Fastify 5.12.5 behandelt eine reine Hop-Zahl absichtlich als "keinem
+  // Proxy vertrauen" (fail-closed, siehe node_modules/fastify/lib/request.js
+  // getTrustProxyFn) -- eine frühere Annahme, eine Zahl würde wie eine Hop-Anzahl funktionieren,
+  // war mit dieser Fastify-Version falsch und führte dazu, dass ALLE Anfragen serverseitig wie
+  // von der Caddy-IP kommend behandelt wurden (geteiltes Login-Rate-Limit für alle Benutzer).
+  // Eine CIDR-Angabe (das Docker-Netz, in dem Caddy läuft) prüft dagegen korrekt nur die Adresse
+  // des direkten Gegenübers. Leer/nicht gesetzt = kein Proxy vertrauen (sicherer Default).
+  TRUSTED_PROXY_CIDR: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
   OFFICE_PREVIEW_URL: z.string().url().optional(),
   UPDATE_SERVICE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   UPDATE_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
@@ -45,7 +57,10 @@ const envSchema = z.object({
   // Leer/fehlend = Scan deaktiviert.
   CLAMAV_HOST: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
   CLAMAV_PORT: z.coerce.number().int().positive().default(3310)
-});
+}).refine(
+  env => (env.DB_USER && env.DB_PASSWORD) || (env.DB_RUNTIME_USER && env.DB_RUNTIME_PASSWORD),
+  { message: 'Weder DB_USER/DB_PASSWORD noch DB_RUNTIME_USER/DB_RUNTIME_PASSWORD gesetzt -- mindestens eines der beiden Kontopaare wird gebraucht.' }
+);
 
 export type Env = z.infer<typeof envSchema>;
 

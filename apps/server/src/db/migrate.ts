@@ -9,6 +9,8 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 import { Migrator, type Migration, type MigrationProvider } from 'kysely/migration';
 import { loadEnv } from '../config/env.js';
 import { createDb } from './connection.js';
+import { createFileKeyProvider } from '../crypto/keyProvider.js';
+import { reencryptLegacyPlaintext } from './reencryptLegacy.js';
 import { migration_0001_installations } from './migrations/0001_installations.js';
 import { migration_0002_key_management } from './migrations/0002_key_management.js';
 import { migration_0003_users_and_groups } from './migrations/0003_users_and_groups.js';
@@ -42,6 +44,8 @@ import { migration_0032_session_idle_timeout } from './migrations/0032_session_i
 import { migration_0033_ldap_per_account_optin } from './migrations/0033_ldap_per_account_optin.js';
 import { migration_0034_encrypt_approval_waiting_text } from './migrations/0034_encrypt_approval_waiting_text.js';
 import { migration_0035_encrypt_contact_fields } from './migrations/0035_encrypt_contact_fields.js';
+import { migration_0036_todo_completed_at } from './migrations/0036_todo_completed_at.js';
+import { migration_0037_outlook_calendar_events } from './migrations/0037_outlook_calendar_events.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -78,7 +82,9 @@ const migrations: Record<string, Migration> = {
   '0032_session_idle_timeout': migration_0032_session_idle_timeout,
   '0033_ldap_per_account_optin': migration_0033_ldap_per_account_optin,
   '0034_encrypt_approval_waiting_text': migration_0034_encrypt_approval_waiting_text,
-  '0035_encrypt_contact_fields': migration_0035_encrypt_contact_fields
+  '0035_encrypt_contact_fields': migration_0035_encrypt_contact_fields,
+  '0036_todo_completed_at': migration_0036_todo_completed_at,
+  '0037_outlook_calendar_events': migration_0037_outlook_calendar_events
 };
 
 const provider: MigrationProvider = {
@@ -104,13 +110,32 @@ async function main(): Promise<void> {
     }
   }
 
-  await db.destroy();
-
   if (error) {
+    await db.destroy();
     console.error('Migration abgebrochen.', error);
     process.exit(1);
   }
   console.log('Alle Migrationen auf dem neuesten Stand.');
+
+  // Security-Audit R-2: läuft bei JEDER Ausführung von migrate.js (neue und bestehende
+  // Installationen) -- idempotent, erkennt und überspringt bereits verschlüsselte Werte. Schließt
+  // die Lücke, dass 0034/0035 den Spaltentyp umgestellt, aber vorhandene Klartextwerte nie
+  // tatsächlich verschlüsselt hatten (siehe reencryptLegacy.ts). Läuft bewusst NACH
+  // migrateToLatest(), damit die Spalten bereits den neuen (verschlüsselten) Typ haben.
+  try {
+    const keyProvider = createFileKeyProvider(env.KEK_FILE_PATH);
+    const { reencrypted, checked } = await reencryptLegacyPlaintext(db, env, keyProvider);
+    if (reencrypted > 0) {
+      console.log(`Altwerte nachtraeglich verschluesselt: ${reencrypted} von ${checked} geprueften Werten (Security-Audit R-2).`);
+    }
+  } catch (err) {
+    // Darf das Deployment nicht blockieren (die Spaltentypen sind bereits korrekt migriert,
+    // nur einzelne Altwerte wären betroffen) -- aber deutlich sichtbar loggen, da ein Fehlschlag
+    // hier bedeutet, dass einzelne Datensätze beim nächsten Lesen weiter scheitern können.
+    console.error('Nachtraegliche Verschluesselung von Altwerten fehlgeschlagen (R-2) -- bitte manuell pruefen/erneut ausfuehren:', err);
+  }
+
+  await db.destroy();
 }
 
 main().catch(err => {

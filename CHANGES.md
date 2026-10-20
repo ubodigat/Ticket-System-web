@@ -1,5 +1,128 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-20 - Zeitstempel bei Teilaufgaben, verbindliches Ticketnummer-Format
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- **Erledigungszeitpunkt bei Teilaufgaben:** Checkt man eine Teilaufgabe ab, wird jetzt Datum und
+  Uhrzeit direkt neben dem (durchgestrichenen) Text angezeigt. Neue Spalte `done_at` auf
+  `ticket_todos` (Migration `0036_todo_completed_at.ts`); wird beim Abhaken gesetzt und beim
+  erneuten Öffnen wieder entfernt, da sie dann nicht mehr erledigt ist.
+- **Ticketnummer-Format gegen Fehlkonfiguration abgesichert:** Ohne den Platzhalter `{number}`
+  im Format wären Ticketnummern nicht mehr eindeutig unterscheidbar (die Erzeugung ist intern
+  zwar bereits immer auf eine stillschweigende Rückfall-Vorlage ausgewichen, das Problem war in
+  den Einstellungen selbst aber nie sichtbar). `PATCH /api/v2/settings` lehnt ein Format ohne
+  `{number}` jetzt bereits beim Speichern ab (für `ticketNumberFormat.format` und jede
+  Kategorie-Vorlage in `ticketNumberCategoryFormats`). Zusätzlich darf die Stellenzahl
+  (`padding`) nicht mehr unter die Ziffernzahl der bereits höchsten vergebenen Ticketnummer
+  gesenkt werden (Prüfung gegen den aktuellen Höchstwert aus `tickets.ticket_number`). Ein
+  Überlauf (z. B. Zähler erreicht beim Format mit drei Stellen die Zahl 1000) führt ohnehin nie
+  zu einem Abschneiden oder einer Kollision: die Zahl selbst wird nie gekürzt, nur die führenden
+  Nullen reichen bei Bedarf automatisch nicht mehr aus und die Nummer wird einfach länger.
+- **Hilfe-Icons bei den E-Mail-Einstellungen:** Jedes Feld im Bereich "E-Mail / SMTP" (SMTP-Host,
+  Port, Verschlüsselung, Zugangsdaten, Absender, Vorlage/Signatur, Transport-Sicherheit,
+  Zertifikatsprüfung, S/MIME- und DKIM-Schlüssel) hat jetzt ein Fragezeichen-Icon daneben, das
+  beim Hovern bzw. per Tastaturfokus über das bereits vorhandene app-weite Tooltip-System
+  (`UI.initTooltips()`) erklärt, wofür das Feld gut ist.
+- **Outlook/Microsoft Graph-Integration ist jetzt funktionsfähig (App-only, Kalendertermine):**
+  Bisher gab es in den Systemeinstellungen nur Konfigurationsfelder ohne jede Anbindung. Jetzt
+  kann aus einem Ticket heraus (neues Kalender-Icon neben der Lösungsfrist) über einen echten
+  Microsoft-Graph-Aufruf ein Termin im konfigurierten Postfach angelegt werden -- vorbelegt mit
+  der aktuellen SLA-/manuellen Frist, kombinierbar mit einem eigenen Zeitraum und einer Notiz.
+  - Neuer dependency-freier Client (`domain/graphClient.ts`, gleiche Abwägung wie bei S/MIME:
+    kein `@azure/msal-node`/`@microsoft/microsoft-graph-client`, nur zwei schlanke REST-Aufrufe):
+    App-only-Client-Credentials-Flow gegen `login.microsoftonline.com`, danach
+    `POST /users/{mailbox}/events` gegen Microsoft Graph.
+  - Das Client-Secret liegt -- anders als bisher die S/MIME-/DKIM-Schlüssel -- NICHT im Klartext
+    in `config_json`, sondern verschlüsselt in einer eigenen Spalte (`outlook_client_secret_enc`,
+    Migration `0037_outlook_calendar_events.ts`), analog zu `smtp_password_enc`/
+    `ldap_bind_password_enc`. Eigener Endpoint `PATCH /api/v2/settings/outlook/secret` (nur
+    Superadmin), nie über `GET /api/v2/settings` lesbar.
+  - Neue Routen `GET/POST /api/v2/tickets/:id/calendar-event(s)`: legt den Termin an, verknüpft
+    ihn über eine neue Tabelle `ticket_calendar_events` mit dem Ticket (gleicher Zugriffsschutz
+    wie bei Teilaufgaben/Beteiligten: Ersteller des Tickets oder Admin/Superadmin) und protokolliert
+    die Aktion im Ticket-Audit-Log.
+  - Eingehende E-Mails automatisch zu Tickets zu machen (Mailbox-Sync) bleibt weiterhin nicht
+    verfügbar -- das verlangt einen dauerhaft laufenden Sync-Dienst und ist bewusst nicht Teil
+    dieser Änderung; die entsprechenden Kästchen in den Einstellungen sind weiterhin deaktiviert
+    und als "noch nicht verfügbar" gekennzeichnet.
+
+## 2026-10-20 - Zwei Regressionen aus dem letzten Update behoben (R-1, R-2) plus R-3 bis R-5, N-3- und N9-Nachbesserung
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Externer Security-Audit (Commit ecb296b) fand zwei durch das letzte Sicherheitsupdate selbst
+  eingeführte Hoch-Befunde sowie drei neue Niedrig-Befunde. Alle fünf sind behoben, dazu zwei
+  bereits als "Teilweise" geführte Punkte (N-3, N9) weiter geschlossen:
+  - **R-1 (Hoch, Regression) `trustProxy` blockierte faktisch alle Logins hinter einem gemeinsamen
+    Limit:** Fastify 5.12.5 behandelt `trustProxy` als Zahl bewusst als "keinem Proxy vertrauen"
+    (fail-closed) -- die vorherige Annahme, eine Hop-Zahl würde wie erwartet funktionieren, war
+    mit dieser Fastify-Version falsch. `req.ip` zeigte dadurch für JEDE Anfrage auf die
+    Caddy-Adresse, wodurch sich alle Benutzer ein einziges Login-Rate-Limit (10/min) teilten --
+    zehn Versuche einer Person sperrten den Login für alle anderen. Fix: `TRUSTED_PROXY_CIDR`
+    (ein konkretes Subnetz, z. B. das `edge`-Docker-Netz, in dem nur Caddy läuft) ersetzt die
+    Hop-Zahl; `docker-compose.yml` gibt dem `edge`-Netz dafür ein festes Subnetz
+    (`172.30.250.0/24`). Neuer Regressionstest (`test/trustProxy.test.ts`, 3 Fälle) prüft
+    dauerhaft: ohne Konfiguration vertraut der Server niemandem, mit Konfiguration liefert
+    `req.ip` die echte Client-Adresse, und ein direkter Client außerhalb des vertrauten Netzes
+    kann `X-Forwarded-For` nicht fälschen.
+  - **R-2 (Hoch, Regression) Ausfall nach Update durch unverschlüsselte Altwerte:** die
+    Migrationen 0034/0035 (vorherige Sitzung) hatten den Spaltentyp von approval_text/
+    waiting_message/Kontaktfeldern auf verschlüsselt umgestellt, aber vorhandene Klartextwerte nie
+    tatsächlich verschlüsselt -- jeder Lesezugriff auf einen Altwert scheiterte mit
+    "Invalid authentication tag length"/"Unsupported state", wodurch `GET /api/v2/tickets`,
+    `/api/v2/users`, `/users/me` und das Verzeichnis komplett mit 500 ausfielen, sobald auch nur
+    ein Datensatz betroffen war. Fix in zwei Schichten: (1) `db/reencryptLegacy.ts` läuft jetzt
+    automatisch am Ende jedes `migrate.js`-Laufs (neue wie bestehende Installationen), erkennt
+    bereits verschlüsselte Werte (übersprungen) gegenüber Klartext (nachträglich verschlüsselt)
+    und ist idempotent -- betrifft also auch Installationen, die das letzte Update schon vor
+    diesem Fix eingespielt hatten, sobald sie erneut migrieren. (2) Zusätzliches Sicherheitsnetz:
+    `fieldCrypto.ts` `decryptFieldTolerant()` fängt einen Entschlüsselungsfehler für genau diese
+    sechs Felder ab und zeigt den Rohinhalt als Text, statt die ganze Liste mit 500 abstürzen zu
+    lassen (gilt NICHT für Kernfelder wie title/description/name/email, die von Anfang an
+    verschlüsselt waren -- dort bleibt ein Entschlüsselungsfehler bewusst ein echter Fehler).
+  - **R-3 (Niedrig) Setup ohne Token, wenn `SETUP_TOKEN` fehlt:** `install.sh` setzt das Token
+    zwar immer, bei manueller Installation/eigener `.env` ohne diese Variable war das Setup aber
+    weiterhin unauthentifiziert erreichbar (fail-open). Jetzt fail-closed: ohne konfiguriertes
+    `SETUP_TOKEN` lehnt die Einrichtung in Produktion ab (503); nur `NODE_ENV=development`
+    erlaubt es weiterhin ohne Token.
+  - **R-4 (Niedrig) DB-Zugangsdatei blieb im MariaDB-Container zurück:** `backup.sh`, `restore.sh`
+    und `install.sh` riefen die temporäre Zugangsdaten-Datei über `exec mariadb[-dump] ...` auf --
+    `exec` ersetzt den Shell-Prozess, wodurch der zuvor registrierte `trap ... EXIT` nie ausgelöst
+    wurde und die Datei (Benutzername+Passwort des vollen DB-Kontos, `/tmp`, Rechte 0600) liegen
+    blieb. Fix: `exec` entfernt, der Exit-Code wird wie zuvor einfach durchgereicht.
+  - **R-5 (Niedrig) S/MIME-Versand verlor BCC und ließ Header-Injection zu:** nodemailer baut bei
+    einer fertigen, bereits signierten Nachricht (`raw`) keine Header mehr aus eigenen Feldern --
+    das `bcc`/`replyTo`-Feld wurde dadurch bei jeder S/MIME-signierten Mail stillschweigend
+    ignoriert, und ein Betreff mit `\r\n` (erreichbar über `POST /api/v2/mail/send`, nur Admins)
+    hätte eigene Mail-Header einschleusen können. Fix: `domain/smime.ts` lehnt `\r`/`\n` in
+    Header-Werten hart ab und kodiert Nicht-ASCII-Zeichen nach RFC 2047; `mail/mailer.ts` nimmt
+    das BCC-Archiv jetzt im `envelope.to` auf (dem einzigen Feld, das bei `raw` tatsächlich die
+    SMTP-Zustellung steuert) und reicht `replyTo` explizit an den S/MIME-Header-Aufbau durch.
+  - **N-3 (weitere Härtung) Signierte Commits jetzt automatisch Pflicht, sobald ein Schlüssel
+    vorhanden ist:** `UPDATE_REQUIRE_SIGNED_COMMITS` bleibt explizit setzbar, erkennt ohne
+    gesetzten Wert aber jetzt selbst beim Start, ob bereits ein GPG-Schlüssel im
+    Updater-Container importiert wurde (`gpg --list-keys`) -- ist das der Fall, wird die
+    Signaturprüfung automatisch zur Pflicht (sicher sobald konfiguriert), ohne Installationen
+    ohne Schlüssel durch einen rückwirkend geänderten Standardwert auszusperren.
+  - **N9 (vollständig statt teilweise) App-Container ohne DDL-Konto:** `DB_USER`/`DB_PASSWORD`
+    (volle Rechte) stehen nicht mehr in der ständigen Umgebung des lang laufenden
+    App-Containers -- nur noch das eingeschränkte `DB_RUNTIME_USER`/`DB_RUNTIME_PASSWORD`
+    (`env.ts`: `DB_USER`/`DB_PASSWORD` jetzt optional, mit Prüfung, dass mindestens ein
+    Kontopaar vorhanden ist; `connection.ts` wirft eine klare Fehlermeldung statt eines
+    kryptischen mysql2-Fehlers, falls für den jeweiligen Zweck die passenden Zugangsdaten
+    fehlen). `Dockerfile.server` führt Migrationen nicht mehr automatisch beim Containerstart
+    aus; sie laufen separat (`install.sh`, `updater-server.mjs` `runMigrate()`) mit den vollen
+    Zugangsdaten nur für diesen einen kurzlebigen Aufruf -- und zwar, wie schon bei R-4, per
+    stdin/temporärer Optionsdatei im Zielcontainer statt als `-e`-Kommandozeilenargument.
+  - `apps/server/.env.example` und `test/appBoot.test.ts` an die `TRUSTED_PROXY_CIDR`-Umbenennung
+    angepasst; 98 statt 95 Tests insgesamt (3 neue Fälle für R-1).
+- Bewusst noch nicht umgesetzt (vom Audit selbst als mittel-/langfristig eingestuft, nicht Teil
+  der "Dringendste Maßnahmen"): N10-Rest (Regeln wiederkehrender Tickets, `custom_fields_json`,
+  Kontoanfragen-Freitext, Mail-Schlüssel in `config_json` weiter Klartext), N11 (Zusammenführung
+  zeigt weiter Nachrichten fremder Ersteller), N12 (Benachrichtigungen per Benutzername statt
+  -ID), N13 (Installer weiter per `curl | bash`), Container-Images auf Digests festlegen (erfordert
+  Abgleich gegen eine echte Registry, nicht ohne Netzwerkzugriff auf eine vertrauenswürdige Quelle
+  verlässlich möglich), CSP ohne `style-src 'unsafe-inline'`, Mailversand über eine Queue (N3).
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
 ## 2026-10-20 - In-App-Update gehärtet statt entfernt (N3, Fortsetzung)
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Auf Nachfrage: statt die In-App-Update-Funktion komplett durch einen Host-systemd-Umbau zu

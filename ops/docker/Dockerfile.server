@@ -34,4 +34,10 @@ ENV NODE_ENV=production
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["sh", "-c", "node dist/db/migrate.js && exec node dist/index.js"]
+# Security-Audit N9: Migrationen laufen NICHT mehr automatisch beim Start dieses Containers --
+# der lang laufende App-Prozess bekommt nur noch das eingeschraenkte DB_RUNTIME_*-Konto (siehe
+# docker-compose.yml), das keine DDL-Rechte (ALTER/CREATE TABLE) hat. Migrationen laufen separat,
+# mit dem vollen DB_USER/DB_PASSWORD-Konto nur fuer den kurzlebigen Migrations-Aufruf (siehe
+# install.sh/updater-server.mjs: "docker compose run --rm -e DB_USER=... -e DB_PASSWORD=... app
+# node dist/db/migrate.js"), bevor dieser Container ueberhaupt startet.
+CMD ["node", "dist/index.js"]

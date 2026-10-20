@@ -973,6 +973,39 @@ label {
     letter-spacing: 1px;
 }
 
+.calendar-event-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.calendar-event-list li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-sm);
+    color: var(--text-sec);
+}
+
+.field-help {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: -2px;
+    margin-left: 4px;
+    color: var(--text-sec);
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: help;
+}
+
+.field-help:hover,
+.field-help:focus-visible {
+    color: var(--primary-solid);
+}
+
 input,
 select,
 textarea {
@@ -4989,6 +5022,21 @@ button:disabled {
     color: var(--text-sec);
     font-size: var(--fs-sm);
     white-space: nowrap;
+}
+
+/* Abschlusszeitpunkt einer erledigten Teilaufgabe -- direkt rechts neben dem (durchgestrichenen)
+   Text, nicht erst im rechten Metadaten-Block, damit der Bezug zur jeweiligen Zeile eindeutig bleibt. */
+.todo-done-at {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: var(--space-2);
+    color: var(--text-sec);
+    font-size: var(--fs-xs, 11px);
+    font-weight: 400;
+    text-decoration: none;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .todo-create-row {

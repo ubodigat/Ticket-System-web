@@ -73,16 +73,25 @@ const settingsConfigSchema = z.object({
     perDay: z.record(z.string(), businessHoursDaySchema).optional(),
     holidays: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(366).optional()
   }).optional(),
-  // format: Vorlage mit {prefix}/{category}/{number}, muss {number} enthalten -- validiert in
-  // buildTicketNumber (tickets.ts), nicht hier, da der Platzhalter-Check dort mit derselben
-  // Logik wie beim tatsächlichen Erzeugen der Nummer laufen soll.
+  // format: Vorlage mit {prefix}/{category}/{number}. {number} MUSS enthalten sein, sonst wären
+  // Ticketnummern nicht mehr eindeutig unterscheidbar (buildTicketNumber in tickets.ts fiel
+  // bisher nur beim tatsächlichen Erzeugen still auf die reine Zahl zurück -- das Problem war in
+  // den Systemeinstellungen selbst nie sichtbar). Jetzt bereits hier beim Speichern hart
+  // abgelehnt, damit die Person sofort merkt, dass die Vorlage so nicht funktioniert.
   ticketNumberFormat: z.object({
     prefix: z.string().max(16).default(''),
     padding: z.number().int().min(1).max(12).default(5),
-    format: z.string().trim().max(64).optional()
+    format: z.string().trim().max(64).optional().refine(
+      value => !value || value.includes('{number}'),
+      'Das Format muss den Platzhalter {number} enthalten, sonst sind Ticketnummern nicht mehr eindeutig.'
+    )
   }).optional(),
-  // Pro Kategorie ein eigenes Format (überschreibt ticketNumberFormat.format für diese Kategorie).
-  ticketNumberCategoryFormats: z.record(z.string(), z.string().trim().max(64)).optional(),
+  // Pro Kategorie ein eigenes Format (überschreibt ticketNumberFormat.format für diese Kategorie)
+  // -- derselbe {number}-Zwang wie oben gilt hier genauso.
+  ticketNumberCategoryFormats: z.record(
+    z.string(),
+    z.string().trim().max(64).refine(value => value.includes('{number}'), 'Das Format muss den Platzhalter {number} enthalten.')
+  ).optional(),
   accountSelfServiceFields: z.array(z.enum(['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation'])).optional(),
   autoArchiveClosedAfterDays: z.number().int().min(0).max(3650).optional(),
   waitingReminderDays: z.number().int().min(1).max(365).optional(),
@@ -255,6 +264,29 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       if (body.config !== undefined) {
         const parsed = settingsConfigSchema.safeParse(body.config);
         if (!parsed.success) return reply.code(400).send({ error: 'invalid_config', details: parsed.error.flatten() });
+
+        // Die Stellenzahl darf nicht unter die Ziffernzahl der bereits höchsten vergebenen
+        // Ticketnummer sinken -- technisch würde das wegen padStart() keine Kollision erzeugen
+        // (eine 4-stellige Zahl bleibt 4-stellig, auch bei padding=3), aber es wirkt in der
+        // Oberfläche inkonsistent/irreführend ("001"-"999" und dann plötzlich "1000" in derselben
+        // Spalte). Siehe ticketNumber.ts: die Zahl selbst wird NIE abgeschnitten, nur die
+        // führenden Nullen; ein höherer Zähler wird automatisch länger statt zu überlaufen.
+        if (parsed.data.ticketNumberFormat?.padding !== undefined) {
+          const rows = await app.db.selectFrom('tickets').select('ticket_number').execute();
+          const highestSequence = rows.reduce((max, row) => {
+            const digits = String(row.ticket_number || '').match(/(\d+)(?!.*\d)/);
+            return Math.max(max, digits ? parseInt(digits[1]!, 10) : 0);
+          }, 0);
+          const minRequiredDigits = String(highestSequence).length;
+          if (parsed.data.ticketNumberFormat.padding < minRequiredDigits) {
+            return reply.code(400).send({
+              error: 'padding_too_low',
+              minRequired: minRequiredDigits,
+              detail: `Die Stellenzahl darf nicht unter ${minRequiredDigits} sinken -- die höchste bisher vergebene Ticketnummer hat bereits ${minRequiredDigits} Stellen.`
+            });
+          }
+        }
+
         const existing = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirstOrThrow();
         const merged = mergeSettingsConfig(existing.config_json ? JSON.parse(existing.config_json) : {}, parsed.data);
         updates.config_json = JSON.stringify(merged);
@@ -357,6 +389,52 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       return reply.send({ success: true });
     } catch (e: any) {
       if (e?.message === 'smtp_not_configured') return reply.code(409).send({ error: 'smtp_not_configured' });
+      return routeError(app, reply, e);
+    }
+  });
+
+  // --- Outlook/Microsoft Graph (App-only Client-Credentials-Flow, siehe domain/graphClient.ts) ---
+
+  // GET /api/v2/settings/outlook - nur Superadmin. Gibt NIE das Client-Secret zurück.
+  app.get('/api/v2/settings/outlook', async (req, reply) => {
+    try {
+      requireSuperadmin(req);
+      const row = await app.db.selectFrom('app_settings').select(['config_json', 'outlook_client_secret_enc']).where('id', '=', 1).executeTakeFirstOrThrow();
+      const config = row.config_json ? JSON.parse(row.config_json) : {};
+      const outlook = config.outlookConfig || {};
+      return reply.send({
+        enabled: !!outlook.enabled, tenantId: outlook.tenantId || '', clientId: outlook.clientId || '',
+        mailbox: outlook.mailbox || '', hasClientSecret: !!row.outlook_client_secret_enc
+      });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  const outlookSecretSchema = z.object({ clientSecret: z.string().min(1).max(1024).optional() });
+
+  // PATCH /api/v2/settings/outlook/secret - nur Superadmin. Eigener Endpoint statt Teil von
+  // PATCH /settings, weil das Client-Secret -- wie SMTP-/LDAP-Passwort -- verschlüsselt in einer
+  // eigenen Spalte liegt und nie über config_json liest-/schreibbar sein soll.
+  app.patch('/api/v2/settings/outlook/secret', async (req, reply) => {
+    try {
+      const session = requireSuperadmin(req);
+      const parsed = outlookSecretSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      if (!parsed.data.clientSecret) return reply.send({ success: true });
+
+      const dek = await ensureDek(app.db, deps.keyProvider, 'app_settings.outlook_client_secret');
+      const outlook_client_secret_enc = fieldCipher.encryptField(parsed.data.clientSecret, dek.rawDek, {
+        installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+        tableName: 'app_settings', recordId: '1', fieldName: 'outlook_client_secret', keyVersion: dek.keyVersion
+      });
+      await app.db.updateTable('app_settings').set({ outlook_client_secret_enc, updated_at: mysqlTimestamp() }).where('id', '=', 1).execute();
+      await app.db.insertInto('global_audit_log').values({
+        id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
+        action: 'settings.outlook_secret_updated', target_type: 'settings', target_id: '1', detail_json: null
+      }).execute();
+      return reply.send({ success: true });
+    } catch (e: any) {
       return routeError(app, reply, e);
     }
   });

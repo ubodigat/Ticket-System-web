@@ -26,6 +26,9 @@ export interface SmimeSignParams {
   subject: string;
   text: string;
   html?: string | undefined;
+  // Security-Audit R-5: wie bcc landete auch replyTo bisher nirgends in der signierten
+  // Nachricht, da nodemailer bei "raw" keine Header mehr aus eigenen Feldern baut.
+  replyTo?: string | undefined;
 }
 
 function runOpenssl(args: string[], extraStdio: { fd3?: string | undefined }): Promise<{ code: number | null; out: Buffer; err: string }> {
@@ -101,10 +104,20 @@ export async function buildSignedMimeMessage(params: SmimeSignParams): Promise<B
     // `openssl smime -sign -outform SMIME` liefert bereits einen vollstaendigen MIME-Teil
     // (multipart/signed mit Content-Type/MIME-Version-Headern) -- nur noch die eigentlichen
     // Mail-Header (From/To/Subject) davorsetzen.
+    // Security-Audit R-5: Header-Werte roh einzusetzen erlaubt Header-Injection (ein Betreff mit
+    // \r\n koennte eigene zusaetzliche Header einschleusen, z.B. ueber POST /api/v2/mail/send) --
+    // \r/\n werden deshalb hart abgelehnt. Nicht-ASCII-Zeichen (Umlaute etc.) werden nach RFC 2047
+    // kodiert, da rohe UTF-8-Bytes in einem Mail-Header ungueltig sind.
+    const headerValue = (value: string): string => {
+      if (/[\r\n]/.test(value)) throw new Error('invalid_header_value');
+      if (/^[\x20-\x7e]*$/.test(value)) return value;
+      return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
+    };
     const header = [
-      `From: ${params.fromAddress}`,
-      `To: ${params.toAddress}`,
-      `Subject: ${params.subject}`,
+      `From: ${headerValue(params.fromAddress)}`,
+      `To: ${headerValue(params.toAddress)}`,
+      `Subject: ${headerValue(params.subject)}`,
+      ...(params.replyTo ? [`Reply-To: ${headerValue(params.replyTo)}`] : []),
       ''
     ].join('\r\n');
     return Buffer.concat([Buffer.from(header, 'utf8'), result.out]);

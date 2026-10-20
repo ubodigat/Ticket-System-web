@@ -78,6 +78,20 @@ export async function unwrapDekOrThrow(provider: KeyProvider, wrapped: Buffer): 
   return provider.unwrapDek(wrapped);
 }
 
+// Security-Audit R-2: zusätzliches Sicherheitsnetz NEBEN der automatischen Alt-Verschlüsselung
+// in db/reencryptLegacy.ts (die bei jedem migrate.js-Lauf greift) -- falls ein Wert trotzdem
+// noch als Klartext in der Spalte steht (z.B. weil die automatische Nachverschlüsselung aus
+// irgendeinem Grund fehlschlug oder übersprungen wurde), soll das NIE einen 500er für die ganze
+// Liste/Seite auslösen. Ein Entschlüsselungsfehler wird hier als "das war schon Klartext"
+// interpretiert und der Rohinhalt als UTF-8-Text zurückgegeben, statt zu werfen.
+export function decryptFieldTolerant(stored: Buffer, dek: Buffer, ctx: AadContext): string {
+  try {
+    return fieldCipher.decryptField(stored, dek, ctx);
+  } catch {
+    return stored.toString('utf8');
+  }
+}
+
 // Blind-Index für Exact-Match-Suche (docs/adr/0005): eigener Schlüsselraum, getrennt von den
 // Feld-DEKs (docs/CRYPTOGRAPHY.md §1), damit ein Leak des einen nicht automatisch den anderen
 // kompromittiert. Normalisierung (lowercase/trim) muss bei Schreiben UND Lesen identisch sein.

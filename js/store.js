@@ -857,6 +857,47 @@ export const Store = {
         }).catch(() => null);
         return !!res && res.ok;
     },
+    // Outlook/Graph: tenantId/clientId/mailbox liegen in config_json (outlookConfig, siehe oben),
+    // das Client-Secret liegt wie SMTP-/LDAP-Passwort in einer eigenen verschlüsselten Spalte und
+    // wird nie vom Server zurückgegeben.
+    getOutlookConfig: async () => {
+        const res = await fetch('/api/v2/settings/outlook', { credentials: 'same-origin' });
+        if (!res.ok) return null;
+        return res.json();
+    },
+    updateOutlookSecret: async (clientSecret) => {
+        const res = await fetch('/api/v2/settings/outlook/secret', {
+            method: 'PATCH', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ clientSecret })
+        }).catch(() => null);
+        return !!res && res.ok;
+    },
+    // Kalendertermine: legt über das Backend (Microsoft Graph, App-only) einen echten Termin im
+    // konfigurierten Outlook-Postfach an und verknüpft ihn mit dem Ticket.
+    getTicketCalendarEvents: async (ticketId) => {
+        const res = await fetch(`/api/v2/tickets/${ticketId}/calendar-events`, { credentials: 'same-origin' });
+        if (!res.ok) return [];
+        const events = (await res.json()).events || [];
+        return events.map(e => ({ id: e.id, subject: e.subject, startAt: e.start_at, endAt: e.end_at, webLink: e.web_link }));
+    },
+    createTicketCalendarEvent: async (ticketId, payload) => {
+        const res = await fetch(`/api/v2/tickets/${ticketId}/calendar-event`, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).catch(() => null);
+        if (!res) { Store.lastError = 'network'; return null; }
+        if (!res.ok) {
+            // Fehlercode (z.B. "outlook_not_configured") statt des vollen JSON-Strings merken,
+            // damit die Oberfläche gezielt darauf reagieren kann (siehe openCalendarEventModal).
+            const body = await res.json().catch(() => null);
+            Store.lastError = body?.error || `HTTP ${res.status}`;
+            return null;
+        }
+        Store.lastError = null;
+        return res.json();
+    },
     testLdapConfig: async (password) => {
         const res = await fetch('/api/v2/settings/ldap/test', {
             method: 'POST', credentials: 'same-origin',

@@ -16,6 +16,11 @@ import { renderPdfPreview } from './pdf-preview.js';
 import { UserDash } from './user-dash.js';
 import { getStatusColor, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
 
+// Fragezeichen-Icon neben einem Einstellungs-Label: nutzt UI.initTooltips() (title-Attribut
+// wird app-weit automatisch durch die gestylte Tooltip-Box ersetzt) für eine Kurzerklärung,
+// wofür das Feld gut ist.
+const FieldHelp = (text) => `<span class="field-help" title="${Utils.esc(text)}" tabindex="0">${Icon('circle-help', 14)}</span>`;
+
 export const AdminBoard = {
     selectedFiles: [],
     slaRefreshTimer: null,
@@ -2152,15 +2157,22 @@ export const AdminBoard = {
 
                         <!-- Outlook -->
                         <div id="sys-outlook" class="tab-content">
-                            <div class="callout">Outlook/Microsoft Graph kann hier vorbereitet werden. Die Serverinstallation enthält aktuell noch keinen aktiven Mailbox-Sync; die Importfunktionen bleiben deshalb deaktiviert, bis ein Graph-Connector angebunden ist.</div>
+                            <div class="callout">Mit App-Registrierung (Tenant-/Client-ID, Client-Secret, Postfach) können aus einem Ticket heraus
+                                echte Outlook-Kalendertermine angelegt werden ${FieldHelp('Benötigt eine Azure-App-Registrierung mit Application-Permission "Calendars.ReadWrite" (App-only, Admin-Zustimmung erforderlich) für das angegebene Postfach.')}.
+                                Eingehende E-Mails als Tickets automatisch zu importieren ist weiterhin nicht möglich -- das würde einen laufenden Mailbox-Sync-Dienst voraussetzen, den es aktuell nicht gibt.</div>
                             <label class="check-row"><input type="checkbox" id="sys-outlook-enabled"><span><strong>Outlook/Graph Integration aktivieren</strong></span></label>
                             <div class="form-grid">
-                                <div class="field"><label>Tenant-ID</label><input id="sys-outlook-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
-                                <div class="field"><label>Client-ID</label><input id="sys-outlook-client" type="text" placeholder="App Registration Client-ID"></div>
+                                <div class="field"><label>Tenant-ID ${FieldHelp('Die Azure-AD-Tenant-ID (Verzeichnis-ID) der Organisation, in der die App-Registrierung angelegt wurde.')}</label><input id="sys-outlook-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
+                                <div class="field"><label>Client-ID ${FieldHelp('Die Anwendungs-ID (Client-ID) der App-Registrierung in Azure AD.')}</label><input id="sys-outlook-client" type="text" placeholder="App Registration Client-ID"></div>
                             </div>
-                            <div class="field"><label>Support-Postfach</label><input id="sys-outlook-mailbox" type="email" placeholder="support@example.com"></div>
-                            <label class="check-row"><input type="checkbox" id="sys-outlook-sync" disabled><span>Eingehende E-Mails synchronisieren</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-outlook-create" disabled><span>Aus E-Mails automatisch Tickets erstellen</span></label>
+                            <div class="field"><label>Client-Secret ${FieldHelp('Geheimer Schlüssel der App-Registrierung (Zertifikate &amp; Geheimnisse). Wird verschlüsselt gespeichert. Leer lassen, um ein bereits gespeichertes Secret unverändert zu lassen.')}</label><input id="sys-outlook-secret" type="password" placeholder="Leer lassen = unverändert"></div>
+                            <div class="field"><label>Support-Postfach ${FieldHelp('Postfach (E-Mail-Adresse), in dem die App-only-Berechtigung Kalendertermine anlegen darf.')}</label><input id="sys-outlook-mailbox" type="email" placeholder="support@example.com"></div>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-sync" disabled><span>Eingehende E-Mails synchronisieren (noch nicht verfügbar)</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-create" disabled><span>Aus E-Mails automatisch Tickets erstellen (noch nicht verfügbar)</span></label>
+                            <div class="setting-row">
+                                <span class="hint" id="sys-outlook-status"></span>
+                                <button class="btn-secondary btn-sm" id="sys-outlook-save" type="button">${Icon('save', 15)}Outlook-Einstellungen speichern</button>
+                            </div>
                         </div>
 
                         <!-- Update -->
@@ -2212,47 +2224,47 @@ export const AdminBoard = {
                         <div id="sys-email" class="tab-content">
                             <div class="callout">Wird hier ein SMTP-Server eingetragen, verschickt der Server echte E-Mails bei
                                 Benachrichtigungen (neues Ticket, Statusänderung, Genehmigung, ...), zusätzlich zur In-App-Benachrichtigung.</div>
-                            <div class="field"><label>SMTP-Host</label><input id="sys-smtp-host" type="text" placeholder="smtp.example.com"></div>
+                            <div class="field"><label>SMTP-Host ${FieldHelp('Adresse des Mailservers, über den E-Mails versendet werden (z. B. smtp.office365.com). Ohne diese Angabe verschickt der Server keine E-Mails -- Benachrichtigungen bleiben dann auf die In-App-Ansicht beschränkt.')}</label><input id="sys-smtp-host" type="text" placeholder="smtp.example.com"></div>
                             <div class="form-grid">
-                                <div class="field"><label>Port</label><input id="sys-smtp-port" type="number" placeholder="587"></div>
-                                <div class="field"><label>Verschlüsselung</label><select id="sys-smtp-secure"><option value="false">STARTTLS (empfohlen)</option><option value="true">TLS/SSL</option></select></div>
+                                <div class="field"><label>Port ${FieldHelp('TCP-Port des Mailservers. Üblich: 587 für STARTTLS, 465 für TLS/SSL, 25 für unverschlüsselt (nicht empfohlen).')}</label><input id="sys-smtp-port" type="number" placeholder="587"></div>
+                                <div class="field"><label>Verschlüsselung ${FieldHelp('Legt fest, wie die Verbindung zum Mailserver abgesichert wird. STARTTLS startet unverschlüsselt und wechselt dann zu TLS -- das ist der gängige Standard bei Port 587. TLS/SSL verschlüsselt von Anfang an (meist Port 465).')}</label><select id="sys-smtp-secure"><option value="false">STARTTLS (empfohlen)</option><option value="true">TLS/SSL</option></select></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>Benutzername</label><input id="sys-smtp-user" type="text" placeholder="support@example.com"></div>
-                                <div class="field"><label>Passwort</label><input id="sys-smtp-pass" type="password" placeholder="Leer lassen = unverändert"></div>
+                                <div class="field"><label>Benutzername ${FieldHelp('Login-Name für den SMTP-Server (meist die vollständige Absender-E-Mail-Adresse).')}</label><input id="sys-smtp-user" type="text" placeholder="support@example.com"></div>
+                                <div class="field"><label>Passwort ${FieldHelp('Zugehöriges Passwort bzw. App-Passwort für den SMTP-Login. Wird verschlüsselt gespeichert. Leer lassen, um ein bereits gespeichertes Passwort unverändert zu lassen.')}</label><input id="sys-smtp-pass" type="password" placeholder="Leer lassen = unverändert"></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>Absender-Adresse</label><input id="sys-smtp-from" type="email" placeholder="support@example.com"></div>
-                                <div class="field"><label>Absender-Name</label><input id="sys-smtp-fromname" type="text" placeholder="Support Portal"></div>
+                                <div class="field"><label>Absender-Adresse ${FieldHelp('E-Mail-Adresse, die Empfänger als Absender aller Benachrichtigungen sehen (das "Von"-Feld).')}</label><input id="sys-smtp-from" type="email" placeholder="support@example.com"></div>
+                                <div class="field"><label>Absender-Name ${FieldHelp('Anzeigename, der zusammen mit der Absender-Adresse im Postfach des Empfängers erscheint, z. B. "Support Portal".')}</label><input id="sys-smtp-fromname" type="text" placeholder="Support Portal"></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>Antwort-an Adresse</label><input id="sys-email-replyto" type="email" placeholder="reply@example.com"></div>
-                                <div class="field"><label>BCC Archiv-Adresse</label><input id="sys-email-bcc" type="email" placeholder="archiv@example.com"></div>
+                                <div class="field"><label>Antwort-an Adresse ${FieldHelp('Optionale abweichende Adresse für das "Antworten"-Feld, falls Antworten nicht an die Absender-Adresse, sondern an ein anderes Postfach gehen sollen.')}</label><input id="sys-email-replyto" type="email" placeholder="reply@example.com"></div>
+                                <div class="field"><label>BCC Archiv-Adresse ${FieldHelp('Optionale Adresse, die bei jeder versendeten Benachrichtigung automatisch als Blindkopie (BCC) mitgeschickt wird -- z. B. für ein zentrales Mail-Archiv.')}</label><input id="sys-email-bcc" type="email" placeholder="archiv@example.com"></div>
                             </div>
                             <div class="settings-section-title">${Icon('mail-check', 15)}Vorlage und Signatur</div>
-                            <div class="field field-wide"><label>E-Mail-Vorlage</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
-                            <div class="field field-wide"><label>Signatur (Text)</label><textarea id="sys-email-text-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
+                            <div class="field field-wide"><label>E-Mail-Vorlage ${FieldHelp('Textbaustein für den Inhalt der Benachrichtigungs-E-Mail. Platzhalter wie {{ticketTitle}}, {{status}} und {{message}} werden beim Versand durch die jeweiligen Ticketdaten ersetzt.')}</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
+                            <div class="field field-wide"><label>Signatur (Text) ${FieldHelp('Textsignatur, die an jede reine Text-E-Mail angehängt wird, z. B. mit Firmenname und Kontaktdaten.')}</label><textarea id="sys-email-text-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
                             <div class="field">
                                 <label class="check-row">
                                     <input type="checkbox" id="sys-email-html-enabled">
                                     <span class="check-text"><strong>HTML-E-Mails aktivieren</strong><span>Benachrichtigungen zusätzlich mit HTML-Signatur und formatiertem Inhalt verschicken.</span></span>
                                 </label>
                             </div>
-                            <div class="field field-wide"><label>Signatur (HTML, nur bei aktiviertem HTML-Versand)</label><textarea id="sys-email-signature" rows="5" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
+                            <div class="field field-wide"><label>Signatur (HTML, nur bei aktiviertem HTML-Versand) ${FieldHelp('Formatierte HTML-Variante der Signatur (z. B. mit Logo oder Hervorhebungen), wird nur verwendet, wenn HTML-E-Mails oben aktiviert sind.')}</label><textarea id="sys-email-signature" rows="5" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
                             <div class="settings-section-title">${Icon('shield-check', 15)}Sicherheit und Zertifikate</div>
                             <div class="callout"><strong>E-Mail Sicherheit:</strong> Zertifikate und Schlüssel werden gespeichert und für Backend/SMTP-Integration bereitgestellt.</div>
                             <div class="form-grid">
-                                <div class="field"><label>Transport-Sicherheit</label><select id="sys-email-transport"><option value="starttls">STARTTLS erzwingen</option><option value="tls">TLS/SSL erzwingen</option><option value="opportunistic">Opportunistisch</option></select></div>
-                                <div class="field"><label>Zertifikatsprüfung</label><select id="sys-email-cert-mode"><option value="strict">Strikt pr&uuml;fen</option><option value="allow-self-signed">Self-signed erlauben</option><option value="disabled">Deaktiviert</option></select></div>
+                                <div class="field"><label>Transport-Sicherheit ${FieldHelp('Bestimmt, wie streng eine verschlüsselte Verbindung zum Mailserver erzwungen wird. "Erzwingen" bricht den Versand ab, wenn keine Verschlüsselung zustande kommt -- sicherer, aber ggf. inkompatibel mit sehr alten Servern. "Opportunistisch" versucht Verschlüsselung, versendet notfalls aber auch unverschlüsselt.')}</label><select id="sys-email-transport"><option value="starttls">STARTTLS erzwingen</option><option value="tls">TLS/SSL erzwingen</option><option value="opportunistic">Opportunistisch</option></select></div>
+                                <div class="field"><label>Zertifikatsprüfung ${FieldHelp('Legt fest, wie genau das TLS-Zertifikat des Mailservers geprüft wird. "Strikt" lehnt ungültige/selbstsignierte Zertifikate ab. "Self-signed erlauben" ist nur für interne Testserver gedacht. "Deaktiviert" prüft gar nicht und sollte nie in Produktion verwendet werden.')}</label><select id="sys-email-cert-mode"><option value="strict">Strikt pr&uuml;fen</option><option value="allow-self-signed">Self-signed erlauben</option><option value="disabled">Deaktiviert</option></select></div>
                             </div>
-                            <div class="field field-wide"><label>S/MIME Zertifikat (PEM)</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
-                            <div class="field field-wide"><label>S/MIME Private Key (PEM)</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+                            <div class="field field-wide"><label>S/MIME Zertifikat (PEM) ${FieldHelp('Öffentliches S/MIME-Zertifikat im PEM-Format, mit dem ausgehende E-Mails digital signiert werden -- Empfänger können damit die Echtheit des Absenders prüfen.')}</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+                            <div class="field field-wide"><label>S/MIME Private Key (PEM) ${FieldHelp('Zugehöriger privater Schlüssel zum S/MIME-Zertifikat. Wird verschlüsselt gespeichert und ausschließlich serverseitig zum Signieren verwendet -- niemals weitergeben.')}</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
                             <div class="form-grid">
-                                <div class="field"><label>Key-Passphrase</label><input id="sys-email-smime-pass" type="password" placeholder="Optional"></div>
-                                <div class="field"><label>DKIM Selector</label><input id="sys-email-dkim-selector" type="text" placeholder="default"></div>
+                                <div class="field"><label>Key-Passphrase ${FieldHelp('Optionales Passwort, falls der S/MIME Private Key selbst verschlüsselt gespeichert ist.')}</label><input id="sys-email-smime-pass" type="password" placeholder="Optional"></div>
+                                <div class="field"><label>DKIM Selector ${FieldHelp('Name des DKIM-Schlüssels, wie er im DNS-Eintrag der Domain veröffentlicht ist (z. B. "default"). Muss zum DNS-TXT-Eintrag passen, sonst schlägt die DKIM-Prüfung beim Empfänger fehl.')}</label><input id="sys-email-dkim-selector" type="text" placeholder="default"></div>
                             </div>
-                            <div class="field"><label>DKIM Domain</label><input id="sys-email-dkim-domain" type="text" placeholder="example.com"></div>
-                            <div class="field field-wide"><label>DKIM Private Key (PEM)</label><textarea id="sys-email-dkim-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+                            <div class="field"><label>DKIM Domain ${FieldHelp('Domain, für die die DKIM-Signatur ausgestellt wird -- muss mit der Absender-Domain übereinstimmen, damit Empfänger-Mailserver die Signatur akzeptieren.')}</label><input id="sys-email-dkim-domain" type="text" placeholder="example.com"></div>
+                            <div class="field field-wide"><label>DKIM Private Key (PEM) ${FieldHelp('Privater DKIM-Schlüssel, mit dem ausgehende E-Mails signiert werden, um Spoofing/Phishing-Filter positiv zu beeinflussen. Der zugehörige öffentliche Schlüssel muss als DNS-TXT-Eintrag unter dem gewählten Selector veröffentlicht sein.')}</label><textarea id="sys-email-dkim-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
                             <div class="setting-row">
                                 <span class="hint" id="sys-smtp-status"></span>
                                 <button class="btn-secondary btn-sm" id="sys-smtp-save-test" type="button">${Icon('send', 15)}Speichern &amp; Test-E-Mail senden</button>
@@ -2554,6 +2566,35 @@ export const AdminBoard = {
         q('#sys-outlook-mailbox').value = outlook.mailbox || '';
         q('#sys-outlook-sync').checked = !!outlook.syncIncoming;
         q('#sys-outlook-create').checked = !!outlook.createTicketsFromMail;
+        const outlookServer = await Store.getOutlookConfig();
+        q('#sys-outlook-secret').value = '';
+        q('#sys-outlook-secret').placeholder = outlookServer?.hasClientSecret ? 'Leer lassen = unverändert' : 'Client-Secret eingeben';
+        q('#sys-outlook-status').textContent = outlookServer?.enabled && outlookServer?.hasClientSecret
+            ? 'Outlook-Integration ist konfiguriert.' : 'Outlook-Integration ist noch nicht vollständig konfiguriert.';
+        q('#sys-outlook-save').onclick = async () => {
+            const secret = q('#sys-outlook-secret').value;
+            const configOk = await Store.updateServerSettings({
+                config: {
+                    outlookConfig: {
+                        enabled: q('#sys-outlook-enabled').checked,
+                        tenantId: q('#sys-outlook-tenant').value.trim(),
+                        clientId: q('#sys-outlook-client').value.trim(),
+                        mailbox: q('#sys-outlook-mailbox').value.trim()
+                    }
+                }
+            });
+            const secretOk = secret ? await Store.updateOutlookSecret(secret) : true;
+            if (configOk && secretOk) {
+                UI.toast('Outlook-Einstellungen gespeichert.');
+                q('#sys-outlook-secret').value = '';
+                const refreshed = await Store.getOutlookConfig();
+                q('#sys-outlook-secret').placeholder = refreshed?.hasClientSecret ? 'Leer lassen = unverändert' : 'Client-Secret eingeben';
+                q('#sys-outlook-status').textContent = refreshed?.enabled && refreshed?.hasClientSecret
+                    ? 'Outlook-Integration ist konfiguriert.' : 'Outlook-Integration ist noch nicht vollständig konfiguriert.';
+            } else {
+                UI.toast('Speichern fehlgeschlagen.');
+            }
+        };
 
         const accEditable = settings.accountConfig?.editable || {};
         q('#sys-acc-name').checked = accEditable.name !== false;
@@ -3713,6 +3754,7 @@ export const AdminBoard = {
                 <label>
                     <input type="checkbox" ${todo.done ? 'checked' : ''} ${t.archived ? 'disabled' : ''}>
                     <span>${esc(todo.content)}</span>
+                    ${todo.done && todo.done_at ? `<span class="todo-done-at" title="Erledigt am">${Icon('check', 11)}${Utils.esc(Utils.fmtDate(todo.done_at))}</span>` : ''}
                 </label>
                 <div class="todo-meta">
                     ${todo.assignee_username ? `<span class="badge">${Icon('user-round', 12)}${esc(getName(todo.assignee_username))}</span>` : '<span class="badge">Nicht zugewiesen</span>'}
@@ -5327,6 +5369,117 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    // Legt über das Backend (Microsoft Graph, App-only -- siehe graphClient.ts) einen echten
+    // Outlook-Kalendertermin an und verknüpft ihn mit dem Ticket. Start wird mit der bestehenden
+    // Lösungsfrist vorbelegt (falls vorhanden), damit die Frist direkt auch im Kalender sichtbar
+    // gemacht werden kann.
+    openCalendarEventModal: async (id) => {
+        const tickets = await Store.getTickets();
+        const t = tickets.find(x => x.id === id);
+        if (!t) return;
+        q('#calendar-event-modal')?.remove();
+        const modal = AdminBoard.createGenericModal();
+        modal.id = 'calendar-event-modal';
+        modal.querySelector('.modal-header h3').textContent = 'Outlook-Termin erstellen';
+
+        const settings = await Store.getSettings();
+        const dueMs = t.customDueAt ? new Date(t.customDueAt).getTime() : Store.ticketSlaDueAt(t, settings);
+        const startMs = dueMs || (Date.now() + 60 * 60 * 1000);
+        const endMs = startMs + 30 * 60 * 1000;
+        const startInitial = new Date(startMs);
+        const endInitial = new Date(endMs);
+
+        const existingEvents = await Store.getTicketCalendarEvents(id);
+        const eventsListHtml = existingEvents.length
+            ? `<div class="field"><label>Bereits erstellte Termine</label><ul class="calendar-event-list">${existingEvents.map(e =>
+                `<li>${Icon('calendar-check', 13)}${Utils.esc(e.subject)} -- ${Utils.esc(Utils.fmtDate(e.startAt))}${e.webLink ? ` <a href="${Utils.esc(e.webLink)}" target="_blank" rel="noopener">${Icon('external-link', 11)}</a>` : ''}</li>`
+            ).join('')}</ul></div>`
+            : '';
+
+        modal.querySelector('.modal-body').innerHTML = `
+            ${eventsListHtml}
+            <div class="field"><label>Betreff</label><input id="cal-event-subject" type="text" value="${Utils.esc(`${t.ticketNumber || ''} ${t.title || ''}`.trim())}" maxlength="512"></div>
+            <div class="form-grid">
+                <div class="field">
+                    <label>Beginn</label>
+                    <div class="date-input-row">
+                        <input id="cal-event-start-date" type="text" inputmode="numeric" placeholder="31.12.2026" value="${Utils.fmtDateOnly(startInitial)}">
+                        <button type="button" class="btn-ghost btn-icon" id="cal-event-start-calendar-btn" title="Kalender öffnen" aria-label="Kalender öffnen">${Icon('calendar', 16)}</button>
+                    </div>
+                    <input id="cal-event-start-time" type="text" inputmode="numeric" placeholder="17:00" value="${Utils.fmtTimeOnly(startInitial)}">
+                </div>
+                <div class="field">
+                    <label>Ende</label>
+                    <div class="date-input-row">
+                        <input id="cal-event-end-date" type="text" inputmode="numeric" placeholder="31.12.2026" value="${Utils.fmtDateOnly(endInitial)}">
+                        <button type="button" class="btn-ghost btn-icon" id="cal-event-end-calendar-btn" title="Kalender öffnen" aria-label="Kalender öffnen">${Icon('calendar', 16)}</button>
+                    </div>
+                    <input id="cal-event-end-time" type="text" inputmode="numeric" placeholder="17:30" value="${Utils.fmtTimeOnly(endInitial)}">
+                </div>
+            </div>
+            <div id="cal-event-start-dtp-host" style="display:none;">${UI.dateTimePickerMarkup('cal-event-start-dtp')}</div>
+            <div id="cal-event-end-dtp-host" style="display:none;">${UI.dateTimePickerMarkup('cal-event-end-dtp')}</div>
+            <div class="field"><label>Notiz (im Termin sichtbar)</label><textarea id="cal-event-notes" rows="3" maxlength="5000"></textarea></div>
+            <p class="hint">Legt den Termin direkt im konfigurierten Outlook-Postfach an (Systemeinstellungen &gt; Outlook). Ist die Integration nicht konfiguriert, erscheint eine entsprechende Fehlermeldung.</p>
+        `;
+        const startDtp = UI.createDateTimePicker(q('#cal-event-start-dtp'), {
+            value: startMs,
+            anchor: q('#cal-event-start-calendar-btn'),
+            onChange: (ms) => {
+                if (!ms) return;
+                const d = new Date(ms);
+                q('#cal-event-start-date').value = Utils.fmtDateOnly(d);
+                q('#cal-event-start-time').value = Utils.fmtTimeOnly(d);
+            }
+        });
+        const endDtp = UI.createDateTimePicker(q('#cal-event-end-dtp'), {
+            value: endMs,
+            anchor: q('#cal-event-end-calendar-btn'),
+            onChange: (ms) => {
+                if (!ms) return;
+                const d = new Date(ms);
+                q('#cal-event-end-date').value = Utils.fmtDateOnly(d);
+                q('#cal-event-end-time').value = Utils.fmtTimeOnly(d);
+            }
+        });
+        q('#cal-event-start-calendar-btn').onclick = () => startDtp.open();
+        q('#cal-event-end-calendar-btn').onclick = () => endDtp.open();
+        UI.bindDateInput(q('#cal-event-start-date'));
+        UI.bindTimeInput(q('#cal-event-start-time'));
+        UI.bindDateInput(q('#cal-event-end-date'));
+        UI.bindTimeInput(q('#cal-event-end-time'));
+
+        modal.querySelector('.modal-footer .btn-primary').textContent = 'Termin erstellen';
+        modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
+            const startPickedMs = Utils.parseGermanDateTime(q('#cal-event-start-date').value, q('#cal-event-start-time').value);
+            const endPickedMs = Utils.parseGermanDateTime(q('#cal-event-end-date').value, q('#cal-event-end-time').value);
+            const subject = q('#cal-event-subject').value.trim();
+            if (!subject) { UI.toast('Bitte einen Betreff eingeben.'); return; }
+            if (!startPickedMs || !endPickedMs || endPickedMs <= startPickedMs) { UI.toast('Bitte ein gültiges Beginn/Ende wählen.'); return; }
+
+            const result = await Store.createTicketCalendarEvent(id, {
+                subject,
+                notes: q('#cal-event-notes').value.trim() || undefined,
+                start_at: new Date(startPickedMs).toISOString(),
+                end_at: new Date(endPickedMs).toISOString()
+            });
+            if (!result) {
+                const errMap = {
+                    outlook_not_configured: 'Outlook-Integration ist nicht vollständig konfiguriert (Systemeinstellungen > Outlook).',
+                    outlook_auth_failed: 'Anmeldung bei Microsoft Graph fehlgeschlagen -- Tenant-/Client-ID oder Client-Secret prüfen.',
+                    outlook_event_create_failed: 'Der Termin konnte nicht angelegt werden -- Postfach/Berechtigung bei Microsoft Graph prüfen.'
+                };
+                UI.toast(errMap[Store.lastError] || 'Termin konnte nicht erstellt werden.');
+                return;
+            }
+            await Store.addLog(t, 'Outlook-Termin erstellt', subject);
+            modal.classList.remove('open');
+            UI.toast('Termin erstellt.');
+        };
+        modal.classList.add('open');
+        if (window.lucide) lucide.createIcons();
+    },
+
     // type/incident_notice sind keine flachen Felder in Store.saveTickets -- direkter PATCH.
     toggleMajorIncident: async (id) => {
         const tickets = await Store.getTickets();
@@ -5789,6 +5942,8 @@ export const AdminBoard = {
             q('#ticket-modal .modal')?.classList.toggle('is-sla-overdue', !!slaCountdown?.overdue);
             const slaEditBtn = q('#m-sla-edit');
             if (slaEditBtn) slaEditBtn.onclick = () => AdminBoard.openCustomDueModal(t.id);
+            const calendarEventBtn = q('#m-calendar-event-btn');
+            if (calendarEventBtn) calendarEventBtn.onclick = () => AdminBoard.openCalendarEventModal(t.id);
 
             // Populate Priority
             if (prioSel) {

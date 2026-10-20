@@ -155,8 +155,24 @@ export interface AppSettingsTable {
   ldap_bind_password_enc: Nullable<Buffer>;
   ldap_base_dn: Nullable<string>;
   ldap_user_filter: Nullable<string>;
+  // App-only-Client-Secret für Microsoft Graph (Outlook-Kalenderintegration) -- verschlüsselt
+  // wie smtp_password_enc/ldap_bind_password_enc, nie im Klartext in config_json.
+  outlook_client_secret_enc: Nullable<Buffer>;
   created_at: CreatedAt;
   updated_at: UpdatedAt;
+}
+
+// Protokolliert, welche Outlook/Graph-Kalendertermine zu welchem Ticket angelegt wurden.
+export interface TicketCalendarEventsTable {
+  id: string;
+  ticket_id: string;
+  graph_event_id: string;
+  web_link: Nullable<string>;
+  subject: string;
+  start_at: UpdatedAt;
+  end_at: UpdatedAt;
+  created_by_user_id: Nullable<string>;
+  created_at: CreatedAt;
 }
 
 export interface CategoriesTable {
@@ -300,6 +316,8 @@ export interface TicketTodosTable {
   assignee_user_id: Nullable<string>;
   assignee_username: Nullable<string>;
   done: ColumnType<boolean, boolean, boolean>;
+  // Zeitpunkt, an dem "done" zuletzt auf true gesetzt wurde -- wird neben dem Text angezeigt.
+  done_at: NullableTimestamp;
   created_by_user_id: Nullable<string>;
   created_at: CreatedAt;
 }
@@ -448,6 +466,7 @@ export interface Database {
   ticket_participants: TicketParticipantsTable;
   ticket_relations: TicketRelationsTable;
   ticket_time_entries: TicketTimeEntriesTable;
+  ticket_calendar_events: TicketCalendarEventsTable;
   attachments: AttachmentsTable;
   kb_article_attachments: KbArticleAttachmentsTable;
   ticket_audit_log: TicketAuditLogTable;

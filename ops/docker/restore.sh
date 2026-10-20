@@ -86,7 +86,7 @@ EOF
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
   cnf="$1"; db="$2"
   trap "rm -f \"$cnf\"" EXIT
-  exec mariadb --defaults-extra-file="$cnf" "$db"
+  mariadb --defaults-extra-file="$cnf" "$db"
 ' _ "$CNF_PATH" "$DB_NAME" < "$WORK_DIR/database.sql"
 
 echo "==> Stelle Schlüssel (KEK) und TLS-Zertifikate wieder her..."

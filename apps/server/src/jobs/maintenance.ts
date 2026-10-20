@@ -20,7 +20,7 @@ import type { Database } from '../db/types.js';
 import type { Env } from '../config/env.js';
 import type { KeyProvider } from '../crypto/keyProvider.js';
 import { ensureDek } from '../crypto/dekService.js';
-import { fieldCipher } from '../crypto/fieldCrypto.js';
+import { fieldCipher, decryptFieldTolerant } from '../crypto/fieldCrypto.js';
 import { randomUUID } from 'node:crypto';
 import { mysqlTimestamp } from '../db/date.js';
 import { buildTicketNumber } from '../domain/ticketNumber.js';
@@ -187,10 +187,11 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
         action: 'waiting_reminder_sent'
       }).execute();
       // Security-Audit N10: waiting_message ist jetzt AES-256-GCM-verschlüsselt (tickets.ts).
+      // R-2: tolerant entschlüsseln -- siehe fieldCrypto.ts decryptFieldTolerant.
       let waitingMessageText: string | null = null;
       if (t.waiting_message) {
         const dek = await ensureDek(deps.db, deps.keyProvider, 'tickets.waiting_message');
-        waitingMessageText = fieldCipher.decryptField(t.waiting_message, dek.rawDek, {
+        waitingMessageText = decryptFieldTolerant(t.waiting_message, dek.rawDek, {
           installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
           tableName: 'tickets', recordId: t.id, fieldName: 'waiting_message', keyVersion: dek.keyVersion
         });

@@ -23,9 +23,17 @@ import type { Database } from './types.js';
 // schreiben. Ohne konfiguriertes Laufzeit-Konto (Rückwärtskompatibilität) bleibt das Verhalten
 // unverändert wie vor diesem Update.
 export function createDb(env: Env, purpose: 'migrate' | 'runtime' = 'runtime'): Kysely<Database> {
-  const credentials = purpose === 'runtime' && env.DB_RUNTIME_USER && env.DB_RUNTIME_PASSWORD
+  const useRuntimeAccount = purpose === 'runtime' && !!env.DB_RUNTIME_USER && !!env.DB_RUNTIME_PASSWORD;
+  const credentials = useRuntimeAccount
     ? { user: env.DB_RUNTIME_USER, password: env.DB_RUNTIME_PASSWORD }
     : { user: env.DB_USER, password: env.DB_PASSWORD };
+  if (!credentials.user || !credentials.password) {
+    // Security-Audit N9: DB_USER/DB_PASSWORD sind jetzt optional (der App-Container bekommt sie
+    // absichtlich nicht mehr) -- ohne diese klare Meldung würde mysql2 nur mit einer kryptischen
+    // Fehlermeldung über eine fehlgeschlagene Authentifizierung mit "undefined" scheitern.
+    const needed = purpose === 'migrate' ? 'DB_USER/DB_PASSWORD' : 'DB_RUNTIME_USER/DB_RUNTIME_PASSWORD oder DB_USER/DB_PASSWORD';
+    throw new Error(`Keine Datenbank-Zugangsdaten für Zweck "${purpose}" konfiguriert -- ${needed} wird benötigt.`);
+  }
   const pool = createPool({
     host: env.DB_HOST,
     port: env.DB_PORT,

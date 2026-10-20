@@ -15,7 +15,7 @@ import { requireSession, requireAdmin } from './session.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
-import { fieldCipher, computeBlindIndex } from '../../crypto/fieldCrypto.js';
+import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
 
@@ -70,8 +70,12 @@ function encryptContactField(value: string, dek: { rawDek: Buffer; keyVersion: n
   });
 }
 
+// Security-Audit R-2: tolerant entschlüsseln (siehe fieldCrypto.ts decryptFieldTolerant) -- diese
+// vier Felder wurden per Migration 0035 nachträglich auf verschlüsselt umgestellt, ohne
+// vorhandene Klartextwerte selbst zu verschlüsseln. db/reencryptLegacy.ts behebt das automatisch
+// bei jedem migrate.js-Lauf; dieser tolerante Fallback ist nur das zusätzliche Sicherheitsnetz.
 function decryptContactField(stored: Buffer, dek: { rawDek: Buffer; keyVersion: number }, deps: UsersRouteDeps, recordId: string, fieldName: string): string {
-  return fieldCipher.decryptField(stored, dek.rawDek, {
+  return decryptFieldTolerant(stored, dek.rawDek, {
     installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'users', recordId, fieldName, keyVersion: dek.keyVersion
   });

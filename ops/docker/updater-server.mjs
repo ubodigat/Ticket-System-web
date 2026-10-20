@@ -8,16 +8,42 @@ const token = process.env.UPDATE_TOKEN || '';
 const repoDir = process.env.REPO_DIR || '/workspace';
 const branch = process.env.UPDATE_BRANCH || 'main';
 const allowMainDeploy = process.env.UPDATE_ALLOW_MAIN_DEPLOY === 'true';
-// Security-Audit N3: optionale, zusaetzliche Haertung -- verlangt eine gueltige GPG-Signatur auf
-// dem Ziel-Commit, bevor gemergt wird. Ohne dies koennte ein kompromittiertes GitHub-Konto (oder
-// ein kompromittierter Push-Zugang) beliebigen Code einschleusen, den der Updater unbesehen auf
-// jede aktualisierende Installation ausrollt. Erfordert, dass der vertrauenswuerdige oeffentliche
-// Schluessel vorab in den GPG-Keyring des Updater-Containers importiert wurde (z.B. per
-// gemountetem Verzeichnis mit "gpg --import"); ohne importierten Schluessel schlaegt die
-// Verifikation IMMER fehl (sicher by default: kein stiller Fallback auf "ungeprueft").
-const requireSignedCommits = process.env.UPDATE_REQUIRE_SIGNED_COMMITS === 'true';
+// Security-Audit N3/R-Nachfolge: verlangt eine gueltige GPG-Signatur auf dem Ziel-Commit, bevor
+// gemergt wird. Ohne dies koennte ein kompromittiertes GitHub-Konto (oder ein kompromittierter
+// Push-Zugang) beliebigen Code einschleusen, den der Updater unbesehen auf jede aktualisierende
+// Installation ausrollt. UPDATE_REQUIRE_SIGNED_COMMITS=true/false erzwingt das Verhalten explizit;
+// ohne gesetzten Wert wird beim Start selbst geprueft, ob bereits ein oeffentlicher Schluessel
+// importiert wurde (z.B. per gemountetem Keyring-Verzeichnis + "gpg --import") -- ist einer
+// vorhanden, gilt die Pruefung automatisch als Pflicht (sicher by default, sobald ein Schluessel
+// konfiguriert ist), sonst bleibt sie aus (Ruecksicht auf Installationen ohne Schluessel, die
+// sonst nie mehr updaten koennten). Kein importierter Schluessel bedeutet IMMER, dass eine
+// aktivierte Pruefung fehlschlaegt -- kein stiller Fallback auf "ungeprueft".
+let requireSignedCommits = process.env.UPDATE_REQUIRE_SIGNED_COMMITS === 'true';
+if (process.env.UPDATE_REQUIRE_SIGNED_COMMITS === undefined) {
+  const keyCheck = await run('gpg', ['--list-keys', '--with-colons'], { timeoutMs: 10000 });
+  requireSignedCommits = keyCheck.code === 0 && keyCheck.out.split('\n').some(line => line.startsWith('pub:'));
+  if (requireSignedCommits) {
+    console.log('UPDATE_REQUIRE_SIGNED_COMMITS nicht gesetzt, aber ein GPG-Schluessel ist importiert -- Signaturpruefung automatisch aktiviert.');
+  }
+}
 const composeFile = `${repoDir}/ops/docker/docker-compose.yml`;
 const envFile = `${repoDir}/ops/docker/.env`;
+
+// Security-Audit N9/R-4: der laufende App-Container hat DB_USER/DB_PASSWORD (volle DDL-Rechte)
+// nicht mehr in seiner staendigen Umgebung (siehe docker-compose.yml) -- fuer den kurzlebigen
+// Migrations-Aufruf aus der EIGENEN Umgebung des Updater-Containers eingespielt. "-e KEY=VALUE"
+// an "docker compose run" waere wieder ein Passwort als Kommandozeilenargument (R-4-Begruendung
+// gilt hier genauso) -- stattdessen liest der gestartete Container die Werte selbst per stdin aus
+// einer temporaeren Datei, genau wie beim DB-Dump in backup.sh.
+async function runMigrate() {
+  return run('docker', [
+    'compose', '-f', composeFile, '--env-file', envFile, 'run', '--rm', '--no-deps', '-T', 'app', 'sh', '-c',
+    'set -e; envf="$(mktemp)"; trap "rm -f \\"$envf\\"" EXIT; cat > "$envf"; set -a; . "$envf"; set +a; node dist/db/migrate.js'
+  ], {
+    timeoutMs: 120000,
+    input: `DB_USER=${process.env.DB_USER || ''}\nDB_PASSWORD=${process.env.DB_PASSWORD || ''}\n`
+  });
+}
 // Ausserhalb des Arbeitsverzeichnisses (innerhalb von .git statt im Working Tree), damit sie nie
 // als "lokale Aenderung" in "git status --porcelain" auftaucht und dadurch faelschlich ein
 // zukuenftiges Update blockiert.
@@ -128,7 +154,7 @@ async function writeHistory(entry) {
 // timeoutMs: 15s fuer /status-Abfragen (git fetch/rev-parse/rev-list), unbegrenzt fuer den
 // eigentlichen Build/Deploy-Lauf (kann je nach Hardware mehrere Minuten dauern).
 function run(command, args, options = {}) {
-  const { timeoutMs = 0, ...spawnOptions } = options;
+  const { timeoutMs = 0, input, ...spawnOptions } = options;
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd: repoDir, shell: false, ...spawnOptions });
     let out = '';
@@ -138,6 +164,11 @@ function run(command, args, options = {}) {
       timedOut = true;
       child.kill('SIGKILL');
     }, timeoutMs) : null;
+    if (typeof input === 'string') {
+      child.stdin.end(input);
+    } else {
+      child.stdin.end();
+    }
     child.stdout.on('data', chunk => { out += chunk.toString(); });
     child.stderr.on('data', chunk => { err += chunk.toString(); });
     child.on('close', code => {
@@ -202,6 +233,15 @@ async function runUpdate(expectedCommit) {
     if (result.err) job.log.push(result.err);
     if (result.code !== 0) throw new Error(`${label} failed`);
   };
+  // Eigene Variante fuer runMigrate() (DB-Zugangsdaten per stdin statt -e, siehe oben) statt
+  // direkt "run('docker', [...])" wie bei den anderen Schritten.
+  const stepResult = async (label, resultPromise) => {
+    job.step = label;
+    const result = await resultPromise;
+    if (result.out) job.log.push(result.out);
+    if (result.err) job.log.push(result.err);
+    if (result.code !== 0) throw new Error(`${label} failed`);
+  };
 
   try {
     await step('fetch', 'git', ['fetch', 'origin', branch]);
@@ -228,7 +268,8 @@ async function runUpdate(expectedCommit) {
     await step('reset', 'git', ['merge', '--ff-only', target.out]);
     await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'build', '--no-cache', 'app']);
     await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', 'office']);
-    await step('migrate', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'run', '--rm', '--no-deps', 'app', 'node', 'dist/db/migrate.js']);
+    job.log.push('$ docker compose run --rm --no-deps app node dist/db/migrate.js (Zugangsdaten per stdin)');
+    await stepResult('migrate', runMigrate());
     await step('restart', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', '--no-deps', '--force-recreate', '--wait', '--wait-timeout', '180', 'app']);
     job.ok = true;
     job.step = 'done';
@@ -340,7 +381,7 @@ createServer(async (req, res) => {
     // aeussert sich als generische 500er auf vielen, scheinbar unzusammenhaengenden Routen).
     if (req.method === 'POST' && req.url === '/migrate') {
       if (job?.running) return json(res, 409, { error: 'update_already_running', job });
-      const result = await run('docker', ['compose', '-f', composeFile, '--env-file', envFile, 'run', '--rm', '--no-deps', 'app', 'node', 'dist/db/migrate.js'], { timeoutMs: 120000 });
+      const result = await runMigrate();
       return json(res, result.code === 0 ? 200 : 500, { ok: result.code === 0, log: [result.out, result.err].filter(Boolean).join('\n') });
     }
     if (req.method === 'POST' && req.url === '/rollback') {

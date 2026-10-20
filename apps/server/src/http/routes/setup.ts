@@ -82,6 +82,18 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
     }
     const input = parsed.data;
 
+    // Security-Audit R-3: fail-closed statt fail-open -- fehlt SETUP_TOKEN (z.B. manuelle
+    // Installation/eigene .env ohne diese Variable), war das Setup bisher komplett offen wie vor
+    // Einführung des Tokens. In Produktion wird das Setup jetzt ohne konfiguriertes Token
+    // abgelehnt; nur NODE_ENV=development erlaubt es weiterhin ohne Token (lokale Entwicklung).
+    if (!deps.env.SETUP_TOKEN && deps.env.NODE_ENV !== 'development') {
+      return reply.code(503).send({
+        type: 'about:blank',
+        title: 'Setup-Token nicht konfiguriert',
+        status: 503,
+        detail: 'SETUP_TOKEN ist nicht gesetzt. In Produktion ist die Einrichtung aus Sicherheitsgründen ohne dieses Token gesperrt -- siehe ops/docker/.env bzw. install.sh.'
+      });
+    }
     // Konstante Vergleichszeit statt "!==": ein zeitbasiertes Signal auf den Setup-Token wäre
     // sonst ein (schwaches, aber unnötiges) Orakel, genau wie beim Update-Token.
     if (deps.env.SETUP_TOKEN) {

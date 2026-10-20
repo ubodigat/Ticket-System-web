@@ -70,7 +70,7 @@ docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
   cnf="$(mktemp)"
   cat > "$cnf"
   trap "rm -f \"$cnf\"" EXIT
-  exec mariadb-dump --defaults-extra-file="$cnf" --single-transaction --routines --triggers "$1"
+  mariadb-dump --defaults-extra-file="$cnf" --single-transaction --routines --triggers "$1"
 ' _ "$DB_NAME" > "$WORK_DIR/database.sql" <<EOF
 [client]
 user=$DB_USER
