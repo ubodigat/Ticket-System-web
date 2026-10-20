@@ -63,12 +63,26 @@ export interface AppDeps {
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
-    bodyLimit: 20 * 1024 * 1024,
+    // Security-Audit N2: 20MB galt bisher global, auch für unauthentifizierte Endpunkte
+    // (Login, Setup) -- ein beliebiger Absender konnte so jede Anfrage mit bis zu 20MB Body
+    // aufblähen, bevor überhaupt Auth/Validierung greift. 2MB deckt alle normalen JSON-Bodies
+    // mit Marge ab; die einzelnen Upload-Routen (Anhänge, CSV-Import) setzen ihr eigenes,
+    // höheres bodyLimit in der Route-Config.
+    bodyLimit: 2 * 1024 * 1024,
     logger: {
       level: deps.env.NODE_ENV === 'production' ? 'info' : 'debug',
       redact: ['req.headers.cookie', 'req.headers.authorization']
     },
-    trustProxy: deps.env.TRUSTED_PROXY_HOPS > 0
+    // Security-Audit N1: "true" vertraut der GESAMTEN X-Forwarded-For-Kette unbedingt (beliebig
+    // viele, vom Client frei wählbare Hops) -- req.ip könnte dadurch auf eine vom Client
+    // vorgetäuschte Adresse zeigen und IP-basiertes Rate-Limiting/Logging umgehbar machen.
+    // Fastify/@fastify/proxy-addr mit einer Hop-Zahl vertraut nur so vielen Einträgen, wie
+    // tatsächlich eigene, bekannte Proxys (hier: Caddy) in der Kette stehen.
+    // fastify.d.ts deklariert trustProxy nur als boolean|string|string[]|TrustProxyFunction, aber
+    // @fastify/proxy-addr (das Fastify darunter nutzt) unterstuetzt eine Hop-Zahl zur Laufzeit
+    // sehr wohl (siehe node_modules/fastify/test/trust-proxy.test.js "trustProxy: 1") -- reine
+    // Typdefinitionsluecke, kein Laufzeitproblem.
+    trustProxy: (deps.env.TRUSTED_PROXY_HOPS > 0 ? deps.env.TRUSTED_PROXY_HOPS : false) as unknown as boolean
   });
 
   app.decorate('db', deps.db);
@@ -109,13 +123,29 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         return;
       }
       const dbSession = await deps.db.selectFrom('sessions')
-        .select(['revoked_at', 'expires_at'])
+        .select(['revoked_at', 'expires_at', 'last_seen_at'])
         .where('id', '=', parsed.sid)
         .where('user_id', '=', parsed.uid)
         .executeTakeFirst();
       if (!dbSession || dbSession.revoked_at || timestampMillis(dbSession.expires_at) <= Date.now()) {
         req.ticketSession = null;
         return;
+      }
+      // Idle-Timeout (Security-Audit): unabhaengig von der absoluten Sitzungsdauer oben --
+      // eine Sitzung ohne jede Aktivitaet seit mehr als idleTimeoutMinutes wird endgueltig
+      // widerrufen (nicht nur fuer diese eine Anfrage verworfen), damit ein gestohlenes, lange
+      // ungenutztes Cookie nicht beliebig spaeter doch noch funktioniert.
+      const lastSeen = timestampMillis(dbSession.last_seen_at);
+      if (lastSeen > 0 && Date.now() - lastSeen > policy.idleTimeoutMinutes * 60 * 1000) {
+        await deps.db.updateTable('sessions').set({ revoked_at: new Date() }).where('id', '=', parsed.sid).execute();
+        req.ticketSession = null;
+        return;
+      }
+      // Nur alle ~60s tatsaechlich schreiben (nicht bei jeder einzelnen Anfrage) -- reduziert
+      // Schreiblast bei sehr aktiven Sitzungen (z.B. Polling), ohne die Idle-Erkennung oben
+      // nennenswert zu verzoegern.
+      if (Date.now() - lastSeen > 60 * 1000) {
+        await deps.db.updateTable('sessions').set({ last_seen_at: new Date() }).where('id', '=', parsed.sid).execute();
       }
       const row = await deps.db.selectFrom('users')
         .select(['username', 'role', 'account_archived', 'locked_until', 'locked_permanent'])
@@ -172,7 +202,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerRecurringRoutes(app);
   registerTodoRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerMfaRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
-  registerUpdateRoutes(app, { env: deps.env });
+  registerUpdateRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerStaticAssetRoutes(app);
 
   return app;

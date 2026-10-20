@@ -15,11 +15,12 @@ import { routeError } from './routeError.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
-import { fieldCipher } from '../../crypto/fieldCrypto.js';
+import { fieldCipher, computeBlindIndex } from '../../crypto/fieldCrypto.js';
 import { sendMail, sendMailSafe } from '../../mail/mailer.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { convertOfficePreview, discardOfficePreview } from '../../documents/officePreview.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
+import { scanIfConfigured } from '../../domain/antivirus.js';
 
 export interface ExtrasRouteDeps {
   env: Env;
@@ -117,19 +118,37 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
     return permissions[key] === true;
   }
 
-  // POST /api/v2/mail/send - echter SMTP-Versand aus der Oberflaeche.
-  // Vorher loggte Store.sendEmail nur im Browser und meldete trotzdem "gesendet".
-  app.post('/api/v2/mail/send', async (req, reply) => {
+  // POST /api/v2/mail/send - SMTP-Versand aus der Oberfläche (M-1: gegen offenes Relay gehärtet).
+  // Nur für Admins erlaubt; Empfänger muss ein bekanntes Konto der eigenen Instanz sein.
+  app.post('/api/v2/mail/send', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
     try {
-      requireSession(req);
+      const session = requireAdmin(req);
       const parsed = sendMailSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+
+      const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
+      const blindIdx = computeBlindIndex(blindIndexDek.rawDek, parsed.data.to.trim().toLowerCase());
+      const known = await app.db.selectFrom('users').select('id')
+        .where('email_blind_idx', '=', blindIdx).executeTakeFirst();
+      if (!known) return reply.code(403).send({ error: 'recipient_not_allowed' });
+
       await sendMail(
         { db: app.db, env: deps.env, keyProvider: deps.keyProvider },
         parsed.data.to,
         parsed.data.subject,
         parsed.data.body
       );
+
+      await app.db.insertInto('global_audit_log').values({
+        id: randomUUID(),
+        actor_user_id: session.uid,
+        actor_username: session.username,
+        action: 'mail.sent',
+        target_type: 'user',
+        target_id: known.id,
+        detail_json: null
+      }).execute();
+
       return reply.send({ success: true });
     } catch (e: any) {
       if (e?.message === 'smtp_not_configured') return reply.code(409).send({ error: 'smtp_not_configured' });
@@ -450,7 +469,9 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
     } catch (error) { return routeError(app, reply, error); }
   });
 
-  app.post('/api/v2/attachments', async (req, reply) => {
+  // bodyLimit höher als der globale 2MB-Standard (N2 im Security-Audit): Anhänge bis 15MB
+  // kommen base64-kodiert im JSON-Body (~33% Overhead) plus Metadaten.
+  app.post('/api/v2/attachments', { bodyLimit: 21 * 1024 * 1024 }, async (req, reply) => {
     try {
       const session = requireSession(req);
       const parsed = attachmentSchema.safeParse(req.body);
@@ -470,6 +491,19 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
         dataB64: parsed.data.data_b64,
         maxSizeBytes: 15 * 1024 * 1024
       });
+
+      // Virenscan (B7, optional -- siehe domain/antivirus.ts), erst NACH der günstigeren
+      // Magic-Byte-/Inhaltsprüfung oben.
+      await scanIfConfigured(deps.env, validated.buffer);
+
+      // Tagesquote pro Konto prüfen (max. 200 MB in 24 Stunden, B7)
+      const used = await app.db.selectFrom('attachments')
+        .select(eb => eb.fn.sum<number>('size_bytes').as('total'))
+        .where('uploaded_by_user_id', '=', session.uid)
+        .where('created_at', '>=', new Date(Date.now() - 86400000)).executeTakeFirst();
+      if (Number(used?.total ?? 0) + validated.sizeBytes > 200 * 1024 * 1024) {
+        return reply.code(429).send({ error: 'upload_quota_exceeded' });
+      }
 
       const id = randomUUID();
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');

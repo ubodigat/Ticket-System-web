@@ -14,11 +14,20 @@ networks:
   # von "edge" gehalten, damit der Updater nicht von Caddy aus erreichbar wird.
   egress:
     driver: bridge
+  # Security-Audit B7 (Virenscan): app<->clamav, isoliert wie "office".
+  clamav:
+    driver: bridge
+    internal: true
+  # Eigenes, NICHT isoliertes Netz nur für ClamAV (freshclam braucht Internetzugang für
+  # Signatur-Updates) -- getrennt von "egress"/dem Updater gehalten, gleiche Begründung wie oben.
+  clamav-egress:
+    driver: bridge
 
 volumes:
   mariadb-data:
   caddy-data:
   caddy-config:
+  clamav-data:
 
 services:
   mariadb:
@@ -34,6 +43,11 @@ services:
       - mariadb-data:/var/lib/mysql
       - ../tls/mariadb:/etc/mysql/tls:ro
       - ./mariadb/conf.d:/etc/mysql/conf.d:ro
+      # Security-Audit N9: legt (nur bei einer frischen/leeren Datenbank, offizielles Verhalten
+      # von /docker-entrypoint-initdb.d) das eingeschraenkte Laufzeit-DB-Konto an -- siehe
+      # install.sh und db/connection.ts. Von install.sh generiert, enthaelt das echte Passwort,
+      # daher nicht versioniert (.gitignore).
+      - ./mariadb/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -46,7 +60,10 @@ services:
       context: ../..
       dockerfile: ops/docker/Dockerfile.server
     restart: unless-stopped
-    networks: [internal, edge, office]
+    # "clamav" ist immer in der Netzliste, auch wenn der Dienst selbst ohne das Profil
+    # "antivirus" (install.sh --enable-antivirus) nie gestartet wird -- harmlos, das Netz
+    # existiert dann einfach ohne Teilnehmer auf der anderen Seite.
+    networks: [internal, edge, office, clamav]
     depends_on:
       mariadb:
         condition: service_healthy
@@ -61,6 +78,11 @@ services:
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
+      # Security-Audit N9: eingeschraenktes Laufzeit-Konto (nur DML), falls von install.sh
+      # eingerichtet; DB_USER/DB_PASSWORD bleiben nur fuer den Migrations-Schritt (CMD unten)
+      # mit vollen DDL-Rechten reserviert.
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER:-}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD:-}
       DB_SSL_CA_PATH: /run/secrets/mariadb-ca.pem
       DB_SSL_REJECT_UNAUTHORIZED: "true"
       KEK_FILE_PATH: /run/secrets/app.kek
@@ -70,6 +92,11 @@ services:
       OFFICE_PREVIEW_URL: http://office:3000
       UPDATE_SERVICE_URL: ${UPDATE_SERVICE_URL:-}
       UPDATE_TOKEN: ${UPDATE_TOKEN:-}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      # Security-Audit B7 (Virenscan): leer = Scan deaktiviert (Rueckwaertskompatibilitaet /
+      # Installationen ohne das optionale "antivirus"-Profil, siehe install.sh --enable-antivirus).
+      CLAMAV_HOST: ${CLAMAV_HOST:-}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
     volumes:
       - ../secrets/app.kek:/run/secrets/app.kek:ro
       - ../tls/mariadb/ca.pem:/run/secrets/mariadb-ca.pem:ro
@@ -79,6 +106,27 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # Security-Audit B7 (Virenscan): optional, per Profil (install.sh --enable-antivirus) --
+  # Signatur-Datenbank braucht beim ersten Start mehrere Minuten + Internetzugang (freshclam) und
+  # laufend ca. 1-2GB RAM, daher nicht standardmaessig aktiv.
+  clamav:
+    image: clamav/clamav-debian:1.4
+    restart: unless-stopped
+    profiles: ["antivirus"]
+    networks: [clamav, clamav-egress]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 3g
+    cpus: 2
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
 
   office:
     image: gotenberg/gotenberg:8.38.1
@@ -113,9 +161,18 @@ services:
       UPDATE_BRANCH: main
       UPDATE_TOKEN: ${UPDATE_TOKEN}
       UPDATE_ALLOW_MAIN_DEPLOY: ${UPDATE_ALLOW_MAIN_DEPLOY:-false}
+      # Security-Audit N3: optional, Standard aus (Rueckwaertskompatibilitaet -- erfordert einen
+      # vorab importierten GPG-Schluessel im Container, siehe updater-server.mjs).
+      UPDATE_REQUIRE_SIGNED_COMMITS: ${UPDATE_REQUIRE_SIGNED_COMMITS:-false}
     volumes:
       - ${UPDATE_REPO_DIR:-/opt/ticket-system}:${UPDATE_REPO_DIR:-/opt/ticket-system}
       - /var/run/docker.sock:/var/run/docker.sock
+      # Security-Audit N3: UPDATE_REQUIRE_SIGNED_COMMITS=true verlangt zusaetzlich einen
+      # importierten GPG-Keyring -- da ein fest einprogrammierter Mount eines nicht vorhandenen
+      # Pfads den Container-Start fuer alle anderen (Standard-)Installationen zum Scheitern
+      # bringen wuerde, wird dieser Mount NICHT hier, sondern ueber eine lokale
+      # docker-compose.override.yml ergaenzt (z.B. "- /pfad/zum/keyring:/home/node/.gnupg:ro"),
+      # siehe CHANGES.md.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3099/health',{headers:{authorization:'Bearer '+process.env.UPDATE_TOKEN}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -134,6 +191,7 @@ services:
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
+      TLS_POLICY: ${TLS_POLICY:-internal}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

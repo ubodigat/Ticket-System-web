@@ -186,7 +186,16 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
         id: randomUUID(), ticket_id: t.id, actor_user_id: null, actor_username: 'system',
         action: 'waiting_reminder_sent'
       }).execute();
-      await notifyTicketAuthor(deps, t, `Erinnerung: Wir warten noch auf deine Antwort.${t.waiting_message ? ' ' + t.waiting_message : ''}`);
+      // Security-Audit N10: waiting_message ist jetzt AES-256-GCM-verschlüsselt (tickets.ts).
+      let waitingMessageText: string | null = null;
+      if (t.waiting_message) {
+        const dek = await ensureDek(deps.db, deps.keyProvider, 'tickets.waiting_message');
+        waitingMessageText = fieldCipher.decryptField(t.waiting_message, dek.rawDek, {
+          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+          tableName: 'tickets', recordId: t.id, fieldName: 'waiting_message', keyVersion: dek.keyVersion
+        });
+      }
+      await notifyTicketAuthor(deps, t, `Erinnerung: Wir warten noch auf deine Antwort.${waitingMessageText ? ' ' + waitingMessageText : ''}`);
       reminded++;
     }
   }

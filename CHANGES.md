@@ -1,5 +1,189 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-20 - In-App-Update gehärtet statt entfernt (N3, Fortsetzung)
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Auf Nachfrage: statt die In-App-Update-Funktion komplett durch einen Host-systemd-Umbau zu
+  ersetzen (siehe vorheriger Eintrag, N3 "bewusst zurückgestellt"), bekommt die bestehende
+  Funktion mehrere unabhängige, zusätzliche Verteidigungsschichten:
+  - **Step-up-Bestätigung:** `POST /api/v2/update/run|migrate|rollback` verlangen jetzt zusätzlich
+    zu "nur Superadmin" das aktuelle Passwort (und bei aktiver 2FA den TOTP-Code) direkt vor der
+    Ausführung -- eine gekaperte/offen gelassene Admin-Session allein reicht nicht mehr, um Code
+    auf dem Server auszuführen (`update.ts` `requireStepUp`, Oberfläche fragt beides in einem
+    neuen Bestätigungsdialog ab, `admin-board.js` `confirmStepUp`).
+  - **Commit-Pinning ("Prüfsumme"):** die Oberfläche muss den exakten Ziel-Commit-Hash
+    mitschicken, den sie zuletzt angezeigt hat; stimmt er nicht mit dem aktuellen Stand bei GitHub
+    überein (z. B. weil zwischen Ansehen und Bestätigen ein neuer Commit gepusht wurde), wird
+    abgebrochen (`409 commit_mismatch`) statt blind den jeweils neuesten Stand zu übernehmen.
+    Wird serverseitig sowohl in der App (`update.ts`) als auch unabhängig davon nochmal im
+    Updater-Dienst selbst geprüft (`updater-server.mjs`, gegen TOCTOU zwischen beiden Aufrufen).
+  - **Signierte, Replay-geschützte Kommunikation App↔Updater:** zusätzlich zum bisherigen
+    Bearer-Token wird jede Anfrage mit HMAC-SHA256 (Schlüssel: `UPDATE_TOKEN`) über
+    Methode+Pfad+Zeitstempel+Einmal-Nonce+Body signiert; der Updater verlangt ein enges
+    30-Sekunden-Zeitfenster und verwirft bereits gesehene Nonces (`updater-server.mjs`
+    `verifyHmac`) -- ein Mitschnitt des internen Docker-Netzwerkverkehrs lässt sich dadurch nicht
+    wiederholen.
+  - **Rollback:** der Updater merkt sich den Commit von vor jedem erfolgreichen Update
+    (`.git/ticket-system-update-history.json`, bewusst außerhalb des Arbeitsverzeichnisses, damit
+    er nie als "lokale Änderung" ein künftiges Update blockiert) und kann gezielt (wieder mit
+    Step-up + Commit-Pinning) dorthin zurückgesetzt werden (`POST /api/v2/update/rollback`, neuer
+    Button in der Oberfläche, nur sichtbar wenn ein Rollback-Ziel bekannt ist). Wichtige
+    Einschränkung, im Log nach jedem Rollback und hier dokumentiert: ein Rollback setzt nur den
+    CODE zurück, nicht automatisch das Datenbank-Schema (Migrationen sind nur vorwärts gerichtet)
+    -- enthielt das rückgängig gemachte Update Migrationen, kann das zu Inkompatibilitäten führen;
+    im Zweifel zusätzlich ein Datenbank-Backup von vor dem Update wiederherstellen
+    (`ops/docker/restore.sh`).
+  - Jede Aktion (Trigger, abgelehnter Commit-Mismatch, Migration, Rollback) landet mit Akteur und
+    Zeitpunkt im globalen Audit-Log.
+  - Bereits vorhandene, unverändert gültige Schutzschichten: `UPDATE_ALLOW_MAIN_DEPLOY` (Opt-in,
+    Standard aus), `git merge --ff-only` statt `reset --hard` beim normalen Update, Abbruch bei
+    lokalen Änderungen, optionale GPG-Signaturprüfung (`UPDATE_REQUIRE_SIGNED_COMMITS`).
+  - `apps/server/test/update.test.ts` auf die neue Step-up-/Commit-Pinning-/Signatur-Logik
+    umgestellt (95 statt 91 Tests insgesamt, 4 neue Fälle für das gehärtete Verhalten).
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-20 - Zweite Welle: auch die bewusst zurückgestellten Audit-Punkte (N-2, N3, N7-Rest, N9, N10, N14, B7-Rest) geschlossen
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Direkte Fortsetzung des Eintrags "Behebung aller im externen Security-Audit ... gefundenen
+  offenen Lücken" weiter unten -- die dort als "bewusst noch nicht umgesetzt" aufgeführten Punkte
+  sind jetzt ebenfalls behoben, auf expliziten Wunsch ("Alles muss geschlossen werden"):
+  - **N-2 Sicherheitseinstellungen ohne Wirkung (jetzt wirksam):** `mailer.ts` wertet
+    `transportSecurity`/`certificateValidation` jetzt tatsächlich für die SMTP-Verbindung aus
+    (TLS-Pflicht nur noch bei "opportunistic" deaktivierbar; Zertifikatsprüfung nur bei
+    "allow-self-signed"/"disabled" gelockert). DKIM-Signierung über nodemailers eingebaute
+    Unterstützung, sobald Domain/Selector/privater Schlüssel hinterlegt sind. S/MIME-Signierung
+    (neu: `domain/smime.ts`) baut die komplette signierte MIME-Nachricht über die `openssl
+    smime`-CLI (RFC 8551) und übergibt sie via `raw` an nodemailer -- bewusst ohne zusätzliches
+    npm-Paket, da das einzige verbreitete reine-JS-CMS/S-MIME-Paket (node-forge) zum Prüfzeitpunkt
+    einen offenen, ungepatchten High-Schwachstellen-Eintrag hatte (GHSA-86w9-cpqp-85rv); `openssl`
+    läuft wie beim Updater mit `shell:false`/Array-Argumenten. Dockerfile.server installiert
+    `openssl` im Runtime-Image nach.
+  - **N3 Updater (weitere Härtung):** neue, standardmäßig deaktivierte Option
+    `UPDATE_REQUIRE_SIGNED_COMMITS=true` -- verlangt `git verify-commit` gegen einen vorab in den
+    Updater-Container importierten GPG-Keyring, bevor gemergt wird (schützt gegen ein
+    kompromittiertes GitHub-Konto). Der eigentliche, vom Audit vorgeschlagene Vollumbau
+    ("Updates nur noch per Host-systemd, Token nicht im App-Container") würde das bestehende
+    "Update installieren"-Bedienkonzept in der Oberfläche ersetzen -- das ist eine Produktentscheidung,
+    keine reine Code-Änderung, und wurde hier bewusst NICHT einseitig vorgenommen. Siehe G.
+  - **N7 (Rest) LDAP-Freischaltung pro Konto:** neue Spalte `ldap_login_enabled` (Migration 0033,
+    Standard `false` für jedes Konto); nur eine Superadmin-Person kann es je Zielkonto umschalten
+    (neuer Schalter im Benutzer-Editor, nur für Superadmins sichtbar). Vorherige Session hatte nur
+    Superadmin-Konten pauschal ausgeschlossen -- jetzt ist LDAP für JEDES Konto standardmäßig aus,
+    nicht nur für Superadmins.
+  - **N9 Kein Least-Privilege-DB-Konto:** neues, optionales `DB_RUNTIME_USER`/`DB_RUNTIME_PASSWORD`
+    mit nur `SELECT, INSERT, UPDATE, DELETE` (kein `ALTER`/`CREATE`/`DROP`) für den Laufzeitbetrieb;
+    Migrationen laufen weiterhin mit dem vollen `DB_USER`/`DB_PASSWORD`-Konto (`db/connection.ts`
+    `createDb(env, 'migrate' | 'runtime')`). `install.sh` generiert das Konto automatisch und legt
+    es bei einer frischen Installation über `/docker-entrypoint-initdb.d` an; bei einer
+    bestehenden Installation (Datenbank schon initialisiert) läuft ein Best-Effort-Versuch direkt
+    nach dem MariaDB-Healthcheck -- gelingt er nicht (DB_USER ohne GRANT OPTION), bleibt die
+    Installation nutzbar und fällt automatisch auf das bisherige Verhalten zurück (siehe Warnung
+    in der Installer-Ausgabe; die GRANT-Anweisungen stehen dann in
+    `ops/docker/mariadb/initdb.d/10-runtime-user.sql`).
+  - **N10 Uneinheitliche Verschlüsselung:** `approval_text`/`waiting_message` (Tickets, Migration
+    0034) sowie `phone`/`mobile`/`job_title`/`office_location` (Benutzerkonten, Migration 0035)
+    sind jetzt AES-256-GCM-verschlüsselt wie title/description/name/email -- vorher Klartext in
+    der Datenbank. `department`/`department_group_id` bleiben bewusst Klartext (werden für
+    Gruppen-/Kategorie-Zuordnung gebraucht, nicht Teil dieses Befunds, siehe bestehender
+    Code-Kommentar). CSV-Export/-Import, Benutzerverzeichnis und die Erinnerungs-Mail für
+    "Warten auf Antwort"-Tickets (`jobs/maintenance.ts`) wurden entsprechend angepasst.
+  - **N14 Backups:** `ops/docker/backup.sh`/`restore.sh` nutzen jetzt `gpg` (symmetrisch, AES256,
+    mit Integritätsschutz/MDC) statt `openssl enc` mit unauthentifiziertem AES-256-CBC -- ein
+    verändertes Archiv wird beim Entschlüsseln jetzt als manipuliert erkannt statt nur als
+    kaputtes tar. Weder das DB-Passwort noch die Backup-Passphrase landen noch als
+    Kommandozeilenargument (vorher über `ps aux` für jeden lokalen Prozess auf dem Host sichtbar)
+    -- beide laufen über eine temporäre MySQL-Optionsdatei bzw. einen separaten
+    Dateideskriptor (`--passphrase-fd 3`). Dieselbe Härtung wurde auch auf die in der ersten Welle
+    ergänzte N9-Hilfsroutine in `install.sh` angewendet (dort war beim Schreiben derselbe
+    Fehler unterlaufen).
+  - **B7 (Rest) Virenscan:** neuer, optionaler ClamAV-Dienst (`install.sh --enable-antivirus`,
+    Compose-Profil `antivirus`, eigenes isoliertes Netz + eigenes Netz nur für
+    Signatur-Updates) -- `domain/antivirus.ts` spricht das clamd-INSTREAM-Protokoll direkt über
+    TCP (bewusst ohne npm-Zusatzpaket). Läuft NACH der bereits vorhandenen Magic-Byte-/
+    Inhaltsprüfung in `domain/fileValidation.ts`. Ohne `CLAMAV_HOST` (Standard) bleibt das
+    Verhalten unverändert; ist er gesetzt, ist der Scan verbindlich -- ein nicht erreichbarer
+    ClamAV-Dienst lässt den Upload mit 503 fehlschlagen statt den Scan still zu überspringen.
+    Nicht standardmäßig aktiv (ca. 1-2GB RAM, mehrminütiger Erstlauf für den
+    Signatur-Datenbank-Download).
+  - Ergänzend: `install.sh` unterstützt jetzt `--domain=` und `--acme-email=` für ein
+    vertrauenswürdiges Let's-Encrypt-Zertifikat (siehe vorheriger CHANGES.md-Eintrag, B5) sowie
+    `--enable-antivirus`; README.md aktualisiert.
+- Damit sind alle in B./C. des Audits gelisteten Befunde mit konkretem Code-/Konfigurationsbezug
+  behoben oder (N3 Vollumbau) bewusst als Produktentscheidung zurückgestellt und transparent
+  benannt -- siehe G. "Restore testen" (N14) und "echte Produktivnutzung/Entscheidung zu Domain,
+  LDAP, HTML-Mails etc." (G.1-G.9 des Audits) bleiben organisatorische/betriebliche Punkte, die
+  sich nicht durch Code allein beantworten lassen.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
+## 2026-10-20 - Behebung aller im externen Security-Audit (Commit a215bc5) gefundenen offenen Lücken
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Grundlage: externer Security-Audit-Bericht ("Security-Audit: Ticket-System-web", 20.10.2026,
+  @Simon Prior). M-1 (offenes Mail-Relay) war zu Beginn dieser Sitzung bereits durch eine parallele
+  Änderung behoben; alle übrigen Hoch/Mittel-Befunde sowie mehrere Niedrig-Befunde wurden jetzt
+  behoben:
+  - **B4 (Hoch) Setup-Übernahme nach Installation:** `install.sh` erzeugt jetzt ein Einmal-Token
+    (`SETUP_TOKEN`), gibt es nur in der Konsolenausgabe aus; `POST /api/v1/setup/complete`
+    vergleicht es mit `timingSafeEqual` (`setup.ts`), das Setup-Formular hat ein neues Token-Feld.
+  - **B5 (Hoch) Kein vertrauenswürdiges TLS:** `tls internal` gilt nur noch für IP-Adressen/
+    localhost/`--dev`; mit `install.sh --domain=... --acme-email=...` bezieht Caddy automatisch
+    ein echtes Let's-Encrypt-Zertifikat (`Caddyfile`, `TLS_POLICY`-Umgebungsvariable).
+  - **B6 (Mittel) Nicht-Admins legen Großstörungen an:** `POST /api/v2/tickets` erzwingt
+    `type='ticket'` und kein `incident_notice` für alle außer Admin/Superadmin (`tickets.ts`).
+  - **B9 (Mittel) Rohes HTML in der Wissensdatenbank:** `sanitizeServerHtml` beim Anlegen/Ändern
+    von KB-Artikeln (`knowledge.ts`), `Utils.sanitizeRichHtml` beim Rendern im Frontend
+    (`admin-board.js`) -- schließt auch Altbestände.
+  - **B12 (Mittel) Gespeicherte SMTP/LDAP-Passwörter an neue Ziele:** bei geändertem Host/Port
+    (SMTP) bzw. geänderter URL (LDAP) ist jetzt ein neues Passwort Pflicht; LDAP erlaubt nur noch
+    `ldaps://` (`settings.ts`).
+  - **B3 (Mittel) 2FA-Neueinrichtung ohne Passwort:** bei bereits aktiver 2FA verlangt
+    `POST /api/v2/mfa/setup` jetzt das aktuelle Passwort; das neue Secret landet in der neuen
+    Spalte `totp_pending_secret_enc` und wird erst durch `/mfa/confirm` mit gültigem Code
+    aktiviert -- das aktive Secret bleibt bis dahin unverändert in Kraft (Migration 0030).
+  - **M-2 (Mittel) HTML-Injection in ausgehenden Mails:** Nutzereingaben werden vor dem Einfügen
+    in den HTML-Teil escaped; nur die Admin-gepflegte Signatur bleibt HTML (`mailer.ts`).
+  - **M-3 (Mittel) Admins übernehmen höher berechtigte Admins:** `change-password`, `mfa-reset`,
+    PATCH und DELETE auf ein fremdes Admin-Konto (nicht nur Superadmin-Ziele) sind jetzt
+    Superadmins vorbehalten (`users.ts`).
+  - **M-4 (Niedrig) Status gesperrter Konten per Zeitmessung erkennbar:** auch für gesperrte/
+    archivierte Konten läuft jetzt ein `argon2.verify()`, damit die Antwortzeit nicht verrät, dass
+    das Konto existiert (`auth.ts`).
+  - **M-5 (Niedrig) Interne Konfiguration für alle lesbar:** `GET /api/v2/settings` liefert
+    `emailAdvancedConfig`/`outlookConfig`/`securityConfig` nur noch an Admin/Superadmin
+    (`settings.ts`).
+  - **M-6 (Niedrig) Kein Schutz des letzten Superadmins:** Herabstufung, Sperre, Archivierung und
+    Löschung des letzten aktiven Superadmin-Kontos sind blockiert (`assertNotLastSuperadmin`,
+    `users.ts`).
+  - **N1 (Niedrig) trustProxy als Boolean:** nutzt jetzt die konfigurierte Hop-Zahl
+    (`TRUSTED_PROXY_HOPS`) statt pauschal der gesamten X-Forwarded-For-Kette zu vertrauen
+    (`app.ts`).
+  - **N2 (Niedrig) Body-Limit 20MB global:** global auf 2MB gesenkt; Anhänge/KB-Anhänge/
+    CSV-Import setzen ihr eigenes, höheres Limit auf Routenebene.
+  - **N4 (Niedrig) Passwortrichtlinie uneinheitlich:** API-Mindestlänge jetzt 14 Zeichen wie beim
+    Setup-Assistenten (`users.ts`, `admin-board.js`).
+  - **N6 (Niedrig) TOTP-Replay:** neue Spalte `totp_last_step` (Migration 0031) plus
+    `domain/totp.ts` verhindern Mehrfachverwendung desselben Codes innerhalb seines
+    Gültigkeitsfensters, race-sicher über eine bedingte UPDATE-Anweisung.
+  - **N7 (Mittel) LDAP als Zweitpasswort auch für Superadmins:** Superadmin-Konten sind vom
+    LDAP-Fallback jetzt ausgenommen, nur das lokale Passwort zählt (`auth.ts`).
+  - **N11 (Mittel) Ticket-Zusammenführung ohne Transaktion:** läuft jetzt vollständig in einer
+    Transaktion mit Zeilensperre auf beiden Tickets (`tickets.ts`).
+  - **N12 (Niedrig) `priority` im PATCH als freier String:** auf dieselben vier gültigen Stufen
+    wie bei der Ticket-Neuanlage beschränkt (`tickets.ts`).
+  - **N13 (Niedrig) `/health` öffentlich erreichbar:** über den öffentlichen Caddy-Origin jetzt
+    gesperrt (404); der Docker-Healthcheck läuft weiterhin direkt im internen Netz.
+  - Nebenbei behoben: ein Test-Mock in `attachment-rights.test.ts` unterstützte die neue
+    Tagesquote-Prüfung (B7) noch nicht und lieferte dadurch einen falschen 500er.
+- Bewusst noch NICHT umgesetzt (zu großer Umfang für diese Änderung, nicht sicherheitskritisch
+  im Sinne einer akuten Ausnutzbarkeit): N-2 (TLS-/Zertifikats-/DKIM-/S-MIME-Optionen im Mailer
+  tatsächlich auswerten), N3 (Updater durch Host-systemd mit signierten Release-Tags ersetzen),
+  N7 (LDAP-Freischaltung pro Konto statt nur Superadmin-Ausnahme), N9 (getrennte DB-Konten für
+  Migration/Laufzeit), N10 (restliche Klartextfelder verschlüsseln), N14 (Backup-Härtung), Idle-
+  Timeout für Sessions, B7-Rest (Upload-Allowlist statt Blockliste, Virenscan). Diese bleiben als
+  offene Punkte für eine Folgeänderung.
+- Herkunft: https://github.com/ubodigat/Ticket-System-web
+- Quellcode der veröffentlichten Version: lokale Arbeitskopie, noch nicht veröffentlicht
+
 ## 2026-10-20 - Fehlgeschlagenes Update erneut installierbar
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Bisher war der Knopf "Update installieren" deaktiviert, sobald kein neuer Commit auf GitHub

@@ -16,12 +16,18 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/ticket-system}"
 DEV_MODE=false
 ASSUME_YES=true
 ENABLE_UPDATES=false
+ENABLE_ANTIVIRUS=false
+PUBLIC_DOMAIN_ARG=""
+ACME_EMAIL_ARG=""
 
 for arg in "$@"; do
   case "$arg" in
     --dev) DEV_MODE=true ;;
     --no-assume-yes) ASSUME_YES=false ;;
     --enable-updates) ENABLE_UPDATES=true ;;
+    --enable-antivirus) ENABLE_ANTIVIRUS=true ;;
+    --domain=*) PUBLIC_DOMAIN_ARG="${arg#--domain=}" ;;
+    --acme-email=*) ACME_EMAIL_ARG="${arg#--acme-email=}" ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -169,8 +175,35 @@ ensure_public_env_defaults() {
     set_env_var "UPDATE_TOKEN" "$(openssl rand -base64 48)" "$ENV_FILE"
   fi
 
-  if ! grep -q '^PUBLIC_DOMAIN=' "$ENV_FILE" || grep -Eq '^PUBLIC_DOMAIN=(localhost|127\.0\.0\.1)?$' "$ENV_FILE"; then
+  if [[ -n "$PUBLIC_DOMAIN_ARG" ]]; then
+    set_env_var "PUBLIC_DOMAIN" "$PUBLIC_DOMAIN_ARG" "$ENV_FILE"
+  elif ! grep -q '^PUBLIC_DOMAIN=' "$ENV_FILE" || grep -Eq '^PUBLIC_DOMAIN=(localhost|127\.0\.0\.1)?$' "$ENV_FILE"; then
     set_env_var "PUBLIC_DOMAIN" "$primary_ip" "$ENV_FILE"
+  fi
+
+  if [[ -n "$ACME_EMAIL_ARG" ]]; then
+    set_env_var "ACME_EMAIL" "$ACME_EMAIL_ARG" "$ENV_FILE"
+  fi
+
+  # Security-Audit B5: "tls internal" (selbstsigniertes Caddy-CA-Zertifikat, löst
+  # Browser-Zertifikatswarnungen aus) ist nur für IP-Adressen/localhost/--dev sinnvoll -- Let's
+  # Encrypt kann dafür ohnehin kein öffentlich vertrauenswürdiges Zertifikat ausstellen. Wurde
+  # eine echte Domain per --domain übergeben (oder steht bereits eine in .env), nutzt Caddy
+  # automatisch ACME/Let's Encrypt (siehe Caddyfile: "tls {$TLS_POLICY:internal}").
+  local current_domain
+  current_domain="$(grep '^PUBLIC_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)"
+  local current_acme_email
+  current_acme_email="$(grep '^ACME_EMAIL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)"
+  if [[ "$DEV_MODE" == "true" || -z "$current_domain" || "$current_domain" == "localhost" \
+        || "$current_domain" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$current_domain" == "127.0.0.1" ]]; then
+    set_env_var "TLS_POLICY" "internal" "$ENV_FILE"
+  else
+    if [[ -z "$current_acme_email" || "$current_acme_email" == "admin@example.invalid" ]]; then
+      warn "PUBLIC_DOMAIN ($current_domain) looks like a real domain, but no --acme-email was given and ACME_EMAIL in .env is still the placeholder. Falling back to tls internal (browser warnings) until a real ACME_EMAIL is set."
+      set_env_var "TLS_POLICY" "internal" "$ENV_FILE"
+    else
+      set_env_var "TLS_POLICY" "$current_acme_email" "$ENV_FILE"
+    fi
   fi
 }
 
@@ -278,8 +311,11 @@ else
   DB_NAME="ticketsystem"
   DB_USER="ticketapp"
   DB_PASSWORD="$(openssl rand -base64 32)"
+  DB_RUNTIME_USER="${DB_USER}_rt"
+  DB_RUNTIME_PASSWORD="$(openssl rand -base64 32)"
   COOKIE_SECRET="$(openssl rand -base64 48)"
   UPDATE_TOKEN="$(openssl rand -base64 48)"
+  SETUP_TOKEN="$(openssl rand -hex 32)"
   INSTALLATION_ID="$(make_uuid)"
 
   DEFAULT_IP=$(detect_primary_ip)
@@ -287,8 +323,11 @@ else
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
+DB_RUNTIME_USER=$DB_RUNTIME_USER
+DB_RUNTIME_PASSWORD=$DB_RUNTIME_PASSWORD
 COOKIE_SECRET=$COOKIE_SECRET
 UPDATE_TOKEN=$UPDATE_TOKEN
+SETUP_TOKEN=$SETUP_TOKEN
 INSTALLATION_ID=$INSTALLATION_ID
 HTTP_PORT=80
 HTTPS_PORT=443
@@ -299,14 +338,61 @@ EOF
   chmod 600 "$ENV_FILE"
 fi
 
+# Security-Audit N9: eingeschraenktes Laufzeit-DB-Konto fuer Installationen von VOR diesem
+# Update nachtragen (neue Installationen bekommen es bereits oben in .env).
+if ! grep -q '^DB_RUNTIME_USER=' "$ENV_FILE"; then
+  EXISTING_DB_USER="$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2)"
+  set_env_var "DB_RUNTIME_USER" "${EXISTING_DB_USER}_rt" "$ENV_FILE"
+  set_env_var "DB_RUNTIME_PASSWORD" "$(openssl rand -base64 32)" "$ENV_FILE"
+fi
+
+# Security-Audit N9: SQL, das /docker-entrypoint-initdb.d beim allerersten Start einer LEEREN
+# MariaDB-Datenbank automatisch ausfuehrt (offizielles mariadb-Image-Verhalten, laeuft intern mit
+# vollen Rechten) -- legt das Laufzeit-Konto mit nur SELECT/INSERT/UPDATE/DELETE an (kein ALTER/
+# CREATE/DROP/INDEX). Bei einer bereits initialisierten Datenbank (Upgrade einer bestehenden
+# Installation) greift dieser Mechanismus NICHT mehr -- der Best-Effort-Versuch weiter unten
+# (nach dem MariaDB-Healthcheck) deckt diesen Fall ab, soweit DB_USER dafuer ausreichende Rechte
+# hat; falls nicht, bleibt die Installation nutzbar (DB_RUNTIME_USER/-PASSWORD werden dann
+# schlicht nicht verwendet, siehe db/connection.ts Fallback auf DB_USER).
+MARIADB_INITDB_DIR="$COMPOSE_DIR/mariadb/initdb.d"
+mkdir -p "$MARIADB_INITDB_DIR" 2>/dev/null || true
+RUNTIME_USER_FOR_SQL="$(grep '^DB_RUNTIME_USER=' "$ENV_FILE" | cut -d= -f2)"
+RUNTIME_PASSWORD_FOR_SQL="$(grep '^DB_RUNTIME_PASSWORD=' "$ENV_FILE" | cut -d= -f2)"
+DB_NAME_FOR_SQL="$(grep '^DB_NAME=' "$ENV_FILE" | cut -d= -f2)"
+cat > "$MARIADB_INITDB_DIR/10-runtime-user.sql" <<EOF
+CREATE USER IF NOT EXISTS '${RUNTIME_USER_FOR_SQL}'@'%' IDENTIFIED BY '${RUNTIME_PASSWORD_FOR_SQL}';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`${DB_NAME_FOR_SQL}\`.* TO '${RUNTIME_USER_FOR_SQL}'@'%';
+FLUSH PRIVILEGES;
+EOF
+chmod 600 "$MARIADB_INITDB_DIR/10-runtime-user.sql"
+
+# Wer zwischen Installation und erstem Setup-Aufruf die Server-IP erreicht, würde sonst das
+# erste (Superadmin-)Konto anlegen können (B4 im Security-Audit) -- Installationen von vor
+# diesem Fix bekommen das Token bei einem erneuten install.sh-Lauf nachgetragen.
+if ! grep -q '^SETUP_TOKEN=' "$ENV_FILE"; then
+  set_env_var "SETUP_TOKEN" "$(openssl rand -hex 32)" "$ENV_FILE"
+fi
+
 ensure_public_env_defaults
 
+COMPOSE_PROFILES_LIST=""
 if [[ "$ENABLE_UPDATES" == "true" ]]; then
   log "Enabling in-app updates (the updater requires Docker host privileges)"
-  set_env_var "COMPOSE_PROFILES" "dangerous-updater" "$ENV_FILE"
+  COMPOSE_PROFILES_LIST="${COMPOSE_PROFILES_LIST:+$COMPOSE_PROFILES_LIST,}dangerous-updater"
   set_env_var "UPDATE_SERVICE_URL" "http://updater:3099" "$ENV_FILE"
   set_env_var "UPDATE_ALLOW_MAIN_DEPLOY" "true" "$ENV_FILE"
   set_env_var "UPDATE_REPO_DIR" "$SCRIPT_DIR" "$ENV_FILE"
+fi
+if [[ "$ENABLE_ANTIVIRUS" == "true" ]]; then
+  # Security-Audit B7: ClamAV-Virenscan fuer Anhaenge, optional (deutlicher Ressourcenbedarf --
+  # ca. 1-2GB RAM, erster Start dauert wegen des Signatur-Downloads mehrere Minuten).
+  log "Enabling ClamAV virus scanning for attachments (several minutes on first start, ~1-2GB RAM)"
+  COMPOSE_PROFILES_LIST="${COMPOSE_PROFILES_LIST:+$COMPOSE_PROFILES_LIST,}antivirus"
+  set_env_var "CLAMAV_HOST" "clamav" "$ENV_FILE"
+  set_env_var "CLAMAV_PORT" "3310" "$ENV_FILE"
+fi
+if [[ -n "$COMPOSE_PROFILES_LIST" ]]; then
+  set_env_var "COMPOSE_PROFILES" "$COMPOSE_PROFILES_LIST" "$ENV_FILE"
 fi
 
 KEK_PATH="$SECRETS_DIR/app.kek"
@@ -368,12 +454,46 @@ until run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$
   sleep 3
 done
 
+log "Ensuring restricted runtime database account exists (Security-Audit N9)"
+# Best-Effort fuer Installationen, deren MariaDB-Datenvolume schon vor diesem Update existierte
+# -- /docker-entrypoint-initdb.d (oben) greift nur bei einer frischen, leeren Datenbank. Schlaegt
+# dies fehl (DB_USER ohne CREATE USER/GRANT OPTION), bleibt die Installation trotzdem lauffaehig:
+# db/connection.ts faellt dann auf DB_USER/DB_PASSWORD fuer den Laufzeitbetrieb zurueck.
+# DB_USER/DB_PASSWORD werden ueber eine temporaere Optionsdatei im Container uebergeben, nie als
+# "-p..."-Kommandozeilenargument (N14-Begruendung gilt hier genauso: sonst ueber "ps aux" fuer
+# jeden lokalen Prozess auf diesem Host sichtbar). Zwei Schritte, weil der zweite Aufruf stdin
+# fuer das SQL-Skript braucht und die Zugangsdaten deshalb nicht erneut per stdin bekommen kann.
+{
+  N9_CNF_PATH="$(run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T mariadb sh -c '
+    umask 077
+    cnf="$(mktemp)"
+    cat > "$cnf"
+    printf "%s" "$cnf"
+  ' <<EOF2
+[client]
+user=$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2)
+password=$(grep '^DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2)
+EOF2
+)"
+  run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T mariadb sh -c '
+    cnf="$1"; db="$2"
+    trap "rm -f \"$cnf\"" EXIT
+    exec mariadb --defaults-extra-file="$cnf" "$db"
+  ' _ "$N9_CNF_PATH" "$(grep '^DB_NAME=' "$ENV_FILE" | cut -d= -f2)" \
+    < "$MARIADB_INITDB_DIR/10-runtime-user.sql"
+} >/dev/null 2>&1 \
+  && log "Runtime database account ready" \
+  || warn "Could not create/verify the restricted runtime database account automatically (DB_USER likely lacks CREATE USER/GRANT privileges on an existing installation). The app will keep using DB_USER for runtime queries until this is resolved manually; see CHANGES.md (N9) for the GRANT statements in $MARIADB_INITDB_DIR/10-runtime-user.sql."
+
 log "Running database migrations"
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps app node dist/db/migrate.js
 
 log "Starting application stack"
 if grep -q '^UPDATE_ALLOW_MAIN_DEPLOY=true$' "$ENV_FILE"; then
   run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile dangerous-updater up -d --build --force-recreate updater
+fi
+if [[ "$ENABLE_ANTIVIRUS" == "true" ]]; then
+  run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile antivirus up -d --force-recreate clamav
 fi
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate --remove-orphans app caddy
 
@@ -410,7 +530,10 @@ cat <<EOF
   Installation completed.
   Ticket system URL: $PUBLIC_URL
   Setup URL:         ${PUBLIC_URL}/setup
-  Open the URL in your browser and complete the setup assistant.
+  Setup token:       $(grep '^SETUP_TOKEN=' "$ENV_FILE" | cut -d= -f2)
+  Open the URL in your browser and complete the setup assistant. The setup
+  assistant will ask for the setup token above before creating the first
+  (superadmin) account -- keep it secret until setup is complete.
 
   If the browser on another device shows ERR_CONNECTION_REFUSED:
     1. Check that you open the HTTPS URL above, not only the bare IP address.

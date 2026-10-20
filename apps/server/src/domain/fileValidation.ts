@@ -142,27 +142,46 @@ export async function validateUploadedFile(params: {
     throw { statusCode: 400, message: 'blocked_script_content' };
   }
 
-  // 5. Tiefe MIME-Erkennung mit file-type
+  // 5. Tiefe MIME-Erkennung mit file-type & strikte Allowlist (B7)
   const detected = await fileTypeFromBuffer(buffer);
-  let finalMime = ((params.declaredMimeType || 'application/octet-stream').toLowerCase().split(';')[0] ?? '').trim();
+
+  // Strikte Whitelist erlaubter Dokument-, Bild- und Textformate
+  const ALLOWED_EXTENSIONS = new Map<string, string>([
+    ['.pdf', 'application/pdf'],
+    ['.png', 'image/png'],
+    ['.jpg', 'image/jpeg'],
+    ['.jpeg', 'image/jpeg'],
+    ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    ['.txt', 'text/plain'],
+    ['.csv', 'text/csv'],
+    ['.log', 'text/plain']
+  ]);
+
+  if (!ALLOWED_EXTENSIONS.has(ext)) {
+    throw { statusCode: 400, message: 'extension_not_allowed' };
+  }
+
+  const expectedMime = ALLOWED_EXTENSIONS.get(ext)!;
+  const isTextual = ['.txt', '.csv', '.log'].includes(ext);
 
   if (detected) {
-    // Wenn file-type einen gefährlichen Typ erkennt -> blockieren
+    // Wenn file-type einen gefährlichen Typ erkennt -> sofort blockieren
     for (const blocked of BLOCKED_MIME_PREFIXES) {
       if (detected.mime.toLowerCase().startsWith(blocked)) {
         throw { statusCode: 400, message: 'blocked_detected_mime' };
       }
     }
-    // Erkannten sicheren MIME-Typ bevorzugen
-    finalMime = detected.mime;
-  }
 
-  // Auch deklarierten MIME-Typ gegen Blocklist prüfen
-  for (const blocked of BLOCKED_MIME_PREFIXES) {
-    if (finalMime.startsWith(blocked)) {
-      throw { statusCode: 400, message: 'blocked_mime_type' };
+    // Bei Binärdateien: Inhalt muss zur Dateiendung passen (docx/xlsx sind zip-Archive)
+    const isOfficeZip = (ext === '.docx' || ext === '.xlsx') && detected.mime === 'application/zip';
+    if (!isTextual && detected.mime !== expectedMime && !isOfficeZip) {
+      throw { statusCode: 400, message: 'content_mismatch' };
     }
   }
+
+  // Niemals den vom Browser übermittelten deklarierten MIME-Typ übernehmen
+  const finalMime = expectedMime;
 
   return {
     safeFilename,

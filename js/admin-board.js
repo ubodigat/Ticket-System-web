@@ -1565,6 +1565,10 @@ export const AdminBoard = {
                             </div>
                         </div>
                         <div class="field field-wide" id="ue-role-box"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
+                        <div class="field field-wide" id="ue-ldap-box" style="display:none">
+                            <label class="check-row"><input type="checkbox" id="ue-ldap-enabled"><span>LDAP-Login für dieses Konto erlauben</span></label>
+                            <div class="hint">LDAP ist eine Ergänzung zum lokalen Passwort (Fallback, falls das lokale Passwort nicht passt). Standardmäßig für jedes Konto deaktiviert; nur Superadmins können das freischalten. Für Superadmin-Konten selbst immer deaktiviert.</div>
+                        </div>
                         <div class="field field-wide" id="ue-groups-box">
                             <label>Gruppe</label>
                             <div id="ue-groups-list"></div>
@@ -1674,8 +1678,16 @@ export const AdminBoard = {
         q('#ue-can-manage-2fa').checked = user ? !!user.canManage2FA : false;
         editModal.querySelectorAll('#ue-man-box [data-perm]').forEach(box => { box.checked = !!user?.permissions?.[box.dataset.perm]; });
         q('#ue-kb').value = user?.permissions?.kb || 'none';
-        roleSel.onchange = updateManBoxVisibility;
+
+        // Security-Audit N7: LDAP-Login ist Opt-in je Konto und nur fuer Nicht-Superadmin-Ziele
+        // relevant (Superadmins sind serverseitig ohnehin hart ausgeschlossen).
+        const ldapBox = q('#ue-ldap-box');
+        const updateLdapBoxVisibility = () => { if (ldapBox) ldapBox.style.display = (isSuper && q('#ue-role').value !== 'superadmin') ? '' : 'none'; };
+        q('#ue-ldap-enabled').checked = user ? !!user.ldapLoginEnabled : false;
+
+        roleSel.onchange = () => { updateManBoxVisibility(); updateLdapBoxVisibility(); };
         updateManBoxVisibility();
+        updateLdapBoxVisibility();
 
         // Gruppe: höchstens eine pro Person (department_group_id im Backend)
         const groupList = q('#ue-groups-list');
@@ -1716,6 +1728,7 @@ export const AdminBoard = {
             const canManageUsersVal = rVal === 'admin' ? q('#ue-can-manage-users').checked : false;
             const canViewLogsVal = rVal === 'admin' ? q('#ue-can-view-logs').checked : false;
             const canManage2FAVal = rVal === 'admin' ? q('#ue-can-manage-2fa').checked : false;
+            const ldapLoginEnabledVal = (isSuper && rVal !== 'superadmin') ? q('#ue-ldap-enabled').checked : false;
 
             if (!uVal) {
                 UI.toast('Benutzername fehlt');
@@ -1741,8 +1754,8 @@ export const AdminBoard = {
                     UI.toast('Passwort fehlt');
                     return;
                 }
-                if (pVal.length < 12) {
-                    UI.toast('Passwort muss mindestens 12 Zeichen lang sein.');
+                if (pVal.length < 14) {
+                    UI.toast('Passwort muss mindestens 14 Zeichen lang sein.');
                     return;
                 }
                 users.push({
@@ -1758,6 +1771,7 @@ export const AdminBoard = {
                     mobile: mobileVal,
                     jobTitle: jobTitleVal,
                     officeLocation: officeLocationVal,
+                    ldapLoginEnabled: ldapLoginEnabledVal,
                     permissions: isSuper ? { ...permissionsVal, canManageRequests: canManageReqVal, canManageUsers: canManageUsersVal, canViewLogs: canViewLogsVal, canManage2FA: canManage2FAVal } : undefined
                 });
             } else {
@@ -1780,6 +1794,7 @@ export const AdminBoard = {
                     target.mobile = mobileVal;
                     target.jobTitle = jobTitleVal;
                     target.officeLocation = officeLocationVal;
+                    if (isSuper) target.ldapLoginEnabled = ldapLoginEnabledVal;
                 }
             }
             const ok = await Store.saveUsers(users);
@@ -1787,7 +1802,7 @@ export const AdminBoard = {
                 const errText = Store.lastError || '';
                 const friendly = errText.includes('email_taken') ? 'Diese E-Mail-Adresse wird bereits von einem anderen Konto verwendet.'
                     : errText.includes('username_taken') ? 'Dieser Benutzername ist bereits vergeben.'
-                    : 'Speichern fehlgeschlagen -- bitte Eingaben prüfen (z.B. Passwort mind. 12 Zeichen, gültige E-Mail).';
+                    : 'Speichern fehlgeschlagen -- bitte Eingaben prüfen (z.B. Passwort mind. 14 Zeichen, gültige E-Mail).';
                 UI.toast(friendly);
                 return;
             }
@@ -1821,6 +1836,47 @@ export const AdminBoard = {
         modal.querySelector('#generic-save-head').onclick = () => modal.querySelector('.modal-footer .btn-primary')?.click();
         if (window.lucide) lucide.createIcons();
         return modal;
+    },
+
+    // Step-up-Bestätigung (Passwort + ggf. TOTP-Code) vor einer folgenreichen Aktion wie einem
+    // In-App-Update, einer Migration oder einem Rollback -- gibt { password, totpCode } zurück
+    // oder null bei Abbruch. Härtung statt Entfernung der Update-Funktion: eine gekaperte Session
+    // allein reicht danach nicht mehr aus, um Code auf dem Server auszuführen.
+    confirmStepUp: (message, commitLabel) => {
+        return new Promise(resolve => {
+            const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+            modal.querySelector('h3').textContent = 'Sicherheitsbestätigung erforderlich';
+            modal.querySelector('.modal-body').innerHTML = `
+                <p>${Utils.esc(message)}</p>
+                ${commitLabel ? `<div class="callout callout-info">Ziel-Commit: <code>${Utils.esc(commitLabel)}</code></div>` : ''}
+                <div class="field"><label>Dein aktuelles Passwort</label><input id="stepup-password" type="password" autocomplete="current-password"></div>
+                <div class="field"><label>2FA-Code (falls aktiviert)</label><input id="stepup-totp" type="text" inputmode="numeric" maxlength="6" placeholder="123456"></div>
+            `;
+            AdminBoard.makeModalFooterVisible(modal);
+            const footerBtn = modal.querySelector('.modal-footer button:last-child');
+            const cancelBtn = modal.querySelector('.modal-footer button:first-child');
+            footerBtn.textContent = 'Bestätigen und fortfahren';
+            cancelBtn.textContent = 'Abbrechen';
+            modal.classList.add('open');
+            let settled = false;
+            const finish = (value) => {
+                if (settled) return;
+                settled = true;
+                modal.classList.remove('open');
+                resolve(value);
+            };
+            // makeModalFooterVisible() entfernt .close-m vom Fußzeilen-Abbrechen-Button (damit er
+            // nicht mehr doppelt mit dem Disketten-Icon im Kopf zusammenspielt) -- Kopf-X und
+            // Fußzeile deshalb hier getrennt verdrahtet, statt sich auf die Klasse zu verlassen.
+            modal.querySelectorAll('.modal-header .close-m').forEach(b => b.onclick = () => finish(null));
+            cancelBtn.onclick = () => finish(null);
+            footerBtn.onclick = () => {
+                const password = q('#stepup-password').value;
+                const totpCode = q('#stepup-totp').value.trim();
+                if (!password) { UI.toast('Passwort erforderlich'); return; }
+                finish({ password, totpCode });
+            };
+        });
     },
 
     // Das generische Modal versteckt seine Fußzeile standardmäßig (Speichern l&auml;uft über das
@@ -1925,6 +1981,8 @@ export const AdminBoard = {
         }
         const job = status.job;
         const updateAvailable = !!status.updateAvailable;
+        // Fuer die Bestaetigungsdialoge der Klick-Handler weiter unten (Commit-Pinning).
+        AdminBoard._lastUpdateStatus = status;
         area.innerHTML = `
             <div class="settings-summary-grid">
                 <div class="summary-card"><span>Lokale Version</span><strong>${Utils.esc((status.localCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.localSubject || '')}</small></div>
@@ -1952,6 +2010,28 @@ export const AdminBoard = {
         }
         if (canRetryFailed) {
             area.insertAdjacentHTML('beforeend', `<div class="callout callout-info">Kein neuer Commit auf GitHub, aber der letzte Installationslauf ist fehlgeschlagen. Die Installation kann für die aktuelle Version erneut gestartet werden (wiederholt Build, Migration und Neustart).</div>`);
+        }
+        // Rollback-Button: nur sichtbar, wenn der Updater einen Commit von vor dem letzten
+        // erfolgreichen Update kennt (siehe updater-server.mjs runUpdate -> writeHistory).
+        if (status.rollbackAvailable && !job?.running) {
+            area.insertAdjacentHTML('beforeend', `
+                <div class="setting-row">
+                    <span class="hint">Letztes Update rückgängig machen (Code zurück auf <code>${Utils.esc((status.rollbackCommit || '').slice(0, 12))}</code> -- Datenbank-Schema bleibt unverändert, siehe Hinweis im Log nach dem Rollback).</span>
+                    <button class="btn-secondary btn-sm" id="sys-update-rollback" type="button">${Icon('undo-2', 15)}Rollback</button>
+                </div>`);
+            q('#sys-update-rollback').onclick = async () => {
+                const stepUp = await AdminBoard.confirmStepUp('Diese Aktion setzt den Code auf die vorherige Version zurück und startet die Anwendung neu.', (status.rollbackCommit || '').slice(0, 12));
+                if (!stepUp) return;
+                q('#sys-update-rollback').disabled = true;
+                const result = await Store.runRollback(status.rollbackCommit, stepUp.password, stepUp.totpCode);
+                if (!result || ![200, 202].includes(result.httpStatus)) {
+                    UI.toast(result?.error === 'wrong_password' ? 'Falsches Passwort.' : result?.error === 'invalid_totp_code' ? 'Ungültiger 2FA-Code.' : 'Rollback fehlgeschlagen oder nicht erreichbar.');
+                    await AdminBoard.renderUpdateStatus();
+                    return;
+                }
+                UI.toast('Rollback wurde gestartet.');
+                await AdminBoard.renderUpdateStatus();
+            };
         }
         if (window.lucide) lucide.createIcons();
         if (job?.running) {
@@ -2022,6 +2102,11 @@ export const AdminBoard = {
                                 <label>Session-Timeout (Minuten)</label>
                                 <input id="sys-session-timeout" type="number" placeholder="480" min="5">
                                 <div class="hint">Mindestens 5 Minuten. Unbegrenzte Sessions sind aus Sicherheitsgründen deaktiviert.</div>
+                            </div>
+                            <div class="field">
+                                <label>Idle-Timeout (Minuten ohne Aktivität)</label>
+                                <input id="sys-idle-timeout" type="number" placeholder="60" min="1">
+                                <div class="hint">Mindestens 1 Minute. Eine Sitzung ohne jede Aktivität länger als dieser Wert wird unabhängig vom Session-Timeout widerrufen.</div>
                             </div>
                             <div class="field">
                                 <label>Max. Fehlversuche beim Login</label>
@@ -2317,10 +2402,23 @@ export const AdminBoard = {
             });
             q('#sys-update-check').onclick = () => AdminBoard.renderUpdateStatus();
             q('#sys-update-run').onclick = async () => {
+                // Commit-Pinning: der Ziel-Commit ist IMMER der zuletzt angezeigte Stand (bei
+                // "neues Update verfügbar" der entfernte, bei "letztes Update erneut
+                // installieren" der bereits lokale) -- die Person bestätigt damit genau das, was
+                // sie zuletzt auf dem Bildschirm gesehen hat, siehe update.ts Commit-Pinning.
+                const status = AdminBoard._lastUpdateStatus || {};
+                const targetCommit = status.updateAvailable ? status.remoteCommit : status.localCommit;
+                if (!targetCommit) { UI.toast('Kein Ziel-Commit bekannt -- bitte zuerst erneut prüfen.'); return; }
+                const stepUp = await AdminBoard.confirmStepUp('Diese Aktion baut die Anwendung neu, führt Datenbank-Migrationen aus und startet den App-Container neu.', targetCommit.slice(0, 12));
+                if (!stepUp) return;
                 q('#sys-update-run').disabled = true;
-                const result = await Store.runUpdate();
+                const result = await Store.runUpdate(targetCommit, stepUp.password, stepUp.totpCode);
                 if (!result || ![200, 202].includes(result.httpStatus)) {
-                    UI.toast('Online-Update ist deaktiviert oder nicht erreichbar.');
+                    const msg = result?.error === 'wrong_password' ? 'Falsches Passwort.'
+                        : result?.error === 'invalid_totp_code' ? 'Ungültiger 2FA-Code.'
+                        : result?.error === 'commit_mismatch' ? 'Der Stand auf GitHub hat sich gerade geändert -- bitte erneut prüfen und bestätigen.'
+                        : 'Online-Update ist deaktiviert oder nicht erreichbar.';
+                    UI.toast(msg);
                     await AdminBoard.renderUpdateStatus();
                     return;
                 }
@@ -2328,13 +2426,19 @@ export const AdminBoard = {
                 await AdminBoard.renderUpdateStatus();
             };
             q('#sys-update-migrate').onclick = async () => {
+                const stepUp = await AdminBoard.confirmStepUp('Diese Aktion führt ausstehende Datenbank-Migrationen für den bereits laufenden Code aus.');
+                if (!stepUp) return;
                 const btn = q('#sys-update-migrate');
                 btn.disabled = true;
                 UI.toast('Datenbank-Migrationen laufen...');
-                const result = await Store.runMigrate();
+                const result = await Store.runMigrate(stepUp.password, stepUp.totpCode);
                 btn.disabled = false;
                 if (!result || result.httpStatus !== 200) {
-                    UI.toast(result?.log ? `Migrationen fehlgeschlagen: ${result.log.slice(0, 200)}` : 'Migrationen fehlgeschlagen oder Updater nicht erreichbar.');
+                    const msg = result?.error === 'wrong_password' ? 'Falsches Passwort.'
+                        : result?.error === 'invalid_totp_code' ? 'Ungültiger 2FA-Code.'
+                        : result?.log ? `Migrationen fehlgeschlagen: ${result.log.slice(0, 200)}`
+                        : 'Migrationen fehlgeschlagen oder Updater nicht erreichbar.';
+                    UI.toast(msg);
                     return;
                 }
                 UI.toast('Datenbank ist jetzt auf dem aktuellen Stand.');
@@ -2421,6 +2525,7 @@ export const AdminBoard = {
 
         q('#sys-2fa-enforce').value = security.force2FA || 'none';
         q('#sys-session-timeout').value = security.sessionTimeout ?? 480;
+        q('#sys-idle-timeout').value = security.idleTimeoutMinutes ?? 60;
         q('#sys-max-login-attempts').value = security.maxLoginAttempts ?? 5;
         q('#sys-lockout-action').value = security.lockoutAction || 'temp';
         q('#sys-lockout-minutes').value = security.lockoutMinutes || 15;
@@ -2583,6 +2688,7 @@ export const AdminBoard = {
                     securityConfig: {
                         force2FA: q('#sys-2fa-enforce').value,
                         sessionTimeout: Math.max(5, parseInt(q('#sys-session-timeout').value, 10) || 480),
+                        idleTimeoutMinutes: Math.max(1, parseInt(q('#sys-idle-timeout').value, 10) || 60),
                         maxLoginAttempts: Math.max(1, parseInt(q('#sys-max-login-attempts').value, 10) || 5),
                         lockoutAction: q('#sys-lockout-action').value,
                         lockoutMinutes: Math.max(1, parseInt(q('#sys-lockout-minutes').value, 10) || 15)
@@ -4322,7 +4428,7 @@ export const AdminBoard = {
             modal.querySelector('#kb-list').innerHTML = articles.length ? articles.map(a => `
                 <details class="kb-article" data-id="${Utils.esc(a.id)}">
                     <summary><strong>${Utils.esc(a.title)}</strong> <span class="hint">${Utils.esc(a.source || '')} · ${Utils.fmtDate(a.createdAt)}</span></summary>
-                    <div class="desc-text rich-content">${a.body}</div>
+                    <div class="desc-text rich-content">${Utils.sanitizeRichHtml(a.body)}</div>
                     <div class="file-preview kb-article-attachments" hidden></div>
                     ${canEdit ? `<button class="btn-ghost btn-sm kb-del" type="button" data-id="${Utils.esc(a.id)}">${Icon('trash-2', 14)}Löschen</button>` : ''}
                 </details>`).join('') : '<div class="empty-state compact">Keine Artikel gefunden.</div>';
@@ -6500,8 +6606,8 @@ export const AdminBoard = {
             UI.toast('Bitte alle Felder füllen');
             return;
         }
-        if (password.length < 12) {
-            UI.toast('Passwort muss mindestens 12 Zeichen lang sein');
+        if (password.length < 14) {
+            UI.toast('Passwort muss mindestens 14 Zeichen lang sein');
             return;
         }
 

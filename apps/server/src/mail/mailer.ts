@@ -16,6 +16,7 @@ import type { Env } from '../config/env.js';
 import type { KeyProvider } from '../crypto/keyProvider.js';
 import { ensureDek } from '../crypto/dekService.js';
 import { fieldCipher } from '../crypto/fieldCrypto.js';
+import { buildSignedMimeMessage } from '../domain/smime.js';
 
 export interface MailDeps {
   db: Kysely<Database>;
@@ -65,6 +66,16 @@ interface EmailAdvancedConfig {
   signature?: string;
   htmlEnabled?: boolean;
   htmlSignature?: string;
+  // Security-Audit N-2: standen bisher ungenutzt in app_settings -- werden jetzt tatsächlich
+  // angewendet (siehe sendMail unten).
+  transportSecurity?: 'starttls' | 'tls' | 'opportunistic';
+  certificateValidation?: 'strict' | 'allow-self-signed' | 'disabled';
+  smimeCertificatePem?: string;
+  smimePrivateKeyPem?: string;
+  smimePassphrase?: string;
+  dkimSelector?: string;
+  dkimDomain?: string;
+  dkimPrivateKeyPem?: string;
 }
 
 // Systemeinstellungen > E-Mail > "Vorlage und Signatur" (replyTo/bccArchive/signature/
@@ -90,23 +101,72 @@ export async function sendMail(deps: MailDeps, to: string, subject: string, text
   const loaded = await loadSmtpConfig(deps);
   if (!loaded) throw new Error('smtp_not_configured');
   const emailConfig = await loadEmailAdvancedConfig(deps);
+
+  // Security-Audit N-2: "opportunistic" ist die einzige Stufe, die ein STARTTLS-Scheitern
+  // bewusst toleriert (explizite Entscheidung der Administration in den Systemeinstellungen) --
+  // in jedem anderen Fall MUSS die Verbindung verschlüsselt sein, sonst würde nodemailer bei
+  // einer nicht-"secure" Verbindung klaglos auf Klartext zurückfallen, falls der SMTP-Server
+  // STARTTLS nicht anbietet.
+  const requireTLS = !loaded.config.secure && emailConfig.transportSecurity !== 'opportunistic';
+  // "strict" (Standard, wenn nichts gesetzt ist) prüft die Zertifikatskette wie jeder Browser;
+  // "allow-self-signed"/"disabled" sind eine bewusste, von einer superadmin-Person getroffene
+  // Lockerung (z.B. interner Mailserver mit selbstsigniertem Zertifikat).
+  const rejectUnauthorized = emailConfig.certificateValidation === undefined || emailConfig.certificateValidation === 'strict';
+
+  const dkim = emailConfig.dkimDomain && emailConfig.dkimSelector && emailConfig.dkimPrivateKeyPem
+    ? { domainName: emailConfig.dkimDomain, keySelector: emailConfig.dkimSelector, privateKey: emailConfig.dkimPrivateKeyPem }
+    : undefined;
+
   const transport = nodemailer.createTransport({
     host: loaded.config.host,
     port: loaded.config.port,
     secure: loaded.config.secure,
-    // Ohne secure (TLS/SMTPS von Anfang an, Port 465) MUSS STARTTLS gelingen -- sonst würde
-    // nodemailer sonst klaglos auf eine unverschlüsselte Verbindung zurückfallen, falls der
-    // SMTP-Server STARTTLS nicht anbietet. Das widerspricht der Anforderung "E-Mail verschlüsselt".
-    requireTLS: !loaded.config.secure,
-    auth: loaded.config.user ? { user: loaded.config.user, pass: loaded.password ?? undefined } : undefined
+    requireTLS,
+    tls: { rejectUnauthorized },
+    auth: loaded.config.user ? { user: loaded.config.user, pass: loaded.password ?? undefined } : undefined,
+    ...(dkim ? { dkim } : {})
   });
   const textSignature = emailConfig.signature?.trim();
   const finalText = textSignature ? `${text}\n\n${textSignature}` : text;
+  // Security-Audit M-2: "text" kann Nutzereingaben enthalten (z.B. Genehmigungsbegründungen,
+  // Ticket-Titel in Benachrichtigungen) -- ohne Escaping würde eingeschleustes HTML/Links im
+  // HTML-Teil der Mail ausgeführt. Nur die Signatur (von Admins in den Einstellungen gepflegt,
+  // bewusst als HTML gedacht) bleibt ungeändert.
+  const escapeHtml = (value: string) => value.replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c] as string));
   const html = emailConfig.htmlEnabled
-    ? `${text.replace(/\n/g, '<br>')}${emailConfig.htmlSignature ? `<br><br>${emailConfig.htmlSignature}` : ''}`
+    ? `${escapeHtml(text).replace(/\n/g, '<br>')}${emailConfig.htmlSignature ? `<br><br>${emailConfig.htmlSignature}` : ''}`
     : undefined;
+  const fromHeader = loaded.config.fromName ? `${loaded.config.fromName} <${loaded.config.from}>` : loaded.config.from;
+
+  // S/MIME: nodemailer kann selbst keinen PKCS#7-Umschlag bauen -- ist ein Zertifikat+Schlüssel
+  // hinterlegt, wird die komplette, bereits signierte MIME-Nachricht extern gebaut (openssl,
+  // siehe domain/smime.ts) und unverändert als `raw` übergeben. replyTo/bcc gehen dabei als
+  // zusätzliche Envelope-Angaben mit, DKIM (falls konfiguriert) signiert nodemailer trotzdem
+  // automatisch über den fertigen Rohtext.
+  if (emailConfig.smimeCertificatePem && emailConfig.smimePrivateKeyPem) {
+    const raw = await buildSignedMimeMessage({
+      certificatePem: emailConfig.smimeCertificatePem,
+      privateKeyPem: emailConfig.smimePrivateKeyPem,
+      passphrase: emailConfig.smimePassphrase,
+      fromAddress: fromHeader,
+      toAddress: to,
+      subject,
+      text: finalText,
+      html
+    });
+    await transport.sendMail({
+      envelope: { from: loaded.config.from, to },
+      ...(emailConfig.replyTo ? { replyTo: emailConfig.replyTo } : {}),
+      ...(emailConfig.bccArchive ? { bcc: emailConfig.bccArchive } : {}),
+      raw: raw ?? undefined
+    });
+    return;
+  }
+
   await transport.sendMail({
-    from: loaded.config.fromName ? `${loaded.config.fromName} <${loaded.config.from}>` : loaded.config.from,
+    from: fromHeader,
     to,
     ...(emailConfig.replyTo ? { replyTo: emailConfig.replyTo } : {}),
     ...(emailConfig.bccArchive ? { bcc: emailConfig.bccArchive } : {}),

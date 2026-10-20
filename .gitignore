@@ -13,6 +13,8 @@ apps/server/secrets/
 apps/server/kek.local
 ops/docker/secrets/
 ops/backups/
+# Security-Audit N9: von install.sh generiertes SQL mit dem echten Laufzeit-DB-Passwort.
+ops/docker/mariadb/initdb.d/*.sql
 *.kek
 .DS_Store
 Thumbs.db

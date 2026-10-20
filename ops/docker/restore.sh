@@ -18,7 +18,7 @@ ENV_FILE="$SCRIPT_DIR/.env"
 
 ARCHIVE_PATH="${1:-}"
 if [[ -z "$ARCHIVE_PATH" || ! -f "$ARCHIVE_PATH" ]]; then
-  echo "Nutzung: $0 <pfad-zum-backup.tar.gz.enc>" >&2
+  echo "Nutzung: $0 <pfad-zum-backup.tar.gz.gpg>" >&2
   exit 1
 fi
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -36,6 +36,11 @@ if [[ "$CONFIRM" != "ja" ]]; then
   exit 1
 fi
 
+if ! command -v gpg >/dev/null 2>&1; then
+  echo "gpg nicht gefunden -- 'apt-get install -y gnupg' und erneut versuchen." >&2
+  exit 1
+fi
+
 PASSPHRASE="${BACKUP_PASSPHRASE:-}"
 if [[ -z "$PASSPHRASE" ]]; then
   read -rsp "Passphrase des Backups: " PASSPHRASE
@@ -46,7 +51,10 @@ WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 echo "==> Entschlüssele Archiv..."
-openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -pass "pass:$PASSPHRASE" -in "$ARCHIVE_PATH" | \
+# Security-Audit N14: Gegenstück zu backup.sh -- gpg (authentifiziert, erkennt ein manipuliertes
+# Archiv statt es still als kaputtes tar zu behandeln), Passphrase über einen separaten
+# Dateideskriptor statt als Kommandozeilenargument.
+gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 --decrypt "$ARCHIVE_PATH" 3<<< "$PASSPHRASE" | \
   tar -C "$WORK_DIR" -xzf -
 unset PASSPHRASE
 
@@ -59,9 +67,27 @@ echo "==> Stoppe Anwendung (Datenbank bleibt für den Import erreichbar)..."
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" stop app
 
 echo "==> Spiele Datenbank-Dump ein..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb \
-  sh -c "exec mariadb -u'$DB_USER' -p'$DB_PASSWORD' '$DB_NAME'" \
-  < "$WORK_DIR/database.sql"
+# Security-Audit N14: DB-Passwort nie als Kommandozeilenargument (siehe backup.sh) -- die
+# Zugangsdaten werden in einem ersten, separaten exec-Aufruf per stdin in eine temporäre,
+# nur-dem-Container-eigene Optionsdatei geschrieben (Pfad selbst ist kein Geheimnis); der
+# eigentliche Datenimport im zweiten Aufruf braucht stdin für den SQL-Dump und kann die
+# Zugangsdaten deshalb nicht erneut per stdin bekommen.
+CNF_PATH="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
+  umask 077
+  cnf="$(mktemp)"
+  cat > "$cnf"
+  printf "%s" "$cnf"
+' <<EOF
+[client]
+user=$DB_USER
+password=$DB_PASSWORD
+EOF
+)"
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
+  cnf="$1"; db="$2"
+  trap "rm -f \"$cnf\"" EXIT
+  exec mariadb --defaults-extra-file="$cnf" "$db"
+' _ "$CNF_PATH" "$DB_NAME" < "$WORK_DIR/database.sql"
 
 echo "==> Stelle Schlüssel (KEK) und TLS-Zertifikate wieder her..."
 mkdir -p "$SCRIPT_DIR/../secrets" "$SCRIPT_DIR/../tls"

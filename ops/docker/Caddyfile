@@ -8,13 +8,21 @@
 }
 
 {$PUBLIC_DOMAIN:localhost} {
-	tls internal
+	# Security-Audit B5: "internal" (selbstsigniertes CA-Zertifikat, Browser-Warnungen) nur für
+	# IP-Adressen/localhost/--dev; bei einer echten Domain + ACME-E-Mail setzt install.sh hier die
+	# E-Mail-Adresse ein, wodurch Caddy automatisch ein vertrauenswürdiges Let's-Encrypt-Zertifikat
+	# bezieht (siehe ensure_public_env_defaults in install.sh).
+	tls {$TLS_POLICY:internal}
 	encode gzip
 
-	# /health ist nur für den internen Docker-Healthcheck/Monitoring gedacht, nicht für die
-	# allgemeine Öffentlichkeit -- docs/ARCHITECTURE.md §2. Hier dennoch über denselben Origin
-	# erreichbar, da kein separates Management-Netz in v1.0 vorgesehen ist; Zugriff kann über
-	# ein vorgelagertes Firewall-/IP-Allowlist-Regelwerk weiter eingeschränkt werden.
+	# Security-Audit N13: /health war bisher öffentlich über denselben Origin erreichbar (verrät
+	# u.a., dass die Installation existiert/läuft, ohne jeden Nutzen für die Öffentlichkeit). Der
+	# Docker-Healthcheck ruft /health direkt am App-Container im internen Netz auf (siehe
+	# docker-compose.yml), nicht über Caddy -- die Sperre hier betrifft ausschließlich den
+	# öffentlichen Zugriff von außen.
+	@health path /health
+	respond @health 404
+
 	reverse_proxy app:3000
 
 	header {

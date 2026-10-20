@@ -16,13 +16,22 @@ import type { Database } from './types.js';
 // rohe SQL-Strings -- gemäß docs/SPEC.md §3 und docs/adr/0001. TLS ist verpflichtend, sobald
 // DB_SSL_CA_PATH gesetzt ist; DB_SSL_REJECT_UNAUTHORIZED darf in Produktion nie auf false stehen
 // (Standardwert ist true, siehe env.ts).
-export function createDb(env: Env): Kysely<Database> {
+// Security-Audit N9: "migrate" nutzt IMMER das volle DB_USER/DB_PASSWORD-Konto (DDL-Rechte für
+// ALTER/CREATE TABLE nötig). "runtime" (Standard) nutzt DB_RUNTIME_USER/DB_RUNTIME_PASSWORD,
+// falls konfiguriert -- ein kompromittierter App-Prozess (z.B. über eine künftige Schwachstelle)
+// könnte das Schema dann nicht mehr verändern oder Tabellen löschen, nur noch Zeilen lesen/
+// schreiben. Ohne konfiguriertes Laufzeit-Konto (Rückwärtskompatibilität) bleibt das Verhalten
+// unverändert wie vor diesem Update.
+export function createDb(env: Env, purpose: 'migrate' | 'runtime' = 'runtime'): Kysely<Database> {
+  const credentials = purpose === 'runtime' && env.DB_RUNTIME_USER && env.DB_RUNTIME_PASSWORD
+    ? { user: env.DB_RUNTIME_USER, password: env.DB_RUNTIME_PASSWORD }
+    : { user: env.DB_USER, password: env.DB_PASSWORD };
   const pool = createPool({
     host: env.DB_HOST,
     port: env.DB_PORT,
     database: env.DB_NAME,
-    user: env.DB_USER,
-    password: env.DB_PASSWORD,
+    user: credentials.user,
+    password: credentials.password,
     connectionLimit: 10,
     supportBigNumbers: true,
     dateStrings: false,

@@ -57,10 +57,14 @@ export interface UsersTable {
   role: 'user' | 'admin' | 'superadmin';
   department_group_id: string | null;
   department: Nullable<string>;
-  phone: Nullable<string>;
-  mobile: Nullable<string>;
-  job_title: Nullable<string>;
-  office_location: Nullable<string>;
+  // Security-Audit N7: LDAP ist standardmäßig AUS für jedes Konto (Opt-in durch einen
+  // Superadmin), nicht mehr pauschal für alle lokal existierenden Konten erreichbar.
+  ldap_login_enabled: ColumnType<boolean, boolean, boolean>;
+  // Security-Audit N10: AES-256-GCM-verschlüsselt wie name/email (users.ts loadContactDeks).
+  phone: Nullable<Buffer>;
+  mobile: Nullable<Buffer>;
+  job_title: Nullable<Buffer>;
+  office_location: Nullable<Buffer>;
   permissions_json: Nullable<string>;
   notif_prefs_json: Nullable<string>;
   supervisor_user_id: Nullable<string>;
@@ -72,6 +76,13 @@ export interface UsersTable {
   // totp_enabled bleibt false, bis der erste Code nach der Einrichtung bestätigt wurde.
   totp_secret_enc: Buffer | null;
   totp_enabled: ColumnType<boolean, boolean, boolean>;
+  // Security-Audit B3: ein laufendes /mfa/setup darf das bereits aktive Secret nie direkt
+  // überschreiben (sonst könnte eine kurz entwendete Session die 2FA des Opfers lautlos
+  // abschalten) -- das neue Secret liegt hier, bis /confirm es per gültigem Code übernimmt.
+  totp_pending_secret_enc: Buffer | null;
+  // Security-Audit N6: zuletzt akzeptierter TOTP-Zeitschritt (siehe domain/totp.ts) -- verhindert
+  // Mehrfachverwendung desselben Codes innerhalb seines ±30s-Gültigkeitsfensters.
+  totp_last_step: Nullable<number>;
   // Brute-Force-Schutz (auth.ts): Fehlversuche in Folge; nach Schwelle setzt auth.ts
   // locked_until. Generated, da beim Insert immer der DB-Default (0) gilt.
   failed_login_count: Generated<number>;
@@ -87,6 +98,9 @@ export interface SessionsTable {
   created_at: CreatedAt;
   expires_at: ColumnType<Date, string | Date, never>;
   revoked_at: NullableTimestamp;
+  // Security-Audit: Idle-Timeout (siehe securityPolicy.ts idleTimeoutMinutes) -- unabhängig von
+  // der absoluten Sitzungsdauer (expires_at).
+  last_seen_at: NullableTimestamp;
 }
 
 export interface JobsTable {
@@ -233,14 +247,16 @@ export interface TicketsTable {
   archived_author_ack: Generated<boolean>;
   approval_status: Nullable<string>;
   approval_requested_by: Nullable<string>;
-  approval_text: Nullable<string>;
+  // Security-Audit N10: AES-256-GCM-verschlüsselt wie title/description/incident_notice.
+  approval_text: Nullable<Buffer>;
   approval_reviewer_id: Nullable<string>;
   incident_id: Nullable<string>;
   incident_notice: Nullable<Buffer>;
   filed_by_user_id: Nullable<string>;
   filed_by_username: Nullable<string>;
   waiting_since: NullableTimestamp;
-  waiting_message: Nullable<string>;
+  // Security-Audit N10: AES-256-GCM-verschlüsselt wie title/description/incident_notice.
+  waiting_message: Nullable<Buffer>;
   waiting_reminder_sent: Generated<boolean>;
   merged_into_ticket_id: Nullable<string>;
   custom_fields_json: Nullable<string>;

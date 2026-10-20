@@ -19,6 +19,8 @@ import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
+import { scanIfConfigured } from '../../domain/antivirus.js';
+import { sanitizeServerHtml } from '../../domain/sanitizer.js';
 
 const createKbAttachmentSchema = z.object({
   filename: z.string().trim().min(1).max(255).refine(
@@ -88,13 +90,19 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const parsed = createArticleSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
+      // Security-Audit B9: Wissensdatenbank-Inhalte werden roh im Browser gerendert (innerHTML) --
+      // ohne serverseitige Bereinigung könnte jedes Konto mit KB-Schreibrecht HTML platzieren,
+      // das bei allen Leserinnen und Lesern ausgeführt wird (gefälschte Login-Formulare etc.).
+      const cleanContent = sanitizeServerHtml(parsed.data.content);
+      if (!cleanContent) return reply.code(400).send({ error: 'empty_content' });
+
       const id = randomUUID();
       const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
       const contentDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.content');
       await app.db.insertInto('kb_articles').values({
         id,
         title: fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, ctx(deps, 'kb_articles', id, 'title', titleDek.keyVersion)),
-        content: fieldCipher.encryptField(parsed.data.content, contentDek.rawDek, ctx(deps, 'kb_articles', id, 'content', contentDek.keyVersion)),
+        content: fieldCipher.encryptField(cleanContent, contentDek.rawDek, ctx(deps, 'kb_articles', id, 'content', contentDek.keyVersion)),
         source_ticket_id: parsed.data.source_ticket_id ?? null,
         created_by_user_id: session.uid
       }).execute();
@@ -118,8 +126,10 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
         updates.title = fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, ctx(deps, 'kb_articles', id, 'title', titleDek.keyVersion));
       }
       if (parsed.data.content !== undefined) {
+        const cleanContent = sanitizeServerHtml(parsed.data.content);
+        if (!cleanContent) return reply.code(400).send({ error: 'empty_content' });
         const contentDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.content');
-        updates.content = fieldCipher.encryptField(parsed.data.content, contentDek.rawDek, ctx(deps, 'kb_articles', id, 'content', contentDek.keyVersion));
+        updates.content = fieldCipher.encryptField(cleanContent, contentDek.rawDek, ctx(deps, 'kb_articles', id, 'content', contentDek.keyVersion));
       }
       await app.db.updateTable('kb_articles').set(updates).where('id', '=', id).execute();
       return reply.send({ success: true });
@@ -179,7 +189,9 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
     }
   });
 
-  app.post('/api/v2/kb/articles/:id/attachments', async (req, reply) => {
+  // bodyLimit höher als der globale 2MB-Standard (N2 im Security-Audit): Anhänge bis 15MB
+  // kommen base64-kodiert im JSON-Body (~33% Overhead) plus Metadaten.
+  app.post('/api/v2/kb/articles/:id/attachments', { bodyLimit: 21 * 1024 * 1024 }, async (req, reply) => {
     try {
       const session = requireAdmin(req);
       if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
@@ -195,6 +207,9 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
         dataB64: parsed.data.data_b64,
         maxSizeBytes: 15 * 1024 * 1024
       });
+
+      // Virenscan (B7, optional -- siehe domain/antivirus.ts).
+      await scanIfConfigured(deps.env, validated.buffer);
 
       const attachmentId = randomUUID();
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.filename');

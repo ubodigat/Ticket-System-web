@@ -57,7 +57,13 @@ describe('attachment ownership enforcement', () => {
   it('rejects uploads with blocked extensions or malicious binary content', async () => {
     const app = Fastify();
     const db: any = {
-      selectFrom: () => ({ select: () => ({ where: () => ({ executeTakeFirst: async () => ({ id: 'ticket', created_by_user_id: uid }) }) }) }),
+      // selectFrom('tickets') -- Ownership-Check; selectFrom('attachments') -- Tagesquote (B7,
+      // zwei verkettete .where()-Aufrufe plus eb.fn.sum). Tabellen-bewusster Chain-Mock statt
+      // des alten, nicht verketteten Minimal-Mocks.
+      selectFrom: (table: string) => {
+        const chain: any = { select: () => chain, where: () => chain, executeTakeFirst: async () => table === 'tickets' ? { id: 'ticket', created_by_user_id: uid } : { total: 0 } };
+        return chain;
+      },
       insertInto: () => ({ values: () => ({ execute: async () => [] }) })
     };
     app.decorate('db', db);

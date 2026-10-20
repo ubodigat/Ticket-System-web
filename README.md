@@ -33,9 +33,15 @@ Entwickelt nach dem **Zero-Trust-Prinzip**: Der Server ist die alleinige Sicherh
 
 Auf einem frischen Debian- oder Ubuntu-Server als `root` (oder mit `sudo`) ausführen:
 
-### Für Produktionsserver mit Domain:
+### Für Produktionsserver ohne eigene Domain (nur per IP erreichbar):
 ```bash
 bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; fi; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh | bash'
+```
+Ohne eigene Domain nutzt Caddy ein selbstsigniertes Zertifikat (`tls internal`) -- Browser zeigen
+dafür eine Zertifikatswarnung. Für ein vertrauenswürdiges, von Let's Encrypt ausgestelltes
+Zertifikat eine echte Domain und eine Kontakt-E-Mail-Adresse angeben:
+```bash
+bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; fi; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh | bash -s -- --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Für lokale Testumgebungen (localhost / Dev-Modus):
@@ -43,14 +49,25 @@ bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && ap
 bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; fi; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh | bash -s -- --dev'
 ```
 
+### Weitere Installer-Optionen:
+- `--enable-antivirus`: ClamAV-Virenscan für Ticket-/Wissensdatenbank-Anhänge aktivieren (zusätzlich
+  zur bereits immer aktiven Magic-Byte-/Inhaltsprüfung). Deutlicher Ressourcenbedarf (ca. 1-2GB RAM),
+  erster Start dauert wegen des Signatur-Datenbank-Downloads mehrere Minuten.
+- `--enable-updates`: Online-Updates über die Oberfläche aktivieren (siehe Warnhinweise im
+  Admin-Bereich -- gibt dem Updater-Container Root-Zugriff auf den Docker-Host).
+
 ### Was der Installer automatisch erledigt:
 1. Prüft und installiert Systempakete (`curl`, `git`, `openssl`, `ca-certificates`).
 2. Installiert und konfiguriert Docker & das Docker Compose Plugin.
 3. Klont das Repository nach `/opt/ticket-system`.
-4. Erzeugt kryptografisch sichere Zufallsschlüssel (`ops/secrets/app.kek`, Passwörter, Cookie-Secret).
+4. Erzeugt kryptografisch sichere Zufallsschlüssel (`ops/secrets/app.kek`, Passwörter, Cookie-Secret,
+   Setup-Token) -- das Setup-Token erscheint nur einmal in der Konsolenausgabe und wird beim
+   Einrichtungsassistenten unter `/setup` abgefragt, damit niemand sonst das erste Superadmin-Konto
+   anlegen kann.
 5. Startet MariaDB, wartet auf die Verfügbarkeit und führt alle Datenbankmigrationen aus.
-6. Startet den App-Container und den Caddy-Proxy (mit automatischem HTTPS/TLS).
-7. Gibt nach erfolgreichem Start die Einrichtungs-URL im Terminal aus.
+6. Startet den App-Container und den Caddy-Proxy (mit automatischem HTTPS/TLS bei angegebener
+   Domain, sonst selbstsigniertem Zertifikat).
+7. Gibt nach erfolgreichem Start die Einrichtungs-URL und das Setup-Token im Terminal aus.
 
 ---
 

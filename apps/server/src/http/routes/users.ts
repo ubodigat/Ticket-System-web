@@ -44,6 +44,52 @@ function safeUserProfileFields(app: FastifyInstance, deps: UsersRouteDeps, row: 
   }
 }
 
+// Security-Audit N10: Telefon/Mobilnummer/Position/Standort sind jetzt genauso AES-256-GCM-
+// verschlüsselt wie name/email -- dieselbe Pro-Zweck-DEK-Struktur wie TicketDeks in tickets.ts.
+interface ContactDeks {
+  phone: { rawDek: Buffer; keyVersion: number };
+  mobile: { rawDek: Buffer; keyVersion: number };
+  jobTitle: { rawDek: Buffer; keyVersion: number };
+  officeLocation: { rawDek: Buffer; keyVersion: number };
+}
+
+async function loadContactDeks(app: FastifyInstance, keyProvider: KeyProvider): Promise<ContactDeks> {
+  const [phone, mobile, jobTitle, officeLocation] = await Promise.all([
+    ensureDek(app.db, keyProvider, 'users.phone'),
+    ensureDek(app.db, keyProvider, 'users.mobile'),
+    ensureDek(app.db, keyProvider, 'users.job_title'),
+    ensureDek(app.db, keyProvider, 'users.office_location')
+  ]);
+  return { phone, mobile, jobTitle, officeLocation };
+}
+
+function encryptContactField(value: string, dek: { rawDek: Buffer; keyVersion: number }, deps: UsersRouteDeps, recordId: string, fieldName: string): Buffer {
+  return fieldCipher.encryptField(value, dek.rawDek, {
+    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+    tableName: 'users', recordId, fieldName, keyVersion: dek.keyVersion
+  });
+}
+
+function decryptContactField(stored: Buffer, dek: { rawDek: Buffer; keyVersion: number }, deps: UsersRouteDeps, recordId: string, fieldName: string): string {
+  return fieldCipher.decryptField(stored, dek.rawDek, {
+    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+    tableName: 'users', recordId, fieldName, keyVersion: dek.keyVersion
+  });
+}
+
+function decryptContactFields(
+  row: { id: string; phone?: Buffer | null; mobile?: Buffer | null; job_title?: Buffer | null; office_location?: Buffer | null },
+  deks: ContactDeks,
+  deps: UsersRouteDeps
+): { phone: string | null; mobile: string | null; job_title: string | null; office_location: string | null } {
+  return {
+    phone: row.phone ? decryptContactField(row.phone, deks.phone, deps, row.id, 'phone') : null,
+    mobile: row.mobile ? decryptContactField(row.mobile, deks.mobile, deps, row.id, 'mobile') : null,
+    job_title: row.job_title ? decryptContactField(row.job_title, deks.jobTitle, deps, row.id, 'job_title') : null,
+    office_location: row.office_location ? decryptContactField(row.office_location, deks.officeLocation, deps, row.id, 'office_location') : null
+  };
+}
+
 // Granulare Zusatzrechte fuer normale Admin-Konten -- gab es in der lokalen Version vom
 // 07.10.2026 im Benutzer-Editor ("Verwaltung"/"Zusatzfunktionen"), war in der Serverversion
 // zwischenzeitlich komplett entfernt statt wie das ueberall sonst in diesem Projekt uebliche
@@ -62,7 +108,9 @@ const userPermissionsSchema = z.object({
 
 const createUserSchema = z.object({
   username: z.string().trim().min(1).max(64).regex(/^[\p{L}\p{N}_.-]+$/u, 'Nur Buchstaben, Zahlen, _, ., - erlaubt'),
-  password: z.string().min(12).max(512), // Mindestlänge 12 Zeichen erzwingen
+  // Security-Audit N4: einheitlich 14 Zeichen wie beim Setup-Assistenten (setup.ts) -- vorher
+  // galten für Admin-angelegte Konten/Passwortänderungen abweichend nur 12 Zeichen.
+  password: z.string().min(14).max(512),
   name: z.string().trim().min(1).max(255),
   email: z.string().email().max(255),
   role: z.enum(['user', 'admin', 'superadmin']),
@@ -76,7 +124,9 @@ const createUserSchema = z.object({
   job_title: z.string().trim().max(255).nullable().optional(),
   office_location: z.string().trim().max(255).nullable().optional(),
   supervisor_user_id: z.string().nullable().optional(),
-  permissions: userPermissionsSchema.optional()
+  permissions: userPermissionsSchema.optional(),
+  // Security-Audit N7: LDAP-Login ist Opt-in je Konto, Standard false (siehe migration 0033).
+  ldap_login_enabled: z.boolean().optional()
 });
 
 const updateUserSchema = z.object({
@@ -96,6 +146,9 @@ const updateUserSchema = z.object({
   supervisor_user_id: z.string().nullable().optional(),
   account_archived: z.boolean().optional(),
   locked_permanent: z.boolean().optional(),
+  // Security-Audit N7: LDAP-Login ist Opt-in je Konto, nur eine Superadmin-Person darf es
+  // umschalten (siehe PATCH-Handler unten).
+  ldap_login_enabled: z.boolean().optional(),
   permissions: userPermissionsSchema.optional(),
   notif_prefs: z.record(z.object({
     app: z.boolean().optional(),
@@ -105,7 +158,7 @@ const updateUserSchema = z.object({
 
 const changePasswordSchema = z.object({
   old_password: z.string().min(1).optional(), // nicht required bei Admin-Reset
-  new_password: z.string().min(12).max(512)
+  new_password: z.string().min(14).max(512) // Security-Audit N4: einheitlich 14 Zeichen (siehe oben)
 });
 
 const createGroupSchema = z.object({
@@ -259,6 +312,20 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     return permissions[key] === true;
   }
 
+  // Security-Audit M-6: ohne diese Prüfung kann der letzte aktive Superadmin sich selbst (oder
+  // ein anderer Superadmin ihn) zum Admin herabstufen, sperren oder archivieren -- danach gäbe
+  // es kein Konto mehr, das Systemeinstellungen/Superadmin-only-Aktionen ausführen kann.
+  async function assertNotLastSuperadmin(targetId: string): Promise<void> {
+    const row = await app.db.selectFrom('users')
+      .select(eb => eb.fn.countAll<string>().as('n'))
+      .where('role', '=', 'superadmin')
+      .where('id', '!=', targetId)
+      .where('account_archived', '=', false)
+      .where('locked_permanent', '=', false)
+      .executeTakeFirstOrThrow();
+    if (Number(row.n) === 0) throw { statusCode: 409, message: 'last_superadmin' };
+  }
+
   function buildAbsence(row: { absence_from_at?: Date | string | null; absence_until_at?: Date | string | null; absence_visible?: boolean | null; absence_substitute_username?: string | null }) {
     // Keine aktive Abwesenheitszeile für diese Person gefunden -- alle vier Unterabfragen
     // liefern dann NULL (absence_visible ist eine Boolean-Spalte, NULL heisst hier "keine Zeile",
@@ -286,13 +353,14 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManageUsers')) && !(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled',
           ...absenceSelects(eb)
         ])
         .orderBy('created_at', 'asc')
         .execute();
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+      const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const users = rows.map(row => {
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
         return {
@@ -303,6 +371,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           notif_prefs_json: undefined,
           name: profile.name,
           email: profile.email,
+          ...decryptContactFields(row as any, contactDeks, deps),
           notif_prefs: buildNotificationPrefs(row.notif_prefs_json),
           absence: buildAbsence(row as any),
           ...buildPermissionFields(row.permissions_json)
@@ -327,8 +396,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         .execute();
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+      const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const users = rows.map(row => {
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
+        const contact = decryptContactFields(row, contactDeks, deps);
         return {
           id: row.id,
           username: row.username,
@@ -337,10 +408,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           role: row.role,
           department_group_id: row.department_group_id,
           department: row.department,
-          phone: row.phone,
-          mobile: row.mobile,
-          job_title: row.job_title,
-          office_location: row.office_location,
+          phone: contact.phone,
+          mobile: contact.mobile,
+          job_title: contact.job_title,
+          office_location: contact.office_location,
           supervisor_user_id: row.supervisor_user_id,
           account_archived: row.account_archived
         };
@@ -357,7 +428,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const row = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled',
           ...absenceSelects(eb)
         ])
         .where('id', '=', session.uid)
@@ -365,6 +436,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!row) return reply.code(404).send({ error: 'not_found' });
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+      const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
       const user = {
         ...row,
@@ -374,6 +446,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         notif_prefs_json: undefined,
         name: profile.name,
         email: profile.email,
+        ...decryptContactFields(row as any, contactDeks, deps),
         notif_prefs: buildNotificationPrefs(row.notif_prefs_json),
         absence: buildAbsence(row as any),
         ...buildPermissionFields(row.permissions_json)
@@ -466,6 +539,13 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const emailTaken = await app.db.selectFrom('users').select('id').where('email_blind_idx', '=', email_blind_idx).executeTakeFirst();
       if (emailTaken) return reply.code(409).send({ error: 'email_taken' });
 
+      // Security-Audit N10: Kontaktfelder jetzt verschlüsselt wie name/email.
+      const contactDeks = await loadContactDeks(app, deps.keyProvider);
+      const phone_enc = parsed.data.phone ? encryptContactField(parsed.data.phone, contactDeks.phone, deps, newId, 'phone') : null;
+      const mobile_enc = parsed.data.mobile ? encryptContactField(parsed.data.mobile, contactDeks.mobile, deps, newId, 'mobile') : null;
+      const job_title_enc = parsed.data.job_title ? encryptContactField(parsed.data.job_title, contactDeks.jobTitle, deps, newId, 'job_title') : null;
+      const office_location_enc = parsed.data.office_location ? encryptContactField(parsed.data.office_location, contactDeks.officeLocation, deps, newId, 'office_location') : null;
+
       await app.db.insertInto('users').values({
         id: newId,
         username: parsed.data.username,
@@ -476,10 +556,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         role: parsed.data.role,
         department_group_id: parsed.data.department_group_id ?? null,
         department: parsed.data.department ?? null,
-        phone: parsed.data.phone ?? null,
-        mobile: parsed.data.mobile ?? null,
-        job_title: parsed.data.job_title ?? null,
-        office_location: parsed.data.office_location ?? null,
+        phone: phone_enc,
+        mobile: mobile_enc,
+        job_title: job_title_enc,
+        office_location: office_location_enc,
         supervisor_user_id: parsed.data.supervisor_user_id ?? null,
         // Zusatzrechte nur bei role='admin' sinnvoll (fuer 'user' zeigt der Editor das Feld gar
         // nicht an), trotzdem hier nicht erzwungen -- ein leeres Objekt bei 'user' ist harmlos.
@@ -487,6 +567,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         account_archived: false,
         locked_permanent: false,
         totp_enabled: false,
+        // Security-Audit N7: nur eine Superadmin-Person darf LDAP-Login direkt beim Anlegen
+        // freischalten; für Superadmin-Zielkonten bleibt es ohnehin immer deaktiviert (auth.ts
+        // schließt sie unabhängig davon vom LDAP-Fallback aus).
+        ldap_login_enabled: parsed.data.ldap_login_enabled === true && session.role === 'superadmin' && parsed.data.role !== 'superadmin',
         installation_id: deps.env.INSTALLATION_ID
       }).execute();
 
@@ -570,16 +654,38 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       // department ist Klartext (kein personenbezogenes Pflichtfeld wie Name/E-Mail, keine
       // Verschlüsselung dafür vorgesehen) -- gleiche Selbst-/Admin-Berechtigung wie Name/E-Mail.
       if (parsed.data.department !== undefined) updates.department = parsed.data.department;
-      if (parsed.data.phone !== undefined) updates.phone = parsed.data.phone;
-      if (parsed.data.mobile !== undefined) updates.mobile = parsed.data.mobile;
-      if (parsed.data.job_title !== undefined) updates.job_title = parsed.data.job_title;
-      if (parsed.data.office_location !== undefined) updates.office_location = parsed.data.office_location;
+      // Security-Audit N10: Kontaktfelder jetzt verschlüsselt wie name/email.
+      if (parsed.data.phone !== undefined || parsed.data.mobile !== undefined || parsed.data.job_title !== undefined || parsed.data.office_location !== undefined) {
+        const contactDeks = await loadContactDeks(app, deps.keyProvider);
+        if (parsed.data.phone !== undefined) updates.phone = parsed.data.phone ? encryptContactField(parsed.data.phone, contactDeks.phone, deps, id, 'phone') : null;
+        if (parsed.data.mobile !== undefined) updates.mobile = parsed.data.mobile ? encryptContactField(parsed.data.mobile, contactDeks.mobile, deps, id, 'mobile') : null;
+        if (parsed.data.job_title !== undefined) updates.job_title = parsed.data.job_title ? encryptContactField(parsed.data.job_title, contactDeks.jobTitle, deps, id, 'job_title') : null;
+        if (parsed.data.office_location !== undefined) updates.office_location = parsed.data.office_location ? encryptContactField(parsed.data.office_location, contactDeks.officeLocation, deps, id, 'office_location') : null;
+      }
       if (parsed.data.notif_prefs !== undefined) updates.notif_prefs_json = JSON.stringify(parsed.data.notif_prefs);
 
       // Nur Admin darf Rolle, Gruppe, Vorgesetzte Person, Archivierung und Sperrung ändern
       if (canManageUsers) {
         const target = await app.db.selectFrom('users').select('role').where('id', '=', id).executeTakeFirst();
-        if (target?.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
+        // Security-Audit M-3: ein Admin mit nur "Benutzerverwaltung" darf kein fremdes
+        // Admin-Konto (Rolle, Gruppe, Vorgesetzte, Sperre, Archivierung) verändern -- nur
+        // Superadmin darf das. Die eigene Person bleibt ausgenommen (sonst könnte sich ein Admin
+        // nicht einmal die eigene Abteilung/Gruppe setzen); Rolle self === 'superadmin' ist
+        // durch updateUserSchema (nur 'user'|'admin' erlaubt) bereits ausgeschlossen (B1).
+        if (target && id !== session.uid && (target.role === 'admin' || target.role === 'superadmin') && session.role !== 'superadmin') {
+          return reply.code(403).send({ error: 'forbidden' });
+        }
+        // Security-Audit M-6: letzten aktiven Superadmin vor Herabstufung, Sperre und
+        // Archivierung schützen (unabhängig davon, ob die Person sich selbst betrifft oder ein
+        // anderer Superadmin die Änderung vornimmt).
+        if (target?.role === 'superadmin') {
+          // updateUserSchema erlaubt für "role" ohnehin nur 'user'|'admin' (nie 'superadmin',
+          // siehe B1) -- jede gesetzte Rolle hier ist für ein Superadmin-Ziel also eine Herabstufung.
+          const demotes = parsed.data.role !== undefined;
+          const archives = parsed.data.account_archived === true;
+          const locks = parsed.data.locked_permanent === true;
+          if (demotes || archives || locks) await assertNotLastSuperadmin(id);
+        }
         if (parsed.data.role !== undefined) updates.role = parsed.data.role;
         if (parsed.data.department_group_id !== undefined) updates.department_group_id = parsed.data.department_group_id;
         if (parsed.data.supervisor_user_id !== undefined) updates.supervisor_user_id = parsed.data.supervisor_user_id;
@@ -590,6 +696,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         // immer nur für isSuper sichtbar).
         if (parsed.data.permissions !== undefined && session.role === 'superadmin') {
           updates.permissions_json = JSON.stringify(parsed.data.permissions);
+        }
+        // Security-Audit N7: LDAP-Login-Freischaltung ist ebenfalls ein privilegierter Vorgang
+        // (erweitert die Angriffsfläche des Kontos um ein externes Verzeichnis) -- nur Superadmin.
+        if (parsed.data.ldap_login_enabled !== undefined && session.role === 'superadmin') {
+          updates.ldap_login_enabled = parsed.data.ldap_login_enabled;
         }
       }
 
@@ -621,9 +732,12 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
       const target = await app.db.selectFrom('users').select(['username', 'role']).where('id', '=', id).executeTakeFirst();
       if (!target) return reply.code(404).send({ error: 'not_found' });
-      if (target.role === 'superadmin' && session.role !== 'superadmin') {
+      // Security-Audit M-3: auch das Löschen eines fremden Admin-Kontos ist nur Superadmins
+      // vorbehalten, nicht nur bei Superadmin-Zielen.
+      if ((target.role === 'admin' || target.role === 'superadmin') && session.role !== 'superadmin') {
         return reply.code(403).send({ error: 'forbidden' });
       }
+      if (target.role === 'superadmin') await assertNotLastSuperadmin(id);
 
       const parsed = deleteUserQuerySchema.safeParse(req.query);
       const ticketDisposition = parsed.success ? parsed.data.tickets : 'archive';
@@ -655,8 +769,14 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const target = await app.db.selectFrom('users').select('role').where('id', '=', id).executeTakeFirst();
-      if (target?.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
-      await app.db.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null }).where('id', '=', id).execute();
+      // Security-Audit M-3: nicht nur Superadmin-Ziele schützen, sondern jedes Admin-Konto --
+      // sonst kann ein Admin, der nur "Benutzerverwaltung" hat, die 2FA eines anderen
+      // Admin-Kontos mit ganz anderen Einzelrechten (z.B. canViewLogs/canManage2FA) zurücksetzen
+      // und übernehmen. Nur Superadmin darf ein fremdes Admin-Konto zurücksetzen.
+      if (target && (target.role === 'admin' || target.role === 'superadmin') && session.role !== 'superadmin') {
+        return reply.code(403).send({ error: 'forbidden' });
+      }
+      await app.db.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null }).where('id', '=', id).execute();
       await app.db.insertInto('global_audit_log').values({
         id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
         action: 'user.mfa_reset', target_type: 'user', target_id: id, detail_json: null
@@ -677,7 +797,12 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!canManageUsers && session.uid !== id) return reply.code(403).send({ error: 'forbidden' });
       if (canManageUsers && session.uid !== id) {
         const target = await app.db.selectFrom('users').select('role').where('id', '=', id).executeTakeFirst();
-        if (target?.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
+        // Security-Audit M-3: wie beim mfa-reset auch hier jedes Admin-Konto schützen, nicht nur
+        // Superadmin-Ziele -- sonst setzt ein Admin mit nur "Benutzerverwaltung" das Passwort
+        // jedes anderen, höher berechtigten Admin-Kontos zurück und übernimmt es.
+        if (target && (target.role === 'admin' || target.role === 'superadmin') && session.role !== 'superadmin') {
+          return reply.code(403).send({ error: 'forbidden' });
+        }
       }
 
       const parsed = changePasswordSchema.safeParse(req.body);
@@ -933,6 +1058,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         .execute();
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+      const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const header = ['username', 'name', 'email', 'role', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'account_archived', 'locked_permanent', 'totp_enabled', 'created_at'];
       const lines = [header.map(csvSafeCell).join(',')];
       for (const row of rows) {
@@ -942,9 +1068,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         });
         const name = fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion));
         const email = fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion));
+        const contact = decryptContactFields(row, contactDeks, deps);
         lines.push([
           row.username, name, email, row.role,
-          row.department ?? '', row.phone ?? '', row.mobile ?? '', row.job_title ?? '', row.office_location ?? '',
+          row.department ?? '', contact.phone ?? '', contact.mobile ?? '', contact.job_title ?? '', contact.office_location ?? '',
           String(row.account_archived), String(row.locked_permanent), String(row.totp_enabled),
           new Date(row.created_at).toISOString()
         ].map(csvSafeCell).join(','));
@@ -973,7 +1100,9 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   // POST /api/v2/users/import.csv - nur Admin. Erwartet Spalten username,name,email,role.
   // Neue Benutzer bekommen ein zufälliges Einmal-Passwort (muss separat mitgeteilt/geändert
   // werden) -- es gibt keinen Import von Klartext-Passwörtern.
-  app.post('/api/v2/users/import.csv', async (req, reply) => {
+  // bodyLimit höher als der globale 2MB-Standard (N2 im Security-Audit): csv-Feld selbst ist
+  // bis 5MB zulässig (siehe z.string().max unten).
+  app.post('/api/v2/users/import.csv', { bodyLimit: 6 * 1024 * 1024 }, async (req, reply) => {
     try {
       const session = requireAdmin(req);
       if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
@@ -1007,6 +1136,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
         const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
         const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
+        const contactDeks = await loadContactDeks(app, deps.keyProvider);
         const ctx = (fieldName: string, keyVersion: number) => ({
           installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
           tableName: 'users', recordId: newId, fieldName, keyVersion
@@ -1021,13 +1151,14 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           role: rowParsed.data.role,
           department_group_id: null,
           department: rowParsed.data.department || null,
-          phone: rowParsed.data.phone || null,
-          mobile: rowParsed.data.mobile || null,
-          job_title: rowParsed.data.job_title || null,
-          office_location: rowParsed.data.office_location || null,
+          phone: rowParsed.data.phone ? encryptContactField(rowParsed.data.phone, contactDeks.phone, deps, newId, 'phone') : null,
+          mobile: rowParsed.data.mobile ? encryptContactField(rowParsed.data.mobile, contactDeks.mobile, deps, newId, 'mobile') : null,
+          job_title: rowParsed.data.job_title ? encryptContactField(rowParsed.data.job_title, contactDeks.jobTitle, deps, newId, 'job_title') : null,
+          office_location: rowParsed.data.office_location ? encryptContactField(rowParsed.data.office_location, contactDeks.officeLocation, deps, newId, 'office_location') : null,
           account_archived: false,
           locked_permanent: false,
           totp_enabled: false,
+          ldap_login_enabled: false,
           installation_id: deps.env.INSTALLATION_ID
         }).execute();
         results.push({ username: rowParsed.data.username, status: 'created', temporaryPassword: tempPassword });

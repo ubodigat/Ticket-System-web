@@ -27,6 +27,11 @@ export const SETUP_HTML = `<!doctype html>
   <p class="hint">Diese Seite erscheint nur einmal. Danach meldest du dich mit dem hier angelegten Konto an.</p>
   <form id="setup-form">
     <fieldset>
+      <legend>Setup-Token</legend>
+      <label for="setupToken">Setup-Token (aus der Konsolenausgabe von install.sh bzw. ops/docker/.env)</label>
+      <input id="setupToken" name="setupToken" type="text" maxlength="256" autocomplete="off">
+    </fieldset>
+    <fieldset>
       <legend>Unternehmen</legend>
       <label for="companyName">Unternehmensname</label>
       <input id="companyName" name="companyName" type="text" required maxlength="255" autocomplete="organization">

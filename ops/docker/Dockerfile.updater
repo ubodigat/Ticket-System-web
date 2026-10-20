@@ -1,6 +1,8 @@
 FROM node:24-alpine
 
-RUN apk add --no-cache git docker-cli docker-cli-compose ca-certificates
+# gnupg wird nur fuer die optionale UPDATE_REQUIRE_SIGNED_COMMITS-Haertung gebraucht
+# (git verify-commit, Security-Audit N3).
+RUN apk add --no-cache git docker-cli docker-cli-compose ca-certificates gnupg
 
 WORKDIR /updater
 COPY ops/docker/updater-server.mjs ./updater-server.mjs

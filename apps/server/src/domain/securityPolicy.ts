@@ -13,6 +13,10 @@ export interface SecurityPolicy {
   force2FA: 'none' | 'all' | 'admin' | 'user';
   // Minuten; Werte <= 0 fallen aus Sicherheitsgruenden auf den sicheren Default zurueck.
   sessionTimeoutMinutes: number;
+  // Idle-Timeout (Minuten seit der letzten Anfrage dieser Sitzung, unabhaengig von der
+  // absoluten Laufzeit oben) -- Werte <= 0 fallen ebenfalls auf den sicheren Default zurueck
+  // (kein "Idle-Timeout deaktivieren" ueber 0, das war genau der im Audit bemaengelte Zustand).
+  idleTimeoutMinutes: number;
   // Werte <= 0 fallen aus Sicherheitsgruenden auf den sicheren Default zurueck.
   maxLoginAttempts: number;
   lockoutAction: 'lock' | 'temp' | 'none';
@@ -26,6 +30,7 @@ export interface SecurityPolicy {
 const SAFE_DEFAULTS: SecurityPolicy = {
   force2FA: 'none',
   sessionTimeoutMinutes: 480,
+  idleTimeoutMinutes: 60,
   maxLoginAttempts: 5,
   lockoutAction: 'temp',
   lockoutMinutes: 15
@@ -48,6 +53,7 @@ export async function loadSecurityPolicy(db: Kysely<Database>): Promise<Security
   return {
     force2FA: ['none', 'all', 'admin', 'user'].includes(sec.force2FA) ? sec.force2FA : SAFE_DEFAULTS.force2FA,
     sessionTimeoutMinutes: typeof sec.sessionTimeout === 'number' && sec.sessionTimeout > 0 ? sec.sessionTimeout : SAFE_DEFAULTS.sessionTimeoutMinutes,
+    idleTimeoutMinutes: typeof sec.idleTimeoutMinutes === 'number' && sec.idleTimeoutMinutes > 0 ? sec.idleTimeoutMinutes : SAFE_DEFAULTS.idleTimeoutMinutes,
     maxLoginAttempts: typeof sec.maxLoginAttempts === 'number' && sec.maxLoginAttempts > 0 ? sec.maxLoginAttempts : SAFE_DEFAULTS.maxLoginAttempts,
     lockoutAction: ['lock', 'temp', 'none'].includes(sec.lockoutAction) ? sec.lockoutAction : SAFE_DEFAULTS.lockoutAction,
     lockoutMinutes: typeof sec.lockoutMinutes === 'number' && sec.lockoutMinutes > 0 ? sec.lockoutMinutes : SAFE_DEFAULTS.lockoutMinutes

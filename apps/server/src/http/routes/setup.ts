@@ -6,7 +6,7 @@ The Original Developer is the Initial Developer: U:Bodigat.
 The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
 Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import * as argon2 from 'argon2';
 import { z } from 'zod';
@@ -31,7 +31,11 @@ const setupRequestSchema = z.object({
   adminEmail: z.string().trim().toLowerCase().email().max(255),
   adminName: z.string().trim().min(1).max(255),
   // Argon2id-Passwortrichtlinie für admin/superadmin: mindestens 14 Zeichen (docs/SPEC.md §8).
-  adminPassword: z.string().min(14).max(256)
+  adminPassword: z.string().min(14).max(256),
+  // Verhindert, dass eine fremde Person zwischen Installation und erstem Aufruf durch den
+  // Betreiber das erste (Superadmin-)Konto anlegt (Security-Audit B4) -- install.sh gibt den
+  // Token einmalig in der Konsole aus.
+  setupToken: z.string().max(256).optional()
 });
 
 export interface SetupRouteDeps {
@@ -56,7 +60,9 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
       .select('setup_completed_at')
       .where('id', '=', 1)
       .executeTakeFirst();
-    return reply.send({ completed: Boolean(row?.setup_completed_at) });
+    // tokenRequired informiert das Setup-Formular, ob ein Token-Feld angezeigt werden muss --
+    // verrät nicht den Token selbst (der steht nur in .env / der install.sh-Konsolenausgabe).
+    return reply.send({ completed: Boolean(row?.setup_completed_at), tokenRequired: Boolean(deps.env.SETUP_TOKEN) });
   });
 
   app.post(
@@ -75,6 +81,21 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
       });
     }
     const input = parsed.data;
+
+    // Konstante Vergleichszeit statt "!==": ein zeitbasiertes Signal auf den Setup-Token wäre
+    // sonst ein (schwaches, aber unnötiges) Orakel, genau wie beim Update-Token.
+    if (deps.env.SETUP_TOKEN) {
+      const expected = Buffer.from(deps.env.SETUP_TOKEN);
+      const provided = Buffer.from(input.setupToken ?? '');
+      if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+        return reply.code(403).send({
+          type: 'about:blank',
+          title: 'Ungültiges Setup-Token',
+          status: 403,
+          detail: 'Das Setup-Token ist falsch oder fehlt. Es steht in der Konsolenausgabe von install.sh bzw. in ops/docker/.env.'
+        });
+      }
+    }
 
     try {
       const result = await app.db.transaction().execute(async trx => {
@@ -138,6 +159,7 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
             account_archived: false,
             locked_permanent: false,
             totp_enabled: false,
+            ldap_login_enabled: false,
             installation_id: deps.env.INSTALLATION_ID
           })
           .execute();

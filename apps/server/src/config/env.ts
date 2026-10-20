@@ -23,6 +23,12 @@ const envSchema = z.object({
   DB_PASSWORD: z.string().min(1),
   DB_SSL_CA_PATH: z.string().min(1).optional(),
   DB_SSL_REJECT_UNAUTHORIZED: z.coerce.boolean().default(true),
+  // Security-Audit N9: optionales, eingeschränktes DB-Konto für den Laufzeitbetrieb (nur
+  // SELECT/INSERT/UPDATE/DELETE, kein ALTER/CREATE/DROP) -- Migrationen laufen weiterhin mit
+  // DB_USER/DB_PASSWORD (volle Rechte). Fehlen diese Variablen, nutzt die Laufzeit wie bisher
+  // DB_USER/DB_PASSWORD (Rückwärtskompatibilität fuer Installationen vor diesem Update).
+  DB_RUNTIME_USER: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
+  DB_RUNTIME_PASSWORD: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
 
   KEK_FILE_PATH: z.string().min(1),
   COOKIE_SECRET: z.string().min(32),
@@ -33,7 +39,12 @@ const envSchema = z.object({
   TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(1),
   OFFICE_PREVIEW_URL: z.string().url().optional(),
   UPDATE_SERVICE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
-  UPDATE_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional())
+  UPDATE_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
+  SETUP_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(16).optional()),
+  // Security-Audit B7: optionaler ClamAV-Virenscan für Anhänge (siehe domain/antivirus.ts).
+  // Leer/fehlend = Scan deaktiviert.
+  CLAMAV_HOST: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
+  CLAMAV_PORT: z.coerce.number().int().positive().default(3310)
 });
 
 export type Env = z.infer<typeof envSchema>;

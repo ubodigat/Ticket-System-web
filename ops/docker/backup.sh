@@ -10,10 +10,18 @@
 # + der KEK (ops/secrets/app.kek), ohne den der Dump wertlos ist (Schlüsselverschlüsselungsschlüssel
 # für alle Datenentschlüsselungsschlüssel, siehe apps/server/src/crypto/keyProvider.ts).
 #
-# Das fertige Archiv wird selbst noch einmal mit einer eigenen Passphrase verschlüsselt
-# (openssl enc, AES-256-CBC + PBKDF2) -- ein Backup, das DB-Dump UND Schlüssel im Klartext
-# zusammen enthält, wäre sonst selbst die "Sicherheitslücke offene Backup-Dateien" aus der
-# Anforderungsliste. Ohne Passphrase ist das Archiv nutzlos, auch wenn es irgendwo offen liegt.
+# Das fertige Archiv wird selbst noch einmal mit einer eigenen Passphrase verschlüsselt -- ein
+# Backup, das DB-Dump UND Schlüssel im Klartext zusammen enthält, wäre sonst selbst die
+# "Sicherheitslücke offene Backup-Dateien" aus der Anforderungsliste. Ohne Passphrase ist das
+# Archiv nutzlos, auch wenn es irgendwo offen liegt.
+#
+# Security-Audit N14, zwei Punkte behoben:
+# 1. gpg (symmetrisch, AES256, OpenPGP-Integritätsschutz/MDC) statt openssl AES-256-CBC: CBC
+#    allein ist nicht authentifiziert -- ein verändertes Archiv würde beim Restore nicht als
+#    manipuliert erkannt, nur als evtl. kaputtes tar. gpg erkennt eine Veränderung beim Entschlüsseln.
+# 2. DB-Passwort und Backup-Passphrase landen nie als Kommandozeilenargument (sonst für jeden
+#    lokalen Prozess auf diesem Host über "ps aux"/"/proc/<pid>/cmdline" sichtbar) -- beide werden
+#    ausschließlich über Datei-Deskriptoren/stdin übergeben.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +42,11 @@ if [[ ! -f "$KEK_PATH" ]]; then
   exit 1
 fi
 
+if ! command -v gpg >/dev/null 2>&1; then
+  echo "gpg nicht gefunden -- 'apt-get install -y gnupg' und erneut versuchen." >&2
+  exit 1
+fi
+
 PASSPHRASE="${BACKUP_PASSPHRASE:-}"
 if [[ -z "$PASSPHRASE" ]]; then
   read -rsp "Passphrase zur Verschlüsselung des Backups (wird für Restore erneut benötigt): " PASSPHRASE
@@ -49,9 +62,20 @@ WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 echo "==> Sichere MariaDB (konsistenter Dump, eine Transaktion)..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb \
-  sh -c "exec mariadb-dump --single-transaction --routines --triggers -u'$DB_USER' -p'$DB_PASSWORD' '$DB_NAME'" \
-  > "$WORK_DIR/database.sql"
+# DB_USER/DB_PASSWORD werden als MySQL-Optionsdatei (--defaults-extra-file) über stdin an den
+# Container übergeben -- nie als "-p..."-Kommandozeilenargument (siehe Kommentar oben).
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
+  set -e
+  umask 077
+  cnf="$(mktemp)"
+  cat > "$cnf"
+  trap "rm -f \"$cnf\"" EXIT
+  exec mariadb-dump --defaults-extra-file="$cnf" --single-transaction --routines --triggers "$1"
+' _ "$DB_NAME" > "$WORK_DIR/database.sql" <<EOF
+[client]
+user=$DB_USER
+password=$DB_PASSWORD
+EOF
 
 echo "==> Kopiere Schlüssel (KEK) und TLS-Zertifikate..."
 mkdir -p "$WORK_DIR/secrets" "$WORK_DIR/tls"
@@ -62,11 +86,17 @@ fi
 cp "$ENV_FILE" "$WORK_DIR/env.backup"
 
 mkdir -p "$BACKUP_DIR"
-ARCHIVE_PATH="$BACKUP_DIR/ticket-system-backup-$TIMESTAMP.tar.gz.enc"
+ARCHIVE_PATH="$BACKUP_DIR/ticket-system-backup-$TIMESTAMP.tar.gz.gpg"
 
-echo "==> Packe und verschlüssele Archiv..."
+echo "==> Packe und verschlüssele Archiv (gpg, authentifiziert)..."
+# --passphrase-fd 3 (NICHT 0/stdin, das traegt den eigentlichen tar-Datenstrom): Passphrase kommt
+# über einen separaten Dateideskriptor, steht nie als Kommandozeilenargument in der Prozessliste.
+# s2k-count auf das Maximum erhöht den Aufwand für einen Brute-Force-Versuch gegen die Passphrase
+# selbst erheblich.
 tar -C "$WORK_DIR" -czf - . | \
-  openssl enc -aes-256-cbc -pbkdf2 -iter 100000 -salt -pass "pass:$PASSPHRASE" -out "$ARCHIVE_PATH"
+  gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
+    --symmetric --cipher-algo AES256 --s2k-mode 3 --s2k-count 65011712 \
+    --output "$ARCHIVE_PATH" 3<<< "$PASSPHRASE"
 unset PASSPHRASE
 
 chmod 600 "$ARCHIVE_PATH"

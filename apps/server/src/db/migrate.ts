@@ -36,6 +36,12 @@ import { migration_0026_user_notification_preferences } from './migrations/0026_
 import { migration_0027_admin_todos } from './migrations/0027_admin_todos.js';
 import { migration_0028_recurring_admin_todos } from './migrations/0028_recurring_admin_todos.js';
 import { migration_0029_user_contact_fields } from './migrations/0029_user_contact_fields.js';
+import { migration_0030_mfa_pending_secret } from './migrations/0030_mfa_pending_secret.js';
+import { migration_0031_totp_replay_protection } from './migrations/0031_totp_replay_protection.js';
+import { migration_0032_session_idle_timeout } from './migrations/0032_session_idle_timeout.js';
+import { migration_0033_ldap_per_account_optin } from './migrations/0033_ldap_per_account_optin.js';
+import { migration_0034_encrypt_approval_waiting_text } from './migrations/0034_encrypt_approval_waiting_text.js';
+import { migration_0035_encrypt_contact_fields } from './migrations/0035_encrypt_contact_fields.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -66,7 +72,13 @@ const migrations: Record<string, Migration> = {
   '0026_user_notification_preferences': migration_0026_user_notification_preferences,
   '0027_admin_todos': migration_0027_admin_todos,
   '0028_recurring_admin_todos': migration_0028_recurring_admin_todos,
-  '0029_user_contact_fields': migration_0029_user_contact_fields
+  '0029_user_contact_fields': migration_0029_user_contact_fields,
+  '0030_mfa_pending_secret': migration_0030_mfa_pending_secret,
+  '0031_totp_replay_protection': migration_0031_totp_replay_protection,
+  '0032_session_idle_timeout': migration_0032_session_idle_timeout,
+  '0033_ldap_per_account_optin': migration_0033_ldap_per_account_optin,
+  '0034_encrypt_approval_waiting_text': migration_0034_encrypt_approval_waiting_text,
+  '0035_encrypt_contact_fields': migration_0035_encrypt_contact_fields
 };
 
 const provider: MigrationProvider = {
@@ -77,7 +89,9 @@ const provider: MigrationProvider = {
 
 async function main(): Promise<void> {
   const env = loadEnv();
-  const db = createDb(env);
+  // Security-Audit N9: Migrationen brauchen DDL-Rechte (ALTER/CREATE TABLE) -- immer das volle
+  // DB_USER/DB_PASSWORD-Konto, nie das eingeschränkte Laufzeit-Konto.
+  const db = createDb(env, 'migrate');
   const migrator = new Migrator({ db, provider });
 
   const { error, results } = await migrator.migrateToLatest();

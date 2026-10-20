@@ -36,15 +36,20 @@ interface TicketDeks {
   title: ResolvedDek;
   description: ResolvedDek;
   incidentNotice: ResolvedDek;
+  // Security-Audit N10: approval_text/waiting_message sind jetzt ebenfalls verschlüsselt.
+  approvalText: ResolvedDek;
+  waitingMessage: ResolvedDek;
 }
 
 async function loadTicketDeks(app: FastifyInstance, keyProvider: KeyProvider): Promise<TicketDeks> {
-  const [title, description, incidentNotice] = await Promise.all([
+  const [title, description, incidentNotice, approvalText, waitingMessage] = await Promise.all([
     ensureDek(app.db, keyProvider, 'tickets.title'),
     ensureDek(app.db, keyProvider, 'tickets.description'),
-    ensureDek(app.db, keyProvider, 'tickets.incident_notice')
+    ensureDek(app.db, keyProvider, 'tickets.incident_notice'),
+    ensureDek(app.db, keyProvider, 'tickets.approval_text'),
+    ensureDek(app.db, keyProvider, 'tickets.waiting_message')
   ]);
-  return { title, description, incidentNotice };
+  return { title, description, incidentNotice, approvalText, waitingMessage };
 }
 
 function encryptTicketField(
@@ -81,7 +86,10 @@ function decryptTicketField(
   });
 }
 
-function decryptTicketRow<T extends { id: string; title: Buffer; description?: Buffer; incident_notice?: Buffer | null }>(
+function decryptTicketRow<T extends {
+  id: string; title: Buffer; description?: Buffer; incident_notice?: Buffer | null;
+  approval_text?: Buffer | null; waiting_message?: Buffer | null;
+}>(
   row: T,
   deks: TicketDeks,
   deps: TicketsRouteDeps
@@ -92,6 +100,12 @@ function decryptTicketRow<T extends { id: string; title: Buffer; description?: B
   }
   if (row.incident_notice) {
     out.incident_notice = decryptTicketField(row.incident_notice, deks.incidentNotice, deps, row.id, 'incident_notice');
+  }
+  if (row.approval_text) {
+    out.approval_text = decryptTicketField(row.approval_text, deks.approvalText, deps, row.id, 'approval_text');
+  }
+  if (row.waiting_message) {
+    out.waiting_message = decryptTicketField(row.waiting_message, deks.waitingMessage, deps, row.id, 'waiting_message');
   }
   return out;
 }
@@ -111,7 +125,10 @@ const updateTicketSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().min(1).max(50000).optional(),
   status: z.string().trim().min(1).max(64).refine(isValidTicketStatus, 'invalid_status').optional(),
-  priority: z.string().trim().min(1).max(32).optional(),
+  // Security-Audit N12: PATCH erlaubte bisher jeden beliebigen String (bis 32 Zeichen) statt nur
+  // der vier gültigen Stufen -- ein falscher Wert würde lautlos aus der SLA-Berechnung
+  // (slaHoursByPriority ist nach genau diesen vier Werten indiziert) herausfallen.
+  priority: z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch']).optional(),
   category: z.string().trim().max(128).nullable().optional(),
   assigned_to_user_id: z.string().nullable().optional(),
   assigned_to_username: z.string().nullable().optional(),
@@ -327,6 +344,12 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         description: decryptTicketField(row.description, deks.description, deps, row.id, 'description'),
         incident_notice: row.incident_notice
           ? decryptTicketField(row.incident_notice, deks.incidentNotice, deps, row.id, 'incident_notice')
+          : null,
+        approval_text: row.approval_text
+          ? decryptTicketField(row.approval_text, deks.approvalText, deps, row.id, 'approval_text')
+          : null,
+        waiting_message: row.waiting_message
+          ? decryptTicketField(row.waiting_message, deks.waitingMessage, deps, row.id, 'waiting_message')
           : null
       }));
       return reply.send({ tickets });
@@ -392,12 +415,21 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const parsed = createTicketSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
 
+      // Security-Audit B6: eine Großstörung erscheint als Banner bei ALLEN Benutzern (GET
+      // /api/v2/incidents/active) -- ohne diese Prüfung könnte jedes normale Konto einen
+      // beliebigen Text ("Störung: Passwort bitte unter ... neu setzen") als offiziellen Hinweis
+      // ausgeben (interner Phishing-Kanal). Nicht-Admins erzwingen daher type='ticket' und kein
+      // incident_notice, unabhängig davon was im Request-Body steht.
+      const isAdminActor = session.role === 'admin' || session.role === 'superadmin';
+      const ticketType = isAdminActor ? parsed.data.type : 'ticket';
+      const incidentNoticeInput = isAdminActor ? parsed.data.incident_notice : undefined;
+
       const newId = randomUUID();
       const deks = await loadTicketDeks(app, deps.keyProvider);
       const titleEnc = encryptTicketField(parsed.data.title, deks.title, deps, newId, 'title');
       const descriptionEnc = encryptTicketField(parsed.data.description, deks.description, deps, newId, 'description');
-      const incidentNoticeEnc = parsed.data.incident_notice
-        ? encryptTicketField(parsed.data.incident_notice, deks.incidentNotice, deps, newId, 'incident_notice')
+      const incidentNoticeEnc = incidentNoticeInput
+        ? encryptTicketField(incidentNoticeInput, deks.incidentNotice, deps, newId, 'incident_notice')
         : null;
 
       // Ticketnummer per SELECT MAX + Insert hat eine Race-Window (zwei gleichzeitige Anfragen
@@ -460,7 +492,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
             description: descriptionEnc,
             priority: parsed.data.priority,
             category: parsed.data.category ?? null,
-            type: parsed.data.type,
+            type: ticketType,
             incident_notice: incidentNoticeEnc,
             created_by_user_id: authorUserId,
             created_by_username: authorUsername,
@@ -681,7 +713,13 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         const isWaitingNow = parsed.data.status.startsWith('Warten auf');
         if (!wasWaiting && isWaitingNow) {
           updates.waiting_since = mysqlTimestamp();
-          updates.waiting_message = parsed.data.waiting_message ?? null;
+          // Security-Audit N10: jetzt verschlüsselt wie title/description.
+          if (parsed.data.waiting_message) {
+            deks = deks ?? await loadTicketDeks(app, deps.keyProvider);
+            updates.waiting_message = encryptTicketField(parsed.data.waiting_message, deks.waitingMessage, deps, id, 'waiting_message');
+          } else {
+            updates.waiting_message = null;
+          }
           updates.waiting_reminder_sent = false;
         } else if (wasWaiting && !isWaitingNow) {
           updates.waiting_since = null;
@@ -1055,11 +1093,17 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const approver = await app.db.selectFrom('users').select(['username']).where('id', '=', parsed.data.approver_user_id).executeTakeFirst();
       if (!approver) return reply.code(400).send({ error: 'invalid_body' });
 
+      // Security-Audit N10: approval_text jetzt verschlüsselt wie title/description.
+      const approvalDeks = await loadTicketDeks(app, deps.keyProvider);
+      const approvalTextEnc = parsed.data.text
+        ? encryptTicketField(parsed.data.text, approvalDeks.approvalText, deps, id, 'approval_text')
+        : null;
+
       await app.db.updateTable('tickets').set({
         approval_status: 'pending',
         approval_requested_by: session.username,
         approval_reviewer_id: parsed.data.approver_user_id,
-        approval_text: parsed.data.text ?? null,
+        approval_text: approvalTextEnc,
         updated_at: mysqlTimestamp()
       }).where('id', '=', id).execute();
 
@@ -1101,9 +1145,15 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         return reply.code(403).send({ error: 'forbidden' });
       }
 
+      // Security-Audit N10: approval_text jetzt verschlüsselt wie title/description.
+      const decisionDeks = await loadTicketDeks(app, deps.keyProvider);
+      const decisionTextEnc = parsed.data.reason
+        ? encryptTicketField(parsed.data.reason, decisionDeks.approvalText, deps, id, 'approval_text')
+        : null;
+
       await app.db.updateTable('tickets').set({
         approval_status: parsed.data.decision,
-        approval_text: parsed.data.reason ?? null,
+        approval_text: decisionTextEnc,
         updated_at: mysqlTimestamp()
       }).where('id', '=', id).execute();
 
@@ -1406,41 +1456,48 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const parsed = mergeTicketSchema.safeParse(req.body);
       if (!parsed.success || parsed.data.target_ticket_id === id) return reply.code(400).send({ error: 'invalid_body' });
 
-      const [source, target] = await Promise.all([
-        app.db.selectFrom('tickets').select(['id', 'ticket_number']).where('id', '=', id).executeTakeFirst(),
-        app.db.selectFrom('tickets').select(['id', 'ticket_number']).where('id', '=', parsed.data.target_ticket_id).executeTakeFirst()
-      ]);
-      if (!source || !target) return reply.code(404).send({ error: 'not_found' });
+      // Security-Audit N11: lief bisher als Folge unabhängiger Einzel-Updates ohne Transaktion --
+      // ein Fehler/Absturz mittendrin konnte Nachrichten/Notizen bereits auf das Zielticket
+      // verschoben haben, während andere Tabellen (Anhänge, Teilaufgaben, ...) noch beim
+      // Ursprungsticket standen oder dieses nie als zusammengeführt markiert wurde. Zeilensperre
+      // (FOR UPDATE) auf beiden Tickets verhindert zusätzlich, dass ein gleichzeitiger zweiter
+      // Merge-Versuch auf dasselbe Ticket eine inkonsistente Doppel-Zusammenführung erzeugt.
+      await app.db.transaction().execute(async trx => {
+        const source = await trx.selectFrom('tickets').select(['id', 'ticket_number', 'merged_into_ticket_id']).where('id', '=', id).forUpdate().executeTakeFirst();
+        const target = await trx.selectFrom('tickets').select(['id', 'ticket_number']).where('id', '=', parsed.data.target_ticket_id).forUpdate().executeTakeFirst();
+        if (!source || !target) throw { statusCode: 404, message: 'not_found' };
+        if (source.merged_into_ticket_id) throw { statusCode: 409, message: 'already_merged' };
 
-      await app.db.updateTable('ticket_messages').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
-      await app.db.updateTable('ticket_notes').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
-      await app.db.updateTable('ticket_todos').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
-      await app.db.updateTable('ticket_time_entries').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
-      await app.db.updateTable('attachments').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
-      // Beteiligte: direktes Umhängen könnte den Unique-Index (ticket_id, user_id) verletzen,
-      // falls dieselbe Person bei beiden Tickets beteiligt ist -- deshalb per IGNORE kopieren statt verschieben.
-      const sourceParticipants = await app.db.selectFrom('ticket_participants').select(['user_id', 'username']).where('ticket_id', '=', source.id).execute();
-      if (sourceParticipants.length) {
-        await app.db.insertInto('ticket_participants')
-          .values(sourceParticipants.map(p => ({ id: randomUUID(), ticket_id: target.id, user_id: p.user_id, username: p.username })))
-          .onDuplicateKeyUpdate({ ticket_id: target.id })
-          .execute();
-      }
-      await app.db.deleteFrom('ticket_participants').where('ticket_id', '=', source.id).execute();
+        await trx.updateTable('ticket_messages').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
+        await trx.updateTable('ticket_notes').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
+        await trx.updateTable('ticket_todos').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
+        await trx.updateTable('ticket_time_entries').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
+        await trx.updateTable('attachments').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
+        // Beteiligte: direktes Umhängen könnte den Unique-Index (ticket_id, user_id) verletzen,
+        // falls dieselbe Person bei beiden Tickets beteiligt ist -- deshalb per IGNORE kopieren statt verschieben.
+        const sourceParticipants = await trx.selectFrom('ticket_participants').select(['user_id', 'username']).where('ticket_id', '=', source.id).execute();
+        if (sourceParticipants.length) {
+          await trx.insertInto('ticket_participants')
+            .values(sourceParticipants.map(p => ({ id: randomUUID(), ticket_id: target.id, user_id: p.user_id, username: p.username })))
+            .onDuplicateKeyUpdate({ ticket_id: target.id })
+            .execute();
+        }
+        await trx.deleteFrom('ticket_participants').where('ticket_id', '=', source.id).execute();
 
-      await app.db.updateTable('tickets').set({
-        archived_at: mysqlTimestamp(), merged_into_ticket_id: target.id, updated_at: mysqlTimestamp()
-      }).where('id', '=', source.id).execute();
-      await app.db.updateTable('tickets').set({ updated_at: mysqlTimestamp() }).where('id', '=', target.id).execute();
+        await trx.updateTable('tickets').set({
+          archived_at: mysqlTimestamp(), merged_into_ticket_id: target.id, updated_at: mysqlTimestamp()
+        }).where('id', '=', source.id).execute();
+        await trx.updateTable('tickets').set({ updated_at: mysqlTimestamp() }).where('id', '=', target.id).execute();
 
-      await app.db.insertInto('ticket_audit_log').values({
-        id: randomUUID(), ticket_id: source.id, actor_user_id: session.uid, actor_username: session.username,
-        action: 'merged_into', field: 'merged_into_ticket_id', old_value: null, new_value: target.id
-      }).execute();
-      await app.db.insertInto('ticket_audit_log').values({
-        id: randomUUID(), ticket_id: target.id, actor_user_id: session.uid, actor_username: session.username,
-        action: 'merged_from', field: 'merged_into_ticket_id', old_value: null, new_value: source.id
-      }).execute();
+        await trx.insertInto('ticket_audit_log').values({
+          id: randomUUID(), ticket_id: source.id, actor_user_id: session.uid, actor_username: session.username,
+          action: 'merged_into', field: 'merged_into_ticket_id', old_value: null, new_value: target.id
+        }).execute();
+        await trx.insertInto('ticket_audit_log').values({
+          id: randomUUID(), ticket_id: target.id, actor_user_id: session.uid, actor_username: session.username,
+          action: 'merged_from', field: 'merged_into_ticket_id', old_value: null, new_value: source.id
+        }).execute();
+      });
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);

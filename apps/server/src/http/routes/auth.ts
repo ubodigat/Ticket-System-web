@@ -8,7 +8,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as argon2 from 'argon2';
-import { TOTP } from 'otpauth';
+import { verifyAndConsumeTotp } from '../../domain/totp.js';
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Env } from '../../config/env.js';
@@ -94,13 +94,6 @@ function verifyMfaPendingToken(env: Env, token: string): { uid: string } | null 
   } catch {
     return null;
   }
-}
-
-function verifyTotpCode(secretBase32: string, code: string): boolean {
-  const totp = new TOTP({ secret: secretBase32, digits: 6, period: 30 });
-  // window: 1 erlaubt eine Zeitschritt-Toleranz (+-30s) für Uhrabweichungen zwischen
-  // Server und Authenticator-App, ohne die Angriffsfläche nennenswert zu vergrößern.
-  return totp.validate({ token: code, window: 1 }) !== null;
 }
 
 function isHttpsRequest(req: FastifyRequest): boolean {
@@ -274,7 +267,8 @@ async function issueSession(app: FastifyInstance, req: FastifyRequest, reply: Fa
     user_agent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'].slice(0, 512) : null,
     ip_address: req.ip?.slice(0, 64) ?? null,
     expires_at: expiresAt,
-    revoked_at: null
+    revoked_at: null,
+    last_seen_at: new Date()
   }).execute();
   reply.setCookie(
     sessionCookieName(req),
@@ -343,7 +337,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const policy = await loadSecurityPolicy(app.db);
     const user = await app.db
       .selectFrom('users')
-      .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'failed_login_count'])
+      .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'failed_login_count', 'ldap_login_enabled'])
       .where('username', '=', input.username)
       .executeTakeFirst();
 
@@ -353,6 +347,10 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       // über unterschiedliche Fehlertexte, siehe Anforderungsliste "Account Enumeration").
       if (user) {
         await logSecurityEvent(app, 'login.rejected_locked_or_archived', input.username);
+        // Security-Audit M-4: ohne diesen Vergleich läuft für gesperrte/archivierte Konten KEIN
+        // argon2.verify() -- die Antwort kommt dadurch messbar schneller als bei "falsches
+        // Passwort" und verrät per Zeitmessung, dass das Konto existiert und gesperrt ist.
+        await argon2.verify(user.password_hash, input.password).catch(() => false);
       } else {
         // Dummy-Verify gegen Timing-basierte Enumeration unbekannter Benutzernamen (siehe oben).
         await argon2.verify(await getDummyPasswordHash(), input.password).catch(() => false);
@@ -369,7 +367,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     }
     // LDAP ist eine ERGÄNZUNG zum lokalen Passwort, kein Ersatz: nur versucht, wenn das lokale
     // Passwort nicht passt, und nur für ein bereits lokal existierendes Konto (siehe auth/ldap.ts).
-    if (!ok) {
+    // Security-Audit N7: LDAP ist standardmäßig für jedes Konto AUS (Opt-in durch eine
+    // Superadmin-Person je Konto, "ldap_login_enabled") und für Superadmin-Konten zusätzlich
+    // hart ausgeschlossen -- ein kompromittiertes/fehlkonfiguriertes LDAP-Verzeichnis darf
+    // niemals ausreichen, um die höchste Berechtigungsstufe der Anwendung zu erlangen.
+    if (!ok && user.role !== 'superadmin' && user.ldap_login_enabled) {
       ok = await authenticateLdap({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, input.username, input.password);
       if (ok) await logSecurityEvent(app, 'login.ldap_success', input.username);
     }
@@ -431,10 +433,10 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         keyVersion: totpDek.keyVersion
       });
 
-      if (!verifyTotpCode(secret, parsed.data.code)) {
+      if (!(await verifyAndConsumeTotp(app.db, user.id, secret, parsed.data.code))) {
         await recordFailedLogin(app, user.id, user.failed_login_count, policy);
         await logSecurityEvent(app, 'login.wrong_totp_code', user.username);
-        return authProblem(reply, 401, 'Code ungültig', 'Der eingegebene Code ist falsch oder abgelaufen.');
+        return authProblem(reply, 401, 'Code ungültig', 'Der eingegebene Code ist falsch, abgelaufen oder wurde bereits verwendet.');
       }
       await resetFailedLogins(app, user.id);
 

@@ -14,7 +14,9 @@ import { startMaintenanceScheduler } from './jobs/maintenance.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
-  const db = createDb(env);
+  // Security-Audit N9: Laufzeitbetrieb nutzt (falls konfiguriert) das eingeschränkte
+  // DB_RUNTIME_USER-Konto -- siehe db/connection.ts.
+  const db = createDb(env, 'runtime');
   const keyProvider = createFileKeyProvider(env.KEK_FILE_PATH);
   const app = await buildApp({ env, db, keyProvider });
 

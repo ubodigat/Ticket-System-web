@@ -98,6 +98,7 @@ const settingsConfigSchema = z.object({
   securityConfig: z.object({
     force2FA: z.enum(['none', 'all', 'admin', 'user']).optional(),
     sessionTimeout: z.number().int().min(5).max(10080).optional(),
+    idleTimeoutMinutes: z.number().int().min(1).max(10080).optional(),
     maxLoginAttempts: z.number().int().min(1).max(50).optional(),
     lockoutAction: z.enum(['lock', 'temp', 'none']).optional(),
     lockoutMinutes: z.number().int().min(1).max(10080).optional()
@@ -183,6 +184,19 @@ const ldapConfigSchema = z.object({
   userFilter: z.string().trim().min(1).max(255).default('(uid={username})')
 });
 
+// Security-Audit M-5: GET /api/v2/settings entfernte bisher nur drei private Mail-Schlüssel,
+// gab aber BCC-Archivadresse, Outlook-Tenant-/Client-ID, Postfach, Mailvorlage und die komplette
+// Sicherheitsrichtlinie (Sperrschwelle, Sitzungsdauer, 2FA-Pflicht) an JEDES angemeldete Konto
+// heraus. Diese Blöcke sind reine Admin-Konfiguration ohne Nutzen für normale Benutzeroberflächen
+// (SLA/Geschäftszeiten/Ticketnummern/Benachrichtigungsregeln/Branding bleiben erhalten).
+function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any> {
+  const clone = JSON.parse(JSON.stringify(config || {}));
+  delete clone.emailAdvancedConfig;
+  delete clone.outlookConfig;
+  delete clone.securityConfig;
+  return clone;
+}
+
 function removeWriteOnlyMailSecrets(config: Record<string, any>): Record<string, any> {
   const clone = JSON.parse(JSON.stringify(config || {}));
   if (clone.emailAdvancedConfig) {
@@ -214,12 +228,14 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
   // werden z.B. im Frontend für Fristanzeigen gebraucht), nicht nur Admins.
   app.get('/api/v2/settings', async (req, reply) => {
     try {
-      requireSession(req);
+      const session = requireSession(req);
       const row = await app.db.selectFrom('app_settings')
         .select(['company_name', 'portal_name', 'config_json'])
         .where('id', '=', 1)
         .executeTakeFirstOrThrow();
-      const config = removeWriteOnlyMailSecrets(row.config_json ? JSON.parse(row.config_json) : {});
+      let config = removeWriteOnlyMailSecrets(row.config_json ? JSON.parse(row.config_json) : {});
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      if (!isAdmin) config = removeAdminOnlyConfig(config);
       return reply.send({ companyName: row.company_name, portalName: row.portal_name, config });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -283,6 +299,16 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       const session = requireSuperadmin(req);
       const parsed = smtpConfigSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+
+      // Security-Audit B12: ein leeres Passwortfeld lässt bisher das gespeicherte Passwort auch
+      // dann stehen, wenn Host oder Port auf ein ANDERES Ziel geändert werden -- wer (oder wer es
+      // übernimmt) einen eigenen Server einträgt, würde so unwissentlich das SMTP-Passwort an
+      // diesen neuen Server senden. Bei geändertem Host/Port ist ein neues Passwort Pflicht.
+      const currentSmtp = await app.db.selectFrom('app_settings').select(['smtp_host', 'smtp_port']).where('id', '=', 1).executeTakeFirst();
+      const smtpTargetChanged = !!currentSmtp && (currentSmtp.smtp_host !== parsed.data.host || currentSmtp.smtp_port !== parsed.data.port);
+      if (smtpTargetChanged && !parsed.data.password) {
+        return reply.code(400).send({ error: 'password_required_for_new_target' });
+      }
 
       const updates: Record<string, unknown> = {
         smtp_host: parsed.data.host,
@@ -361,6 +387,20 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       const session = requireSuperadmin(req);
       const parsed = ldapConfigSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+
+      // Security-Audit B12: nur verschlüsselte LDAP-Verbindungen zulassen -- mit ldap:// gehen
+      // sowohl das Dienstkonto-Bind-Passwort als auch die Login-Passwörter der Nutzenden
+      // unverschlüsselt übers Netz.
+      if (!/^ldaps:\/\//i.test(parsed.data.url)) {
+        return reply.code(400).send({ error: 'ldaps_required' });
+      }
+      // Wie bei SMTP: bei geändertem Ziel (URL) ist ein neues Bind-Passwort Pflicht, sonst würde
+      // das gespeicherte Dienstkonto-Passwort an einen neuen, potenziell fremden Server gehen.
+      const currentLdap = await app.db.selectFrom('app_settings').select(['ldap_url']).where('id', '=', 1).executeTakeFirst();
+      const ldapTargetChanged = !!currentLdap && currentLdap.ldap_url !== parsed.data.url;
+      if (ldapTargetChanged && !parsed.data.bindPassword) {
+        return reply.code(400).send({ error: 'password_required_for_new_target' });
+      }
 
       const updates: Record<string, unknown> = {
         ldap_enabled: parsed.data.enabled,

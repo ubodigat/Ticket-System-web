@@ -115,6 +115,7 @@ export const Store = {
         mobile: u.mobile || '',
         jobTitle: u.job_title || '',
         officeLocation: u.office_location || '',
+        ldapLoginEnabled: !!u.ldap_login_enabled,
         supervisorUserId: u.supervisor_user_id ?? null,
         accountArchived: !!u.account_archived,
         accountLocked: !!u.locked_permanent,
@@ -875,8 +876,15 @@ export const Store = {
         const body = await res.json().catch(() => ({}));
         return { ...body, httpStatus: res.status };
     },
-    runUpdate: async () => {
-        const res = await fetch('/api/v2/update/run', { method: 'POST', credentials: 'same-origin' }).catch(() => null);
+    // Härtung statt Entfernung der In-App-Update-Funktion: Passwort (+ TOTP bei aktiver 2FA) und
+    // der zuvor angezeigte Ziel-Commit-Hash müssen mitgeschickt werden (siehe update.ts
+    // requireStepUp/Commit-Pinning) -- die Oberfläche fragt beides vor dem eigentlichen Aufruf ab.
+    runUpdate: async (expectedCommit, password, totpCode) => {
+        const res = await fetch('/api/v2/update/run', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ expected_commit: expectedCommit, password, totp_code: totpCode || undefined })
+        }).catch(() => null);
         if (!res) return { httpStatus: 0 };
         const body = await res.json().catch(() => ({}));
         return { ...body, httpStatus: res.status };
@@ -884,8 +892,24 @@ export const Store = {
     // Unabhängig vom vollen Update-Zyklus, immer verfügbar (nicht durch "kein Update verfügbar"
     // blockiert) -- holt die Datenbank wieder auf den Schema-Stand des bereits laufenden Codes,
     // falls ein früherer Update-Lauf vor dem Migrations-Schritt abgebrochen ist.
-    runMigrate: async () => {
-        const res = await fetch('/api/v2/update/migrate', { method: 'POST', credentials: 'same-origin' }).catch(() => null);
+    runMigrate: async (password, totpCode) => {
+        const res = await fetch('/api/v2/update/migrate', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ password, totp_code: totpCode || undefined })
+        }).catch(() => null);
+        if (!res) return { httpStatus: 0 };
+        const body = await res.json().catch(() => ({}));
+        return { ...body, httpStatus: res.status };
+    },
+    // Rollback auf den Commit, der vor dem letzten erfolgreichen In-App-Update aktiv war (siehe
+    // updater-server.mjs runRollback) -- ebenfalls mit Step-up + Commit-Pinning.
+    runRollback: async (expectedCommit, password, totpCode) => {
+        const res = await fetch('/api/v2/update/rollback', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ expected_commit: expectedCommit, password, totp_code: totpCode || undefined })
+        }).catch(() => null);
         if (!res) return { httpStatus: 0 };
         const body = await res.json().catch(() => ({}));
         return { ...body, httpStatus: res.status };

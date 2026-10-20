@@ -18,6 +18,7 @@ import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
+import { verifyAndConsumeTotp } from '../../domain/totp.js';
 import { routeError } from './routeError.js';
 
 export interface MfaRouteDeps {
@@ -37,13 +38,26 @@ function totpCtx(deps: MfaRouteDeps, userId: string, keyVersion: number) {
 }
 
 export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): void {
-  // POST /api/v2/mfa/setup - erzeugt ein neues Secret für das EIGENE Konto. Wird noch NICHT
-  // aktiv (totp_enabled bleibt false), bis /confirm den ersten Code bestätigt -- verhindert,
-  // dass ein nie abgeschlossener Setup-Versuch versehentlich als aktiver Schutz zählt.
+  // POST /api/v2/mfa/setup - erzeugt ein neues Secret für das EIGENE Konto. Solange 2FA noch
+  // nicht aktiv ist, läuft das wie bisher direkt über totp_secret_enc. Ist 2FA aber bereits
+  // aktiv, verlangt der Request zusätzlich das aktuelle Passwort (Step-up, Security-Audit B3 --
+  // sonst könnte eine kurz entwendete Session die bestehende 2FA lautlos abschalten, da
+  // totp_secret_enc sofort überschrieben und totp_enabled sofort auf false gesetzt würde) und
+  // das neue Secret landet nur in totp_pending_secret_enc, bis /confirm es per gültigem Code
+  // übernimmt -- das aktive Secret bleibt bis dahin unverändert in Kraft.
   app.post('/api/v2/mfa/setup', async (req, reply) => {
     try {
       const session = requireSession(req);
-      const user = await app.db.selectFrom('users').select('username').where('id', '=', session.uid).executeTakeFirstOrThrow();
+      const user = await app.db.selectFrom('users')
+        .select(['username', 'totp_enabled', 'password_hash'])
+        .where('id', '=', session.uid).executeTakeFirstOrThrow();
+
+      if (user.totp_enabled) {
+        const parsed = z.object({ password: z.string().min(1) }).safeParse(req.body);
+        if (!parsed.success) return reply.code(401).send({ error: 'password_required' });
+        const ok = await argon2.verify(user.password_hash, parsed.data.password);
+        if (!ok) return reply.code(401).send({ error: 'password_required' });
+      }
 
       const secret = new Secret({ size: 20 });
       const totp = new TOTP({
@@ -54,7 +68,11 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
 
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
       const encrypted = fieldCipher.encryptField(secret.base32, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
-      await app.db.updateTable('users').set({ totp_secret_enc: encrypted, totp_enabled: false }).where('id', '=', session.uid).execute();
+      if (user.totp_enabled) {
+        await app.db.updateTable('users').set({ totp_pending_secret_enc: encrypted }).where('id', '=', session.uid).execute();
+      } else {
+        await app.db.updateTable('users').set({ totp_secret_enc: encrypted, totp_pending_secret_enc: null, totp_enabled: false }).where('id', '=', session.uid).execute();
+      }
 
       const qrDataUrl = await QRCode.toDataURL(totp.toString(), { margin: 1, width: 240 });
       return reply.send({ secret: secret.base32, qrDataUrl });
@@ -63,24 +81,32 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
     }
   });
 
-  // POST /api/v2/mfa/confirm - erster Code nach dem Setup bestätigt die Einrichtung.
+  // POST /api/v2/mfa/confirm - erster Code nach dem Setup bestätigt die Einrichtung. Liegt ein
+  // Secret in totp_pending_secret_enc (Neueinrichtung bei bereits aktiver 2FA, siehe /setup
+  // oben), wird DAS bestätigt und übernimmt das aktive Secret -- sonst wie bisher das frisch
+  // erzeugte, noch nicht aktive totp_secret_enc.
   app.post('/api/v2/mfa/confirm', async (req, reply) => {
     try {
       const session = requireSession(req);
       const parsed = z.object({ code: z.string().trim().length(6) }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const user = await app.db.selectFrom('users').select(['totp_secret_enc']).where('id', '=', session.uid).executeTakeFirst();
-      if (!user?.totp_secret_enc) return reply.code(409).send({ error: 'no_pending_setup' });
+      const user = await app.db.selectFrom('users').select(['totp_secret_enc', 'totp_pending_secret_enc']).where('id', '=', session.uid).executeTakeFirst();
+      const pendingEnc = user?.totp_pending_secret_enc ?? null;
+      const targetEnc = pendingEnc ?? user?.totp_secret_enc ?? null;
+      if (!targetEnc) return reply.code(409).send({ error: 'no_pending_setup' });
 
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
-      const secret = fieldCipher.decryptField(user.totp_secret_enc, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
-      const totp = new TOTP({ secret, digits: 6, period: 30 });
-      if (totp.validate({ token: parsed.data.code, window: 1 }) === null) {
+      const secret = fieldCipher.decryptField(targetEnc, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
+      if (!(await verifyAndConsumeTotp(app.db, session.uid, secret, parsed.data.code))) {
         return reply.code(401).send({ error: 'invalid_code' });
       }
 
-      await app.db.updateTable('users').set({ totp_enabled: true }).where('id', '=', session.uid).execute();
+      if (pendingEnc) {
+        await app.db.updateTable('users').set({ totp_secret_enc: pendingEnc, totp_pending_secret_enc: null, totp_enabled: true }).where('id', '=', session.uid).execute();
+      } else {
+        await app.db.updateTable('users').set({ totp_enabled: true }).where('id', '=', session.uid).execute();
+      }
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -99,7 +125,7 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
       const ok = await argon2.verify(user.password_hash, parsed.data.password);
       if (!ok) return reply.code(401).send({ error: 'wrong_password' });
 
-      await app.db.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null }).where('id', '=', session.uid).execute();
+      await app.db.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null }).where('id', '=', session.uid).execute();
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);

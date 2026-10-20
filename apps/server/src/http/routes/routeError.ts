@@ -15,9 +15,14 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 // bewusst geschriebenen Kontrollfluss-Fehler (401/403/404/409/...) mit ihren festen,
 // ungefährlichen Texten gehen an den Client; alles andere wird nur serverseitig geloggt und
 // als generischer 500er beantwortet.
+// 503 ist zusätzlich zum 4xx-Bereich erlaubt: eigene, bewusst geworfene "Dienst nicht erreichbar"-
+// Fehler (z.B. ClamAV nicht erreichbar, siehe domain/antivirus.ts) sollen genauso wie 4xx-Fehler
+// mit ihrem festen, ungefährlichen Text an den Client gehen statt im generischen 500er zu verschwinden.
+const ALLOWED_5XX = new Set([503]);
+
 export function routeError(app: FastifyInstance, reply: FastifyReply, err: unknown): FastifyReply {
   const statusCode = (err as { statusCode?: unknown })?.statusCode;
-  if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
+  if (typeof statusCode === 'number' && ((statusCode >= 400 && statusCode < 500) || ALLOWED_5XX.has(statusCode))) {
     const message = (err as { message?: unknown })?.message;
     return reply.code(statusCode).send({ error: typeof message === 'string' ? message : 'bad_request' });
   }
