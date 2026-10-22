@@ -58,10 +58,11 @@ export const fieldCipher: FieldCipher = {
   },
 
   decryptField(stored, dek, ctx) {
+    if (stored.length < GCM_IV_LENGTH + GCM_TAG_LENGTH) throw new Error('Invalid encrypted field');
     const iv = stored.subarray(0, GCM_IV_LENGTH);
     const tag = stored.subarray(GCM_IV_LENGTH, GCM_IV_LENGTH + GCM_TAG_LENGTH);
     const ciphertext = stored.subarray(GCM_IV_LENGTH + GCM_TAG_LENGTH);
-    const decipher = createDecipheriv('aes-256-gcm', dek, iv);
+    const decipher = createDecipheriv('aes-256-gcm', dek, iv, { authTagLength: GCM_TAG_LENGTH });
     decipher.setAAD(buildAad(ctx));
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
@@ -78,18 +79,10 @@ export async function unwrapDekOrThrow(provider: KeyProvider, wrapped: Buffer): 
   return provider.unwrapDek(wrapped);
 }
 
-// Security-Audit R-2: zusätzliches Sicherheitsnetz NEBEN der automatischen Alt-Verschlüsselung
-// in db/reencryptLegacy.ts (die bei jedem migrate.js-Lauf greift) -- falls ein Wert trotzdem
-// noch als Klartext in der Spalte steht (z.B. weil die automatische Nachverschlüsselung aus
-// irgendeinem Grund fehlschlug oder übersprungen wurde), soll das NIE einen 500er für die ganze
-// Liste/Seite auslösen. Ein Entschlüsselungsfehler wird hier als "das war schon Klartext"
-// interpretiert und der Rohinhalt als UTF-8-Text zurückgegeben, statt zu werfen.
+// Kept as a compatibility name for callers. Plaintext fallback is deliberately disabled.
 export function decryptFieldTolerant(stored: Buffer, dek: Buffer, ctx: AadContext): string {
-  try {
-    return fieldCipher.decryptField(stored, dek, ctx);
-  } catch {
-    return stored.toString('utf8');
-  }
+  // Legacy plaintext is migrated before deployment. Authentication failures must fail closed.
+  return fieldCipher.decryptField(stored, dek, ctx);
 }
 
 // Blind-Index für Exact-Match-Suche (docs/adr/0005): eigener Schlüsselraum, getrennt von den

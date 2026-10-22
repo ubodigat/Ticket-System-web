@@ -11,6 +11,19 @@ permissions:
 jobs:
   server:
     runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:12.3@sha256:99c125f103f5d081ebbc9ffe064e63daf7f688ac33a5f7f29af2d7260a96debf
+        env:
+          MARIADB_ROOT_PASSWORD: ci-root-password
+          MARIADB_DATABASE: ticketsystem_security_ci
+          MARIADB_USER: ticketapp
+          MARIADB_PASSWORD: ci-password-with-equals==
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
     steps:
       - uses: actions/checkout@v5
 
@@ -21,6 +34,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Verify pinned installation manifest
+        run: node ops/create-install-manifest.mjs --check
+
+      - name: Installer security regressions
+        run: bash ops/tests/installer-security.sh
+
       - name: Typecheck
         run: npm run typecheck --workspace=apps/server
 
@@ -29,6 +48,17 @@ jobs:
 
       - name: Build
         run: npm run build --workspace=apps/server
+
+      - name: MariaDB upgrade and encryption integration
+        run: node ops/tests/mariadb-security.mjs
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_NAME: ticketsystem_security_ci
+          DB_USER: ticketapp
+          DB_PASSWORD: ci-password-with-equals==
+          COOKIE_SECRET: ci-cookie-secret-32-characters-minimum
+          INSTALLATION_ID: 33333333-3333-4333-8333-333333333333
 
       - name: Dependency audit (keine bekannten Schwachstellen, docs/THREAT_MODEL.md §7)
         run: npm audit --audit-level=high

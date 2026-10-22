@@ -18,6 +18,17 @@ export function getStatusColor(s) {
     return 'var(--text-sec)';
 }
 
+// Wie getStatusColor(), aber als CSS-Klasse statt als inline style="--dot:..." -- CSP
+// (style-src ohne 'unsafe-inline') erlaubt keine per-Element gesetzten Inline-Styles mehr,
+// siehe .status-dot-* in style.css.
+export function getStatusColorClass(s) {
+    if (s === 'Neu') return 'status-dot-neu';
+    if (s === 'In Bearbeitung') return 'status-dot-in-bearbeitung';
+    if (String(s).startsWith('Warten auf')) return 'status-dot-warten';
+    if (s === 'Geschlossen') return 'status-dot-geschlossen';
+    return '';
+}
+
 export function getPrioValue(p) {
     if (p === 'Kritisch') return 3;
     if (p === 'Hoch') return 2;

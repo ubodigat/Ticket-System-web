@@ -28,6 +28,7 @@ import { registerUpdateRoutes } from './routes/update.js';
 import { registerTodoRoutes } from './routes/todos.js';
 import { registerStaticAssetRoutes } from './routes/staticAssets.js';
 import { loadSecurityPolicy } from '../domain/securityPolicy.js';
+import { isAccountExpired } from '../domain/accountValidity.js';
 
 function timestampMillis(value: Date | string | null | undefined): number {
   if (!value) return 0;
@@ -44,7 +45,7 @@ function timestampMillis(value: Date | string | null | undefined): number {
 const CSP_DIRECTIVES = {
   defaultSrc: ["'self'"],
   scriptSrc: ["'self'"],
-  styleSrc: ["'self'", "'unsafe-inline'"],
+  styleSrc: ["'self'"],
   imgSrc: ["'self'", 'data:', 'blob:'],
   fontSrc: ["'self'"],
   connectSrc: ["'self'"],
@@ -148,11 +149,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         await deps.db.updateTable('sessions').set({ last_seen_at: new Date() }).where('id', '=', parsed.sid).execute();
       }
       const row = await deps.db.selectFrom('users')
-        .select(['username', 'role', 'account_archived', 'locked_until', 'locked_permanent'])
+        .select(['username', 'role', 'account_archived', 'locked_until', 'locked_permanent', 'account_valid_until'])
         .where('id', '=', parsed.uid)
         .executeTakeFirst();
       const isLocked = !!row && (row.locked_permanent || timestampMillis(row.locked_until) > Date.now());
-      if (!row || row.account_archived || isLocked) {
+      if (!row || row.account_archived || isLocked || isAccountExpired(row.account_valid_until)) {
         req.ticketSession = null;
         return;
       }
@@ -199,7 +200,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerExtrasV2Routes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerSettingsRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerKnowledgeRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
-  registerRecurringRoutes(app);
+  registerRecurringRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerTodoRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerMfaRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerUpdateRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });

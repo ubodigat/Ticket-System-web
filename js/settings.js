@@ -13,6 +13,7 @@ import { UI } from './ui.js';
 import { Auth } from './auth.js';
 import { AdminBoard } from './admin-board.js';
 import { UserDash } from './user-dash.js';
+import { BrowserNotifications } from './browser-notifications.js';
 
 export const Settings = {
     defaults: {
@@ -303,11 +304,11 @@ export const Settings = {
                             <label>${Lang.t('accentColor')}</label>
                             <div class="accent-picker">
                                 <div class="accent-presets" role="group" aria-label="${Lang.t('accentColor')}">
-                                    <button type="button" class="accent-preset" data-color="#6366f1" style="--preset:#6366f1" title="Indigo" aria-label="Indigo"></button>
-                                    <button type="button" class="accent-preset" data-color="#63bce8" style="--preset:#63bce8" title="Himmelblau" aria-label="Himmelblau"></button>
-                                    <button type="button" class="accent-preset" data-color="#10b981" style="--preset:#10b981" title="Grün" aria-label="Grün"></button>
-                                    <button type="button" class="accent-preset" data-color="#f59e0b" style="--preset:#f59e0b" title="Orange" aria-label="Orange"></button>
-                                    <button type="button" class="accent-preset" data-color="#ef4444" style="--preset:#ef4444" title="Rot" aria-label="Rot"></button>
+                                    <button type="button" class="accent-preset accent-preset-indigo" data-color="#6366f1" title="Indigo" aria-label="Indigo"></button>
+                                    <button type="button" class="accent-preset accent-preset-sky" data-color="#63bce8" title="Himmelblau" aria-label="Himmelblau"></button>
+                                    <button type="button" class="accent-preset accent-preset-green" data-color="#10b981" title="Grün" aria-label="Grün"></button>
+                                    <button type="button" class="accent-preset accent-preset-orange" data-color="#f59e0b" title="Orange" aria-label="Orange"></button>
+                                    <button type="button" class="accent-preset accent-preset-red" data-color="#ef4444" title="Rot" aria-label="Rot"></button>
                                 </div>
                                 <span class="accent-picker-divider"></span>
                                 ${UI.colorPickerMarkup('s-color', 'Eigene Farbe')}
@@ -335,6 +336,8 @@ export const Settings = {
                             <label>Benachrichtigungen</label>
                             <p class="hint">Lege fest, ob du Benachrichtigungen in der App, per E-Mail oder auf beiden Wegen erhalten möchtest. Grau hinterlegte Einträge wurden vom Administrator fest vorgegeben.</p>
                             <div id="s-notif-area" class="notif-personal-list"></div>
+                            <label class="check-row"><input id="s-browser-notifications" type="checkbox"><span id="s-browser-notifications-label"></span></label>
+                            <p class="hint" id="s-browser-notifications-status" role="status"></p>
                         </div>
                     </div>
                 </div>`;
@@ -454,6 +457,28 @@ export const Settings = {
     renderNotifArea: async (user) => {
         const area = q('#s-notif-area');
         if (!area || !user) return;
+        const browserToggle = q('#s-browser-notifications');
+        const browserStatus = q('#s-browser-notifications-status');
+        const english = (await Store.getSettings()).lang === 'en';
+        q('#s-browser-notifications-label').textContent = english ? 'Browser notifications on this device' : 'Browser-Benachrichtigungen auf diesem Ger\u00e4t';
+        const updateBrowserState = () => {
+            browserToggle.checked = BrowserNotifications.enabled();
+            browserToggle.disabled = !BrowserNotifications.supported();
+            browserStatus.textContent = !BrowserNotifications.supported()
+                ? (english ? 'Unavailable. A supported browser and trusted HTTPS connection are required.' : 'Nicht verf\u00fcgbar. Ein unterst\u00fctzter Browser und vertrauensw\u00fcrdiges HTTPS sind erforderlich.')
+                : Notification.permission === 'denied'
+                    ? (english ? 'Blocked in browser site permissions.' : 'In den Website-Berechtigungen des Browsers blockiert.')
+                    : BrowserNotifications.enabled()
+                        ? (english ? 'Enabled on this device.' : 'Auf diesem Ger\u00e4t aktiviert.')
+                        : (english ? 'Disabled on this device.' : 'Auf diesem Ger\u00e4t deaktiviert.');
+        };
+        updateBrowserState();
+        browserToggle.onchange = async () => {
+            const pending = BrowserNotifications.configure(browserToggle.checked);
+            browserToggle.disabled = true;
+            await pending;
+            updateBrowserState();
+        };
         const policy = await Store.getNotifPolicy();
         const role = Store.roleGroup(user);
         const rows = [];

@@ -14,7 +14,7 @@ import { Settings } from './settings.js';
 import { renderWorkbook } from './excel-preview.js';
 import { renderPdfPreview } from './pdf-preview.js';
 import { UserDash } from './user-dash.js';
-import { getStatusColor, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
+import { getStatusColorClass, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
 
 // Fragezeichen-Icon neben einem Einstellungs-Label: nutzt UI.initTooltips() (title-Attribut
 // wird app-weit automatisch durch die gestylte Tooltip-Box ersetzt) für eine Kurzerklärung,
@@ -913,17 +913,7 @@ export const AdminBoard = {
                 <td>${Utils.esc(l.details || '')}</td>
             </tr>`).join('');
         const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>System-Protokoll</title>
-            <style>
-                body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px;}
-                .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:4px;}
-                .print-head img{max-height:48px;max-width:180px;object-fit:contain;}
-                h1{font-size:18px;margin:0 0 4px;}
-                .meta{color:#555;font-size:12px;margin-bottom:16px;}
-                table{width:100%;border-collapse:collapse;font-size:12px;}
-                th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top;white-space:pre-line;}
-                th{background:#f0f0f0;}
-                tr:nth-child(even){background:#fafafa;}
-            </style></head><body>
+            <link rel="stylesheet" href="/js/print.css"></head><body>
             <div class="print-head">
                 <div>
                     <h1>System-Protokoll</h1>
@@ -1144,6 +1134,7 @@ export const AdminBoard = {
             el.className = 'table-row user-manager-row';
 
             const roleInfo = u.role.toUpperCase();
+            const validityExpired = u.accountValidUntil && u.accountValidUntil < new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
             const userGroups = groups
                 .filter(g => (g.members || []).includes(u.username) || (u.groups || []).includes(g.id))
                 .map(g => g.name);
@@ -1152,6 +1143,7 @@ export const AdminBoard = {
                 <div class="user-manager-text">
                     <span class="user-manager-name">${Utils.esc(u.username)}${u.twoFactorEnabled ? `<span class="badge badge-accent" title="2FA aktiv">${Icon('shield-check', 12)}2FA</span>` : ''}${u.accountLocked ? `<span class="badge badge-danger" title="Nach Fehlversuchen oder manuell gesperrt">${Icon('lock', 12)}Gesperrt</span>` : ''}${u.lockedUntil && u.lockedUntil > Date.now() ? `<span class="badge badge-danger" title="Vorübergehend nach Fehlversuchen gesperrt">${Icon('lock', 12)}Gesperrt bis ${new Date(u.lockedUntil).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</span>` : ''}${u.accountArchived ? `<span class="badge" title="Archiviert">${Icon('archive', 12)}Archiviert</span>` : ''}</span>
                     <span class="row-sub">${Utils.esc(u.name || '-')} · ${Utils.esc(u.email || 'Keine E-Mail')}</span>
+                    ${u.accountValidUntil ? `<span class="badge ${validityExpired ? 'badge-danger' : ''}">${Icon(validityExpired ? 'lock' : 'calendar', 12)}${validityExpired ? 'Abgelaufen' : 'Gültig bis'} ${Utils.esc(u.accountValidUntil.split('-').reverse().join('.'))}</span>` : ''}
                     <div class="group-chip-row">
                         <span class="badge">${Utils.esc(roleInfo)}</span>
                         ${userGroups.map(name => `<span class="group-chip">${Icon('users-round', 12)}${Utils.esc(name)}</span>`).join('')}
@@ -1339,7 +1331,7 @@ export const AdminBoard = {
                         <label class="check-row compact"><input type="checkbox" class="cf-required" ${f.required ? 'checked' : ''}>Pflicht</label>
                         <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-remove" title="Feld entfernen" aria-label="Feld entfernen">${Icon('x', 14)}</button>
                     </div>
-                    <div class="cf-options-editor" style="${f.type === 'select' ? '' : 'display:none;'}">
+                    <div class="cf-options-editor" ${f.type === 'select' ? '' : 'hidden'}>
                         <div class="cf-options-list"></div>
                         <button type="button" class="btn-ghost btn-sm cf-add-option">${Icon('plus', 13)}Option hinzufügen</button>
                     </div>
@@ -1411,7 +1403,7 @@ export const AdminBoard = {
                 { id: 'gm-print', icon: 'printer', title: 'Drucken' }
             ],
             body: `<input type="search" id="gm-search" class="section-search" placeholder="Mitglied suchen...">
-                   <div id="gm-list" style="margin-top:var(--space-3)"></div>`
+                   <div id="gm-list" class="mt-3"></div>`
         });
         const render = async () => {
             const groups = await Store.getGroups();
@@ -1463,10 +1455,7 @@ export const AdminBoard = {
             const users = await Store.getUsers();
             const members = users.filter(u => (group.members || []).includes(u.username));
             UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Mitglieder · ${Utils.esc(group.name)}</title>
-                <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}
-                .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;border-bottom:1px solid #ccc;padding-bottom:12px}
-                .print-head img{max-height:48px;max-width:180px;object-fit:contain}.print-head h1{font-size:20px;margin:0 0 4px}.print-head .meta{color:#555;font-size:12px}
-                table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}</style></head>
+                <link rel="stylesheet" href="/js/print.css"></head>
                 <body><div class="print-head"><div><h1>${Utils.esc(company.name || 'Support Portal')} · Gruppe ${Utils.esc(group.name)}</h1>
                 <div class="meta">${members.length} Mitglieder &middot; Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div></div>
                 ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}</div>
@@ -1560,6 +1549,7 @@ export const AdminBoard = {
                         <div class="field"><label>E-Mail</label><input id="ue-email" type="email"></div>
                         <div class="field field-wide" id="ue-similar-hint" hidden></div>
                         <div class="field"><label>Passwort (leer = unverändert)</label><input id="ue-pass" type="password"></div>
+                        <div class="field field-wide" id="ue-validity-box"><label for="ue-valid-until">Gültig bis einschließlich (optional)</label>${UI.dateFieldMarkup('ue-valid-until')}</div>
                         <div class="field field-wide" id="ue-contact-box">
                             <label>Kontaktdaten</label>
                             <div class="perm-grid">
@@ -1570,7 +1560,7 @@ export const AdminBoard = {
                             </div>
                         </div>
                         <div class="field field-wide" id="ue-role-box"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
-                        <div class="field field-wide" id="ue-ldap-box" style="display:none">
+                        <div class="field field-wide" id="ue-ldap-box" hidden>
                             <label class="check-row"><input type="checkbox" id="ue-ldap-enabled"><span>LDAP-Login für dieses Konto erlauben</span></label>
                             <div class="hint">LDAP ist eine Ergänzung zum lokalen Passwort (Fallback, falls das lokale Passwort nicht passt). Standardmäßig für jedes Konto deaktiviert; nur Superadmins können das freischalten. Für Superadmin-Konten selbst immer deaktiviert.</div>
                         </div>
@@ -1582,7 +1572,7 @@ export const AdminBoard = {
                             <label>Vorgesetzte Person</label>
                             <div id="ue-supervisor"></div>
                         </div>
-                        <div class="field field-wide" id="ue-man-box" style="display:none">
+                        <div class="field field-wide" id="ue-man-box" hidden>
                             <label>Verwaltung</label>
                             <div class="perm-grid">
                                 <label class="check-row"><input type="checkbox" id="ue-can-manage-req"><span>Kontoanfragen verwalten</span></label>
@@ -1620,6 +1610,14 @@ export const AdminBoard = {
         const isNew = !user;
         const currentUser = await Store.currentUser();
         const isSuper = currentUser && currentUser.role === 'superadmin';
+        const canSetValidity = isSuper || !!currentUser?.canManageUsers;
+        editModal._validityPicker?.destroy();
+        q('#ue-validity-box').innerHTML = `<label for="ue-valid-until">Gültig bis einschließlich (optional)</label>${UI.dateFieldMarkup('ue-valid-until')}`;
+        q('#ue-validity-box').hidden = !canSetValidity;
+        const validUntil = user?.accountValidUntil || null;
+        q('#ue-valid-until').value = validUntil ? validUntil.split('-').reverse().join('.') : '';
+        editModal._validityPicker = UI.bindDateField('ue-valid-until', { initialMs: validUntil ? new Date(validUntil + 'T12:00:00').getTime() : null });
+        if (window.lucide) lucide.createIcons();
 
         q('#ue-user').value = isNew ? '' : user.username;
         q('#ue-user').disabled = !isNew;
@@ -1722,6 +1720,12 @@ export const AdminBoard = {
             const mobileVal = q('#ue-mobile').value.trim();
             const jobTitleVal = q('#ue-job-title').value.trim();
             const officeLocationVal = q('#ue-office-location').value.trim();
+            const validityText = q('#ue-valid-until').value.trim();
+            const validityParts = validityText.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+            if (canSetValidity && validityText && (!validityParts || !Number.isFinite(Utils.parseGermanDateTime(validityText, '12:00')))) {
+                return UI.toast('Gültigkeitsdatum bitte als dd.mm.jjjj eingeben.');
+            }
+            const validityVal = validityParts ? `${validityParts[3]}-${validityParts[2]}-${validityParts[1]}` : null;
             const rVal = q('#ue-role').value;
             const groupVal = groupPicker?.getValue() || null;
             const supervisorVal = supervisorPicker?.getValue() || null;
@@ -1776,6 +1780,7 @@ export const AdminBoard = {
                     mobile: mobileVal,
                     jobTitle: jobTitleVal,
                     officeLocation: officeLocationVal,
+                    accountValidUntil: canSetValidity ? validityVal : null,
                     ldapLoginEnabled: ldapLoginEnabledVal,
                     permissions: isSuper ? { ...permissionsVal, canManageRequests: canManageReqVal, canManageUsers: canManageUsersVal, canViewLogs: canViewLogsVal, canManage2FA: canManage2FAVal } : undefined
                 });
@@ -1799,6 +1804,7 @@ export const AdminBoard = {
                     target.mobile = mobileVal;
                     target.jobTitle = jobTitleVal;
                     target.officeLocation = officeLocationVal;
+                    if (canSetValidity) target.accountValidUntil = validityVal;
                     if (isSuper) target.ldapLoginEnabled = ldapLoginEnabledVal;
                 }
             }
@@ -1806,6 +1812,7 @@ export const AdminBoard = {
             if (!ok) {
                 const errText = Store.lastError || '';
                 const friendly = errText.includes('email_taken') ? 'Diese E-Mail-Adresse wird bereits von einem anderen Konto verwendet.'
+                    : errText.includes('last_superadmin') ? 'Der letzte dauerhaft verfügbare Superadmin darf nicht befristet oder gesperrt werden.'
                     : errText.includes('username_taken') ? 'Dieser Benutzername ist bereits vergeben.'
                     : 'Speichern fehlgeschlagen -- bitte Eingaben prüfen (z.B. Passwort mind. 14 Zeichen, gültige E-Mail).';
                 UI.toast(friendly);
@@ -1918,7 +1925,7 @@ export const AdminBoard = {
         const percent = done ? 100 : Math.round((currentIndex / steps.length) * 100);
         return `
             <div class="update-progress">
-                <div class="update-progress-bar"><div class="update-progress-fill ${job.failed ? 'failed' : done ? 'ok' : ''}" style="width:${percent}%"></div></div>
+                <div class="update-progress-bar"><div class="update-progress-fill ${job.failed ? 'failed' : done ? 'ok' : ''}" data-percent="${percent}"></div></div>
                 <div class="update-progress-steps">
                     ${steps.map((s, i) => {
                         const state = job.failed && i === currentIndex ? 'failed' : (i < currentIndex || done) ? 'done' : i === currentIndex ? 'active' : '';
@@ -1958,6 +1965,11 @@ export const AdminBoard = {
             const runBtn = q('#sys-update-run');
             if (runBtn) runBtn.disabled = true;
             if (window.lucide) lucide.createIcons();
+            return;
+        }
+        if (status.error === 'update_signature_not_configured') {
+            area.innerHTML = `<div class="callout callout-info">Updates sind gesperrt: Es fehlt ein vertrauensw&uuml;rdiger Signaturschl&uuml;ssel. Schl&uuml;ssel in ops/docker/update-keys einrichten und den Updater neu starten.</div>`;
+            if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
             return;
         }
         if (status.error === 'update_runner_disabled' || status.enabled === false) {
@@ -2339,9 +2351,9 @@ export const AdminBoard = {
                             <div class="settings-section-title">Branding &amp; Kontaktdaten</div>
                             <div class="field">
                                 <label>Firmenlogo / Logo-URL</label>
-                                <div class="form-grid" style="grid-template-columns:1fr auto;align-items:end;gap:var(--space-2)">
+                                <div class="form-grid company-logo-grid">
                                     <input id="sys-company-logo" type="text" placeholder="https://example.com/logo.png oder hochladen">
-                                    <label class="btn btn-secondary btn-sm" style="white-space:nowrap">${Icon('upload', 15)}Hochladen<input type="file" id="sys-company-logo-file" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" style="display:none"></label>
+                                    <label class="btn btn-secondary btn-sm nowrap">${Icon('upload', 15)}Hochladen<input type="file" id="sys-company-logo-file" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" hidden></label>
                                 </div>
                                 <div class="hint" id="sys-company-logo-hint"></div>
                             </div>
@@ -3133,7 +3145,7 @@ export const AdminBoard = {
             const cats = (Array.isArray(t.category) ? t.category : [t.category || '-']).map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('');
 
             el.innerHTML = `
-                <span class="status-dot" style="--dot:${getStatusColor(t.status)}"></span>
+                <span class="status-dot ${getStatusColorClass(t.status)}"></span>
                 <div class="ticket-row-main">
                     <div class="row-title" title="${Utils.esc(t.title)}">${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</div>
                     <div class="ticket-row-cats">${cats}</div>
@@ -4225,7 +4237,7 @@ export const AdminBoard = {
             icon: 'message-square',
             size: 'sm',
             body: list.length ? `${list.length > 5 ? '<input type="search" id="tb-pick-search" class="section-search" placeholder="Textbaustein suchen...">' : ''}<div class="checkbox-list" id="tb-pick-list">${list.map(b => `
-                <button type="button" class="btn-secondary tb-pick" data-id="${Utils.esc(b.id)}" data-search="${Utils.esc(`${b.title} ${b.text}`.toLowerCase())}" style="justify-content:flex-start;width:100%">${Utils.esc(b.title)}</button>`).join('')}</div>`
+                <button type="button" class="btn-secondary tb-pick" data-id="${Utils.esc(b.id)}" data-search="${Utils.esc(`${b.title} ${b.text}`.toLowerCase())}" class="justify-start w-full">${Utils.esc(b.title)}</button>`).join('')}</div>`
                 : '<div class="empty-state compact">Noch keine Textbausteine. Lege sie unter Verwaltung → Textbausteine an.</div>'
         });
         const search = modal.querySelector('#tb-pick-search');
@@ -4265,15 +4277,7 @@ export const AdminBoard = {
             const actor = await Store.currentUser();
             const rangeLabel = modal.querySelector('#rep-range').selectedOptions[0]?.textContent || '';
             UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Auswertung</title>
-                <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px}h4{margin:20px 0 8px;font-size:13px;text-transform:uppercase;color:#555}
-                .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;border-bottom:1px solid #ccc;padding-bottom:12px}
-                .print-head img{max-height:48px;max-width:180px;object-fit:contain}
-                .print-head h1{font-size:20px;margin:0 0 4px}
-                .print-head .meta{color:#555;font-size:12px}
-                .report-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.report-kpi{border:1px solid #ccc;border-radius:6px;padding:10px}
-                .report-kpi span{display:block;font-size:11px;color:#555}.report-kpi strong{font-size:18px}
-                table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}
-                .report-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eee;font-size:13px}</style></head>
+                <link rel="stylesheet" href="/js/print.css"></head>
                 <body>
                 <div class="print-head">
                     <div>
@@ -4369,7 +4373,7 @@ export const AdminBoard = {
             icon: 'book-open',
             size: 'md',
             body: `<input type="search" id="kb-search" class="section-search" placeholder="Artikel durchsuchen...">
-                   <div id="kb-list" style="margin-top:var(--space-3)"></div>
+                   <div id="kb-list" class="mt-3"></div>
                    ${canEdit ? `<div class="kb-editor">
                        <h4 class="section-title">Neuer Artikel</h4>
                        <div class="field"><label for="kb-new-title">Titel</label><input id="kb-new-title" type="text"></div>
@@ -4382,7 +4386,7 @@ export const AdminBoard = {
                                <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-numbered" title="Nummerierte Liste" aria-label="Nummerierte Liste">${Icon('list-ordered', 15)}</button>
                                <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-table" title="Tabelle einfügen" aria-label="Tabelle einfügen">${Icon('table', 15)}</button>
                                <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-link" title="Link einfügen" aria-label="Link einfügen">${Icon('link', 15)}</button>
-                               <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen">${Icon('paperclip', 15)}<input type="file" id="kb-file-input" style="display:none" multiple></label>
+                               <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen">${Icon('paperclip', 15)}<input type="file" id="kb-file-input" hidden multiple></label>
                            </div>
                            <div id="kb-new-body" class="rich-editor" contenteditable="true" data-placeholder="Schreibe wie in einem Textverarbeitungsprogramm: Formatierungen, Listen und Tabellen direkt bearbeiten."></div>
                            <div id="kb-file-preview" class="file-preview"></div>
@@ -4711,8 +4715,8 @@ export const AdminBoard = {
             icon: 'link',
             size: 'md',
             body: `<input type="search" id="rel-search" class="section-search" placeholder="Ticket-Nr oder Titel suchen...">
-                   <label class="check-row compact" style="margin-top:var(--space-2)"><input type="checkbox" id="rel-show-archived"><span>Auch geschlossene/archivierte Tickets anzeigen</span></label>
-                   <div class="checkbox-list" id="rel-list" style="margin-top:var(--space-3)"></div>`,
+                   <label class="check-row compact mt-2"><input type="checkbox" id="rel-show-archived"><span>Auch geschlossene/archivierte Tickets anzeigen</span></label>
+                   <div class="checkbox-list mt-3" id="rel-list"></div>`,
             onSave: async (m) => {
                 const ids = [...m.querySelectorAll('input[type="checkbox"].rel-pick:checked')].map(cb => cb.value);
                 if (!ids.length) return UI.toast('Bitte mindestens ein Ticket auswählen.');
@@ -4794,7 +4798,7 @@ export const AdminBoard = {
     openSubstituteNoticePopups: async (user) => {
         if (!user) return;
         const all = await Store.getNotifications();
-        const pending = all.filter(n => n.recipient === user.username && n.type === 'absence' && !n.read);
+        const pending = all.filter(n => n.recipientUserId === user.id && n.type === 'absence' && !n.read);
         q('#substitute-popup')?.remove();
         if (!pending.length) return;
         const users = await Store.getUsers();
@@ -4971,7 +4975,7 @@ export const AdminBoard = {
             return `<div class="absence-overview-row"><div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span></div><span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Team'}</span></div>`;
         }).join('') : '<div class="empty-state compact">Aktuell ist niemand abwesend.</div>';
         modal.querySelector('.modal-body').insertAdjacentHTML('beforeend', `
-            <div class="setting-row" style="margin-top:var(--space-3);">
+            <div class="setting-row mt-3">
                 <button type="button" class="btn-primary btn-sm" id="abs-overview-own">${Icon('plane', 15)}Meine Abwesenheit einstellen</button>
             </div>`);
         modal.querySelector('#abs-overview-own').onclick = () => {
@@ -5323,7 +5327,7 @@ export const AdminBoard = {
                     <input id="custom-due-time" type="text" inputmode="numeric" placeholder="17:00" value="${initialDate ? Utils.fmtTimeOnly(initialDate) : '17:00'}">
                 </div>
             </div>
-            <div id="custom-due-dtp-host" style="display:none;">${UI.dateTimePickerMarkup('custom-due-dtp')}</div>
+            <div id="custom-due-dtp-host" hidden>${UI.dateTimePickerMarkup('custom-due-dtp')}</div>
             <p class="hint">${t.customDueAt ? 'Diese Frist wurde manuell gesetzt und ersetzt die automatische Berechnung.' : 'Standardmäßig wird die Frist aus Priorität und Geschäftszeiten berechnet. Hier kannst du sie für dieses Ticket überschreiben.'}</p>
             ${t.customDueAt ? `<button type="button" class="btn-secondary btn-sm" id="custom-due-reset">${Icon('rotate-ccw', 15)}Automatisch berechnen (zurücksetzen)</button>` : ''}
         `;
@@ -5417,8 +5421,8 @@ export const AdminBoard = {
                     <input id="cal-event-end-time" type="text" inputmode="numeric" placeholder="17:30" value="${Utils.fmtTimeOnly(endInitial)}">
                 </div>
             </div>
-            <div id="cal-event-start-dtp-host" style="display:none;">${UI.dateTimePickerMarkup('cal-event-start-dtp')}</div>
-            <div id="cal-event-end-dtp-host" style="display:none;">${UI.dateTimePickerMarkup('cal-event-end-dtp')}</div>
+            <div id="cal-event-start-dtp-host" hidden>${UI.dateTimePickerMarkup('cal-event-start-dtp')}</div>
+            <div id="cal-event-end-dtp-host" hidden>${UI.dateTimePickerMarkup('cal-event-end-dtp')}</div>
             <div class="field"><label>Notiz (im Termin sichtbar)</label><textarea id="cal-event-notes" rows="3" maxlength="5000"></textarea></div>
             <p class="hint">Legt den Termin direkt im konfigurierten Outlook-Postfach an (Systemeinstellungen &gt; Outlook). Ist die Integration nicht konfiguriert, erscheint eine entsprechende Fehlermeldung.</p>
         `;
@@ -5664,21 +5668,7 @@ export const AdminBoard = {
             <div class="grid"><div><strong>Zugeordnete Tickets</strong>${linkedToIncident.length}</div></div>
             ${linkedToIncident.length ? `<ul>${linkedToIncident.map(x => `<li>${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)} – ${Utils.esc(nameFor(x.author) || x.author || '-')} – ${Utils.esc(x.status)}</li>`).join('')}</ul>` : '<p class="desc">Keine Tickets zugeordnet.</p>'}` : incidentOf ? `<h2>Großstörung</h2><p class="desc">Zugeordnet zu ${Utils.esc(incidentOf.ticketNumber || incidentOf.id)} · ${Utils.esc(incidentOf.title)}</p>` : '';
         const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>${Utils.esc(t.ticketNumber || t.id)}</title>
-            <style>
-                body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px;max-width:800px;margin:0 auto;}
-                .print-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:4px;}
-                .print-head img{max-height:48px;max-width:180px;object-fit:contain;}
-                h1{font-size:20px;margin:0 0 4px;}
-                .meta{color:#555;font-size:12px;margin-bottom:16px;}
-                .grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;margin-bottom:16px;font-size:13px;}
-                .grid div strong{display:block;font-size:11px;color:#555;text-transform:uppercase;}
-                h2{font-size:14px;border-bottom:1px solid #ccc;padding-bottom:4px;margin-top:24px;}
-                .desc{white-space:pre-wrap;font-size:13px;}
-                ul{padding-left:20px;font-size:13px;}
-                .p-entry{border-bottom:1px solid #eee;padding:6px 0;font-size:12px;}
-                .p-entry span{color:#777;margin-left:8px;}
-                .p-entry p{margin:4px 0 0;white-space:pre-wrap;}
-            </style></head><body>
+            <link rel="stylesheet" href="/js/print.css"></head><body>
             <div class="print-head">
                 <div>
                     <h1>${Utils.esc(t.ticketNumber || t.id)} &middot; ${Utils.esc(t.title)}</h1>

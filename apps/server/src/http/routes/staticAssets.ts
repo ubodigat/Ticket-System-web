@@ -18,6 +18,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 
 type Asset = { file: string; contentType: string; root: 'app' | 'vendor' | 'pdfjs' };
 const ASSETS: Record<string, Asset> = {
+  '/js/print.css': { file: 'js/print.css', contentType: 'text/css; charset=utf-8', root: 'app' },
   '/index.html': { file: 'index.html', contentType: 'text/html; charset=utf-8', root: 'app' },
   '/dashboard.html': { file: 'dashboard.html', contentType: 'text/html; charset=utf-8', root: 'app' },
   '/admin.html': { file: 'admin.html', contentType: 'text/html; charset=utf-8', root: 'app' },
@@ -28,6 +29,7 @@ const ASSETS: Record<string, Asset> = {
   '/js/utils.js': { file: 'js/utils.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/lang.js': { file: 'js/lang.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/store.js': { file: 'js/store.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/browser-notifications.js': { file: 'js/browser-notifications.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/log-diff.js': { file: 'js/log-diff.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/auth.js': { file: 'js/auth.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/ui.js': { file: 'js/ui.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },

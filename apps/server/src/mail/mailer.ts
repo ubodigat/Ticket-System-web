@@ -17,6 +17,7 @@ import type { KeyProvider } from '../crypto/keyProvider.js';
 import { ensureDek } from '../crypto/dekService.js';
 import { fieldCipher } from '../crypto/fieldCrypto.js';
 import { buildSignedMimeMessage } from '../domain/smime.js';
+import { readMailSecrets } from './secrets.js';
 
 export interface MailDeps {
   db: Kysely<Database>;
@@ -84,19 +85,14 @@ interface EmailAdvancedConfig {
 // zusaetzlich sinnlos doppelt in companyBrandingConfig vorhanden (jetzt entfernt, siehe
 // settings.ts); das hier ist die einzige verbleibende, jetzt auch tatsaechlich genutzte Stelle.
 async function loadEmailAdvancedConfig(deps: MailDeps): Promise<EmailAdvancedConfig> {
-  const row = await deps.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+  const row = await deps.db.selectFrom('app_settings').select(['config_json', 'mail_secrets_enc']).where('id', '=', 1).executeTakeFirst();
   if (!row?.config_json) return {};
-  try {
-    const parsed = JSON.parse(row.config_json);
-    return (parsed && typeof parsed === 'object' && parsed.emailAdvancedConfig) || {};
-  } catch {
-    return {};
-  }
+  const parsed = JSON.parse(row.config_json);
+  return { ...((parsed && typeof parsed === 'object' && parsed.emailAdvancedConfig) || {}),
+    ...await readMailSecrets(deps, row.mail_secrets_enc) };
 }
 
-// Best-effort: wird aus createNotification() aufgerufen, darf eine Benachrichtigung niemals
-// blockieren, wenn SMTP nicht konfiguriert ist oder der Versand fehlschlaegt (Netzwerk, falsche
-// Zugangsdaten, ...) -- deshalb fängt jeder Aufrufer selbst ab bzw. nutzt sendMailSafe.
+// Immediate transport for the queue worker and explicit SMTP connection tests only.
 export async function sendMail(deps: MailDeps, to: string, subject: string, text: string): Promise<void> {
   const loaded = await loadSmtpConfig(deps);
   if (!loaded) throw new Error('smtp_not_configured');
@@ -121,6 +117,9 @@ export async function sendMail(deps: MailDeps, to: string, subject: string, text
     host: loaded.config.host,
     port: loaded.config.port,
     secure: loaded.config.secure,
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 30000,
     requireTLS,
     tls: { rejectUnauthorized },
     auth: loaded.config.user ? { user: loaded.config.user, pass: loaded.password ?? undefined } : undefined,
@@ -178,16 +177,4 @@ export async function sendMail(deps: MailDeps, to: string, subject: string, text
     text: finalText,
     ...(html ? { html } : {})
   });
-}
-
-export async function sendMailSafe(deps: MailDeps, to: string, subject: string, text: string): Promise<void> {
-  try {
-    await sendMail(deps, to, subject, text);
-  } catch (err) {
-    // E-Mail-Zustellung ist best-effort -- die eigentliche In-App-Benachrichtigung bleibt davon
-    // unberührt. Fehlerdetails landen im Server-Log, nicht beim Benutzer.
-    if (err instanceof Error && err.message !== 'smtp_not_configured') {
-      console.error('E-Mail-Versand fehlgeschlagen:', err.message);
-    }
-  }
 }

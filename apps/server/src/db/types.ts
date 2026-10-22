@@ -69,6 +69,7 @@ export interface UsersTable {
   notif_prefs_json: Nullable<string>;
   supervisor_user_id: Nullable<string>;
   account_archived: ColumnType<boolean, boolean, boolean>;
+  account_valid_until: NullableTimestamp;
   locked_until: NullableTimestamp;
   locked_permanent: ColumnType<boolean, boolean, boolean>;
   installation_id: string;
@@ -135,6 +136,7 @@ export interface RateLimitCountersTable {
 }
 
 export interface AppSettingsTable {
+  mail_secrets_enc: Nullable<Buffer>;
   id: number;
   company_name: string;
   portal_name: string;
@@ -229,8 +231,8 @@ export interface KbArticlesTable {
 
 export interface RecurringTicketRulesTable {
   id: string;
-  title: string;
-  description: string;
+  title: Buffer;
+  description: Buffer;
   category: Nullable<string>;
   priority: string;
   interval_unit: 'day' | 'week' | 'month';
@@ -275,7 +277,10 @@ export interface TicketsTable {
   waiting_message: Nullable<Buffer>;
   waiting_reminder_sent: Generated<boolean>;
   merged_into_ticket_id: Nullable<string>;
-  custom_fields_json: Nullable<string>;
+  // Security-Audit N10-Rest: AES-256-GCM-verschlüsselt, Inhalt ist das JSON der tatsächlichen
+  // Freitext-/Auswahlwerte (nicht die Feld-Definitionen -- die bleiben in categories.custom_fields_json
+  // als Schema-Metadaten unverschlüsselt).
+  custom_fields_json: Nullable<Buffer>;
   installation_id: string;
   created_at: CreatedAt;
   updated_at: UpdatedAt;
@@ -378,8 +383,8 @@ export interface AccountRequestsTable {
   id: string;
   name: Buffer;
   email: Buffer;
-  company: Nullable<string>;
-  reason: Nullable<string>;
+  company: Nullable<Buffer>;
+  reason: Nullable<Buffer>;
   status: string;
   reviewed_by_user_id: Nullable<string>;
   installation_id: string;
@@ -420,6 +425,7 @@ export interface GlobalAuditLogTable {
 }
 
 export interface Database {
+  encryption_checkpoints: { purpose: string };
   recurring_admin_todos: {
     id: string;
     content: Buffer;

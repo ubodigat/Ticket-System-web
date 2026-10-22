@@ -18,6 +18,7 @@ import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { APP_JS, AUTH_CSS, LOGIN_JS } from '../assets/authPage.js';
 import { authenticateLdap } from '../../auth/ldap.js';
 import { loadSecurityPolicy, force2faAppliesToRole, type SecurityPolicy } from '../../domain/securityPolicy.js';
+import { isAccountExpired } from '../../domain/accountValidity.js';
 
 const PROD_SESSION_COOKIE = '__Host-ticket_session';
 const DEV_SESSION_COOKIE = 'ticket_session';
@@ -204,10 +205,10 @@ async function currentUser(req: FastifyRequest, app: FastifyInstance, deps: Auth
   if (!dbSession || dbSession.revoked_at || timestampMillis(dbSession.expires_at) <= Date.now()) return null;
   const user = await app.db
     .selectFrom('users')
-    .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until'])
+    .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until', 'account_valid_until'])
     .where('id', '=', session.uid)
     .executeTakeFirst();
-  if (!user || user.account_archived || user.locked_permanent) return null;
+  if (!user || user.account_archived || user.locked_permanent || isAccountExpired(user.account_valid_until)) return null;
   if (timestampMillis(user.locked_until) > Date.now()) return null;
   return decryptUser(app, deps, user);
 }
@@ -337,12 +338,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const policy = await loadSecurityPolicy(app.db);
     const user = await app.db
       .selectFrom('users')
-      .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'failed_login_count', 'ldap_login_enabled'])
+      .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'failed_login_count', 'ldap_login_enabled', 'account_valid_until'])
       .where('username', '=', input.username)
       .executeTakeFirst();
 
     const lockedUntil = timestampMillis(user?.locked_until);
-    if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now()) {
+    if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || isAccountExpired(user.account_valid_until)) {
       // Absichtlich dieselbe Fehlermeldung wie bei falschem Passwort (kein Account-Enumeration
       // über unterschiedliche Fehlertexte, siehe Anforderungsliste "Account Enumeration").
       if (user) {
@@ -415,11 +416,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       const policy = await loadSecurityPolicy(app.db);
       const user = await app.db
         .selectFrom('users')
-        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'totp_secret_enc', 'failed_login_count'])
+        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'totp_secret_enc', 'failed_login_count', 'account_valid_until'])
         .where('id', '=', pending.uid)
         .executeTakeFirst();
       const lockedUntil = timestampMillis(user?.locked_until);
-      if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || !user.totp_enabled || !user.totp_secret_enc) {
+      if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || isAccountExpired(user.account_valid_until) || !user.totp_enabled || !user.totp_secret_enc) {
         return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Bitte erneut anmelden.');
       }
 

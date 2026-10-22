@@ -11,6 +11,12 @@ import { loadEnv } from '../config/env.js';
 import { createDb } from './connection.js';
 import { createFileKeyProvider } from '../crypto/keyProvider.js';
 import { reencryptLegacyPlaintext } from './reencryptLegacy.js';
+import { migrateMailSecrets } from '../mail/secrets.js';
+import { migration_0041_mail_secrets } from './migrations/0041_mail_secrets.js';
+import { migration_0042_notification_identity } from './migrations/0042_notification_identity.js';
+import { migration_0043_encryption_checkpoints } from './migrations/0043_encryption_checkpoints.js';
+import { migration_0044_contact_ciphertext_capacity } from './migrations/0044_contact_ciphertext_capacity.js';
+import { migration_0045_account_valid_until } from './migrations/0045_account_valid_until.js';
 import { migration_0001_installations } from './migrations/0001_installations.js';
 import { migration_0002_key_management } from './migrations/0002_key_management.js';
 import { migration_0003_users_and_groups } from './migrations/0003_users_and_groups.js';
@@ -46,6 +52,9 @@ import { migration_0034_encrypt_approval_waiting_text } from './migrations/0034_
 import { migration_0035_encrypt_contact_fields } from './migrations/0035_encrypt_contact_fields.js';
 import { migration_0036_todo_completed_at } from './migrations/0036_todo_completed_at.js';
 import { migration_0037_outlook_calendar_events } from './migrations/0037_outlook_calendar_events.js';
+import { migration_0038_encrypt_recurring_rules } from './migrations/0038_encrypt_recurring_rules.js';
+import { migration_0039_encrypt_account_request_text } from './migrations/0039_encrypt_account_request_text.js';
+import { migration_0040_encrypt_ticket_custom_fields } from './migrations/0040_encrypt_ticket_custom_fields.js';
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
@@ -84,7 +93,15 @@ const migrations: Record<string, Migration> = {
   '0034_encrypt_approval_waiting_text': migration_0034_encrypt_approval_waiting_text,
   '0035_encrypt_contact_fields': migration_0035_encrypt_contact_fields,
   '0036_todo_completed_at': migration_0036_todo_completed_at,
-  '0037_outlook_calendar_events': migration_0037_outlook_calendar_events
+  '0037_outlook_calendar_events': migration_0037_outlook_calendar_events,
+  '0038_encrypt_recurring_rules': migration_0038_encrypt_recurring_rules,
+  '0039_encrypt_account_request_text': migration_0039_encrypt_account_request_text,
+  '0040_encrypt_ticket_custom_fields': migration_0040_encrypt_ticket_custom_fields,
+  '0041_mail_secrets': migration_0041_mail_secrets,
+  '0042_notification_identity': migration_0042_notification_identity,
+  '0043_encryption_checkpoints': migration_0043_encryption_checkpoints,
+  '0044_contact_ciphertext_capacity': migration_0044_contact_ciphertext_capacity,
+  '0045_account_valid_until': migration_0045_account_valid_until
 };
 
 const provider: MigrationProvider = {
@@ -124,15 +141,16 @@ async function main(): Promise<void> {
   // migrateToLatest(), damit die Spalten bereits den neuen (verschlüsselten) Typ haben.
   try {
     const keyProvider = createFileKeyProvider(env.KEK_FILE_PATH);
+    await migrateMailSecrets({ db, env, keyProvider });
     const { reencrypted, checked } = await reencryptLegacyPlaintext(db, env, keyProvider);
     if (reencrypted > 0) {
       console.log(`Altwerte nachtraeglich verschluesselt: ${reencrypted} von ${checked} geprueften Werten (Security-Audit R-2).`);
     }
   } catch (err) {
-    // Darf das Deployment nicht blockieren (die Spaltentypen sind bereits korrekt migriert,
-    // nur einzelne Altwerte wären betroffen) -- aber deutlich sichtbar loggen, da ein Fehlschlag
-    // hier bedeutet, dass einzelne Datensätze beim nächsten Lesen weiter scheitern können.
+    // Do not deploy with partially migrated plaintext or failed authentication checks.
     console.error('Nachtraegliche Verschluesselung von Altwerten fehlgeschlagen (R-2) -- bitte manuell pruefen/erneut ausfuehren:', err);
+    await db.destroy();
+    process.exit(1);
   }
 
   await db.destroy();

@@ -38,7 +38,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
             <button id="btn-to-dash" class="btn-ghost"><i data-lucide="layout-dashboard"></i>Dashboard</button>
             <button id="btn-list-view" class="btn-ghost"><i data-lucide="table-properties"></i>Liste</button>
             <button id="btn-archive" class="btn-ghost"><i data-lucide="archive"></i>Archiv</button>
-            <button id="btn-global-logs" class="btn-ghost" style="display:none;"><i data-lucide="bell"></i>System-Logs</button>
+            <button id="btn-global-logs" class="btn-ghost" hidden><i data-lucide="bell"></i>System-Logs</button>
             <button id="btn-notifications" class="btn-ghost btn-icon notification-button" title="Benachrichtigungen" aria-label="Benachrichtigungen"><i data-lucide="bell"></i><span class="notification-count" hidden>0</span></button>
             <button id="theme-toggle" class="btn-ghost btn-icon" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
             <button id="logout" class="btn-ghost"><i data-lucide="log-out"></i><span data-i18n="logout">Abmelden</span></button>
@@ -84,7 +84,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
         </div>
 
         <!-- Listenansicht mit Filtern, gespeicherten Ansichten und Mehrfachauswahl -->
-        <div id="list-view" style="display:none;"></div>
+        <div id="list-view" hidden></div>
 
         <div id="kanban-view">
             <div class="board-tools">
@@ -235,7 +235,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                                             <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
                                             <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
                                             <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
-                                            <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-admin-note-file-input" style="display:none" multiple></label>
+                                            <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-admin-note-file-input" hidden multiple></label>
                                             <label class="note-option"><input type="checkbox" id="m-admin-note-pin"> Anpinnen</label>
                                         </div>
                                         <textarea id="m-admin-new-comment" rows="4" placeholder="Nachricht an andere Admins... @Benutzername"></textarea>
@@ -264,7 +264,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                                             <button class="btn-ghost btn-icon btn-sm" id="m-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
                                             <button class="btn-ghost btn-icon btn-sm" id="m-note-numbered" title="Nummerierte Liste" aria-label="Nummerierte Liste"><i data-lucide="list-ordered"></i></button>
                                             <button class="btn-ghost btn-icon btn-sm" id="m-note-table" title="Tabelle einfügen" aria-label="Tabelle einfügen"><i data-lucide="table"></i></button>
-                                            <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" style="display:none" multiple></label>
+                                            <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" hidden multiple></label>
                                             <label class="note-option"><input type="checkbox" id="m-note-pin"> Anpinnen</label>
                                             <label class="note-option"><input type="checkbox" id="m-note-resolution"> Endgültige Lösung</label>
                                         </div>
@@ -283,8 +283,8 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 
                         <div class="actions-row">
                             <button id="btn-mark-incident" class="btn-secondary"><i data-lucide="siren"></i>Als Großstörung markieren</button>
-                            <button id="btn-assign-incident" class="btn-secondary" style="display:none;"><i data-lucide="link"></i>Einer Störung zuordnen</button>
-                            <button id="btn-archive-ticket" class="btn-secondary" style="display:none;"><i data-lucide="archive"></i>Archivieren</button>
+                            <button id="btn-assign-incident" class="btn-secondary" hidden><i data-lucide="link"></i>Einer Störung zuordnen</button>
+                            <button id="btn-archive-ticket" class="btn-secondary" hidden><i data-lucide="archive"></i>Archivieren</button>
                             <span id="m-extra-actions"></span>
                         </div>
                     </div>
@@ -343,7 +343,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         <option value="admin">Admin</option>
                     </select>
                 </div>
-                <div class="field" id="a-dept-field" style="display:none;">
+                <div class="field" id="a-dept-field" hidden>
                     <label for="a-dept">Abteilung (nur für Admins)</label>
                     <select id="a-dept">
                         <option value="Allgemein">Allgemein</option>

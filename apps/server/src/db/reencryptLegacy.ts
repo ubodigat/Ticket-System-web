@@ -24,7 +24,7 @@ import { fieldCipher } from '../crypto/fieldCrypto.js';
 // jetzt nachträglich verschlüsselt. Kann bei Bedarf auch manuell erneut ausgeführt werden
 // ("node dist/db/reencryptLegacy.js").
 interface ReencryptJob {
-  table: 'tickets' | 'users';
+  table: 'tickets' | 'users' | 'recurring_ticket_rules' | 'account_requests';
   field: string;
   purpose: string;
 }
@@ -35,7 +35,14 @@ const JOBS: readonly ReencryptJob[] = [
   { table: 'users', field: 'phone', purpose: 'users.phone' },
   { table: 'users', field: 'mobile', purpose: 'users.mobile' },
   { table: 'users', field: 'job_title', purpose: 'users.job_title' },
-  { table: 'users', field: 'office_location', purpose: 'users.office_location' }
+  { table: 'users', field: 'office_location', purpose: 'users.office_location' },
+  // Security-Audit N10-Rest (Migrationen 0038-0040): dieselbe nachtraegliche Verschluesselung
+  // fuer die bisher noch offenen Klartextfelder.
+  { table: 'recurring_ticket_rules', field: 'title', purpose: 'recurring_ticket_rules.title' },
+  { table: 'recurring_ticket_rules', field: 'description', purpose: 'recurring_ticket_rules.description' },
+  { table: 'account_requests', field: 'company', purpose: 'account_requests.company' },
+  { table: 'account_requests', field: 'reason', purpose: 'account_requests.reason' },
+  { table: 'tickets', field: 'custom_fields_json', purpose: 'tickets.custom_fields_json' }
 ];
 
 export async function reencryptLegacyPlaintext(db: Kysely<Database>, env: Env, keyProvider: KeyProvider): Promise<{ reencrypted: number; checked: number }> {
@@ -43,6 +50,8 @@ export async function reencryptLegacyPlaintext(db: Kysely<Database>, env: Env, k
   let checked = 0;
 
   for (const job of JOBS) {
+    const completed = await db.selectFrom('encryption_checkpoints').select('purpose')
+      .where('purpose', '=', job.purpose).executeTakeFirst();
     const dek = await ensureDek(db, keyProvider, job.purpose);
     // sql.ref/sql.table statisch pro festen, hier hart kodierten Feldnamen -- kein Nutzereingabe-
     // Bezug, daher unkritisch trotz dynamischem Spaltennamen.
@@ -61,13 +70,22 @@ export async function reencryptLegacyPlaintext(db: Kysely<Database>, env: Env, k
       try {
         fieldCipher.decryptField(stored, dek.rawDek, ctx);
         continue; // Bereits gültig verschlüsselt -- nichts zu tun.
-      } catch {
+      } catch (error) {
+        if (completed) throw error;
         // Kein gültiges AES-256-GCM-Ciphertext fuer diesen Kontext -> als Klartext behandeln.
       }
-      const plaintext = stored.toString('utf8');
+      const plaintext = new TextDecoder('utf-8', { fatal: true }).decode(stored);
+      if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(plaintext)) {
+        throw new Error(`Invalid legacy value: ${job.table}.${job.field} ${row.id}`);
+      }
       const encrypted = fieldCipher.encryptField(plaintext, dek.rawDek, ctx);
-      await sql`update ${sql.table(job.table)} set ${sql.ref(job.field)} = ${encrypted} where id = ${row.id}`.execute(db);
-      reencrypted++;
+      const result = await sql`update ${sql.table(job.table)} set ${sql.ref(job.field)} = ${encrypted}
+        where id = ${row.id} and ${sql.ref(job.field)} = ${stored}`.execute(db);
+      reencrypted += Number(result.numAffectedRows ?? 0);
+    }
+    if (!completed) {
+      await db.insertInto('encryption_checkpoints').values({ purpose: job.purpose })
+        .onDuplicateKeyUpdate({ purpose: job.purpose }).execute();
     }
   }
 

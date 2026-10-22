@@ -1,177 +1,208 @@
-# Support Portal · Enterprise Helpdesk- & Ticketsystem
+# Ticket-System / Support Portal
 
-Ein modernes, selbst gehostetes Helpdesk- und Ticketsystem mit reaktiver Weboberfläche, Node.js/Fastify-Backend, MariaDB und durchgängiger Enterprise-Sicherheit.
+Selbst gehostetes Ticketsystem mit Benutzerportal, Admin-Board, Aufgaben, Genehmigungen,
+Benachrichtigungen und Dokumentenvorschau. Daten werden serverseitig in MariaDB gespeichert.
 
-Entwickelt nach dem **Zero-Trust-Prinzip**: Der Server ist die alleinige Sicherheitsinstanz. Client-Eingaben werden niemals ungeprüft übernommen, alle Daten werden auf Feldebene verschlüsselt und sicher verwaltet.
+## Installation mit einem Befehl
 
----
+Auf einem Debian-/Ubuntu-Server **als root** ausführen. Docker, Docker Compose und die
+benötigten Pakete werden automatisch installiert. Empfohlen: mindestens 3 GB RAM;
+für den optionalen Virenscanner zusätzlich 1-2 GB.
 
-## Highlights & Kernfunktionen
-
-- **Ein-Befehl-Installation (One-Command-Install):** Vollautomatisches Setup auf Debian/Ubuntu inklusive MariaDB, Caddy (automatisches TLS), Docker Compose und Migrationen.
-- **Zero-Trust-Sicherheitsarchitektur:**
-  - **Kein Vertrauen in den Browser (Client):** Strikte serverseitige Zod-Validierung, serverseitige HTML-Sanitization (`sanitize-html`), kein RCE oder unsichere Code-Ausführung möglich.
-  - **Vollständiger Schutz vor Datei-Manipulationen:** Tiefe Dateityp-Erkennung (`file-type`), Prüfung auf Magic Bytes (Blockierung von Windows PE, Linux ELF, Mach-O, Shell-Skripten, PHP, bösartigem SVG/HTML) unabhängig vom deklarierten MIME-Typ oder der Endung.
-  - **Defense in Depth & CSP:** Strikte Content Security Policy ohne `'unsafe-inline'` oder `'unsafe-eval'` für Skripte. Keine externen CDNs – alle benötigten Assets werden lokal ausgeliefert.
-  - **Argon2id & TOTP Zwei-Faktor-Authentifizierung (2FA):** Server-validiertes MFA mit Notfall-Wiederherstellung und konfigurierbarem Brute-Force-Schutz (temporäre/permanente Kontensperrung).
-  - **Verschlüsselung auf Feldebene (Encryption at Rest):** DEK-Schlüsselhierarchie (AES-256-GCM) mit Authenticated Additional Data (AAD) für Ticketinhalte, Chatnachrichten, interne Notizen, Dateianhänge und Benutzerdaten.
-  - **Ende-zu-Ende-Verschlüsselung (E2EE):** Unterstützung für asymmetrische Schlüsselpaare und Ende-zu-Ende-Verschlüsselung im Ticket-Chat.
-- **Rollensystem & Granulare Berechtigungen (RBAC):**
-  - **Benutzer:** Tickets erstellen, eigene Tickets einsehen/kommentieren, Rückfragen beantworten, Profil verwalten.
-  - **Admins:** Kanban- und Listenansichten, Zuweisungen, interne Notizen, Zeitabrechnung, Dokumentenvorschau, Todo-Verwaltung.
-  - **Superadmins:** Vollständige Systemverwaltung, globale Audit-Logs, Benutzer- und Rollenvergabe, Sicherheitsrichtlinien.
-- **Umfassende Ticket- & Workflow-Tools:**
-  - Status-, Prioritäts- und SLA-Fristenverwaltung mit automatischer Reaktionszeitüberwachung.
-  - Interne Notizen (für Endbenutzer unsichtbar) und Aufgaben-Checklisten pro Ticket.
-  - Integrierte Dokumentenvorschau (Office- und PDF-Dateien) über isolierten Konvertierungsdienst.
-  - Benachrichtigungscenter (In-App & E-Mail via SMTP) und konfigurierbare Textbausteine.
-  - Integrierte Wissensdatenbank (Knowledge Base) mit Volltextsuche.
-
----
-
-## Schnellinstallation (One-Command-Install)
-
-Auf einem frischen Debian- oder Ubuntu-Server als `root` (oder mit `sudo`) ausführen:
-
-### Für Produktionsserver ohne eigene Domain (nur per IP erreichbar):
 ```bash
-bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; fi; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh | bash'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "f5adb1f78f75285e75be0ffb87b6dbbd24aff55412c5e56ad056c0c1383038cd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=4e4c4074f057b22ed4418428f834194e75fa938304dde7a7910037ada0be3155 bash "$f"'
 ```
-Ohne eigene Domain nutzt Caddy ein selbstsigniertes Zertifikat (`tls internal`) -- Browser zeigen
-dafür eine Zertifikatswarnung. Für ein vertrauenswürdiges, von Let's Encrypt ausgestelltes
-Zertifikat eine echte Domain und eine Kontakt-E-Mail-Adresse angeben:
+
+Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
+Dateien des gesamten Installationsstands gegen ein festgelegtes SHA-256-Manifest. Bei
+Abweichungen wird abgebrochen. Immer den vollständigen Befehl aus diesem README verwenden,
+nicht durch ein ungeprüftes `curl | bash` ersetzen. Skript, Manifest und README müssen
+gemeinsam veröffentlicht sein; vor dem Push ist der neue Befehl noch nicht verwendbar.
+
+Nach erfolgreichem Start zeigt der Installer die Adresse und das Setup-Token an.
+Adresse öffnen, Token eingeben und das erste Superadmin-Konto einrichten.
+Installation: `/opt/ticket-system`; Konfiguration: `ops/docker/.env`.
+
+**Zugriff:** Ports 80/443 müssen vom Arbeitsplatz aus erreichbar sein. Bei Zugriff über
+eine lokale IP verwendet Caddy ein internes Zertifikat; dessen CA muss auf den Endgeräten
+als vertrauenswürdig eingerichtet werden. Ein gesunder Container allein bestätigt noch
+nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
+
+### Mit eigener Domain
+
+DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
+
 ```bash
-bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; fi; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh | bash -s -- --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "f5adb1f78f75285e75be0ffb87b6dbbd24aff55412c5e56ad056c0c1383038cd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=4e4c4074f057b22ed4418428f834194e75fa938304dde7a7910037ada0be3155 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
-### Für lokale Testumgebungen (localhost / Dev-Modus):
-```bash
-bash -c 'set -e; if ! command -v curl >/dev/null 2>&1; then apt-get update && apt-get install -y curl ca-certificates; fi; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh | bash -s -- --dev'
-```
+### Was enthalten ist
 
-### Weitere Installer-Optionen:
-- `--enable-antivirus`: ClamAV-Virenscan für Ticket-/Wissensdatenbank-Anhänge aktivieren (zusätzlich
-  zur bereits immer aktiven Magic-Byte-/Inhaltsprüfung). Deutlicher Ressourcenbedarf (ca. 1-2GB RAM),
-  erster Start dauert wegen des Signatur-Datenbank-Downloads mehrere Minuten.
-- `--enable-updates`: Online-Updates über die Oberfläche aktivieren (siehe Warnhinweise im
-  Admin-Bereich -- gibt dem Updater-Container Root-Zugriff auf den Docker-Host).
+- Benutzerkontoanfragen, optionale Kontogültigkeit, Rollen und serverseitige Berechtigungsprüfung.
+- Ticket-Board und Listenansicht, Prioritäten, Fristen, Geschäftszeiten, Archiv und Störungen.
+- Nachrichten, Anhänge, Teilaufgaben, eigene/geteilte/wiederkehrende Aufgaben und Genehmigungen.
+- Office-/PDF-Vorschau über einen isolierten LibreOffice-Dienst.
+- SMTP mit verschlüsselter, dauerhafter Versandqueue; LDAP und Outlook nach Einrichtung.
+- Argon2id, widerrufbare Sitzungen, optionale 2FA-Pflicht, CSRF-Schutz und Feldverschlüsselung.
 
-### Was der Installer automatisch erledigt:
-1. Prüft und installiert Systempakete (`curl`, `git`, `openssl`, `ca-certificates`).
-2. Installiert und konfiguriert Docker & das Docker Compose Plugin.
-3. Klont das Repository nach `/opt/ticket-system`.
-4. Erzeugt kryptografisch sichere Zufallsschlüssel (`ops/secrets/app.kek`, Passwörter, Cookie-Secret,
-   Setup-Token) -- das Setup-Token erscheint nur einmal in der Konsolenausgabe und wird beim
-   Einrichtungsassistenten unter `/setup` abgefragt, damit niemand sonst das erste Superadmin-Konto
-   anlegen kann.
-5. Startet MariaDB, wartet auf die Verfügbarkeit und führt alle Datenbankmigrationen aus.
-6. Startet den App-Container und den Caddy-Proxy (mit automatischem HTTPS/TLS bei angegebener
-   Domain, sonst selbstsigniertem Zertifikat).
-7. Gibt nach erfolgreichem Start die Einrichtungs-URL und das Setup-Token im Terminal aus.
+**Browser-Benachrichtigungen:** In den persönlichen Einstellungen unter
+Benachrichtigungen einschalten und die Browser-Abfrage erlauben. Die Freigabe gilt pro
+Konto und Browser-Gerät. Neue In-App-Meldungen erscheinen dann auch als Desktop-Mitteilung;
+ein Klick öffnet das zugehörige Ticket bzw. die Aufgabenliste. Voraussetzung sind ein
+unterstützter Desktop-Browser und vertrauenswürdiges HTTPS (bei lokalen IPs Caddy-CA installieren).
+Ein Tab des Ticket-Systems muss geöffnet bleiben, auch im Hintergrund. Die Prüfung erfolgt
+alle 30 Sekunden, bei Verbindungsfehlern mit längeren Abständen. Bei geschlossener App gibt
+es keinen Web-Push. Alte Meldungen werden beim Aktivieren nicht nachträglich eingeblendet.
 
----
+SMTP, LDAP und Microsoft Graph benötigen eigene Zugangsdaten. Für Graph muss die
+Anwendungsberechtigung im Tenant auf das vorgesehene Postfach begrenzt werden.
+Kalendereinladungen sind nur für Admins an bekannte aktive Konten erlaubt.
 
-## Erste Schritte nach der Installation
+## Aktualisieren
 
-1. **Einrichtungsassistent aufrufen:** Öffne `https://<server-adresse>/setup` im Browser.
-2. **Grundeinstellungen festlegen:** Unternehmensname, Portalbezeichnung und Einstellungen erfassen.
-3. **Ersten Superadmin anlegen:** Zugangsdaten für das Haupt-Administratorkonto definieren.
-4. **Anmelden:** Unter `https://<server-adresse>/login` anmelden.
-   - Benutzer werden automatisch auf `/dashboard.html` weitergeleitet.
-   - Administratoren und Superadmins werden automatisch auf `/admin.html` weitergeleitet.
+Vorher ein Backup erstellen. In einem bewusst geprüften lokalen Repository:
 
----
-
-## Architektur & Sicherheitsmodell
-
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                          Browser (Client)                              │
-│   Dashboard / Admin-Board / UI-Module (Zero-Trust: reine Präsentation) │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ HTTPS / TLS (Caddy)
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Fastify App Server (Node 24)                    │
-│  ├─ Rate-Limiting & Security-Header (Helmet, Strict-CSP)              │
-│  ├─ Session-Prüfung & serverseitige Rollenvalidierung (RBAC)           │
-│  ├─ Zod-Validierung aller Parameter & Payloads                         │
-│  ├─ Serverseitige HTML-Sanitization (sanitize-html)                    │
-│  ├─ Tiefen-Dateivalidierung (Magic Bytes, file-type, Shebang-Check)    │
-│  └─ Kryptografische Dienste (Argon2id, AES-256-GCM DEK Service)        │
-└──────────────────┬─────────────────────────────────┬───────────────────┘
-                   │                                 │
-                   ▼                                 ▼
-┌────────────────────────────────────┐  ┌────────────────────────────────┐
-│      MariaDB 12 (Datenbank)        │  │     Office Preview Service     │
-│  ├─ Normalisierte SQL-Tabellen     │  │  ├─ Gotenberg / LibreOffice    │
-│  ├─ Verschlüsselte Pflichtspalten  │  │  ├─ Isolierter PDF-Export      │
-│  └─ Revisionssichere Audit-Logs    │  │  └─ Keine Skriptausführung     │
-└────────────────────────────────────┘  └────────────────────────────────┘
-```
-
-### Sicherheitsprinzipien im Detail
-
-1. **Zero-Trust-Browser-Prinzip:**
-   - Der Client wird niemals als vertrauenswürdig eingestuft.
-   - Berechtigungen (z.B. Bearbeiten von Tickets, Admin-Zusatzrechte, Schließen fremder Tickets) werden ausschließlich auf dem Server erzwungen.
-   - Rich-Text-Nachrichten und Beschreibungen werden vor der Speicherung serverseitig von bösartigem HTML, Skripten und Event-Handlern bereinigt.
-2. **Sichere Dateiverarbeitung:**
-   - Hochgeladene Dateien werden serverseitig auf Binärebene (Magic Bytes) analysiert.
-   - Ausführbare Dateien (EXE, ELF, Mach-O, Java-Bytecode) und Skripte (Bash, Batch, PHP, HTML, SVG mit Skripten) werden unabhängig von ihrer Dateiendung blockiert.
-   - Dokumentenvorschauen werden isoliert gerendert und mit strikter CSP (`default-src 'none'`) als PDF ausgeliefert.
-3. **Schlüsselverwaltung & Verschlüsselung:**
-   - Der Key Encryption Key (KEK) liegt in `ops/secrets/app.kek` und verlässt den Server nicht.
-   - Datenverschlüsselungsschlüssel (DEKs) verschlüsseln sensitive Daten mit AES-256-GCM und kanonischem AAD (Verhinderung von Vertauschungs- und Replay-Angriffen).
-   - Passwörter werden ausschließlich mit Argon2id gehasht.
-
----
-
-## Wichtige Befehle für Administratoren
-
-Wechsle in das Installationsverzeichnis:
 ```bash
 cd /opt/ticket-system
+bash ops/docker/backup.sh
+git pull --ff-only
+bash install.sh
 ```
 
-| Aktion | Befehl |
-|---|---|
-| **Status aller Container** | `docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env ps` |
-| **Live-Logs anzeigen** | `docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs -f` |
-| **App neu starten** | `docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env restart app` |
-| **App neu bauen** | `docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --build --no-deps app` |
-| **Migrationen prüfen/ausführen** | `docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env exec -T app node dist/db/migrate.js` |
-| **Backup erstellen** | `./ops/docker/backup.sh` |
+Der Installer übernimmt bestehende Daten und Schlüssel, prüft das Laufzeit-Datenbankkonto
+und führt die Migrationen aus. Während der Datenmigration wird die alte App angehalten,
+damit sie keine Klartextwerte mehr nachschreiben kann. Schlägt die Migration fehl, bleibt
+die App bis zur Fehlerbehebung angehalten. Keine Volumes löschen und keine neuen Schlüssel über alte
+Schlüssel schreiben. Migrationen dürfen nicht im dauerhaft laufenden App-Container
+ausgeführt werden: Dieser besitzt absichtlich keine DDL-Zugangsdaten.
 
----
+**Online-Updates:** Standardmäßig deaktiviert. Der optionale Updater benötigt privilegierten
+Docker-Host-Zugriff und akzeptiert ausschließlich signierte Commits mit einem vom Betreiber
+hinterlegten Schlüssel. Ohne Schlüssel bleiben Updates gesperrt, auch mit
+`UPDATE_REQUIRE_SIGNED_COMMITS=false`. Details unten.
 
-## Entwicklung & Testsuite
+<details>
+<summary>Betrieb, Fehlersuche, optionale Dienste und Entwicklung</summary>
 
-Für Entwickler, die lokal an der Codebasis arbeiten:
+## Docker Compose
 
-### Voraussetzungen
-- Node.js 24+
-- MariaDB oder Docker
+### Befristete Benutzerkonten
 
-### Installation & Prüfung
+In der Benutzerverwaltung beim Anlegen oder Bearbeiten das optionale Feld **Gültig bis
+einschließlich** setzen. Das Konto bleibt bis zum Ende dieses Tages nutzbar (Europe/Berlin),
+danach werden Anmeldung und bestehende Sitzungen abgewiesen. Ein leeres Datum bedeutet
+unbegrenzte Gültigkeit. Das Datum kann mit Benutzerverwaltungsrechten geändert oder entfernt
+werden; normale Benutzer können es nicht selbst verlängern. Der letzte dauerhaft verfügbare
+Superadmin darf nicht befristet werden. Bestehende Konten bleiben ohne Datum gültig.
+
+Die neue Spalte wird beim regulären Installer-/Update-Lauf durch Migration 0045 angelegt.
+
+### Container verwalten
+
+Alle Befehle im Installationsverzeichnis ausführen:
+
 ```bash
-# Abhängigkeiten installieren
-npm install
-
-# TypeScript Typecheck
-npm run typecheck
-
-# Vollständige Testsuite ausführen (Vitest)
-npm run test
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env ps
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs --tail=100 app mariadb caddy
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env restart app
 ```
 
-Alle 20 Test-Suites decken RBAC, IDOR-Schutz, Dateivalidierung, HTML-Sanitizing, Krypto-Services, SLA-Berechnungen und Authentifizierung automatisiert ab.
+Der Stack enthält App, MariaDB, Caddy und Gotenberg. Datenbank und Office-Dienst haben
+keine veröffentlichten Host-Ports. Images und Node-Basisimages sind per Digest festgelegt;
+Sicherheitsaktualisierungen der Digests müssen bewusst geprüft und eingepflegt werden.
 
----
+Wenn das Proxy-Netz kollidiert, `EDGE_SUBNET` in `ops/docker/.env` auf ein freies privates
+Subnetz setzen. Compose und Proxy-Vertrauen verwenden denselben Wert.
 
-## Lizenz & Attribution
+### Bestehende Installation startet nicht / Datenbankanmeldung scheitert
 
-Dieses Projekt unterliegt der **Common Public Attribution License Version 1.0 (CPAL-1.0)**.
-Originalprojekt: [Ticket-System-web](https://github.com/ubodigat/Ticket-System-web) von **U:Bodigat**.
-Copyright © 2026 U:Bodigat. Alle Rechte vorbehalten.
-Details zur Lizenzierung siehe [LICENSE](LICENSE) und [NOTICE.md](NOTICE.md).
+`bash install.sh` erhält Passwörter einschließlich aller `=`-Zeichen. Es richtet das
+eingeschränkte Laufzeitkonto mit Root-Rechten ein und prüft dessen Anmeldung über TLS,
+bevor die App neu gestartet wird. DDL-Zugangsdaten gelangen nicht in die laufende App.
+
+Bei älteren Installationen wird das ursprünglich von MariaDB generierte Root-Passwort
+aus den vorhandenen Containerlogs übernommen. Sind diese nicht mehr vorhanden, muss
+das tatsächliche bestehende Root-Passwort einmalig als `DB_ROOT_PASSWORD` in
+`ops/docker/.env` eingetragen werden. Der Installer kann ein verlorenes Passwort nicht
+rekonstruieren und bricht dann ab, ohne Daten oder Volumes zu löschen.
+
+### Online-Updater bewusst aktivieren
+
+Nur einsetzen, wenn der Docker-Host-Zugriff ausdrücklich akzeptiert wird. Ein kompromittierter
+Updater besitzt Host-Rechte. Die sichere Standardinstallation startet diesen Dienst nicht.
+
+Den öffentlichen Release-Signaturschlüssel über einen vertrauenswürdigen Kanal beziehen und
+seinen Fingerprint unabhängig prüfen. Anschließend auf dem Host importieren:
+
+```bash
+mkdir -p ops/docker/update-keys
+chmod 700 ops/docker/update-keys
+gpg --homedir "$PWD/ops/docker/update-keys" --import /root/release-signing-key.asc
+bash install.sh --enable-updates
+```
+
+Der Schlüsselbund wird nur lesend eingebunden. Nach Schlüsseländerungen den Updater neu
+starten. Unsignierte Commits und unbekannte Signaturen werden abgelehnt; der Entwickler
+muss Release-Commits entsprechend signieren. Rollbacks mit Schemaänderungen sind gesperrt
+und erfordern eine Wiederherstellung mit passendem Datenbank-Backup.
+
+### Weitere Optionen
+
+- `--enable-antivirus`: ClamAV aktivieren; ohne funktionierenden Scanner schlagen Uploads bei aktivierter Prüfung fehl.
+- `--dev`: lokale Testkonfiguration, nicht für öffentliche Produktionsinstallationen.
+- `--domain=... --acme-email=...`: öffentlich vertrauenswürdiges HTTPS über ACME.
+- `--no-assume-yes`: Paketinstallationen nicht automatisch bestätigen.
+
+### Backups und Mailzustellung
+
+```bash
+bash ops/docker/backup.sh
+bash ops/docker/restore.sh
+```
+
+Backup-Anweisungen und erforderliche Parameter in den Skripten beachten. KEK,
+Installations-ID, Datenbank und Konfiguration gehören zusammen; ein Datenbankdump ohne
+passenden KEK ist nicht wiederherstellbar.
+
+Mails werden verschlüsselt in `jobs` gespeichert und getrennt vom HTTP-Request versendet.
+Fehler werden mit Wartezeiten bis zu fünfmal versucht; erschöpfte Jobs haben Status `dead`.
+Abgeschlossene Nutzdaten werden sofort entfernt, tote Jobs nach sieben Tagen gelöscht.
+Bei einem Absturz direkt nach der SMTP-Annahme kann eine Mail doppelt zugestellt werden
+(At-least-once-Zustellung). Serverlogs enthalten Job-ID und Versuchszahl, keinen Mailinhalt.
+
+## Entwicklung und Verifikation
+
+Node.js 24+, für Integrationstests eine separate MariaDB-Testdatenbank:
+
+```bash
+npm ci
+npm run typecheck --workspace=apps/server
+npm run test --workspace=apps/server
+npm run build --workspace=apps/server
+npm audit --audit-level=high
+bash ops/tests/installer-security.sh
+```
+
+CI prüft zusätzlich den Upgrade-Pfad von Schema 0037 mit Bestandsdaten gegen MariaDB.
+Ein lokaler grüner Unit-Testlauf ersetzt keinen erfolgreichen Compose-/Upgrade-Test.
+
+Nach Quellcodeänderungen **vor Veröffentlichung**:
+
+```bash
+node ops/create-install-manifest.mjs
+node ops/create-install-manifest.mjs --check
+```
+
+Der erste Befehl aktualisiert Manifest und Installationsbefehle im README. Alle Änderungen
+gemeinsam veröffentlichen. CI weist ein veraltetes Manifest zurück. Das README ist als
+Hash-Vertrauensanker selbst nicht Teil des Manifests.
+
+Architektur, Grenzen und Sicherheitsentscheidungen: [docs](docs),
+[Sicherheitsmodell](docs/THREAT_MODEL.md), [aktueller Reparaturstand](docs/SECURITY-REMEDIATION.md).
+
+</details>
+
+## Lizenz
+
+CPAL-1.0. Originalprojekt [Ticket-System-web](https://github.com/ubodigat/Ticket-System-web)
+von U:Bodigat. Siehe [LICENSE](LICENSE), [NOTICE.md](NOTICE.md) und [CONTRIBUTORS.md](CONTRIBUTORS.md).

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+for arg in "$@"; do
+  if [ "$arg" = logs ]; then
+    if [ "${MOCK_ROOT_MISSING:-0}" != 1 ]; then printf 'mariadb-1 | GENERATED ROOT PASSWORD: recovered-root\n'; fi
+    exit 0
+  fi
+done
+while [ "$1" != sh ]; do shift; done
+exec "$@"

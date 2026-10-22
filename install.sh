@@ -12,6 +12,7 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/ubodigat/Ticket-System-web.git}"
+INSTALL_MANIFEST_SHA256="${INSTALL_MANIFEST_SHA256:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/ticket-system}"
 DEV_MODE=false
 ASSUME_YES=true
@@ -191,9 +192,9 @@ ensure_public_env_defaults() {
   # eine echte Domain per --domain übergeben (oder steht bereits eine in .env), nutzt Caddy
   # automatisch ACME/Let's Encrypt (siehe Caddyfile: "tls {$TLS_POLICY:internal}").
   local current_domain
-  current_domain="$(grep '^PUBLIC_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)"
+  current_domain="$(grep '^PUBLIC_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
   local current_acme_email
-  current_acme_email="$(grep '^ACME_EMAIL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)"
+  current_acme_email="$(grep '^ACME_EMAIL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
   if [[ "$DEV_MODE" == "true" || -z "$current_domain" || "$current_domain" == "localhost" \
         || "$current_domain" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$current_domain" == "127.0.0.1" ]]; then
     set_env_var "TLS_POLICY" "internal" "$ENV_FILE"
@@ -254,9 +255,29 @@ Manual fallback:
 EOF
 }
 
+verify_installation() {
+  local dir="$1"
+  (
+    cd "$dir"
+    printf '%s  install-manifest.sha256\n' "$INSTALL_MANIFEST_SHA256" | sha256sum -c - || exit 1
+    sha256sum --strict -c install-manifest.sha256 || exit 1
+    # Additional tracked files can affect a Docker build even when all known files match.
+    diff -u <(git ls-files | grep -v -E '^(README.md|install-manifest.sha256)$' | LC_ALL=C sort) \
+      <(sed 's/^[a-f0-9]\{64\}  //' install-manifest.sha256 | LC_ALL=C sort)
+  )
+}
+
 rerun_from_clone_if_needed() {
   if [[ -f "$SCRIPT_DIR/ops/docker/docker-compose.yml" && -f "$SCRIPT_DIR/package.json" ]]; then
+    if [[ -n "$INSTALL_MANIFEST_SHA256" ]]; then
+      verify_installation "$SCRIPT_DIR"
+    fi
     return
+  fi
+
+  if [[ ! "$INSTALL_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+    echo 'Standalone installation requires INSTALL_MANIFEST_SHA256 from the reviewed README command. Unverified curl | bash is not supported.' >&2
+    exit 1
   fi
 
   ensure_base_packages
@@ -275,9 +296,10 @@ rerun_from_clone_if_needed() {
   fi
 
   run_root chown -R "$(id -u):$(id -g)" "$INSTALL_DIR" 2>/dev/null || true
-  run_root chmod +x "$INSTALL_DIR/install.sh"
+  verify_installation "$INSTALL_DIR"
+  export INSTALL_MANIFEST_SHA256
   log "Continuing installation from $INSTALL_DIR"
-  exec "$INSTALL_DIR/install.sh" "$@"
+  exec bash "$INSTALL_DIR/install.sh" "$@"
 }
 
 make_uuid() {
@@ -311,6 +333,7 @@ else
   DB_NAME="ticketsystem"
   DB_USER="ticketapp"
   DB_PASSWORD="$(openssl rand -base64 32)"
+  DB_ROOT_PASSWORD="$(openssl rand -hex 32)"
   DB_RUNTIME_USER="${DB_USER}_rt"
   DB_RUNTIME_PASSWORD="$(openssl rand -base64 32)"
   COOKIE_SECRET="$(openssl rand -base64 48)"
@@ -323,6 +346,7 @@ else
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
+DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
 DB_RUNTIME_USER=$DB_RUNTIME_USER
 DB_RUNTIME_PASSWORD=$DB_RUNTIME_PASSWORD
 COOKIE_SECRET=$COOKIE_SECRET
@@ -341,30 +365,13 @@ fi
 # Security-Audit N9: eingeschraenktes Laufzeit-DB-Konto fuer Installationen von VOR diesem
 # Update nachtragen (neue Installationen bekommen es bereits oben in .env).
 if ! grep -q '^DB_RUNTIME_USER=' "$ENV_FILE"; then
-  EXISTING_DB_USER="$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2)"
+  EXISTING_DB_USER="$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2-)"
   set_env_var "DB_RUNTIME_USER" "${EXISTING_DB_USER}_rt" "$ENV_FILE"
   set_env_var "DB_RUNTIME_PASSWORD" "$(openssl rand -base64 32)" "$ENV_FILE"
 fi
 
-# Security-Audit N9: SQL, das /docker-entrypoint-initdb.d beim allerersten Start einer LEEREN
-# MariaDB-Datenbank automatisch ausfuehrt (offizielles mariadb-Image-Verhalten, laeuft intern mit
-# vollen Rechten) -- legt das Laufzeit-Konto mit nur SELECT/INSERT/UPDATE/DELETE an (kein ALTER/
-# CREATE/DROP/INDEX). Bei einer bereits initialisierten Datenbank (Upgrade einer bestehenden
-# Installation) greift dieser Mechanismus NICHT mehr -- der Best-Effort-Versuch weiter unten
-# (nach dem MariaDB-Healthcheck) deckt diesen Fall ab, soweit DB_USER dafuer ausreichende Rechte
-# hat; falls nicht, bleibt die Installation nutzbar (DB_RUNTIME_USER/-PASSWORD werden dann
-# schlicht nicht verwendet, siehe db/connection.ts Fallback auf DB_USER).
-MARIADB_INITDB_DIR="$COMPOSE_DIR/mariadb/initdb.d"
-mkdir -p "$MARIADB_INITDB_DIR" 2>/dev/null || true
-RUNTIME_USER_FOR_SQL="$(grep '^DB_RUNTIME_USER=' "$ENV_FILE" | cut -d= -f2)"
-RUNTIME_PASSWORD_FOR_SQL="$(grep '^DB_RUNTIME_PASSWORD=' "$ENV_FILE" | cut -d= -f2)"
-DB_NAME_FOR_SQL="$(grep '^DB_NAME=' "$ENV_FILE" | cut -d= -f2)"
-cat > "$MARIADB_INITDB_DIR/10-runtime-user.sql" <<EOF
-CREATE USER IF NOT EXISTS '${RUNTIME_USER_FOR_SQL}'@'%' IDENTIFIED BY '${RUNTIME_PASSWORD_FOR_SQL}';
-GRANT SELECT, INSERT, UPDATE, DELETE ON \`${DB_NAME_FOR_SQL}\`.* TO '${RUNTIME_USER_FOR_SQL}'@'%';
-FLUSH PRIVILEGES;
-EOF
-chmod 600 "$MARIADB_INITDB_DIR/10-runtime-user.sql"
+# Runtime accounts are provisioned after the DB healthcheck with verified root credentials.
+# This also works for existing volumes; initdb.d scripts only run on empty volumes.
 
 # Wer zwischen Installation und erstem Setup-Aufruf die Server-IP erreicht, würde sonst das
 # erste (Superadmin-)Konto anlegen können (B4 im Security-Audit) -- Installationen von vor
@@ -437,6 +444,10 @@ open_firewall_ports
 
 log "Building and starting Docker stack"
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" build --no-cache app
+if [[ -f "$ENV_FILE" ]] && ! grep -q '^DB_ROOT_PASSWORD=.' "$ENV_FILE"; then
+  log "Recovering existing database root credential before container replacement"
+  run_root sh "$SCRIPT_DIR/ops/docker/provision-db.sh" "$SCRIPT_DIR" --recover-only
+fi
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --force-recreate --remove-orphans mariadb
 
 log "Waiting for database healthcheck"
@@ -454,45 +465,18 @@ until run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$
   sleep 3
 done
 
-log "Ensuring restricted runtime database account exists (Security-Audit N9)"
-# Best-Effort fuer Installationen, deren MariaDB-Datenvolume schon vor diesem Update existierte
-# -- /docker-entrypoint-initdb.d (oben) greift nur bei einer frischen, leeren Datenbank. Schlaegt
-# dies fehl (DB_USER ohne CREATE USER/GRANT OPTION), bleibt die Installation trotzdem lauffaehig:
-# db/connection.ts faellt dann auf DB_USER/DB_PASSWORD fuer den Laufzeitbetrieb zurueck.
-# DB_USER/DB_PASSWORD werden ueber eine temporaere Optionsdatei im Container uebergeben, nie als
-# "-p..."-Kommandozeilenargument (N14-Begruendung gilt hier genauso: sonst ueber "ps aux" fuer
-# jeden lokalen Prozess auf diesem Host sichtbar). Zwei Schritte, weil der zweite Aufruf stdin
-# fuer das SQL-Skript braucht und die Zugangsdaten deshalb nicht erneut per stdin bekommen kann.
-{
-  N9_CNF_PATH="$(run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T mariadb sh -c '
-    umask 077
-    cnf="$(mktemp)"
-    cat > "$cnf"
-    printf "%s" "$cnf"
-  ' <<EOF2
-[client]
-user=$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2)
-password=$(grep '^DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2)
-EOF2
-)"
-  run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T mariadb sh -c '
-    cnf="$1"; db="$2"
-    trap "rm -f \"$cnf\"" EXIT
-    mariadb --defaults-extra-file="$cnf" "$db"
-  ' _ "$N9_CNF_PATH" "$(grep '^DB_NAME=' "$ENV_FILE" | cut -d= -f2)" \
-    < "$MARIADB_INITDB_DIR/10-runtime-user.sql"
-} >/dev/null 2>&1 \
-  && log "Runtime database account ready" \
-  || warn "Could not create/verify the restricted runtime database account automatically (DB_USER likely lacks CREATE USER/GRANT privileges on an existing installation). The app will keep using DB_USER for runtime queries until this is resolved manually; see CHANGES.md (N9) for the GRANT statements in $MARIADB_INITDB_DIR/10-runtime-user.sql."
+log "Provisioning and verifying runtime database credentials"
+run_root sh "$SCRIPT_DIR/ops/docker/provision-db.sh" "$SCRIPT_DIR"
 
 log "Running database migrations"
+run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" stop --timeout 30 app
 # Security-Audit N9: DB_USER/DB_PASSWORD (volle DDL-Rechte) stehen nicht mehr in der staendigen
 # Service-Umgebung von "app" (siehe docker-compose.yml) -- nur fuer diesen einen, kurzlebigen
 # Migrations-Aufruf per -e injiziert.
-run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps \
-  -e DB_USER="$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2)" \
-  -e DB_PASSWORD="$(grep '^DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2)" \
-  app node dist/db/migrate.js
+printf '%s\n%s\n' "$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2-)" \
+  "$(grep '^DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)" \
+  | run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps -T \
+    app sh -c 'set -eu; IFS= read -r DB_USER; IFS= read -r DB_PASSWORD; export DB_USER DB_PASSWORD; exec node dist/db/migrate.js'
 
 log "Starting application stack"
 if grep -q '^UPDATE_ALLOW_MAIN_DEPLOY=true$' "$ENV_FILE"; then
@@ -536,7 +520,7 @@ cat <<EOF
   Installation completed.
   Ticket system URL: $PUBLIC_URL
   Setup URL:         ${PUBLIC_URL}/setup
-  Setup token:       $(grep '^SETUP_TOKEN=' "$ENV_FILE" | cut -d= -f2)
+  Setup token:       $(grep '^SETUP_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
   Open the URL in your browser and complete the setup assistant. The setup
   assistant will ask for the setup token above before creating the first
   (superadmin) account -- keep it secret until setup is complete.

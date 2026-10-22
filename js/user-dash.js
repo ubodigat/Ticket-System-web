@@ -11,7 +11,7 @@ import { Lang } from './lang.js';
 import { Store, Notifications } from './store.js';
 import { UI } from './ui.js';
 import { AdminBoard } from './admin-board.js';
-import { getStatusColor, isPendingApprover, insertMarkdownText, insertMarkdownLink } from './ticket-helpers.js';
+import { getStatusColorClass, isPendingApprover, insertMarkdownText, insertMarkdownLink } from './ticket-helpers.js';
 
 // --- User Dashboard Logic ---
 export const UserDash = {
@@ -397,7 +397,7 @@ export const UserDash = {
 
         // Metadata
         if (q('#u-m-status')) {
-            q('#u-m-status').innerHTML = `<span class="status-badge"><span class="status-dot" style="--dot:${getStatusColor(t.status)}"></span>${Lang.status(t.status)}</span>`;
+            q('#u-m-status').innerHTML = `<span class="status-badge"><span class="status-dot ${getStatusColorClass(t.status)}"></span>${Lang.status(t.status)}</span>`;
         }
         const waitingRequest = q('#u-waiting-request');
         if (waitingRequest) {
@@ -585,7 +585,7 @@ export const UserDash = {
                 const approvalBadge = pendingApproval ? `<span class="approval-badge" title="Wartet auf Genehmigung">${Icon('hourglass', 12)}Genehmigung</span>` : '';
 
                 el.innerHTML = `
-                    <span class="status-dot" style="--dot:${getStatusColor(t.status)}" title="${Utils.esc(Lang.status(t.status))}"></span>
+                    <span class="status-dot ${getStatusColorClass(t.status)}" title="${Utils.esc(Lang.status(t.status))}"></span>
                     <div class="ticket-row-main">
                         <div class="row-title" title="${Utils.esc(t.title)}">${Utils.esc(t.title)}</div>
                         <div class="ticket-row-cats"><span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>${catBadges}${archivedBadge}${overdueBadge}${approvalBadge}</div>

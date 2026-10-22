@@ -6,6 +6,7 @@ import type { KeyProvider } from '../crypto/keyProvider.js';
 import { ensureDek } from '../crypto/dekService.js';
 import { fieldCipher } from '../crypto/fieldCrypto.js';
 import { mysqlTimestamp } from '../db/date.js';
+import { queueUserMail } from '../mail/queue.js';
 
 export interface TodoDeps { env: Env; keyProvider: KeyProvider }
 export function todoContext(deps: TodoDeps, tableName: string, fieldName: string, recordId: string, keyVersion: number) {
@@ -37,6 +38,10 @@ export async function insertAdminTodo(db: Kysely<Database>, deps: TodoDeps,
         message: fieldCipher.encryptField(`${actor.username} hat dir eine Aufgabe zugewiesen: ${data.content.slice(0, 1000)}`,
           notificationDek.rawDek, todoContext(deps, 'notifications', 'message', notificationId, notificationDek.keyVersion)) };
     })).execute();
+    for (const recipient of others) {
+      await queueUserMail({ db, ...deps }, recipient.id, 'Neue Aufgabe',
+        `${actor.username} hat dir eine Aufgabe zugewiesen: ${data.content.slice(0, 1000)}`, 'todo_assigned');
+    }
   }
   return id;
 }

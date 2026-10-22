@@ -19,6 +19,7 @@ import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { sendMail, isSmtpConfigured } from '../../mail/mailer.js';
 import { authenticateLdap, isLdapEnabled } from '../../auth/ldap.js';
 import { mysqlTimestamp } from '../../db/date.js';
+import { MAIL_SECRET_KEYS, readMailSecrets, encryptMailSecrets } from '../../mail/secrets.js';
 
 export interface SettingsRouteDeps {
   env: Env;
@@ -287,8 +288,19 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
           }
         }
 
-        const existing = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirstOrThrow();
+        const existing = await app.db.selectFrom('app_settings').select(['config_json', 'mail_secrets_enc']).where('id', '=', 1).executeTakeFirstOrThrow();
         const merged = mergeSettingsConfig(existing.config_json ? JSON.parse(existing.config_json) : {}, parsed.data);
+        const mailDeps = { db: app.db, ...deps };
+        if (merged.emailAdvancedConfig) {
+          const secrets = await readMailSecrets(mailDeps, existing.mail_secrets_enc);
+          let changed = false;
+          for (const key of MAIL_SECRET_KEYS) {
+            const value = merged.emailAdvancedConfig[key];
+            if (typeof value === 'string' && value) { secrets[key] = value; changed = true; }
+            delete merged.emailAdvancedConfig[key];
+          }
+          if (changed) updates.mail_secrets_enc = await encryptMailSecrets(mailDeps, secrets);
+        }
         updates.config_json = JSON.stringify(merged);
       }
 

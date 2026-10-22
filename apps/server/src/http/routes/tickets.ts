@@ -14,7 +14,7 @@ import { requireSession, requireAdmin } from './session.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek, type ResolvedDek } from '../../crypto/dekService.js';
-import { fieldCipher, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
+import { fieldCipher, decryptFieldTolerant, computeBlindIndex } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
 import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
@@ -40,17 +40,21 @@ interface TicketDeks {
   // Security-Audit N10: approval_text/waiting_message sind jetzt ebenfalls verschlüsselt.
   approvalText: ResolvedDek;
   waitingMessage: ResolvedDek;
+  // Security-Audit N10-Rest: die tatsächlichen Freitext-/Auswahlwerte der Admin-definierten
+  // Zusatzfelder (nicht deren Definition -- die liegt in categories.custom_fields_json).
+  customFields: ResolvedDek;
 }
 
 async function loadTicketDeks(app: FastifyInstance, keyProvider: KeyProvider): Promise<TicketDeks> {
-  const [title, description, incidentNotice, approvalText, waitingMessage] = await Promise.all([
+  const [title, description, incidentNotice, approvalText, waitingMessage, customFields] = await Promise.all([
     ensureDek(app.db, keyProvider, 'tickets.title'),
     ensureDek(app.db, keyProvider, 'tickets.description'),
     ensureDek(app.db, keyProvider, 'tickets.incident_notice'),
     ensureDek(app.db, keyProvider, 'tickets.approval_text'),
-    ensureDek(app.db, keyProvider, 'tickets.waiting_message')
+    ensureDek(app.db, keyProvider, 'tickets.waiting_message'),
+    ensureDek(app.db, keyProvider, 'tickets.custom_fields_json')
   ]);
-  return { title, description, incidentNotice, approvalText, waitingMessage };
+  return { title, description, incidentNotice, approvalText, waitingMessage, customFields };
 }
 
 function encryptTicketField(
@@ -110,7 +114,7 @@ function decryptTicketField(
 
 function decryptTicketRow<T extends {
   id: string; title: Buffer; description?: Buffer; incident_notice?: Buffer | null;
-  approval_text?: Buffer | null; waiting_message?: Buffer | null;
+  approval_text?: Buffer | null; waiting_message?: Buffer | null; custom_fields_json?: Buffer | null;
 }>(
   row: T,
   deks: TicketDeks,
@@ -129,7 +133,30 @@ function decryptTicketRow<T extends {
   if (row.waiting_message) {
     out.waiting_message = decryptTicketFieldTolerant(row.waiting_message, deks.waitingMessage, deps, row.id, 'waiting_message');
   }
+  if (row.custom_fields_json !== undefined) {
+    out.custom_fields_json = decryptCustomFieldsJson(row.custom_fields_json, deks.customFields, deps, row.id);
+  }
   return out;
+}
+
+// Security-Audit N10-Rest: tolerant, weil bestehende Tickets aus der Zeit vor Migration 0040
+// erst durch db/reencryptLegacy.ts nachverschluesselt werden (R-2-Timing). Das JSON selbst wird
+// komplett als ein Feld verschluesselt/entschluesselt, nicht Wert fuer Wert.
+function decryptCustomFieldsJson(
+  stored: Buffer | null,
+  dek: ResolvedDek,
+  deps: TicketsRouteDeps,
+  recordId: string
+): string | null {
+  if (!stored) return null;
+  return decryptFieldTolerant(stored, dek.rawDek, {
+    installationId: deps.env.INSTALLATION_ID,
+    schemaVersion: deps.env.SCHEMA_VERSION,
+    tableName: 'tickets',
+    recordId,
+    fieldName: 'custom_fields_json',
+    keyVersion: dek.keyVersion
+  });
 }
 
 const createTicketSchema = z.object({
@@ -372,7 +399,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           : null,
         waiting_message: row.waiting_message
           ? decryptTicketFieldTolerant(row.waiting_message, deks.waitingMessage, deps, row.id, 'waiting_message')
-          : null
+          : null,
+        custom_fields_json: decryptCustomFieldsJson(row.custom_fields_json, deks.customFields, deps, row.id)
       }));
       return reply.send({ tickets });
     } catch (e: any) {
@@ -524,7 +552,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
             status: 'Neu',
             sla_due_at: slaDueAt ? mysqlTimestamp(slaDueAt) : null,
             installation_id: deps.env.INSTALLATION_ID,
-            custom_fields_json: parsed.data.custom_fields ? JSON.stringify(parsed.data.custom_fields) : null
+            custom_fields_json: parsed.data.custom_fields
+              ? encryptTicketField(JSON.stringify(parsed.data.custom_fields), deks.customFields, deps, newId, 'custom_fields_json')
+              : null
           }).execute();
           break;
         } catch (err: any) {
@@ -1499,12 +1529,22 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     }
   });
 
-  app.post('/api/v2/tickets/:id/calendar-event', async (req, reply) => {
+  app.post('/api/v2/tickets/:id/calendar-event', { config: { rateLimit: {
+    max: 20, timeWindow: '1 hour', keyGenerator: req => req.ticketSession?.uid ?? req.ip
+  } } }, async (req, reply) => {
     try {
-      const session = requireSession(req);
+      const session = requireAdmin(req);
       const { id } = req.params as { id: string };
       const parsed = createCalendarEventSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+
+      const emailIndex = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
+      for (const email of parsed.data.attendee_emails ?? []) {
+        const known = await app.db.selectFrom('users').select('id')
+          .where('email_blind_idx', '=', computeBlindIndex(emailIndex.rawDek, email.toLowerCase()))
+          .where('account_archived', '=', false).where('locked_permanent', '=', false).executeTakeFirst();
+        if (!known) return reply.code(403).send({ error: 'attendee_not_allowed' });
+      }
 
       const ticket = await app.db.selectFrom('tickets').select(['id', 'created_by_user_id']).where('id', '=', id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
@@ -1575,10 +1615,19 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       // (FOR UPDATE) auf beiden Tickets verhindert zusätzlich, dass ein gleichzeitiger zweiter
       // Merge-Versuch auf dasselbe Ticket eine inkonsistente Doppel-Zusammenführung erzeugt.
       await app.db.transaction().execute(async trx => {
-        const source = await trx.selectFrom('tickets').select(['id', 'ticket_number', 'merged_into_ticket_id']).where('id', '=', id).forUpdate().executeTakeFirst();
-        const target = await trx.selectFrom('tickets').select(['id', 'ticket_number']).where('id', '=', parsed.data.target_ticket_id).forUpdate().executeTakeFirst();
+        const source = await trx.selectFrom('tickets').select(['id', 'ticket_number', 'merged_into_ticket_id', 'created_by_user_id']).where('id', '=', id).forUpdate().executeTakeFirst();
+        const target = await trx.selectFrom('tickets').select(['id', 'ticket_number', 'created_by_user_id', 'merged_into_ticket_id']).where('id', '=', parsed.data.target_ticket_id).forUpdate().executeTakeFirst();
         if (!source || !target) throw { statusCode: 404, message: 'not_found' };
         if (source.merged_into_ticket_id) throw { statusCode: 409, message: 'already_merged' };
+        if (target.merged_into_ticket_id) throw { statusCode: 409, message: 'target_already_merged' };
+
+        // Security-Audit N11: nach dem Zusammenführen sieht, wer Zugriff auf das Zielticket hat,
+        // auch alle Nachrichten/Notizen, die vorher nur im Ursprungsticket standen -- bei
+        // unterschiedlichen Ersteller-Konten würde private Kommunikation offengelegt.
+        // Deshalb auch für Superadmins nur innerhalb desselben bekannten Kontos zulassen.
+        if (!source.created_by_user_id || source.created_by_user_id !== target.created_by_user_id) {
+          throw { statusCode: 403, message: 'cross_user_merge_forbidden' };
+        }
 
         await trx.updateTable('ticket_messages').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
         await trx.updateTable('ticket_notes').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();

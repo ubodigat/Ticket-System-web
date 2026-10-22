@@ -72,6 +72,10 @@ describe('buildApp – Boot- und Verdrahtungs-Smoke-Test', () => {
   it('/health antwortet, statt bei jeder Anfrage ungefangen zu werfen', async () => {
     const res = await app.inject({ method: 'GET', url: '/health' });
     expect([200, 503]).toContain(res.statusCode);
+    const csp = String(res.headers['content-security-policy']);
+    expect(csp).toContain("style-src 'self'");
+    expect(csp).not.toContain('unsafe-inline');
+    expect(csp).not.toContain('unsafe-eval');
   });
 
   it('geschützte v2-Routen antworten ohne Sitzung mit 401, nicht mit 500', async () => {

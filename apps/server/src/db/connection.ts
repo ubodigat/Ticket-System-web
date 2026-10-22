@@ -43,6 +43,7 @@ export function createDb(env: Env, purpose: 'migrate' | 'runtime' = 'runtime'): 
     connectionLimit: 10,
     supportBigNumbers: true,
     dateStrings: false,
+    timezone: 'Z',
     ...(env.DB_SSL_CA_PATH
       ? { ssl: { ca: readFileSync(env.DB_SSL_CA_PATH, 'utf8'), rejectUnauthorized: env.DB_SSL_REJECT_UNAUTHORIZED } }
       : {})

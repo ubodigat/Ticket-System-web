@@ -13,6 +13,7 @@ import { AdminBoard } from './admin-board.js';
 import { UserDash } from './user-dash.js';
 import { Settings } from './settings.js';
 import { LogDiff } from './log-diff.js';
+import { BrowserNotifications } from './browser-notifications.js';
 
 export const Store = {
     openDataDb: () => new Promise((resolve, reject) => {
@@ -118,6 +119,7 @@ export const Store = {
         ldapLoginEnabled: !!u.ldap_login_enabled,
         supervisorUserId: u.supervisor_user_id ?? null,
         accountArchived: !!u.account_archived,
+        accountValidUntil: u.account_valid_until ? String(u.account_valid_until).slice(0, 10) : null,
         accountLocked: !!u.locked_permanent,
         lockedUntil: u.locked_until ? new Date(u.locked_until).getTime() : null,
         failedLogins: 0,
@@ -201,6 +203,7 @@ export const Store = {
                         job_title: u.jobTitle || '',
                         office_location: u.officeLocation || '',
                         supervisor_user_id: u.supervisorUserId ?? null,
+                        account_valid_until: u.accountValidUntil ?? null,
                         permissions: u.permissions ?? undefined
                     })
                 }).catch(() => null);
@@ -224,6 +227,7 @@ export const Store = {
             if (u.supervisorUserId !== prev.supervisorUserId) patch.supervisor_user_id = u.supervisorUserId ?? null;
             if (!!u.accountArchived !== prev.accountArchived) patch.account_archived = !!u.accountArchived;
             if (!!u.accountLocked !== prev.accountLocked) patch.locked_permanent = !!u.accountLocked;
+            if ((u.accountValidUntil ?? null) !== (prev.accountValidUntil ?? null)) patch.account_valid_until = u.accountValidUntil ?? null;
             if (JSON.stringify(u.notifPrefs || {}) !== JSON.stringify(prev.notifPrefs || {})) patch.notif_prefs = u.notifPrefs || {};
             // Die vier "Verwaltung"-Schalter (canManageRequests/-Users/canViewLogs/canManage2FA)
             // kommen serverseitig im selben permissions-Objekt an wie die "Zusatzfunktionen"
@@ -1096,13 +1100,17 @@ export const Store = {
     },
     // Benachrichtigungen laufen über die echte /api/v2/notifications-API; Erzeugung passiert
     // serverseitig bei der jeweiligen Ticket-Aktion (siehe tickets.ts), nicht mehr clientseitig.
-    getNotifications: async () => {
+    getNotifications: async (strict = false) => {
         const res = await fetch('/api/v2/notifications', { credentials: 'same-origin' });
-        if (!res.ok) return [];
+        if (!res.ok) {
+            if (strict) throw new Error(`notifications_${res.status}`);
+            return [];
+        }
         const payload = await res.json();
         return (payload.notifications || []).map(n => ({
             id: n.id,
             recipient: n.recipient_username,
+            recipientUserId: n.recipient_user_id,
             ticketId: n.ticket_id,
             ticketNumber: n.ticket_number,
             message: n.message,
@@ -1369,6 +1377,33 @@ export const Store = {
             const button = q('#btn-notifications');
             if (button) button.onclick = Notifications.open;
             await Notifications.refresh();
+            const user = await Store.currentUser();
+            if (button && user) BrowserNotifications.start({
+                user, load: () => Store.getNotifications(true),
+                onBatch: items => {
+                    const count = button.querySelector('.notification-count');
+                    const unread = items.filter(item => !item.read).length;
+                    if (count) { count.textContent = unread > 99 ? '99+' : String(unread); count.hidden = !unread; }
+                },
+                title: () => Lang.t('notifications'),
+                onOpen: Notifications.openItem
+            });
+        },
+
+        openItem: async selected => {
+            // Recheck the session: another tab may have logged into a different account.
+            const res = await fetch('/api/v2/users/me', { credentials: 'same-origin' });
+            if (!res.ok) return;
+            const payload = await res.json();
+            if ((payload.user || payload).id !== selected.recipientUserId) return;
+            await Store.markNotificationRead(selected.id);
+            q('#notification-modal')?.classList.remove('open');
+            await Notifications.refresh();
+            if (selected.type === 'todo_assigned') document.dispatchEvent(new Event('open-todos'));
+            if (selected.ticketId) {
+                if (q('.kanban-board')) await AdminBoard.openModal(selected.ticketId);
+                else await UserDash.openModal(selected.ticketId);
+            }
         },
 
         refresh: async () => {
@@ -1436,14 +1471,7 @@ export const Store = {
                 const selected = own.find(item => item.id === row.dataset.notificationId);
                 row.querySelector('.notification-open').onclick = async () => {
                     if (!selected) return;
-                    await Store.markNotificationRead(selected.id);
-                    q('#notification-modal')?.classList.remove('open');
-                    await Notifications.refresh();
-                    if (selected.type === 'todo_assigned') document.dispatchEvent(new Event('open-todos'));
-                    if (selected.ticketId) {
-                        if (q('.kanban-board')) await AdminBoard.openModal(selected.ticketId);
-                        else await UserDash.openModal(selected.ticketId);
-                    }
+                    await Notifications.openItem(selected);
                 };
                 row.querySelector('.notification-delete').onclick = async () => {
                     await Store.deleteNotification(row.dataset.notificationId);

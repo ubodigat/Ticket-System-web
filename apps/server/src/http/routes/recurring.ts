@@ -16,6 +16,15 @@ import { randomUUID } from 'node:crypto';
 import { requireAdmin } from './session.js';
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
+import type { Env } from '../../config/env.js';
+import type { KeyProvider } from '../../crypto/keyProvider.js';
+import { ensureDek } from '../../crypto/dekService.js';
+import { fieldCipher, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
+
+export interface RecurringRouteDeps {
+  env: Env;
+  keyProvider: KeyProvider;
+}
 
 const createRuleSchema = z.object({
   title: z.string().trim().min(1).max(255),
@@ -27,7 +36,7 @@ const createRuleSchema = z.object({
   next_run_at: z.string().datetime()
 });
 
-export function registerRecurringRoutes(app: FastifyInstance): void {
+export function registerRecurringRoutes(app: FastifyInstance, deps: RecurringRouteDeps): void {
   async function hasRecurringPermission(session: { uid: string; role: string }): Promise<boolean> {
     if (session.role === 'superadmin') return true;
     if (session.role !== 'admin') return false;
@@ -37,11 +46,43 @@ export function registerRecurringRoutes(app: FastifyInstance): void {
     return permissions.recurring === true;
   }
 
+  // Security-Audit N10-Rest: title/description waren bisher Klartext, obwohl derselbe Inhalt im
+  // tatsächlich erzeugten Ticket (jobs/maintenance.ts) verschlüsselt landet. Tolerant statt strikt,
+  // weil vorhandene Regeln aus der Zeit vor Migration 0038 nach der Spaltentyp-Umstellung erst
+  // durch db/reencryptLegacy.ts nachverschlüsselt werden (Timing wie bei approval_text/
+  // waiting_message, siehe R-2).
+  async function loadRuleDeks() {
+    const [titleDek, descriptionDek] = await Promise.all([
+      ensureDek(app.db, deps.keyProvider, 'recurring_ticket_rules.title'),
+      ensureDek(app.db, deps.keyProvider, 'recurring_ticket_rules.description')
+    ]);
+    return { titleDek, descriptionDek };
+  }
+
+  function decryptRule<T extends { id: string; title: Buffer; description: Buffer }>(
+    row: T,
+    deks: { titleDek: Awaited<ReturnType<typeof ensureDek>>; descriptionDek: Awaited<ReturnType<typeof ensureDek>> }
+  ) {
+    return {
+      ...row,
+      title: decryptFieldTolerant(row.title, deks.titleDek.rawDek, {
+        installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+        tableName: 'recurring_ticket_rules', recordId: row.id, fieldName: 'title', keyVersion: deks.titleDek.keyVersion
+      }),
+      description: decryptFieldTolerant(row.description, deks.descriptionDek.rawDek, {
+        installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+        tableName: 'recurring_ticket_rules', recordId: row.id, fieldName: 'description', keyVersion: deks.descriptionDek.keyVersion
+      })
+    };
+  }
+
   app.get('/api/v2/recurring-rules', async (req, reply) => {
     try {
       const session = requireAdmin(req);
       if (!(await hasRecurringPermission(session))) return reply.code(403).send({ error: 'forbidden' });
-      const rules = await app.db.selectFrom('recurring_ticket_rules').selectAll().orderBy('next_run_at', 'asc').execute();
+      const rows = await app.db.selectFrom('recurring_ticket_rules').selectAll().orderBy('next_run_at', 'asc').execute();
+      const deks = await loadRuleDeks();
+      const rules = rows.map(row => decryptRule(row, deks));
       return reply.send({ rules });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -55,10 +96,17 @@ export function registerRecurringRoutes(app: FastifyInstance): void {
       const parsed = createRuleSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
       const id = randomUUID();
+      const { titleDek, descriptionDek } = await loadRuleDeks();
       await app.db.insertInto('recurring_ticket_rules').values({
         id,
-        title: parsed.data.title,
-        description: parsed.data.description,
+        title: fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, {
+          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+          tableName: 'recurring_ticket_rules', recordId: id, fieldName: 'title', keyVersion: titleDek.keyVersion
+        }),
+        description: fieldCipher.encryptField(parsed.data.description, descriptionDek.rawDek, {
+          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+          tableName: 'recurring_ticket_rules', recordId: id, fieldName: 'description', keyVersion: descriptionDek.keyVersion
+        }),
         category: parsed.data.category ?? null,
         priority: parsed.data.priority,
         interval_unit: parsed.data.interval_unit,
@@ -105,11 +153,13 @@ export function registerRecurringRoutes(app: FastifyInstance): void {
     try {
       const session = requireAdmin(req);
       if (!(await hasRecurringPermission(session))) return reply.code(403).send({ error: 'forbidden' });
-      const due = await app.db.selectFrom('recurring_ticket_rules')
+      const rows = await app.db.selectFrom('recurring_ticket_rules')
         .selectAll()
         .where('active', '=', true)
         .where('next_run_at', '<=', new Date())
         .execute();
+      const deks = await loadRuleDeks();
+      const due = rows.map(row => decryptRule(row, deks));
       return reply.send({ due });
     } catch (e: any) {
       return routeError(app, reply, e);

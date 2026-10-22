@@ -11,6 +11,7 @@ import { createDb } from './db/connection.js';
 import { createFileKeyProvider } from './crypto/keyProvider.js';
 import { buildApp } from './http/app.js';
 import { startMaintenanceScheduler } from './jobs/maintenance.js';
+import { startMailQueue } from './mail/queue.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -23,11 +24,13 @@ async function main(): Promise<void> {
   // Siehe jobs/maintenance.ts: einfacher In-Prozess-Timer statt echter Job-Queue -- korrekt für
   // genau eine laufende Instanz, nicht für horizontale Skalierung.
   const maintenanceTimer = startMaintenanceScheduler({ db, env, keyProvider });
+  const stopMailQueue = startMailQueue({ db, env, keyProvider });
 
   const closeGracefully = async (signal: string): Promise<void> => {
     app.log.info(`${signal} empfangen, fahre herunter...`);
     clearInterval(maintenanceTimer);
     await app.close();
+    await stopMailQueue();
     await db.destroy();
     process.exit(0);
   };

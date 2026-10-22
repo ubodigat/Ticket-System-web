@@ -11,21 +11,10 @@ const allowMainDeploy = process.env.UPDATE_ALLOW_MAIN_DEPLOY === 'true';
 // Security-Audit N3/R-Nachfolge: verlangt eine gueltige GPG-Signatur auf dem Ziel-Commit, bevor
 // gemergt wird. Ohne dies koennte ein kompromittiertes GitHub-Konto (oder ein kompromittierter
 // Push-Zugang) beliebigen Code einschleusen, den der Updater unbesehen auf jede aktualisierende
-// Installation ausrollt. UPDATE_REQUIRE_SIGNED_COMMITS=true/false erzwingt das Verhalten explizit;
-// ohne gesetzten Wert wird beim Start selbst geprueft, ob bereits ein oeffentlicher Schluessel
-// importiert wurde (z.B. per gemountetem Keyring-Verzeichnis + "gpg --import") -- ist einer
-// vorhanden, gilt die Pruefung automatisch als Pflicht (sicher by default, sobald ein Schluessel
-// konfiguriert ist), sonst bleibt sie aus (Ruecksicht auf Installationen ohne Schluessel, die
-// sonst nie mehr updaten koennten). Kein importierter Schluessel bedeutet IMMER, dass eine
-// aktivierte Pruefung fehlschlaegt -- kein stiller Fallback auf "ungeprueft".
-let requireSignedCommits = process.env.UPDATE_REQUIRE_SIGNED_COMMITS === 'true';
-if (process.env.UPDATE_REQUIRE_SIGNED_COMMITS === undefined) {
-  const keyCheck = await run('gpg', ['--list-keys', '--with-colons'], { timeoutMs: 10000 });
-  requireSignedCommits = keyCheck.code === 0 && keyCheck.out.split('\n').some(line => line.startsWith('pub:'));
-  if (requireSignedCommits) {
-    console.log('UPDATE_REQUIRE_SIGNED_COMMITS nicht gesetzt, aber ein GPG-Schluessel ist importiert -- Signaturpruefung automatisch aktiviert.');
-  }
-}
+// Installation ausrollt. Kein importierter Schluessel sperrt Deployments ohne Fallback.
+// Only operator-installed keys may authorize a deployment. No flag disables verification.
+const keyCheck = await run('gpg', ['--list-keys', '--with-colons'], { timeoutMs: 10000 });
+const signatureConfigured = keyCheck.code === 0 && keyCheck.out.split('\n').some(line => line.startsWith('pub:'));
 const composeFile = `${repoDir}/ops/docker/docker-compose.yml`;
 const envFile = `${repoDir}/ops/docker/.env`;
 
@@ -35,13 +24,19 @@ const envFile = `${repoDir}/ops/docker/.env`;
 // an "docker compose run" waere wieder ein Passwort als Kommandozeilenargument (R-4-Begruendung
 // gilt hier genauso) -- stattdessen liest der gestartete Container die Werte selbst per stdin aus
 // einer temporaeren Datei, genau wie beim DB-Dump in backup.sh.
-async function runMigrate() {
+async function runMigrate({ stopApp = false } = {}) {
+  const provision = await run('sh', [`${repoDir}/ops/docker/provision-db.sh`, repoDir], { timeoutMs: 60000 });
+  if (provision.code !== 0) return provision;
+  if (stopApp) {
+    const stopped = await run('docker', ['compose', '-f', composeFile, '--env-file', envFile, 'stop', '--timeout', '30', 'app'], { timeoutMs: 45000 });
+    if (stopped.code !== 0) return stopped;
+  }
   return run('docker', [
     'compose', '-f', composeFile, '--env-file', envFile, 'run', '--rm', '--no-deps', '-T', 'app', 'sh', '-c',
-    'set -e; envf="$(mktemp)"; trap "rm -f \\"$envf\\"" EXIT; cat > "$envf"; set -a; . "$envf"; set +a; node dist/db/migrate.js'
+    'set -eu; IFS= read -r DB_USER; IFS= read -r DB_PASSWORD; export DB_USER DB_PASSWORD; exec node dist/db/migrate.js'
   ], {
     timeoutMs: 120000,
-    input: `DB_USER=${process.env.DB_USER || ''}\nDB_PASSWORD=${process.env.DB_PASSWORD || ''}\n`
+    input: `${process.env.DB_USER || ''}\n${process.env.DB_PASSWORD || ''}\n`
   });
 }
 // Ausserhalb des Arbeitsverzeichnisses (innerhalb von .git statt im Working Tree), damit sie nie
@@ -157,6 +152,7 @@ function run(command, args, options = {}) {
   const { timeoutMs = 0, input, ...spawnOptions } = options;
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd: repoDir, shell: false, ...spawnOptions });
+    child.stdin.on('error', () => {}); // An early command failure may close stdin (EPIPE).
     let out = '';
     let err = '';
     let timedOut = false;
@@ -183,6 +179,7 @@ function run(command, args, options = {}) {
 }
 
 async function collectStatus() {
+  if (allowMainDeploy && !signatureConfigured) return { enabled: false, error: 'update_signature_not_configured', job };
   if (job?.running) return { ...lastStatus, enabled: allowMainDeploy, job };
   const fetchResult = await run('git', ['fetch', 'origin', branch, '--quiet'], { timeoutMs: 15000 });
   if (fetchResult.code !== 0) {
@@ -256,7 +253,7 @@ async function runUpdate(expectedCommit) {
     if (expectedCommit && expectedCommit !== target.out) {
       throw new Error(`Ziel-Commit hat sich geaendert (erwartet ${expectedCommit}, GitHub liefert jetzt ${target.out}). Update abgebrochen, bitte Stand erneut pruefen.`);
     }
-    if (requireSignedCommits) {
+    {
       job.step = 'verify';
       job.log.push(`$ git verify-commit ${target.out}`);
       const verify = await run('git', ['verify-commit', target.out], { timeoutMs: 15000 });
@@ -269,7 +266,7 @@ async function runUpdate(expectedCommit) {
     await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'build', '--no-cache', 'app']);
     await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', 'office']);
     job.log.push('$ docker compose run --rm --no-deps app node dist/db/migrate.js (Zugangsdaten per stdin)');
-    await stepResult('migrate', runMigrate());
+    await stepResult('migrate', runMigrate({ stopApp: true }));
     await step('restart', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', '--no-deps', '--force-recreate', '--wait', '--wait-timeout', '180', 'app']);
     job.ok = true;
     job.step = 'done';
@@ -314,9 +311,12 @@ async function runRollback(expectedCommit) {
     }
     const dirty = await run('git', ['status', '--porcelain']);
     if (dirty.code !== 0 || dirty.out) throw new Error('Lokale Aenderungen vorhanden. Rollback abgebrochen; Dateien bleiben erhalten.');
+    await step('verify', 'git', ['verify-commit', history.previousCommit]);
+    const schemaDiff = await run('git', ['diff', '--name-only', history.previousCommit, 'HEAD', '--', 'apps/server/src/db/migrations']);
+    if (schemaDiff.code !== 0 || schemaDiff.out) throw new Error('Rollback ueber Schemaaenderungen gesperrt. Wiederherstellung nur mit passendem Datenbank-Backup.');
     job.step = 'reset';
-    job.log.push(`$ git reset --hard ${history.previousCommit}`);
-    const reset = await run('git', ['reset', '--hard', history.previousCommit], { timeoutMs: 15000 });
+    job.log.push(`$ git switch --detach ${history.previousCommit}`);
+    const reset = await run('git', ['switch', '--detach', history.previousCommit], { timeoutMs: 15000 });
     if (reset.out) job.log.push(reset.out);
     if (reset.err) job.log.push(reset.err);
     if (reset.code !== 0) throw new Error('reset failed');
@@ -369,6 +369,8 @@ createServer(async (req, res) => {
       return json(res, 200, await statusRequest);
     }
     if (req.method === 'POST' && req.url === '/run') {
+      if (!signatureConfigured) return json(res, 409, { error: 'update_signature_not_configured' });
+      if (!/^[a-f0-9]{40}$/.test(body.expected_commit || '')) return json(res, 400, { error: 'expected_commit_required' });
       if (!allowMainDeploy) return json(res, 403, { error: 'update_runner_disabled', message: 'Automatische Deployments von main sind deaktiviert. Aktiviere UPDATE_ALLOW_MAIN_DEPLOY=true nur bewusst und zeitlich begrenzt.' });
       if (job?.running) return json(res, 409, { error: 'update_already_running', job });
       runUpdate(typeof body.expected_commit === 'string' ? body.expected_commit : null);

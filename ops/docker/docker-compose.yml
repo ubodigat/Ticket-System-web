@@ -11,7 +11,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.30.250.0/24
+        - subnet: ${EDGE_SUBNET:-172.30.250.0/24}
   office:
     driver: bridge
     internal: true
@@ -37,11 +37,11 @@ volumes:
 
 services:
   mariadb:
-    image: mariadb:12.3
+    image: mariadb:12.3@sha256:99c125f103f5d081ebbc9ffe064e63daf7f688ac33a5f7f29af2d7260a96debf
     restart: unless-stopped
     networks: [internal]
     environment:
-      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-}
       MARIADB_DATABASE: ${DB_NAME}
       MARIADB_USER: ${DB_USER}
       MARIADB_PASSWORD: ${DB_PASSWORD}
@@ -49,11 +49,6 @@ services:
       - mariadb-data:/var/lib/mysql
       - ../tls/mariadb:/etc/mysql/tls:ro
       - ./mariadb/conf.d:/etc/mysql/conf.d:ro
-      # Security-Audit N9: legt (nur bei einer frischen/leeren Datenbank, offizielles Verhalten
-      # von /docker-entrypoint-initdb.d) das eingeschraenkte Laufzeit-DB-Konto an -- siehe
-      # install.sh und db/connection.ts. Von install.sh generiert, enthaelt das echte Passwort,
-      # daher nicht versioniert (.gitignore).
-      - ./mariadb/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -95,7 +90,7 @@ services:
       INSTALLATION_ID: ${INSTALLATION_ID}
       # Security-Audit R-1: CIDR statt Hop-Zahl (siehe app.ts) -- das feste Subnetz des
       # "edge"-Netzes oben, in dem nur Caddy laeuft.
-      TRUSTED_PROXY_CIDR: "172.30.250.0/24"
+      TRUSTED_PROXY_CIDR: ${EDGE_SUBNET:-172.30.250.0/24}
       OFFICE_PREVIEW_URL: http://office:3000
       UPDATE_SERVICE_URL: ${UPDATE_SERVICE_URL:-}
       UPDATE_TOKEN: ${UPDATE_TOKEN:-}
@@ -118,7 +113,7 @@ services:
   # Signatur-Datenbank braucht beim ersten Start mehrere Minuten + Internetzugang (freshclam) und
   # laufend ca. 1-2GB RAM, daher nicht standardmaessig aktiv.
   clamav:
-    image: clamav/clamav-debian:1.4
+    image: clamav/clamav-debian:1.4@sha256:c7df83a4c9794aeb43b7cff296fc9f42a0f47cbf0e96704510e7e5b57b2f4913
     restart: unless-stopped
     profiles: ["antivirus"]
     networks: [clamav, clamav-egress]
@@ -136,7 +131,7 @@ services:
       start_period: 180s
 
   office:
-    image: gotenberg/gotenberg:8.38.1
+    image: gotenberg/gotenberg:8.38.1@sha256:aa552cc115db488e0f0bcb07446aac13071ad51505b642c84bb894500907b42b
     restart: unless-stopped
     networks: [office]
     cap_drop: [ALL]
@@ -174,12 +169,13 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       UPDATE_ALLOW_MAIN_DEPLOY: ${UPDATE_ALLOW_MAIN_DEPLOY:-false}
-      # Security-Audit N3: optional, Standard aus (Rueckwaertskompatibilitaet -- erfordert einen
-      # vorab importierten GPG-Schluessel im Container, siehe updater-server.mjs).
-      UPDATE_REQUIRE_SIGNED_COMMITS: ${UPDATE_REQUIRE_SIGNED_COMMITS:-false}
+      # Signature verification cannot be disabled; keys are explicitly operator-installed.
+      UPDATE_REQUIRE_SIGNED_COMMITS: "true"
+      GNUPGHOME: /run/update-keys
     volumes:
       - ${UPDATE_REPO_DIR:-/opt/ticket-system}:${UPDATE_REPO_DIR:-/opt/ticket-system}
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./update-keys:/run/update-keys:ro
       # Security-Audit N3: UPDATE_REQUIRE_SIGNED_COMMITS=true verlangt zusaetzlich einen
       # importierten GPG-Keyring -- da ein fest einprogrammierter Mount eines nicht vorhandenen
       # Pfads den Container-Start fuer alle anderen (Standard-)Installationen zum Scheitern
@@ -194,7 +190,7 @@ services:
       start_period: 20s
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     restart: unless-stopped
     networks: [edge]
     depends_on: [app]

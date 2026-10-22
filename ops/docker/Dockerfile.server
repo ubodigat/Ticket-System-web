@@ -1,6 +1,6 @@
 # Multi-stage Build -- Node 24 LTS gemäß docs/SPEC.md §3. Läuft als dedizierte, nicht-root
 # UID/GID gemäß docs/adr/0002-key-storage-container-uids.md.
-FROM node:24-bookworm-slim AS build
+FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS build
 WORKDIR /build
 COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/package.json
@@ -14,7 +14,7 @@ COPY picture ./public/picture
 COPY vendor ./vendor
 RUN npm run build --workspace=apps/server
 
-FROM node:24-bookworm-slim AS runtime
+FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS runtime
 # openssl wird ausschliesslich fuer optionales S/MIME-Signieren ausgehender Mails gebraucht
 # (domain/smime.ts, Security-Audit N-2) -- kein eigenes, ggf. unsicheres npm-Paket fuer
 # PKCS#7/CMS, sondern dieselbe, breit geprueft Implementierung, die auch fuer TLS genutzt wird.

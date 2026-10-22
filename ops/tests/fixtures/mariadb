@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+[ "${MOCK_DB_FAIL:-0}" != 1 ] || exit 1
+printf '%s\n' "$@" >> "$FIXTURE_LOG.args"
+cnf=${1#--defaults-extra-file=}
+cat "$cnf" >> "$FIXTURE_LOG"
+case " $* " in
+  *' --protocol=tcp '*) exit 0;;
+  *) cat >> "$FIXTURE_LOG";;
+esac

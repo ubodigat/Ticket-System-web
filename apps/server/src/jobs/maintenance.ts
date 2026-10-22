@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto';
 import { mysqlTimestamp } from '../db/date.js';
 import { buildTicketNumber } from '../domain/ticketNumber.js';
 import { runRecurringAdminTodos } from './adminTodos.js';
+import { queueUserMail } from '../mail/queue.js';
 
 const DEFAULT_AUTO_ARCHIVE_DAYS = 3;
 
@@ -87,8 +88,21 @@ export async function runRecurringTickets(deps: MaintenanceDeps): Promise<number
 
   const titleDek = await ensureDek(deps.db, deps.keyProvider, 'tickets.title');
   const descriptionDek = await ensureDek(deps.db, deps.keyProvider, 'tickets.description');
+  // Security-Audit N10-Rest: die Regel selbst speichert title/description jetzt ebenfalls
+  // verschlüsselt (Migration 0038) -- erst entschlüsseln, dann für das neue Ticket erneut
+  // verschlüsseln (eigene DEKs je Tabelle, nicht einfach weiterkopieren).
+  const ruleTitleDek = await ensureDek(deps.db, deps.keyProvider, 'recurring_ticket_rules.title');
+  const ruleDescriptionDek = await ensureDek(deps.db, deps.keyProvider, 'recurring_ticket_rules.description');
 
   for (const rule of due) {
+    const ruleTitle = decryptFieldTolerant(rule.title, ruleTitleDek.rawDek, {
+      installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+      tableName: 'recurring_ticket_rules', recordId: rule.id, fieldName: 'title', keyVersion: ruleTitleDek.keyVersion
+    });
+    const ruleDescription = decryptFieldTolerant(rule.description, ruleDescriptionDek.rawDek, {
+      installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+      tableName: 'recurring_ticket_rules', recordId: rule.id, fieldName: 'description', keyVersion: ruleDescriptionDek.keyVersion
+    });
     const rows = await deps.db.selectFrom('tickets').select('ticket_number').execute();
     const lastNum = rows.reduce((max, row) => {
       const found = String(row.ticket_number || '').match(/(\d+)(?!.*\d)/);
@@ -108,8 +122,8 @@ export async function runRecurringTickets(deps: MaintenanceDeps): Promise<number
     await deps.db.insertInto('tickets').values({
       id: newId,
       ticket_number: ticketNumber,
-      title: fieldCipher.encryptField(rule.title, titleDek.rawDek, ctx('title', titleDek.keyVersion)),
-      description: fieldCipher.encryptField(rule.description, descriptionDek.rawDek, ctx('description', descriptionDek.keyVersion)),
+      title: fieldCipher.encryptField(ruleTitle, titleDek.rawDek, ctx('title', titleDek.keyVersion)),
+      description: fieldCipher.encryptField(ruleDescription, descriptionDek.rawDek, ctx('description', descriptionDek.keyVersion)),
       priority: rule.priority,
       category: rule.category,
       type: 'ticket',
@@ -146,6 +160,7 @@ async function notifyTicketAuthor(deps: MaintenanceDeps, ticket: { id: string; c
     id, recipient_user_id: ticket.created_by_user_id, recipient_username: ticket.created_by_username,
     type: 'statusChange', ticket_id: ticket.id, ticket_number: ticket.ticket_number, message: encrypted, is_read: false
   }).execute();
+  await queueUserMail(deps, ticket.created_by_user_id, `Ticket ${ticket.ticket_number}`, message);
 }
 
 // Erinnert die anfragende Person nach X Tagen, schließt das Ticket nach Y Tagen automatisch,

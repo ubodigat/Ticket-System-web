@@ -973,6 +973,16 @@ label {
     letter-spacing: 1px;
 }
 
+.print-frame {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border: 0;
+    visibility: hidden;
+}
+
 .calendar-event-list {
     display: flex;
     flex-direction: column;
@@ -2186,7 +2196,8 @@ button:disabled {
     color: var(--tone, var(--text-sec));
 }
 
-/* Status-Punkt */
+/* Status-Punkt -- Farbe kommt ueber eine Klasse (CSP style-src ohne 'unsafe-inline' erlaubt
+   kein style="--dot:..." mehr), siehe getStatusColorClass() in ticket-helpers.js. */
 .status-dot {
     width: 8px;
     height: 8px;
@@ -2195,6 +2206,11 @@ button:disabled {
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot, transparent) 20%, transparent);
     flex-shrink: 0;
 }
+
+.status-dot-neu { --dot: var(--info); }
+.status-dot-in-bearbeitung { --dot: var(--warning); }
+.status-dot-warten { --dot: var(--wait); }
+.status-dot-geschlossen { --dot: var(--success); }
 
 /* Datei-Chip mit Entfernen-Button */
 .file-preview {
@@ -5490,6 +5506,14 @@ button:disabled {
     background: var(--preset);
 }
 
+/* Feste Preset-Farben als Klasse statt style="--preset:..." (CSP style-src ohne
+   'unsafe-inline') -- siehe js/settings.js. */
+.accent-preset-indigo { --preset: #6366f1; }
+.accent-preset-sky { --preset: #63bce8; }
+.accent-preset-green { --preset: #10b981; }
+.accent-preset-orange { --preset: #f59e0b; }
+.accent-preset-red { --preset: #ef4444; }
+
 .accent-preset:hover,
 .color-swatch-btn:hover {
     transform: scale(1.12);
@@ -5956,10 +5980,19 @@ button:disabled {
 
 .update-progress-fill {
     height: 100%;
+    width: 0;
     border-radius: var(--radius-pill);
     background: var(--warning);
     transition: width var(--ease);
 }
+
+/* Diskrete Breiten statt inline style="width:..." (CSP style-src ohne 'unsafe-inline') --
+   job.step kennt nur 5 feste Schritte, also gibt es nur diese 6 moeglichen Prozentwerte. */
+.update-progress-fill[data-percent="20"] { width: 20%; }
+.update-progress-fill[data-percent="40"] { width: 40%; }
+.update-progress-fill[data-percent="60"] { width: 60%; }
+.update-progress-fill[data-percent="80"] { width: 80%; }
+.update-progress-fill[data-percent="100"] { width: 100%; }
 
 .update-progress-fill.ok {
     background: var(--success);
@@ -6088,6 +6121,16 @@ button:disabled {
     transform: translateX(-50%) translateY(5px);
 }
 
+
+/* --- 16b. Utility-Klassen (ersetzen punktuelle inline style="..." -- CSP style-src ohne
+   'unsafe-inline') ------------------------------------------------------ */
+
+.mt-2 { margin-top: var(--space-2); }
+.mt-3 { margin-top: var(--space-3); }
+.nowrap { white-space: nowrap; }
+.w-full { width: 100%; }
+.justify-start { justify-content: flex-start; }
+.company-logo-grid { grid-template-columns: 1fr auto; align-items: end; gap: var(--space-2); }
 
 /* --- 17. Kleine Bildschirme ------------------------------------------------ */
 

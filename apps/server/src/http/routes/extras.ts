@@ -15,8 +15,8 @@ import { routeError } from './routeError.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
-import { fieldCipher, computeBlindIndex } from '../../crypto/fieldCrypto.js';
-import { sendMail, sendMailSafe } from '../../mail/mailer.js';
+import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
+import { queueMail as sendMail, queueMailIfConfigured as sendMailSafe, queueUserMail } from '../../mail/queue.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { convertOfficePreview, discardOfficePreview } from '../../documents/officePreview.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
@@ -67,6 +67,7 @@ export async function createNotification(
   deps: ExtrasRouteDeps,
   params: { recipientUserId: string | null; recipientUsername: string; type: string; ticketId?: string | null; ticketNumber?: string | null; message: string }
 ): Promise<void> {
+  if (!params.recipientUserId) return;
   const id = randomUUID();
   const dek = await ensureDek(app.db, deps.keyProvider, 'notifications.message');
   const encrypted = fieldCipher.encryptField(params.message, dek.rawDek, {
@@ -90,22 +91,8 @@ export async function createNotification(
 
   // E-Mail-Zustellung ist best-effort und blockiert die In-App-Benachrichtigung nie (siehe
   // sendMailSafe) -- ohne konfiguriertes SMTP oder ohne hinterlegte E-Mail passiert einfach nichts.
-  if (params.recipientUserId) {
-    const recipient = await app.db.selectFrom('users').select('email_enc').where('id', '=', params.recipientUserId).executeTakeFirst();
-    if (recipient?.email_enc) {
-      const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
-      const email = fieldCipher.decryptField(recipient.email_enc, emailDek.rawDek, {
-        installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-        tableName: 'users', recordId: params.recipientUserId, fieldName: 'email', keyVersion: emailDek.keyVersion
-      });
-      await sendMailSafe(
-        { db: app.db, env: deps.env, keyProvider: deps.keyProvider },
-        email,
-        params.ticketNumber ? `Ticket ${params.ticketNumber}` : 'Benachrichtigung',
-        params.message
-      );
-    }
-  }
+  await queueUserMail({ db: app.db, ...deps }, params.recipientUserId,
+    params.ticketNumber ? `Ticket ${params.ticketNumber}` : 'Benachrichtigung', params.message, params.type);
 }
 
 export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDeps): void {
@@ -143,7 +130,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
         id: randomUUID(),
         actor_user_id: session.uid,
         actor_username: session.username,
-        action: 'mail.sent',
+        action: 'mail.queued',
         target_type: 'user',
         target_id: known.id,
         detail_json: null
@@ -164,7 +151,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const session = requireSession(req);
       const rows = await app.db.selectFrom('notifications')
         .selectAll()
-        .where('recipient_username', '=', session.username)
+        .where('recipient_user_id', '=', session.uid)
         .orderBy('created_at', 'desc')
         .limit(100)
         .execute();
@@ -229,7 +216,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       await app.db.updateTable('notifications')
         .set({ is_read: true })
         .where('id', '=', id)
-        .where('recipient_username', '=', session.username)
+        .where('recipient_user_id', '=', session.uid)
         .execute();
       return reply.send({ success: true });
     } catch (e: any) {
@@ -243,7 +230,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const session = requireSession(req);
       await app.db.updateTable('notifications')
         .set({ is_read: true })
-        .where('recipient_username', '=', session.username)
+        .where('recipient_user_id', '=', session.uid)
         .execute();
       return reply.send({ success: true });
     } catch (e: any) {
@@ -251,14 +238,14 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
     }
   });
 
-  // DELETE /api/v2/notifications/:id - nur eigene (IDOR-Schutz über recipient_username)
+  // DELETE /api/v2/notifications/:id - nur eigene (IDOR-Schutz über recipient_user_id)
   app.delete('/api/v2/notifications/:id', async (req, reply) => {
     try {
       const session = requireSession(req);
       const { id } = req.params as { id: string };
       await app.db.deleteFrom('notifications')
         .where('id', '=', id)
-        .where('recipient_username', '=', session.username)
+        .where('recipient_user_id', '=', session.uid)
         .execute();
       return reply.send({ success: true });
     } catch (e: any) {
@@ -271,7 +258,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
     try {
       const session = requireSession(req);
       await app.db.deleteFrom('notifications')
-        .where('recipient_username', '=', session.username)
+        .where('recipient_user_id', '=', session.uid)
         .execute();
       return reply.send({ success: true });
     } catch (e: any) {
@@ -297,12 +284,16 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       fieldName,
       keyVersion
     });
+    // Security-Audit N10-Rest: company/reason sind Freitextfelder (koennen personenbezogene
+    // Angaben enthalten) und werden jetzt genauso verschluesselt wie name/email.
+    const companyDek = parsed.data.company ? await ensureDek(app.db, deps.keyProvider, 'account_requests.company') : null;
+    const reasonDek = parsed.data.reason ? await ensureDek(app.db, deps.keyProvider, 'account_requests.reason') : null;
     await app.db.insertInto('account_requests').values({
       id,
       name: fieldCipher.encryptField(parsed.data.name, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
       email: fieldCipher.encryptField(parsed.data.email, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
-      company: parsed.data.company ?? null,
-      reason: parsed.data.reason ?? null,
+      company: companyDek ? fieldCipher.encryptField(parsed.data.company!, companyDek.rawDek, ctx('company', companyDek.keyVersion)) : null,
+      reason: reasonDek ? fieldCipher.encryptField(parsed.data.reason!, reasonDek.rawDek, ctx('reason', reasonDek.keyVersion)) : null,
       status: 'pending',
       installation_id: deps.env.INSTALLATION_ID
     }).execute();
@@ -318,6 +309,8 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
         .selectAll().orderBy('created_at', 'desc').execute();
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.email');
+      const companyDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.company');
+      const reasonDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.reason');
       const requests = rows.map(row => {
         const ctx = (fieldName: string, keyVersion: number) => ({
           installationId: deps.env.INSTALLATION_ID,
@@ -330,7 +323,11 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
         return {
           ...row,
           name: fieldCipher.decryptField(row.name, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-          email: fieldCipher.decryptField(row.email, emailDek.rawDek, ctx('email', emailDek.keyVersion))
+          email: fieldCipher.decryptField(row.email, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
+          // Security-Audit N10-Rest: tolerant, weil bestehende Anfragen aus der Zeit vor Migration
+          // 0039 erst durch db/reencryptLegacy.ts nachverschluesselt werden (siehe R-2-Timing).
+          company: row.company ? decryptFieldTolerant(row.company, companyDek.rawDek, ctx('company', companyDek.keyVersion)) : null,
+          reason: row.reason ? decryptFieldTolerant(row.reason, reasonDek.rawDek, ctx('reason', reasonDek.keyVersion)) : null
         };
       });
       return reply.send({ requests });

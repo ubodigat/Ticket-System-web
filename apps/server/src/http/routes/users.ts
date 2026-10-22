@@ -18,6 +18,7 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
+import { isAccountExpired, isValidAccountDate } from '../../domain/accountValidity.js';
 
 export interface UsersRouteDeps {
   env: Env;
@@ -111,6 +112,7 @@ const userPermissionsSchema = z.object({
 });
 
 const createUserSchema = z.object({
+  account_valid_until: z.string().refine(isValidAccountDate, 'invalid_date').nullable().optional(),
   username: z.string().trim().min(1).max(64).regex(/^[\p{L}\p{N}_.-]+$/u, 'Nur Buchstaben, Zahlen, _, ., - erlaubt'),
   // Security-Audit N4: einheitlich 14 Zeichen wie beim Setup-Assistenten (setup.ts) -- vorher
   // galten für Admin-angelegte Konten/Passwortänderungen abweichend nur 12 Zeichen.
@@ -134,6 +136,7 @@ const createUserSchema = z.object({
 });
 
 const updateUserSchema = z.object({
+  account_valid_until: z.string().refine(isValidAccountDate, 'invalid_date').nullable().optional(),
   name: z.string().trim().min(1).max(255).optional(),
   email: z.string().email().max(255).optional(),
   role: z.enum(['user', 'admin']).optional(),
@@ -326,6 +329,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       .where('id', '!=', targetId)
       .where('account_archived', '=', false)
       .where('locked_permanent', '=', false)
+      .where('account_valid_until', 'is', null)
       .executeTakeFirstOrThrow();
     if (Number(row.n) === 0) throw { statusCode: 409, message: 'last_superadmin' };
   }
@@ -357,7 +361,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManageUsers')) && !(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until',
           ...absenceSelects(eb)
         ])
         .orderBy('created_at', 'asc')
@@ -432,7 +436,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const row = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until',
           ...absenceSelects(eb)
         ])
         .where('id', '=', session.uid)
@@ -569,6 +573,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         // nicht an), trotzdem hier nicht erzwungen -- ein leeres Objekt bei 'user' ist harmlos.
         permissions_json: parsed.data.permissions ? JSON.stringify(parsed.data.permissions) : null,
         account_archived: false,
+        account_valid_until: parsed.data.account_valid_until ?? null,
         locked_permanent: false,
         totp_enabled: false,
         // Security-Audit N7: nur eine Superadmin-Person darf LDAP-Login direkt beim Anlegen
@@ -624,6 +629,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           parsed.data.supervisor_user_id !== undefined ||
           parsed.data.account_archived !== undefined ||
           parsed.data.locked_permanent !== undefined ||
+          parsed.data.account_valid_until !== undefined ||
           parsed.data.permissions !== undefined
         ) {
           return reply.code(403).send({ error: 'forbidden' });
@@ -670,7 +676,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
       // Nur Admin darf Rolle, Gruppe, Vorgesetzte Person, Archivierung und Sperrung ändern
       if (canManageUsers) {
-        const target = await app.db.selectFrom('users').select('role').where('id', '=', id).executeTakeFirst();
+        const target = await app.db.selectFrom('users').select(['role', 'account_valid_until']).where('id', '=', id).executeTakeFirst();
+        if (!target) return reply.code(404).send({ error: 'not_found' });
         // Security-Audit M-3: ein Admin mit nur "Benutzerverwaltung" darf kein fremdes
         // Admin-Konto (Rolle, Gruppe, Vorgesetzte, Sperre, Archivierung) verändern -- nur
         // Superadmin darf das. Die eigene Person bleibt ausgenommen (sonst könnte sich ein Admin
@@ -688,13 +695,20 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           const demotes = parsed.data.role !== undefined;
           const archives = parsed.data.account_archived === true;
           const locks = parsed.data.locked_permanent === true;
-          if (demotes || archives || locks) await assertNotLastSuperadmin(id);
+          const expires = parsed.data.account_valid_until != null;
+          if (demotes || archives || locks || expires) await assertNotLastSuperadmin(id);
         }
         if (parsed.data.role !== undefined) updates.role = parsed.data.role;
         if (parsed.data.department_group_id !== undefined) updates.department_group_id = parsed.data.department_group_id;
         if (parsed.data.supervisor_user_id !== undefined) updates.supervisor_user_id = parsed.data.supervisor_user_id;
         if (parsed.data.account_archived !== undefined) updates.account_archived = parsed.data.account_archived;
         if (parsed.data.locked_permanent !== undefined) updates.locked_permanent = parsed.data.locked_permanent;
+        if (parsed.data.account_valid_until !== undefined) {
+          updates.account_valid_until = parsed.data.account_valid_until;
+          if (isAccountExpired(target.account_valid_until) || isAccountExpired(parsed.data.account_valid_until)) {
+            await app.db.updateTable('sessions').set({ revoked_at: mysqlTimestamp() }).where('user_id', '=', id).execute();
+          }
+        }
         // Zusatzrechte für andere Admin-Konten zu vergeben ist selbst ein privilegierter Vorgang
         // -- nur Superadmin darf das (gleiche Einschränkung wie im Editor, "ue-man-box" war dort
         // immer nur für isSuper sichtbar).
@@ -710,12 +724,13 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
       await app.db.updateTable('users').set(updates).where('id', '=', id).execute();
 
-      if (canManageUsers && (parsed.data.role !== undefined || parsed.data.account_archived !== undefined || parsed.data.locked_permanent !== undefined)) {
+      if (canManageUsers && (parsed.data.role !== undefined || parsed.data.account_archived !== undefined || parsed.data.locked_permanent !== undefined || parsed.data.account_valid_until !== undefined)) {
         await app.db.insertInto('global_audit_log').values({
           id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
           action: 'user.updated', target_type: 'user', target_id: id,
           detail_json: JSON.stringify({
-            role: parsed.data.role, account_archived: parsed.data.account_archived, locked_permanent: parsed.data.locked_permanent
+            role: parsed.data.role, account_archived: parsed.data.account_archived, locked_permanent: parsed.data.locked_permanent,
+            account_valid_until: parsed.data.account_valid_until
           })
         }).execute();
       }

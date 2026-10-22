@@ -30,18 +30,24 @@ export const UI = {
         if (!frame) {
             frame = document.createElement('iframe');
             frame.id = 'print-frame';
-            frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+            frame.className = 'print-frame';
             document.body.appendChild(frame);
         }
-        const doc = frame.contentWindow.document;
-        doc.open();
-        doc.write(html);
-        doc.close();
-        UI.toast('Druckvorschau wird geöffnet...');
+        const parsed = new DOMParser().parseFromString(html, 'text/html');
+        parsed.querySelectorAll('style, script, link[rel="stylesheet"]').forEach(el => el.remove());
+        const stylesheet = parsed.createElement('link');
+        stylesheet.rel = 'stylesheet';
+        stylesheet.href = '/js/print.css';
+        parsed.head.appendChild(stylesheet);
         frame.onload = () => {
             frame.contentWindow.focus();
             frame.contentWindow.print();
         };
+        const doc = frame.contentWindow.document;
+        doc.open();
+        doc.write('<!DOCTYPE html>' + parsed.documentElement.outerHTML);
+        doc.close();
+        UI.toast('Druckvorschau wird geöffnet...');
     },
     // Ersetzt native title-Tooltips (vom Browser gezeichnet, nicht stylebar) durch eine
     // ans Design angepasste, abgerundete Tooltip-Box. Funktioniert per Delegation auch für
@@ -938,7 +944,13 @@ export const UI = {
                 renderLabel();
             },
             open,
-            close
+            close,
+            destroy: () => {
+                close();
+                window.removeEventListener('click', root._dtpOutside);
+                window.removeEventListener('resize', root._dtpReposition);
+                popover.remove();
+            }
         };
     },
 
