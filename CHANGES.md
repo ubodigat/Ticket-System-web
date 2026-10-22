@@ -1,5 +1,34 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-22 - npm-audit-Nachbesserung und Install-Manifest aktualisiert
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Der Security-Audit vom 21.10.2026 (Commit 7e60822) listete R-6 bis R-9, N10-Rest, N11,
+  N12, N13, N3, CSP `unsafe-inline` und Image-Digest-Pinning als offen. Beim Nachprüfen
+  stellte sich heraus, dass all diese Punkte bereits in Commit `44838e3` (22.10.2026,
+  bereits auf `origin/main`) behoben waren -- u.a. `ops/docker/provision-db.sh` (R-6:
+  Laufzeit-Konto wird erst nach erfolgreicher TLS-Verifikation in die `.env`
+  geschrieben, nie vorher), `requireAdmin` + Empfänger-Blind-Index + Rate-Limit am
+  Kalender-Endpunkt (R-7), fail-closed `decryptFieldTolerant` (R-8), `mail_secrets_enc`
+  für S/MIME/DKIM (R-9), harte Ablehnung einer Ticket-Zusammenführung bei
+  unterschiedlichem Ersteller (N11), `recipient_user_id` statt Benutzername bei
+  Benachrichtigungen (N12), Prüfsummen-Manifest `install-manifest.sha256` für den
+  Installer (N13), Mail-Versand über die `jobs`-Tabelle (N3), CSP ohne `unsafe-inline`
+  und Image-Digests in `docker-compose.yml`.
+- Zwei dabei neu aufgetretene, bis dahin ungeprüfte Dependency-Lücken geschlossen:
+  `fastify` (Header-Validierungs-Bypass, Patch-Update innerhalb des bestehenden
+  `^5.2.1`-Bereichs) und `sanitize-html` (unbegrenzte Rekursion beim erneuten
+  Bereinigen eines verworfenen iframe-Fallbacks, DoS-Risiko; Pin von 2.18.0 auf
+  2.18.1 angehoben). `npm audit --omit=dev` meldet wieder 0 Schwachstellen.
+- `install-manifest.sha256` sowie der darauf aufbauende gepinnte Hash im
+  `curl | bash`-Einzeiler in README.md mit `node ops/create-install-manifest.mjs`
+  neu erzeugt, da sich durch das Dependency-Update die Prüfsummen von `package.json`/
+  `package-lock.json` geändert hatten (`--check` bestätigt jetzt wieder Konsistenz).
+- Vollständiger Verifikationslauf: Typecheck, 149 Tests, Build, JS-/Shell-Syntax und
+  `npm audit` grün. Der echte MariaDB-Integrationstest (`ops/tests/mariadb-security.mjs`,
+  bereits von einer vorherigen Sitzung ergänzt, deckt u.a. die serverseitige Mail-Queue
+  und die JSON-String-Rückgabe von mysql2 ab) läuft lokal mangels Docker nicht --
+  Bestätigung steht beim nächsten GitHub-CI-Lauf aus.
+
 ## 2026-10-20 - Zeitstempel bei Teilaufgaben, verbindliches Ticketnummer-Format
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - **Erledigungszeitpunkt bei Teilaufgaben:** Checkt man eine Teilaufgabe ab, wird jetzt Datum und

@@ -73,6 +73,7 @@ try {
   assert.equal(await decrypt('tickets', ticketId, 'custom_fields_json', row.custom_fields_json), JSON.stringify({ private: 'Sensitive custom field' }));
   assert.equal(await decrypt('tickets', ticketId, 'waiting_message', row.waiting_message), 'Legacy pending question');
   const settings = await db.selectFrom('app_settings').selectAll().where('id', '=', 1).executeTakeFirstOrThrow();
+  assert.equal(typeof settings.config_json, 'string', 'JSON columns must follow the application string contract');
   assert.ok(!settings.config_json.includes('PRIVATE KEY'));
   assert.equal((await readMailSecrets(deps, settings.mail_secrets_enc)).smimePassphrase, 'Passphrase');
   const second = await reencryptLegacyPlaintext(db, env, keyProvider);
@@ -85,7 +86,12 @@ try {
   await drainMailQueue(deps);
   const job = await db.selectFrom('jobs').selectAll().where('type', '=', 'smtp.delivery').executeTakeFirstOrThrow();
   assert.equal(job.status, 'queued'); assert.equal(job.attempts, 1);
+  assert.equal(typeof job.payload_json, 'string', 'Mail queue JSON must be returned as a string');
   assert.ok(!job.payload_json.includes('Private queued body'));
+  const envelope = JSON.parse(job.payload_json);
+  assert.equal(typeof envelope.ciphertext, 'string');
+  const mail = JSON.parse(await decrypt('jobs', job.idempotency_key, 'mail_payload', Buffer.from(envelope.ciphertext, 'base64')));
+  assert.deepEqual(mail, { to: 'test@example.org', subject: 'Queued subject', text: 'Private queued body' });
   console.log('MariaDB upgrade, encryption, authenticated migration checkpoints and durable mail retry: OK');
 } finally {
   await db.destroy(); await rm(temp, { recursive: true, force: true });

@@ -42,6 +42,9 @@ export function createDb(env: Env, purpose: 'migrate' | 'runtime' = 'runtime'): 
     password: credentials.password,
     connectionLimit: 10,
     supportBigNumbers: true,
+    // MariaDB extended JSON metadata otherwise makes mysql2 return objects. Our database
+    // types and explicit JSON.parse calls require strings, including the encrypted mail envelope.
+    jsonStrings: true,
     dateStrings: false,
     timezone: 'Z',
     ...(env.DB_SSL_CA_PATH
