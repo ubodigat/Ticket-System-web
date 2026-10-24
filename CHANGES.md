@@ -1,5 +1,34 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-24 - Installer gegen falsch-positive "lokale Änderungen" abgesichert, zod v4
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- **`install.sh` bricht nicht mehr grundlos mit "Your local changes ... would be
+  overwritten by merge" ab:** Ein Nutzer traf das live, nachdem zwischen seinem ersten
+  und zweiten Lauf `.gitattributes` um `eol=lf`-Normalisierung ergänzt wurde -- Git
+  bewertete die bereits ausgecheckte `install.sh` dadurch als "lokal verändert",
+  obwohl niemand etwas editiert hatte, und `git pull --ff-only` verweigerte sich fünf
+  Versuche lang identisch. Das vom Installer verwaltete Klon-Verzeichnis ist nie für
+  Handbearbeitung gedacht (Secrets liegen per `.gitignore` außerhalb in
+  `ops/docker/.env`), deshalb setzt `install.sh` jetzt vor jedem `git pull --ff-only`
+  hart auf den zuletzt bekannten Commit zurück (`git reset --hard HEAD`) -- betrifft
+  nur versionierte Dateien, nie die Secrets. Diese Fehlerklasse (egal ob durch
+  Normalisierung, eine versehentliche Änderung oder sonst eine Abweichung ausgelöst)
+  kann dadurch nicht mehr auftreten.
+- **Abhängigkeiten aktualisiert (neue, seit dem letzten Lauf veröffentlichte
+  Schwachstellen):** `fastify`/`fast-uri` (Header-Validierung bzw. URI-Scheme-Spoofing/
+  Pfad-Verwechslung, Patch-Updates innerhalb des bestehenden Bereichs) und
+  `nodemailer` (Adressparser-Lücken, ebenfalls Patch-Update). Zusätzlich `zod` von 3.24
+  auf 4.6.7 angehoben (High-Severity: Speichererschöpfung bei übergroßen,
+  eingeschränkten Collections) -- ein echter Major-Versionssprung mit API-Änderung:
+  `z.record()` verlangt in v4 zwingend ein Schema für die Schlüssel (`z.record(z.string(), ...)`
+  statt nur `z.record(...)`), betraf drei Stellen (`tickets.ts` custom_fields,
+  `users.ts` notif_prefs, `extras.ts` filters) und wurde angepasst. Vor dem Hochstufen
+  mit vollem Typecheck/149 Tests/Build geprüft, nicht blind per `--force` übernommen.
+  `npm audit --omit=dev` meldet wieder 0 Schwachstellen.
+- `install-manifest.sha256` und der gepinnte Hash im README-Installationsbefehl mit
+  `node ops/create-install-manifest.mjs` neu erzeugt (Inhalt von `install.sh`,
+  `package.json`/`package-lock.json` und den drei Routen-Dateien hat sich geändert).
+
 ## 2026-10-22 - npm-audit-Nachbesserung und Install-Manifest aktualisiert
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - Der Security-Audit vom 21.10.2026 (Commit 7e60822) listete R-6 bis R-9, N10-Rest, N11,

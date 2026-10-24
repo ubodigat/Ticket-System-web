@@ -157,7 +157,7 @@ const updateUserSchema = z.object({
   // umschalten (siehe PATCH-Handler unten).
   ldap_login_enabled: z.boolean().optional(),
   permissions: userPermissionsSchema.optional(),
-  notif_prefs: z.record(z.object({
+  notif_prefs: z.record(z.string(), z.object({
     app: z.boolean().optional(),
     email: z.boolean().optional()
   })).optional()

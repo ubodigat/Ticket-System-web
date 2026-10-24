@@ -166,7 +166,7 @@ const createTicketSchema = z.object({
   category: z.string().trim().max(128).optional(),
   type: z.enum(['ticket', 'incident']).default('ticket'),
   incident_notice: z.string().trim().max(2000).optional(),
-  custom_fields: z.record(z.unknown()).optional(),
+  custom_fields: z.record(z.string(), z.unknown()).optional(),
   on_behalf_of_user_id: z.string().optional()
 });
 

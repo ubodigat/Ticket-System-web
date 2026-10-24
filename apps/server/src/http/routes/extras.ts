@@ -558,7 +558,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
 
   const createListViewSchema = z.object({
     name: z.string().trim().min(1).max(128),
-    filters: z.record(z.unknown()),
+    filters: z.record(z.string(), z.unknown()),
     is_shared: z.boolean().default(false)
   });
 
