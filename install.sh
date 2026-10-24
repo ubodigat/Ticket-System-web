@@ -285,7 +285,17 @@ rerun_from_clone_if_needed() {
 
   log "Cloning repository"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
-    retry_root 5 git -C "$INSTALL_DIR" pull --ff-only || { print_clone_help; exit 1; }
+    # This clone is exclusively installer-managed; nobody is expected to hand-edit files in it
+    # (secrets live outside Git in ops/docker/.env, see .gitignore). Even so, the working tree
+    # can end up looking "locally modified" without anyone touching anything -- e.g. a later
+    # .gitattributes change (added eol=lf normalization) makes Git re-evaluate already-checked-
+    # out files against the new rule and treat them as dirty. "git pull --ff-only" then refuses
+    # to merge, over and over, even though nothing meaningful actually changed. Resetting to the
+    # last known commit right before every pull makes that class of failure impossible: it only
+    # discards tracked-file drift (which should never be intentional here), never the untracked,
+    # gitignored secrets.
+    retry_root 5 bash -c 'git -C "$1" reset --hard HEAD >/dev/null && git -C "$1" pull --ff-only' _ "$INSTALL_DIR" \
+      || { print_clone_help; exit 1; }
   else
     run_root mkdir -p "$(dirname "$INSTALL_DIR")"
     if [[ -e "$INSTALL_DIR" && ! -d "$INSTALL_DIR/.git" ]]; then
