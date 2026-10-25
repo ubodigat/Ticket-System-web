@@ -10,7 +10,7 @@ benötigten Pakete werden automatisch installiert. Empfohlen: mindestens 3 GB RA
 für den optionalen Virenscanner zusätzlich 1-2 GB.
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d5d41d0c00b5c07973ff14dbb20d80cc44a90d1b0027f944dd4b53a27e5fe247" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=0d1599ecbdebfaf6b8c0515725d9c2f19c6b7515c308407aef67b96d6993a780 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d5d41d0c00b5c07973ff14dbb20d80cc44a90d1b0027f944dd4b53a27e5fe247" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=4fb93e6e3acfa627d59ecd4362edb3475c10a8d4923d501e88fb329033b20a9b bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -33,7 +33,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d5d41d0c00b5c07973ff14dbb20d80cc44a90d1b0027f944dd4b53a27e5fe247" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=0d1599ecbdebfaf6b8c0515725d9c2f19c6b7515c308407aef67b96d6993a780 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d5d41d0c00b5c07973ff14dbb20d80cc44a90d1b0027f944dd4b53a27e5fe247" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=4fb93e6e3acfa627d59ecd4362edb3475c10a8d4923d501e88fb329033b20a9b bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist
