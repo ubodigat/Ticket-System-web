@@ -1,53 +1,45 @@
-name: Dependabot-Manifest automatisch aktualisieren
+name: Dependabot-Manifest pruefen
 
-# Dauerhafte Loesung fuer das wiederkehrende "Install manifest is stale"-Problem:
-# install-manifest.sha256 haengt vom Inhalt JEDER getrackten Datei ab (Lockfile
-# eingeschlossen). Dependabot aendert package.json/package-lock.json, regeneriert das
-# Manifest aber nie, also schlaegt der "Verify pinned installation manifest"-Schritt in
-# ci.yml auf jedem Dependabot-PR fehl, bis jemand das manuell nachzieht. Dieser Workflow
-# erzeugt das Manifest direkt auf dem PR-Branch neu, sobald Dependabot ihn aktualisiert,
-# noch bevor der eigentliche CI-Check laeuft.
-#
-# pull_request_target statt pull_request: Workflows, die durch Dependabot ausgeloest
-# werden, bekommen bei pull_request ein rein lesendes GITHUB_TOKEN (GitHub-Sicherheits-
-# massnahme) -- ein Push waere damit unmoeglich. pull_request_target laedt die Workflow-
-# Definition vom Basis-Branch (main), nicht vom PR, und bekommt die hier konfigurierten
-# Rechte. Es wird bewusst NICHT "npm ci"/"npm install" ausgefuehrt (kein Scripts-Risiko
-# durch ein von Dependabot vorgeschlagenes Lockfile) -- das Skript liest nur Dateien und
-# bildet Hashes.
+# Teil 1 von 2 der Loesung fuer das wiederkehrende "Install manifest is stale"-Problem bei
+# Dependabot-PRs (Teil 2: dependabot-manifest-apply.yml). Dieser Workflow laeuft bewusst UN-
+# privilegiert ueber den Standard-Trigger "pull_request": Workflows, die durch Dependabot
+# ausgeloest werden, bekommen von GitHub ohnehin nur ein rein lesendes GITHUB_TOKEN, egal was
+# hier unter "permissions" steht -- das ist exakt der sichere Kontext, um den PR-Branch
+# auszuchecken und das Manifest-Skript darauf laufen zu lassen. Es wird hier NICHT committet
+# oder gepusht (dafuer fehlen in diesem Kontext ohnehin die Rechte) -- das Ergebnis landet nur
+# als Artefakt fuer Teil 2.
 on:
-  pull_request_target:
+  pull_request:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  fix-manifest:
+  check-manifest:
     if: github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          persist-credentials: true
 
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
 
-      - name: Manifest bei Bedarf neu erzeugen und committen
-        env:
-          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      - name: Manifest pruefen und bei Bedarf neu erzeugen
         run: |
           set -e
+          mkdir -p /tmp/manifest-fix
           if node ops/create-install-manifest.mjs --check; then
-            echo "Manifest ist bereits aktuell."
-            exit 0
+            echo "clean" > /tmp/manifest-fix/status
+          else
+            node ops/create-install-manifest.mjs
+            cp README.md install-manifest.sha256 /tmp/manifest-fix/
+            echo "stale" > /tmp/manifest-fix/status
           fi
-          node ops/create-install-manifest.mjs
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md install-manifest.sha256
-          git commit -m "Install-Manifest nach Dependabot-Update automatisch neu erzeugen"
-          git push origin "HEAD:$PR_HEAD_REF"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifest-fix
+          path: /tmp/manifest-fix
+          retention-days: 1
