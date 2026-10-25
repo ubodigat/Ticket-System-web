@@ -47,6 +47,44 @@ warn() {
   printf '\nWARN: %s\n' "$1" >&2
 }
 
+probe_public_asset() {
+  local response
+  # Internal Caddy certificates may not be trusted by the server itself yet. This is
+  # only a readiness probe; browsers must still trust the CA for secure features.
+  response=$(curl --insecure --silent --show-error --noproxy '*' --connect-timeout 3 --max-time 10 \
+    --output /dev/null --write-out '%{http_code} %{content_type}' "$1" 2>/dev/null) || return 1
+  [[ "$response" == "200 $2"* ]]
+}
+
+verify_public_web() {
+  local base_url="$1" attempt file
+  for ((attempt = 1; attempt <= 20; attempt++)); do
+    if probe_public_asset "${base_url}/index.html" 'text/html'; then break; fi
+    if [[ "$attempt" -eq 20 ]]; then
+      echo "Public login page is not ready: ${base_url}/index.html" >&2
+      return 1
+    fi
+    sleep 3
+  done
+  for file in script.js vendor/lucide.min.js; do
+    if ! probe_public_asset "${base_url}/${file}" 'application/javascript'; then
+      echo "Required JavaScript asset unavailable: ${base_url}/${file}" >&2
+      return 1
+    fi
+  done
+  for file in "$SCRIPT_DIR"/js/*.js; do
+    [[ -f "$file" ]] || continue
+    if ! probe_public_asset "${base_url}/js/${file##*/}" 'application/javascript'; then
+      echo "Required frontend module unavailable: ${base_url}/js/${file##*/}" >&2
+      return 1
+    fi
+  done
+  probe_public_asset "${base_url}/style.css" 'text/css' || {
+    echo "Required stylesheet unavailable: ${base_url}/style.css" >&2
+    return 1
+  }
+}
+
 run_root() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     "$@"
@@ -447,7 +485,7 @@ fi
 run_root chown 999 "$CA_KEY" "$SERVER_KEY" 2>/dev/null || true
 
 if [[ "$DEV_MODE" == "true" ]]; then
-  log "Development mode active; using localhost HTTP"
+  log "Development mode active; using internal HTTPS certificates"
 fi
 
 open_firewall_ports
@@ -515,13 +553,17 @@ done
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 PUBLIC_URL="https://${PUBLIC_DOMAIN}"
-if [[ "$DEV_MODE" == "true" || "$PUBLIC_DOMAIN" == "localhost" ]]; then
-  PUBLIC_URL="http://localhost:${HTTP_PORT}"
+if [[ "${HTTPS_PORT:-443}" != "443" ]]; then
+  PUBLIC_URL="${PUBLIC_URL}:${HTTPS_PORT}"
 fi
 
-log "Checking local web reachability"
-if ! curl -kfsS --max-time 10 "https://${PUBLIC_DOMAIN}/health" >/dev/null 2>&1; then
-  warn "Local HTTPS check for https://${PUBLIC_DOMAIN}/health failed. The containers may still be starting; check Docker logs if the browser cannot connect."
+log "Checking public login page and frontend assets"
+if ! verify_public_web "$PUBLIC_URL"; then
+  echo "Installation is not ready: the public website or a required asset could not be loaded." >&2
+  echo "Internal app health alone does not verify the reverse proxy or login scripts." >&2
+  echo "Check logs with:" >&2
+  echo "docker compose -f '$COMPOSE_DIR/docker-compose.yml' --env-file '$ENV_FILE' logs --tail=80 app caddy" >&2
+  exit 1
 fi
 
 cat <<EOF
@@ -539,9 +581,12 @@ cat <<EOF
     1. Check that you open the HTTPS URL above, not only the bare IP address.
     2. Check host/provider/VM/router firewall rules for TCP ports 80 and 443.
     3. Test from the server:
-       curl -k -I https://${PUBLIC_DOMAIN}/health
+       curl -k -I ${PUBLIC_URL}/index.html
     4. Test from the client:
-       curl -k -I https://${PUBLIC_DOMAIN}/health
+       curl -k -I ${PUBLIC_URL}/index.html
+
+  The public /health path intentionally returns 404. Internal container health
+  is checked separately. Trust the Caddy CA on client devices when using internal TLS.
 
   Install directory: $SCRIPT_DIR
   Docker env file:   $ENV_FILE

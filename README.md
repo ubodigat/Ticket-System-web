@@ -10,7 +10,7 @@ benötigten Pakete werden automatisch installiert. Empfohlen: mindestens 3 GB RA
 für den optionalen Virenscanner zusätzlich 1-2 GB.
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d5d41d0c00b5c07973ff14dbb20d80cc44a90d1b0027f944dd4b53a27e5fe247" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=8602f4a9c02f3e4f3b84ed349c75d52a4a1a30ada53ef30019333536a77e19b7 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d507bee161626d58fe19d22180dce7bffd5184a094a924a8bacb6c3138c3e853" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=7f738b270c7a11aaa3a256f9bf1ccf69f460ca39e47ad0d3620c7520054e9625 bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -20,6 +20,10 @@ nicht durch ein ungeprüftes `curl | bash` ersetzen. Skript, Manifest und README
 gemeinsam veröffentlicht sein; vor dem Push ist der neue Befehl noch nicht verwendbar.
 
 Nach erfolgreichem Start zeigt der Installer die Adresse und das Setup-Token an.
+Vor der Erfolgsmeldung prüft er die öffentliche Anmeldeseite, JavaScript-Module und
+Stylesheets über Caddy. Fehlen erforderliche Dateien oder startet der Webzugang nicht,
+bricht er mit einer Fehlermeldung ab. `/health` ist öffentlich absichtlich gesperrt
+(404); dieser Pfad wird nur intern für den Container-Healthcheck verwendet.
 Adresse öffnen, Token eingeben und das erste Superadmin-Konto einrichten.
 Installation: `/opt/ticket-system`; Konfiguration: `ops/docker/.env`.
 
@@ -33,7 +37,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d5d41d0c00b5c07973ff14dbb20d80cc44a90d1b0027f944dd4b53a27e5fe247" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=8602f4a9c02f3e4f3b84ed349c75d52a4a1a30ada53ef30019333536a77e19b7 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d507bee161626d58fe19d22180dce7bffd5184a094a924a8bacb6c3138c3e853" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=7f738b270c7a11aaa3a256f9bf1ccf69f460ca39e47ad0d3620c7520054e9625 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist

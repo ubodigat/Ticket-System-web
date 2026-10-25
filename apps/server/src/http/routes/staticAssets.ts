@@ -39,6 +39,7 @@ const ASSETS: Record<string, Asset> = {
   '/js/admin-board.js': { file: 'js/admin-board.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/context-menu.js': { file: 'js/context-menu.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/todos.js': { file: 'js/todos.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/outlook-calendar.js': { file: 'js/outlook-calendar.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/excel-preview.js': { file: 'js/excel-preview.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/pdf-preview.js': { file: 'js/pdf-preview.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/vendor/pdfjs/pdf.mjs': { file: 'build/pdf.mjs', contentType: 'application/javascript; charset=utf-8', root: 'pdfjs' },

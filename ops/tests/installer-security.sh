@@ -53,5 +53,38 @@ printf 'unexpected execution input\n' > "$fixture/verified/injected.txt"
 git -C "$fixture/verified" add -- injected.txt
 if verify_installation "$fixture/verified" >/dev/null 2>&1; then echo 'Additional tracked source must fail verification' >&2; exit 1; fi
 bash -n "$root/install.sh"
+# Probe public pages, never the intentionally blocked /health path. Simulate Caddy
+# starting late, a missing module and a misleading HTML fallback for JavaScript.
+sed -n '/^probe_public_asset() {/,/^}/p; /^verify_public_web() {/,/^}/p' "$root/install.sh" > "$fixture/web-probe.sh"
+source "$fixture/web-probe.sh"
+mkdir -p "$fixture/web/js"
+touch "$fixture/web/js/outlook-calendar.js"
+SCRIPT_DIR="$fixture/web"
+curl() {
+  local url="${!#}"
+  printf '%s\n' "$url" >> "$fixture/web-requests"
+  if [[ "$url" == */health ]]; then return 1; fi
+  if [[ "$url" == */index.html ]]; then
+    if [[ "$WEB_MODE" == 'starting' && ! -f "$fixture/started" ]]; then
+      touch "$fixture/started"; return 7
+    fi
+    if [[ "$WEB_MODE" == 'unreachable' ]]; then return 7; fi
+    printf '200 text/html; charset=utf-8'
+  elif [[ "$url" == */style.css ]]; then printf '200 text/css; charset=utf-8'
+  elif [[ "$url" == */outlook-calendar.js && "$WEB_MODE" == 'missing' ]]; then printf '404 text/plain'
+  elif [[ "$url" == */outlook-calendar.js && "$WEB_MODE" == 'html-fallback' ]]; then printf '200 text/html'
+  else printf '200 application/javascript; charset=utf-8'; fi
+}
+sleep() { :; }
+WEB_MODE=starting
+verify_public_web 'https://192.0.2.1:8443'
+grep -q 'https://192.0.2.1:8443/js/outlook-calendar.js' "$fixture/web-requests"
+! grep -q '/health' "$fixture/web-requests"
+for WEB_MODE in missing html-fallback unreachable; do
+  if verify_public_web 'https://192.0.2.1' >/dev/null 2>&1; then
+    echo "Public website verification must fail for $WEB_MODE" >&2; exit 1
+  fi
+done
+unset -f curl sleep
 sh -n "$root/ops/docker/provision-db.sh"
 echo 'Installer credential preservation, root recovery, TLS verification and failure handling: OK'
