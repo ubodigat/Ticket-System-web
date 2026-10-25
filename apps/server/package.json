@@ -26,7 +26,7 @@
     "nodemailer": "^10.0.16",
     "otpauth": "^9.5.2",
     "pdfjs-dist": "6.4.299",
-    "pino": "^9.6.0",
+    "pino": "^10.4.0",
     "qrcode": "^1.5.4",
     "sanitize-html": "2.18.1",
     "zod": "^4.6.7"
@@ -38,7 +38,7 @@
     "@types/sanitize-html": "2.16.2",
     "eslint": "^9.18.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   },
   "engines": {
