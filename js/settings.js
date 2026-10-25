@@ -42,7 +42,7 @@ export const Settings = {
             type: 'default',
             val: '',
             preset: 'bg-default',
-            label: 'Standard',
+            get label() { return Lang.t('bgPresetDefault'); },
             icon: 'moon-star'
         },
         {
@@ -56,42 +56,42 @@ export const Settings = {
             type: 'class',
             val: 'bg-nebula',
             preset: 'bg-nebula',
-            label: 'Nebel',
+            get label() { return Lang.t('bgPresetNebula'); },
             icon: 'orbit'
         },
         {
             type: 'class',
             val: 'bg-ocean',
             preset: 'bg-ocean',
-            label: 'Ozean',
+            get label() { return Lang.t('bgPresetOcean'); },
             icon: 'waves'
         },
         {
             type: 'class',
             val: 'bg-forest',
             preset: 'bg-forest',
-            label: 'Wald',
+            get label() { return Lang.t('bgPresetForest'); },
             icon: 'trees'
         },
         {
             type: 'class',
             val: 'bg-ember',
             preset: 'bg-ember',
-            label: 'Glut',
+            get label() { return Lang.t('bgPresetEmber'); },
             icon: 'flame'
         },
         {
             type: 'class',
             val: 'bg-sand',
             preset: 'bg-sand',
-            label: 'Sand',
+            get label() { return Lang.t('bgPresetSand'); },
             icon: 'mountain'
         },
         {
             type: 'class',
             val: 'bg-graphite',
             preset: 'bg-graphite',
-            label: 'Graphit',
+            get label() { return Lang.t('bgPresetGraphite'); },
             icon: 'grid-3x3'
         }
     ],
@@ -168,11 +168,11 @@ export const Settings = {
     absencePeriodMarkup: (absence, prefix = 'abs') => { absence = absence || {}; return `
         <div class="form-grid">
             <div class="field">
-                <label for="${prefix}-from">Von (TT.MM.JJJJ, leer = sofort)</label>
+                <label for="${prefix}-from">${Lang.t('dateFromEmptyImmediate')}</label>
                 ${UI.dateFieldMarkup(`${prefix}-from`, absence.fromMs ? Utils.fmtDateOnly(new Date(absence.fromMs)) : '', `${prefix}-from-dtp`)}
             </div>
             <div class="field">
-                <label for="${prefix}-until">Bis (TT.MM.JJJJ, leer = offen)</label>
+                <label for="${prefix}-until">${Lang.t('dateUntilEmptyOpen')}</label>
                 ${UI.dateFieldMarkup(`${prefix}-until`, absence.untilMs ? Utils.fmtDateOnly(new Date(absence.untilMs)) : '', `${prefix}-until-dtp`)}
             </div>
         </div>`; },
@@ -187,9 +187,9 @@ export const Settings = {
         const untilRaw = q(`#${prefix}-until`)?.value.trim() || '';
         const fromMs = fromRaw ? Utils.parseGermanDateTime(fromRaw, '00:00') : null;
         const untilMs = untilRaw ? Utils.parseGermanDateTime(untilRaw, '23:59') : null;
-        if (fromRaw && !fromMs) throw new Error('Bitte das Startdatum im Format TT.MM.JJJJ eingeben.');
-        if (untilRaw && !untilMs) throw new Error('Bitte das Enddatum im Format TT.MM.JJJJ eingeben.');
-        if (fromMs && untilMs && untilMs < fromMs) throw new Error('Das Enddatum liegt vor dem Startdatum.');
+        if (fromRaw && !fromMs) throw new Error(Lang.t('enterStartDateFormat'));
+        if (untilRaw && !untilMs) throw new Error(Lang.t('enterEndDateFormat'));
+        if (fromMs && untilMs && untilMs < fromMs) throw new Error(Lang.t('endDateBeforeStartDate'));
         return { fromMs, untilMs };
     },
 
@@ -205,18 +205,18 @@ export const Settings = {
         const absence = me?.absence || {};
         const substitutes = users.filter(u => u.username !== user.username && (u.role === 'admin' || u.role === 'superadmin') && !u.accountArchived);
         area.innerHTML = `
-            <label class="check-row"><input type="checkbox" id="s-abs-active" ${absence.active || absence.pending ? 'checked' : ''}><span>Ich bin abwesend</span></label>
+            <label class="check-row"><input type="checkbox" id="s-abs-active" ${absence.active || absence.pending ? 'checked' : ''}><span>${Lang.t('iAmAbsent')}</span></label>
             ${Settings.absencePeriodMarkup(absence, 's-abs')}
             <div class="field">
-                <label for="s-abs-sub">Vertretung</label>
+                <label for="s-abs-sub">${Lang.t('substitute')}</label>
                 <select id="s-abs-sub">
-                    <option value="">Keine – Tickets zurück ins Team</option>
+                    <option value="">${Lang.t('noneTicketsBackToTeam')}</option>
                     ${substitutes.map(u => `<option value="${Utils.esc(u.username)}" ${absence.substitute === u.username ? 'selected' : ''}>${Utils.esc(u.name || u.username)}</option>`).join('')}
                 </select>
             </div>
-            <label class="check-row"><input type="checkbox" id="s-abs-visible" ${absence.visible ? 'checked' : ''}><span>Anderen Admins anzeigen, dass ich abwesend bin</span></label>
-            <div class="setting-row"><span class="hint">${absence.pending ? `Geplant ab ${new Date(absence.fromMs).toLocaleDateString('de-DE')}.` : 'Beim Start wird die Vertretung Hauptverantwortlicher aller offenen Tickets. Am Ende kannst du sie zurückholen.'}</span>
-                <button class="btn-primary btn-sm" id="btn-save-absence">${Icon('save', 15)}Abwesenheit speichern</button>
+            <label class="check-row"><input type="checkbox" id="s-abs-visible" ${absence.visible ? 'checked' : ''}><span>${Lang.t('showOtherAdminsAbsent')}</span></label>
+            <div class="setting-row"><span class="hint">${absence.pending ? Lang.format('plannedFrom', { date: new Date(absence.fromMs).toLocaleDateString(Lang.current === 'en' ? 'en-US' : 'de-DE') }) : Lang.t('absenceStartHint')}</span>
+                <button class="btn-primary btn-sm" id="btn-save-absence">${Icon('save', 15)}${Lang.t('saveAbsenceButton')}</button>
             </div>`;
         Settings.bindAbsencePeriod('s-abs', absence);
         q('#btn-save-absence').onclick = async () => {
@@ -224,7 +224,7 @@ export const Settings = {
             try { period = Settings.readAbsencePeriod('s-abs'); } catch (error) { return UI.toast(error.message); }
             const stillActive = q('#s-abs-active').checked;
             await AdminBoard.setAbsence(user.username, stillActive, q('#s-abs-sub').value || null, q('#s-abs-visible').checked, period.fromMs, period.untilMs);
-            UI.toast('Abwesenheit gespeichert.');
+            UI.toast(Lang.t('absenceSavedToast'));
             Settings.renderAbsenceArea(user);
             if (!stillActive) await AdminBoard.openAbsenceReturnPopup(user);
         };
@@ -237,36 +237,36 @@ export const Settings = {
         if (!user) { field.hidden = true; return; }
         const editable = { name: true, email: true, department: false, phone: false, mobile: false, jobTitle: false, officeLocation: false, ...(settings.accountConfig?.editable || {}) };
         const rows = [
-            { key: 'name', label: 'Name', value: user.name || '' },
-            { key: 'email', label: 'E-Mail', value: user.email || '' },
-            { key: 'department', label: 'Einrichtung / Abteilung', value: user.department || '' },
-            { key: 'phone', label: 'Telefon', value: user.phone || '' },
-            { key: 'mobile', label: 'Mobil', value: user.mobile || '' },
-            { key: 'jobTitle', label: 'Position / Jobtitel', value: user.jobTitle || '' },
-            { key: 'officeLocation', label: 'Standort', value: user.officeLocation || '' },
+            { key: 'name', label: Lang.t('name'), value: user.name || '' },
+            { key: 'email', label: Lang.t('email'), value: user.email || '' },
+            { key: 'department', label: Lang.t('department'), value: user.department || '' },
+            { key: 'phone', label: Lang.t('phone'), value: user.phone || '' },
+            { key: 'mobile', label: Lang.t('mobile'), value: user.mobile || '' },
+            { key: 'jobTitle', label: Lang.t('jobTitle'), value: user.jobTitle || '' },
+            { key: 'officeLocation', label: Lang.t('location'), value: user.officeLocation || '' },
         ];
         const anyEditable = rows.some(row => editable[row.key]);
         field.hidden = false;
         area.innerHTML = `
             <div class="form-grid">
-                ${rows.map(row => `<div class="field"><label for="acc-${row.key}">${row.label}${editable[row.key] ? '' : ' <span class="hint">(vom Administrator gesperrt)</span>'}</label><input id="acc-${row.key}" type="text" value="${Utils.esc(row.value)}"${editable[row.key] ? '' : ' disabled'}></div>`).join('')}
+                ${rows.map(row => `<div class="field"><label for="acc-${row.key}">${row.label}${editable[row.key] ? '' : ` <span class="hint">${Lang.t('lockedByAdmin')}</span>`}</label><input id="acc-${row.key}" type="text" value="${Utils.esc(row.value)}"${editable[row.key] ? '' : ' disabled'}></div>`).join('')}
             </div>
-            ${anyEditable ? `<div class="setting-row"><span class="hint">Nur die freigegebenen Felder kannst du ändern.</span>
-                <button class="btn-primary btn-sm" id="btn-save-account">${Icon('save', 15)}Konto speichern</button>
+            ${anyEditable ? `<div class="setting-row"><span class="hint">${Lang.t('onlyEditableFieldsHint')}</span>
+                <button class="btn-primary btn-sm" id="btn-save-account">${Icon('save', 15)}${Lang.t('saveAccountButton')}</button>
             </div>` : ''}`;
         q('#btn-save-account')?.addEventListener('click', async () => {
             const users = await Store.getUsers();
             const target = users.find(u => u.id === user.id);
             if (!target) return;
             const emailValue = q('#acc-email')?.value.trim();
-            if (editable.email && emailValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) return UI.toast('Bitte eine gültige E-Mail-Adresse eingeben.');
+            if (editable.email && emailValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) return UI.toast(Lang.t('enterValidEmailAddress'));
             rows.forEach(row => {
                 const el = q(`#acc-${row.key}`);
                 if (el && editable[row.key]) target[row.key] = el.value.trim();
             });
             await Store.saveUsers(users);
             await Store.addGlobalLog('Konto geändert', `Benutzer: ${target.username}`);
-            UI.toast('Konto gespeichert.');
+            UI.toast(Lang.t('accountSavedToast'));
         });
     },
 
@@ -286,7 +286,7 @@ export const Settings = {
                     </div>
                     <div class="modal-body form-grid">
                         <div class="field field-wide" id="s-absence-field" hidden>
-                            <label>Abwesenheit &amp; Vertretung</label>
+                            <label>${Lang.t('absenceAndSubstitute')}</label>
                             <div id="s-absence-area"></div>
                         </div>
                         <div class="field">
@@ -305,13 +305,13 @@ export const Settings = {
                             <div class="accent-picker">
                                 <div class="accent-presets" role="group" aria-label="${Lang.t('accentColor')}">
                                     <button type="button" class="accent-preset accent-preset-indigo" data-color="#6366f1" title="Indigo" aria-label="Indigo"></button>
-                                    <button type="button" class="accent-preset accent-preset-sky" data-color="#63bce8" title="Himmelblau" aria-label="Himmelblau"></button>
-                                    <button type="button" class="accent-preset accent-preset-green" data-color="#10b981" title="Grün" aria-label="Grün"></button>
-                                    <button type="button" class="accent-preset accent-preset-orange" data-color="#f59e0b" title="Orange" aria-label="Orange"></button>
-                                    <button type="button" class="accent-preset accent-preset-red" data-color="#ef4444" title="Rot" aria-label="Rot"></button>
+                                    <button type="button" class="accent-preset accent-preset-sky" data-color="#63bce8" title="${Lang.t('colorSky')}" aria-label="${Lang.t('colorSky')}"></button>
+                                    <button type="button" class="accent-preset accent-preset-green" data-color="#10b981" title="${Lang.t('colorGreen')}" aria-label="${Lang.t('colorGreen')}"></button>
+                                    <button type="button" class="accent-preset accent-preset-orange" data-color="#f59e0b" title="${Lang.t('colorOrange')}" aria-label="${Lang.t('colorOrange')}"></button>
+                                    <button type="button" class="accent-preset accent-preset-red" data-color="#ef4444" title="${Lang.t('colorRed')}" aria-label="${Lang.t('colorRed')}"></button>
                                 </div>
                                 <span class="accent-picker-divider"></span>
-                                ${UI.colorPickerMarkup('s-color', 'Eigene Farbe')}
+                                ${UI.colorPickerMarkup('s-color', Lang.t('customColor'))}
                                 <span class="accent-picker-label" id="s-color-label"></span>
                             </div>
                         </div>
@@ -329,12 +329,12 @@ export const Settings = {
                             </div>
                         </div>
                         <div class="field field-wide" id="s-account-field" hidden>
-                            <label>Konto</label>
+                            <label>${Lang.t('accountLabel')}</label>
                             <div id="s-account-area"></div>
                         </div>
                         <div class="field field-wide" id="s-notif-field">
-                            <label>Benachrichtigungen</label>
-                            <p class="hint">Lege fest, ob du Benachrichtigungen in der App, per E-Mail oder auf beiden Wegen erhalten möchtest. Grau hinterlegte Einträge wurden vom Administrator fest vorgegeben.</p>
+                            <label>${Lang.t('notificationsLabel')}</label>
+                            <p class="hint">${Lang.t('notificationsHint')}</p>
                             <div id="s-notif-area" class="notif-personal-list"></div>
                             <label class="check-row"><input id="s-browser-notifications" type="checkbox"><span id="s-browser-notifications-label"></span></label>
                             <p class="hint" id="s-browser-notifications-status" role="status"></p>
@@ -411,35 +411,44 @@ export const Settings = {
             secArea.innerHTML = `
                 <div class="setting-row">
                     <div class="check-text">
-                        <strong>2-Faktor-Authentifizierung</strong>
-                        <span>${isEnabled ? 'Aktiviert' : 'Deaktiviert'}</span>
+                        <strong>${Lang.t('twoFactorAuth')}</strong>
+                        <span>${isEnabled ? Lang.t('enabled') : Lang.t('disabled2')}</span>
                     </div>
                     <button class="${isEnabled ? 'btn-secondary' : 'btn-primary'} btn-sm" id="btn-toggle-2fa">
-                        ${Icon(isEnabled ? 'shield-off' : 'shield-check', 15)}${isEnabled ? 'Deaktivieren' : 'Einrichten'}
+                        ${Icon(isEnabled ? 'shield-off' : 'shield-check', 15)}${isEnabled ? Lang.t('disableButton') : Lang.t('setUpButton')}
                     </button>
                 </div>
             `;
             q('#btn-toggle-2fa').onclick = async () => {
                 if (isEnabled) {
-                    // Deaktivieren erfordert das aktuelle Passwort (Step-up, docs/SPEC.md §8) --
-                    // keine reine Client-Entscheidung mehr.
+                    // Deaktivieren erfordert das aktuelle Passwort UND einen gültigen TOTP-Code
+                    // (Step-up, docs/SPEC.md §8, Security-Audit R-12) -- keine reine
+                    // Client-Entscheidung und kein reiner Passwort-Check mehr.
                     const password = await UI.promptText({
-                        title: '2FA deaktivieren',
-                        label: 'Zur Bestätigung: aktuelles Passwort',
-                        placeholder: 'Passwort'
+                        title: Lang.t('disable2FATitle'),
+                        label: Lang.t('confirmCurrentPassword'),
+                        placeholder: Lang.t('passwordPlaceholder')
                     });
                     if (!password) return;
+                    const code = await UI.promptText({
+                        title: Lang.t('disable2FATitle'),
+                        label: Lang.t('confirmCurrentMfaCode'),
+                        placeholder: '000000'
+                    });
+                    if (!code) return;
                     const res = await fetch('/api/v2/mfa/disable', {
                         method: 'POST',
                         credentials: 'same-origin',
                         headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify({ password })
+                        body: JSON.stringify({ password, code })
                     }).catch(() => null);
                     if (res && res.ok) {
-                        UI.toast('2FA deaktiviert');
+                        UI.toast(Lang.t('mfaDisabledToast'));
                         Settings.openModal(); // Re-render
                     } else {
-                        UI.toast('Passwort falsch.');
+                        const body = await res?.json().catch(() => null);
+                        UI.toast(body?.error === 'too_many_attempts' ? Lang.t('tooManyAttemptsRetryLater')
+                            : body?.error === 'invalid_code' ? Lang.t('codeWrongOrExpired') : Lang.t('wrongPasswordShort'));
                     }
                 } else {
                     modal.classList.remove('open');
@@ -491,12 +500,12 @@ export const Settings = {
             const emailValue = rule.emailLocked ? rule.defaultEmail : (typeof personal.email === 'boolean' ? personal.email : rule.defaultEmail);
             rows.push(`
                 <div class="notif-personal-row${rule.appLocked && rule.emailLocked ? ' locked' : ''}" data-notif-type="${type}">
-                    <div class="notif-matrix-label"><strong>${Utils.esc(meta.label)}</strong>${rule.appLocked && rule.emailLocked ? '<span>Vom Administrator festgelegt</span>' : ''}</div>
+                    <div class="notif-matrix-label"><strong>${Utils.esc(meta.label)}</strong>${rule.appLocked && rule.emailLocked ? `<span>${Lang.t('setByAdmin')}</span>` : ''}</div>
                     <label class="check-row compact"><input type="checkbox" class="sn-app" ${appValue ? 'checked' : ''} ${rule.appLocked ? 'disabled' : ''}>In-App</label>
-                    <label class="check-row compact"><input type="checkbox" class="sn-email" ${emailValue ? 'checked' : ''} ${rule.emailLocked ? 'disabled' : ''}>E-Mail</label>
+                    <label class="check-row compact"><input type="checkbox" class="sn-email" ${emailValue ? 'checked' : ''} ${rule.emailLocked ? 'disabled' : ''}>${Lang.t('email')}</label>
                 </div>`);
         });
-        area.innerHTML = rows.join('') || '<div class="empty-state compact">Keine personalisierbaren Benachrichtigungen verfügbar.</div>';
+        area.innerHTML = rows.join('') || `<div class="empty-state compact">${Lang.t('noPersonalizableNotifications')}</div>`;
         area.querySelectorAll('.notif-personal-row').forEach(row => {
             const type = row.dataset.notifType;
             const appBox = row.querySelector('.sn-app');
@@ -588,8 +597,8 @@ export const Settings = {
         upBtn.id = 's-bg-upload';
         upBtn.dataset.type = 'image';
         upBtn.dataset.preset = 'upload';
-        upBtn.title = 'Eigenes Bild';
-        upBtn.innerHTML = `${Icon('image-plus', 16)}<span>Eigenes Bild</span>`;
+        upBtn.title = Lang.t('customImage');
+        upBtn.innerHTML = `${Icon('image-plus', 16)}<span>${Lang.t('customImage')}</span>`;
         upBtn.onclick = () => q('#s-bg-file').click();
         grid.appendChild(upBtn);
         if (window.lucide) lucide.createIcons();
@@ -598,7 +607,7 @@ export const Settings = {
             const file = e.target.files[0];
             if (!file) return;
             if (file.size > 4 * 1024 * 1024) {
-                UI.toast('Bild zu groß (max 4MB)');
+                UI.toast(Lang.t('imageTooLarge4MB'));
                 return;
             }
             try {
@@ -608,9 +617,9 @@ export const Settings = {
                 await Store.saveSettings(s);
                 Settings.apply(s);
                 Settings.renderState(modal, s);
-                UI.toast('Hintergrund aktualisiert');
+                UI.toast(Lang.t('backgroundUpdatedToast'));
             } catch (err) {
-                UI.toast('Fehler beim Upload');
+                UI.toast(Lang.t('uploadErrorToast'));
             }
         };
     },

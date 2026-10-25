@@ -1,0 +1,16 @@
+# Security-Audit R-17: ohne automatischen Update-Prozess veralten npm-Abhaengigkeiten,
+# Docker-Digests und GitHub Actions still, bis eine naechste Pruefung sie wieder findet.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /ops/docker
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

@@ -31,12 +31,12 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
     <header class="topbar">
         <div class="topbar-left">
             <div class="brand-mini">Support Portal</div>
-            <div class="crumb">Dashboard</div>
+            <div class="crumb" data-i18n="dashboard">Dashboard</div>
             <div id="user-display" class="topbar-user"></div>
         </div>
         <nav class="topbar-right">
-            <button id="btn-notifications" class="btn-ghost btn-icon notification-button" title="Benachrichtigungen" aria-label="Benachrichtigungen"><i data-lucide="bell"></i><span class="notification-count" hidden>0</span></button>
-            <button id="theme-toggle" class="btn-ghost btn-icon" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
+            <button id="btn-notifications" class="btn-ghost btn-icon notification-button" data-i18n-title="notifications" data-i18n-aria-label="notifications" title="Benachrichtigungen" aria-label="Benachrichtigungen"><i data-lucide="bell"></i><span class="notification-count" hidden>0</span></button>
+            <button id="theme-toggle" class="btn-ghost btn-icon" data-i18n-title="settings" data-i18n-aria-label="settings" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
             <button id="btn-logout" class="btn-ghost"><i data-lucide="log-out"></i><span data-i18n="logout">Abmelden</span></button>
         </nav>
     </header>
@@ -46,17 +46,17 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
             <h2 data-i18n="newTicket">Neues Ticket</h2>
             <div class="field">
                 <label for="t-title" data-i18n="subject">Betreff</label>
-                <input id="t-title" type="text" placeholder="Kurzer Titel">
+                <input id="t-title" type="text" data-i18n-placeholder="titlePlaceholder" placeholder="Kurzer Titel">
             </div>
             <div class="field">
                 <label for="t-desc" data-i18n="description">Beschreibung</label>
-                <textarea id="t-desc" rows="6" placeholder="Beschreibe dein Anliegen möglichst genau."></textarea>
+                <textarea id="t-desc" rows="6" data-i18n-placeholder="descriptionPlaceholder" placeholder="Beschreibe dein Anliegen möglichst genau."></textarea>
             </div>
             <div class="field">
-                <label>Anhänge</label>
+                <label data-i18n="attachments">Anhänge</label>
                 <label for="t-files" class="dropzone" id="t-files-dropzone">
                     <i data-lucide="upload-cloud"></i>
-                    <span class="dropzone-text"><strong>Dateien hierher ziehen</strong> oder klicken zum Auswählen</span>
+                    <span class="dropzone-text"><strong data-i18n="dragFilesHere">Dateien hierher ziehen</strong> <span data-i18n="orClickToSelect">oder klicken zum Auswählen</span></span>
                     <input id="t-files" type="file" multiple>
                 </label>
                 <div id="t-files-preview" class="file-preview"></div>
@@ -65,9 +65,9 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                 <div class="field">
                     <label for="t-prio" data-i18n="priority">Priorität</label>
                     <select id="t-prio">
-                        <option value="Niedrig">Niedrig</option>
-                        <option value="Normal">Normal</option>
-                        <option value="Hoch">Hoch</option>
+                        <option value="Niedrig" data-i18n="low">Niedrig</option>
+                        <option value="Normal" data-i18n="normal">Normal</option>
+                        <option value="Hoch" data-i18n="high">Hoch</option>
                     </select>
                 </div>
                 <div class="field">
@@ -82,7 +82,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
         <section class="card ticket-list-card">
             <div class="section-head">
                 <h2 data-i18n="myTickets">Deine Tickets</h2>
-                <input type="text" id="u-search" class="section-search" placeholder="Suchen...">
+                <input type="text" id="u-search" class="section-search" data-i18n-placeholder="search" placeholder="Suchen...">
             </div>
             <label class="filter-toggle">
                 <input type="checkbox" id="dash-filter-archive">
@@ -105,8 +105,8 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
             <div class="modal-header">
                 <h3 id="u-m-title">Ticket</h3>
                 <div class="modal-actions">
-                    <button class="btn-ghost btn-icon" id="u-m-resolve" title="Als gelöst schließen" aria-label="Als gelöst schließen" hidden><i data-lucide="circle-check-big"></i></button>
-                    <button class="btn-ghost btn-icon" id="u-m-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                    <button class="btn-ghost btn-icon" id="u-m-resolve" data-i18n-title="markResolved" data-i18n-aria-label="markResolved" title="Als gelöst schließen" aria-label="Als gelöst schließen" hidden><i data-lucide="circle-check-big"></i></button>
+                    <button class="btn-ghost btn-icon" id="u-m-close" data-i18n-title="close" data-i18n-aria-label="close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
                 </div>
             </div>
             <div class="modal-body">
@@ -117,28 +117,28 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 
                 <div id="u-tab-details" class="tab-content active">
                     <div class="meta-grid">
-                        <div class="meta-item"><strong>Status</strong><span id="u-m-status" class="meta-value">-</span></div>
-                        <div class="meta-item"><strong>Datum</strong><span id="u-m-date" class="meta-value">-</span></div>
-                        <div class="meta-item"><strong>Prio</strong><span id="u-m-prio" class="meta-value">-</span></div>
-                        <div class="meta-item"><strong>Kategorie</strong><span id="u-m-cat" class="meta-value">-</span></div>
-                        <div class="meta-item"><strong>Bearbeiter</strong><span id="u-m-assignee" class="meta-value">-</span></div>
-                        <div class="meta-item"><strong>Archiviert</strong><span id="u-m-archived" class="meta-value">-</span></div>
-                        <div class="meta-item" id="u-m-sla-item" hidden><strong>Bearbeitungszeit</strong><span id="u-m-sla-badge" class="sla-badge sla-badge-muted"></span></div>
+                        <div class="meta-item"><strong data-i18n="status">Status</strong><span id="u-m-status" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong data-i18n="date">Datum</strong><span id="u-m-date" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong data-i18n="prio">Prio</strong><span id="u-m-prio" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong data-i18n="category">Kategorie</strong><span id="u-m-cat" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong data-i18n="assignee">Bearbeiter</strong><span id="u-m-assignee" class="meta-value">-</span></div>
+                        <div class="meta-item"><strong data-i18n="archived">Archiviert</strong><span id="u-m-archived" class="meta-value">-</span></div>
+                        <div class="meta-item" id="u-m-sla-item" hidden><strong data-i18n="processingTime">Bearbeitungszeit</strong><span id="u-m-sla-badge" class="sla-badge sla-badge-muted"></span></div>
                     </div>
                     <div id="u-waiting-request" class="waiting-request" hidden>
-                        <strong>Wir benötigen noch folgende Angaben</strong>
+                        <strong data-i18n="infoNeeded">Wir benötigen noch folgende Angaben</strong>
                         <p id="u-waiting-message"></p>
                     </div>
                     <div id="u-approval-pending" class="waiting-request" hidden>
-                        <strong><i data-lucide="hourglass"></i> Wartet auf Genehmigung</strong>
+                        <strong><i data-lucide="hourglass"></i> <span data-i18n="awaitingApproval">Wartet auf Genehmigung</span></strong>
                         <p id="u-approval-pending-text"></p>
                     </div>
                     <div id="u-approval-rejected" class="waiting-request is-danger" hidden>
-                        <strong>Anfrage abgelehnt</strong>
+                        <strong data-i18n="requestRejected">Anfrage abgelehnt</strong>
                         <p id="u-approval-rejected-text"></p>
-                        <button type="button" class="btn-secondary btn-sm" id="u-approval-reuse">Als neue Anfrage übernehmen</button>
+                        <button type="button" class="btn-secondary btn-sm" id="u-approval-reuse" data-i18n="reuseAsNewRequest">Als neue Anfrage übernehmen</button>
                     </div>
-                    <h4 class="section-title">Beschreibung</h4>
+                    <h4 class="section-title" data-i18n="description">Beschreibung</h4>
                     <p id="u-m-desc" class="desc-text"></p>
                     <div id="u-m-incident" class="incident-notice" hidden></div>
                     <div id="u-m-custom-fields-display" class="custom-fields-display" hidden></div>
@@ -150,18 +150,18 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         <div id="u-chat-msgs" class="chat-messages"></div>
                         <div class="chat-input-area">
                             <div class="toolbar">
-                                <button class="btn-ghost btn-icon btn-sm" title="Fett" aria-label="Fett" id="u-chat-bold"><i data-lucide="bold"></i></button>
-                                <button class="btn-ghost btn-icon btn-sm" title="Kursiv" aria-label="Kursiv" id="u-chat-italic"><i data-lucide="italic"></i></button>
-                                <button class="btn-ghost btn-icon btn-sm" title="Link einfügen" aria-label="Link einfügen" id="u-chat-link"><i data-lucide="link"></i></button>
-                                <label class="btn btn-ghost btn-icon btn-sm" title="Datei anhängen" aria-label="Datei anhängen">
+                                <button class="btn-ghost btn-icon btn-sm" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett" id="u-chat-bold"><i data-lucide="bold"></i></button>
+                                <button class="btn-ghost btn-icon btn-sm" data-i18n-title="italic" data-i18n-aria-label="italic" title="Kursiv" aria-label="Kursiv" id="u-chat-italic"><i data-lucide="italic"></i></button>
+                                <button class="btn-ghost btn-icon btn-sm" data-i18n-title="insertLink" data-i18n-aria-label="insertLink" title="Link einfügen" aria-label="Link einfügen" id="u-chat-link"><i data-lucide="link"></i></button>
+                                <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="attachFile" data-i18n-aria-label="attachFile" title="Datei anhängen" aria-label="Datei anhängen">
                                     <i data-lucide="paperclip"></i>
                                     <input type="file" id="u-chat-file" multiple>
                                 </label>
                             </div>
                             <div id="u-chat-file-preview" class="file-preview"></div>
                             <div class="input-row">
-                                <textarea id="u-chat-input" placeholder="Nachricht schreiben..."></textarea>
-                                <button class="btn-primary btn-icon" id="u-chat-send" title="Senden" aria-label="Senden"><i data-lucide="send"></i></button>
+                                <textarea id="u-chat-input" data-i18n-placeholder="writeMessage" placeholder="Nachricht schreiben..."></textarea>
+                                <button class="btn-primary btn-icon" id="u-chat-send" data-i18n-title="send" data-i18n-aria-label="send" title="Senden" aria-label="Senden"><i data-lucide="send"></i></button>
                             </div>
                         </div>
                     </div>

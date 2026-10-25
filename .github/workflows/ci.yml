@@ -62,3 +62,11 @@ jobs:
 
       - name: Dependency audit (keine bekannten Schwachstellen, docs/THREAT_MODEL.md §7)
         run: npm audit --audit-level=high
+
+      # Security-Audit R-10/R-17: npm audit meldete CVE-2026-15144 (@fastify/rate-limit) nicht,
+      # obwohl die Luecke in OSV/NVD gefuehrt wurde -- npm audit allein reicht als Nachweis nicht.
+      # Auf einen Commit-Hash fixiert (v2.7.0), nicht auf einen beweglichen Tag.
+      - name: OSV-Scan (findet auch Advisories, die npm audit nicht meldet)
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36
+        with:
+          scan-args: --lockfile=package-lock.json

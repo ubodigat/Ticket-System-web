@@ -15,6 +15,7 @@ import { Auth } from './js/auth.js';
 import { UserDash } from './js/user-dash.js';
 import { AdminBoard } from './js/admin-board.js';
 import { TodoList } from './js/todos.js';
+import { OutlookCalendar } from './js/outlook-calendar.js';
 import './js/context-menu.js';
 // --- Main Init ---
 // --- Main Init ---
@@ -30,6 +31,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await Settings.init(); // Initialize Settings with Theme logic
     await Notifications.init();
     await TodoList.init();
+    if (currentUser) await OutlookCalendar.init();
     UI.initTooltips();
     if (q('#stars')) UI.starfield();
 
@@ -38,8 +40,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const goToApp = (user) => {
             try { sessionStorage.removeItem('reply-reminder'); } catch { /* Storage is optional. */ }
             UI.toast(Auth.mfaSetupRequired
-                ? `Willkommen ${user.name || user.username} – bitte richte die Zwei-Faktor-Anmeldung in deinem Konto ein.`
-                : `Willkommen ${user.name || user.username}`);
+                ? Lang.format('welcomeMfaSetup', { name: user.name || user.username })
+                : Lang.format('welcomeBack', { name: user.name || user.username }));
             setTimeout(() => window.location.href = (user.role === 'admin' || user.role === 'superadmin') ? 'admin.html' : 'dashboard.html', 500);
         };
         // Die Entscheidung "ist ein zweiter Faktor nötig" trifft ausschließlich der Server
@@ -52,18 +54,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             const result = await Auth.login(u, p);
             if (result && result.mfaRequired) {
                 const code = await UI.promptText({
-                    title: 'Zwei-Faktor-Code',
-                    label: 'Code aus der Authenticator-App',
+                    title: Lang.t('twoFactorCodeTitle'),
+                    label: Lang.t('authenticatorCodeLabel'),
                     placeholder: '123456'
                 });
                 if (!code) return;
                 const user = await Auth.verifyMfa(code.trim());
                 if (user) return goToApp(user);
-                UI.toast('Code ungültig oder abgelaufen.');
+                UI.toast(Lang.t('codeInvalidExpired'));
                 return;
             }
             if (result) return goToApp(result);
-            UI.toast(Auth.lastError === 'network' ? 'Verbindung zum Server fehlgeschlagen.' : 'Benutzername oder Passwort ist falsch.');
+            UI.toast(Auth.lastError === 'network' ? Lang.t('networkError') : Lang.t('loginInvalid'));
         };
         q('#btn-login').addEventListener('click', handleLogin);
         q('#login-user').addEventListener('keydown', (e) => {
@@ -86,7 +88,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const name = q('#req-name').value.trim();
             const email = q('#req-email').value.trim();
             if (!name || !email) {
-                UI.toast('Bitte Felder füllen');
+                UI.toast(Lang.t('fillFields'));
                 return;
             }
 
@@ -95,11 +97,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ name, email })
             }).catch(() => null);
-            if (!res || !res.ok) return UI.toast('Anfrage senden fehlgeschlagen.');
+            if (!res || !res.ok) return UI.toast(Lang.t('requestSendFailed'));
 
             q('#req-name').value = '';
             q('#req-email').value = '';
-            UI.toast('Anfrage gesendet! Ein Admin prüft das.');
+            UI.toast(Lang.t('requestSent'));
         };
         q('#btn-request').onclick = handleRequest;
         q('#req-name').onkeydown = (e) => {

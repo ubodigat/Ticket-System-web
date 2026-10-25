@@ -19,6 +19,8 @@ import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../cryp
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { isAccountExpired, isValidAccountDate } from '../../domain/accountValidity.js';
+import { loadSecurityPolicy } from '../../domain/securityPolicy.js';
+import { isSourceLocked, recordSourceFailure, clearSourceFailures } from '../../domain/loginThrottle.js';
 
 export interface UsersRouteDeps {
   env: Env;
@@ -396,7 +398,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   // duerfen aber keine Admin-Felder wie Sperren, Rechte oder Audit-relevante Status sehen.
   app.get('/api/v2/users/directory', async (req, reply) => {
     try {
-      requireSession(req);
+      const session = requireSession(req);
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
       const rows = await app.db.selectFrom('users')
         .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived'])
         .where('account_archived', '=', false)
@@ -404,6 +407,22 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         .execute();
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+      // Security-Audit R-16: normale Nutzer bekamen bisher Kontaktdaten (E-Mail, Telefon, Mobil,
+      // Funktion, Standort, Vorgesetzte) ALLER aktiven Konten inklusive aller Admins -- ein
+      // einzelnes kompromittiertes Nutzerkonto lieferte damit eine vollstaendige Liste fuer
+      // Phishing/Social Engineering. Fuer die Rolle "user" reicht id/username/name (fuer
+      // Erwaehnungen, Zuweisungsanzeige und Auswahlfelder, siehe js/todos.js/user-dash.js) --
+      // Kontaktdaten nur noch fuer Admin-/Superadmin-Konten.
+      if (!isAdmin) {
+        const users = rows.map(row => ({
+          id: row.id,
+          username: row.username,
+          name: safeUserProfileFields(app, deps, row, nameDek, emailDek).name,
+          role: row.role,
+          account_archived: row.account_archived
+        }));
+        return reply.send({ users });
+      }
       const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const users = rows.map(row => {
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
@@ -807,7 +826,9 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   });
 
   // POST /api/v2/users/:id/change-password
-  app.post('/api/v2/users/:id/change-password', async (req, reply) => {
+  // Security-Audit R-12: eigenes Rate-Limit pro Session/IP (zusaetzlich zur Pro-Quellnetz-Sperre
+  // unten) -- bisher griff dafuer nur das globale 1000/min-Limit.
+  app.post('/api/v2/users/:id/change-password', { config: { rateLimit: { max: 5, timeWindow: '15 minutes', keyGenerator: (req: any) => req.ticketSession?.uid ?? req.ip } } }, async (req, reply) => {
     try {
       const session = requireSession(req);
       const { id } = req.params as { id: string };
@@ -833,8 +854,16 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         const user = await app.db.selectFrom('users').select('password_hash').where('id', '=', id).executeTakeFirst();
         if (!user) return reply.code(404).send({ error: 'not_found' });
         if (!parsed.data.old_password) return reply.code(400).send({ error: 'old_password_required' });
+        // Security-Audit R-12: gleiche Pro-Quellnetz-Sperre wie beim Login (R-11) -- bisher
+        // konnte das alte Passwort hier ohne jede Fehlversuchsgrenze geraten werden.
+        if (await isSourceLocked(app.db, session.uid, req.ip)) return reply.code(401).send({ error: 'too_many_attempts' });
         const ok = await argon2.verify(user.password_hash, parsed.data.old_password);
-        if (!ok) return reply.code(401).send({ error: 'wrong_password' });
+        if (!ok) {
+          const policy = await loadSecurityPolicy(app.db);
+          await recordSourceFailure(app.db, session.uid, req.ip, policy);
+          return reply.code(401).send({ error: 'wrong_password' });
+        }
+        await clearSourceFailures(app.db, session.uid);
       }
 
       const password_hash = await argon2.hash(parsed.data.new_password, { type: argon2.argon2id });

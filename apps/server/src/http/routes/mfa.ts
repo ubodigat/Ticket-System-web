@@ -9,6 +9,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 // V2 MFA-Selbstverwaltung (TOTP). QR-Code wird serverseitig erzeugt (qrcode-Paket) -- es gibt
 // keinen Aufruf an einen externen Dienst wie api.qrserver.com (Altsystem-Mangel, siehe README).
 import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import * as argon2 from 'argon2';
 import { Secret, TOTP } from 'otpauth';
@@ -19,6 +20,9 @@ import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { verifyAndConsumeTotp } from '../../domain/totp.js';
+import { loadSecurityPolicy } from '../../domain/securityPolicy.js';
+import { isSourceLocked, recordSourceFailure, clearSourceFailures } from '../../domain/loginThrottle.js';
+import { queueUserMail } from '../../mail/queue.js';
 import { routeError } from './routeError.js';
 
 export interface MfaRouteDeps {
@@ -37,6 +41,25 @@ function totpCtx(deps: MfaRouteDeps, userId: string, keyVersion: number) {
   };
 }
 
+// Security-Audit R-12: Passwortwechsel und 2FA-Setup/-Abschaltung prüften das aktuelle Passwort
+// bisher ohne eigenes Rate-Limit und ohne Fehlversuchszähler -- wer eine Session übernimmt
+// (z.B. an einem unbeaufsichtigten Rechner), konnte das Passwort dort beliebig oft pro Minute
+// raten. Gleiche Bausteine wie beim Login (R-11): eigenes Rate-Limit pro Session/IP UND eine
+// Pro-Quellnetz-Sperre über denselben Mechanismus wie recordFailedLogin.
+const stepUpRateLimit = { config: { rateLimit: { max: 5, timeWindow: '15 minutes', keyGenerator: (req: any) => req.ticketSession?.uid ?? req.ip } } };
+
+async function verifyStepUpPassword(app: FastifyInstance, userId: string, ip: string, passwordHash: string, password: string): Promise<'ok' | 'locked' | 'wrong'> {
+  if (await isSourceLocked(app.db, userId, ip)) return 'locked';
+  const ok = await argon2.verify(passwordHash, password);
+  if (!ok) {
+    const policy = await loadSecurityPolicy(app.db);
+    await recordSourceFailure(app.db, userId, ip, policy);
+    return 'wrong';
+  }
+  await clearSourceFailures(app.db, userId);
+  return 'ok';
+}
+
 export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): void {
   // POST /api/v2/mfa/setup - erzeugt ein neues Secret für das EIGENE Konto. Solange 2FA noch
   // nicht aktiv ist, läuft das wie bisher direkt über totp_secret_enc. Ist 2FA aber bereits
@@ -45,7 +68,7 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
   // totp_secret_enc sofort überschrieben und totp_enabled sofort auf false gesetzt würde) und
   // das neue Secret landet nur in totp_pending_secret_enc, bis /confirm es per gültigem Code
   // übernimmt -- das aktive Secret bleibt bis dahin unverändert in Kraft.
-  app.post('/api/v2/mfa/setup', async (req, reply) => {
+  app.post('/api/v2/mfa/setup', stepUpRateLimit, async (req, reply) => {
     try {
       const session = requireSession(req);
       const user = await app.db.selectFrom('users')
@@ -55,8 +78,8 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
       if (user.totp_enabled) {
         const parsed = z.object({ password: z.string().min(1) }).safeParse(req.body);
         if (!parsed.success) return reply.code(401).send({ error: 'password_required' });
-        const ok = await argon2.verify(user.password_hash, parsed.data.password);
-        if (!ok) return reply.code(401).send({ error: 'password_required' });
+        const result = await verifyStepUpPassword(app, session.uid, req.ip, user.password_hash, parsed.data.password);
+        if (result !== 'ok') return reply.code(401).send({ error: result === 'locked' ? 'too_many_attempts' : 'password_required' });
       }
 
       const secret = new Secret({ size: 20 });
@@ -113,19 +136,39 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
     }
   });
 
-  // POST /api/v2/mfa/disable - erfordert das aktuelle Passwort (Step-up für eine
-  // sicherheitsrelevante Aktion, docs/SPEC.md §8).
-  app.post('/api/v2/mfa/disable', async (req, reply) => {
+  // POST /api/v2/mfa/disable - erfordert Passwort UND gültigen TOTP-Code (Step-up, docs/SPEC.md
+  // §8). Security-Audit R-12: bisher reichte allein das Passwort -- eine übernommene Session
+  // konnte den zweiten Faktor damit selbst abschalten, ohne ihn je besessen zu haben, und ohne
+  // jede Spur im Audit-Log. Jetzt zusätzlich ein gültiger TOTP-Code, ein Audit-Eintrag und eine
+  // Warn-Mail an das eigene Konto.
+  app.post('/api/v2/mfa/disable', stepUpRateLimit, async (req, reply) => {
     try {
       const session = requireSession(req);
-      const parsed = z.object({ password: z.string().min(1) }).safeParse(req.body);
+      const parsed = z.object({ password: z.string().min(1), code: z.string().trim().length(6) }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const user = await app.db.selectFrom('users').select(['password_hash']).where('id', '=', session.uid).executeTakeFirstOrThrow();
-      const ok = await argon2.verify(user.password_hash, parsed.data.password);
-      if (!ok) return reply.code(401).send({ error: 'wrong_password' });
+      const user = await app.db.selectFrom('users').select(['password_hash', 'totp_secret_enc']).where('id', '=', session.uid).executeTakeFirstOrThrow();
+      const result = await verifyStepUpPassword(app, session.uid, req.ip, user.password_hash, parsed.data.password);
+      if (result !== 'ok') return reply.code(401).send({ error: result === 'locked' ? 'too_many_attempts' : 'wrong_password' });
+
+      if (!user.totp_secret_enc) return reply.code(409).send({ error: 'mfa_not_enabled' });
+      const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
+      const secret = fieldCipher.decryptField(user.totp_secret_enc, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
+      if (!(await verifyAndConsumeTotp(app.db, session.uid, secret, parsed.data.code))) {
+        return reply.code(401).send({ error: 'invalid_code' });
+      }
 
       await app.db.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null }).where('id', '=', session.uid).execute();
+      await app.db.insertInto('global_audit_log').values({
+        id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
+        action: 'mfa.disabled', target_type: 'user', target_id: session.uid, detail_json: null
+      }).execute();
+      await queueUserMail(
+        { db: app.db, env: deps.env, keyProvider: deps.keyProvider }, session.uid,
+        'Zwei-Faktor-Anmeldung deaktiviert',
+        'Für dein Konto wurde die Zwei-Faktor-Anmeldung deaktiviert. Warst du das nicht, melde dich sofort beim Support.',
+        'security'
+      );
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);

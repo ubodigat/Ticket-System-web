@@ -1,5 +1,321 @@
 # Änderungen und Herkunft (CPAL 3.3)
 
+## 2026-10-25 - Persönlicher Outlook-Kalender pro Benutzer (Punkt 9.2)
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Neue, von der bestehenden App-only-Integration getrennte Funktion: jede Person kann über einen
+  neuen "Mein Kalender"-Button in der Kopfzeile ihren eigenen Outlook-Kalender per OAuth
+  (Authorization Code Flow, delegierte Berechtigung) verbinden, darin direkt eine
+  Monatsübersicht mit ihren echten Terminen sehen und neue Termine anlegen -- unabhängig vom
+  gemeinsamen Service-Postfach der Ticket-Kalenderfunktion.
+- **Backend:** neue Migration `0048_outlook_personal_calendar.ts` (drei neue Spalten an
+  `users`: verschlüsselter Refresh-Token, Anzeige-E-Mail, Verbindungszeitpunkt -- gleiches
+  Verschlüsselungsmuster wie `name_enc`/`email_enc`, nicht das globale `app_settings`-Muster).
+  `domain/graphClient.ts` um den delegierten OAuth-Austausch erweitert (Autorisierungs-URL,
+  Code-gegen-Token-Tausch, Refresh mit automatischer Rotation, `/me/calendarview`,
+  `/me/events`) -- nutzt dieselbe Azure-App-Registrierung (Tenant-/Client-ID, Client-Secret) wie
+  die bestehende Integration, nur mit zusätzlichen delegierten Scopes
+  (`offline_access Calendars.ReadWrite User.Read`). Neue Routen-Datei
+  `http/routes/outlookPersonal.ts` (`GET /connect`, `GET /callback`, `GET /status`,
+  `GET /calendar`, `POST /events`, `POST /disconnect`) mit CSRF-Schutz über einen kurzlebigen,
+  signierten State-Cookie; der Access-Token wird nie persistiert, nur der Refresh-Token
+  (verschlüsselt). Token-Refresh läuft bedarfsgesteuert bei jeder Anfrage, bewusst ohne neuen
+  Hintergrund-Job (die bestehende `setInterval`-Wartung ist nicht Multi-Instance-sicher).
+- **Frontend:** neue Datei `js/outlook-calendar.js` (`OutlookCalendar`) -- Monatsraster mit
+  Termin-Markern pro Tag, Tagesdetailansicht, Verbinden-/Trennen-Dialog, Termin-Erstellen-
+  Formular (gleiche Feldstruktur wie der bestehende Ticket-Outlook-Termin-Dialog). Der
+  Rücksprung von Microsoft (`?outlook=connected`/`?outlook=failed`) wird beim Laden ausgewertet,
+  per `history.replaceState` aus der URL entfernt und als Toast gemeldet. In
+  Systemeinstellungen > Outlook ein zusätzlicher Hinweis mit der exakten Redirect-URI, die die
+  Admin-Person einmalig in Azure AD hinterlegen muss.
+- 16 neue Schlüsselpaare in `js/lang.js`; Konsistenz-Check über alle zwölf bisher bearbeiteten
+  Dateien bestätigt 1121 DE- = 1121 EN-Schlüssel.
+- Server-Verifikation: `typecheck`/`build`/`test` (159 Tests) für `apps/server` erfolgreich.
+  Ein echter Microsoft-OAuth-Austausch kann hier nicht automatisiert getestet werden -- dafür
+  nach dem einmaligen Azure-Setup (Redirect-URI + Admin-Consent für die delegierten Scopes) ein
+  manueller Test: Verbinden, Kalender ansehen, Termin anlegen, Trennen.
+
+## 2026-10-25 - Passwort-Anforderungen-Popup, Teilnehmer beim Outlook-Termin
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- **Punkt 4 (Passwort-Anforderungen-Popup):** `UI.bindPasswordRequirements()` (neu in
+  `js/ui.js`) zeigt beim Fokussieren eines Passwortfelds ein Popover mit der einzigen
+  serverseitig durchgesetzten Regel (mind. 14 Zeichen, siehe
+  `apps/server/src/http/routes/users.ts`) und aktualisiert live, wie viele Zeichen noch fehlen,
+  statt die Person erst nach dem Absenden scheitern zu lassen. Eingebunden bei den beiden
+  Stellen, an denen ein Admin ein neues Anmelde-Passwort vergibt: "Benutzer erstellen"
+  (`#a-password`) und "Benutzer bearbeiten" (`#ue-pass`). Neue CSS-Klasse
+  `.password-requirements-popover` in `style.css`.
+- **Punkt 9.1 (Personen beim Outlook-Termin auswählen):** Das Backend
+  (`apps/server/src/domain/graphClient.ts`, Route `POST /api/v2/tickets/:id/calendar-event`)
+  unterstützte `attendee_emails` bereits vollständig -- nur die Oberfläche
+  (`AdminBoard.openCalendarEventModal`) hatte dafür noch kein Eingabefeld. Jetzt mit einer
+  Mehrfachauswahl (bestehende, nicht archivierte Benutzer) ergänzt; die ausgewählten Personen
+  werden beim Absenden zu E-Mail-Adressen aufgelöst und an den bestehenden Endpunkt
+  übergeben -- keine neue Graph-Berechtigung nötig, da `Calendars.ReadWrite`
+  (Application Permission) Teilnehmer als Teil des Termin-Objekts bereits abdeckt.
+  **Räume/Ressourcen** sind dagegen in diesem Projekt an keiner Stelle als Datenmodell
+  vorhanden (weder im Graph-Client noch in der Datenbank) -- das wurde bewusst nicht erfunden,
+  sondern als separate, noch zu klärende Anforderung zurückgestellt.
+- 2 neue Schlüsselpaare in `js/lang.js`; Konsistenz-Check bestätigt 1108 DE- = 1108
+  EN-Schlüssel.
+
+## 2026-10-25 - Vollständige Englisch-Übersetzung, Phase 8 (Ad-hoc-Ternarys aufräumen) -- Plan abgeschlossen
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Alle verbleibenden `Lang.current === 'en' ? ... : ...`-Ternarys, die direkt deutschen/
+  englischen Text enthielten, durch echte `Lang.t()`-Wörterbucheinträge ersetzt: die
+  Archiv-Suche-Platzhalter, die zweifach vorkommende "Interne Kommunikation"-Überschrift, die
+  drei "Warten auf..."-Werte in `Lang.status()` und die komplette `chooseWaitingStatus()`-
+  Funktion (Auswahlliste, Titel, Labels, Platzhalter, Bestätigen-/Abbrechen-Button) in
+  `js/admin-board.js`. Drei verbleibende `Lang.current === 'en'`-Stellen sind bewusst erhalten
+  geblieben, da sie keine Übersetzungs-Ternarys sind, sondern die Locale für
+  `toLocaleDateString()`/`toLocaleTimeString()` wählen (`js/admin-board.js`, `js/settings.js`,
+  `js/utils.js`) -- das ist korrektes, sprachabhängiges Datumsformat-Verhalten, kein
+  Übersetzungs-Workaround.
+- 14 neue Schlüsselpaare in `js/lang.js`. Finaler Konsistenz-Check über alle elf Dateien
+  bestätigt 1104 DE- = 1104 EN-Schlüssel, 963 tatsächlich verwendete Schlüssel vollständig in
+  beiden Wörterbüchern vorhanden.
+- **Damit ist der komplette 8-Phasen-Plan zur vollständigen Englisch-Übersetzung
+  abgeschlossen** (Login/2FA, Nutzer-Dashboard, Todo-Liste, Admin-Board, Einstellungen,
+  gemeinsame UI-Komponenten, restliches statisches Markup, Ad-hoc-Ternarys). Bewusst weiterhin
+  unübersetzt bleiben historische Audit-Protokoll-Freitexte (`Store.addLog`/`addGlobalLog`) --
+  siehe Begründung im Phase-4-Eintrag.
+
+## 2026-10-25 - Vollständige Englisch-Übersetzung, Phase 7 (restliches statisches Markup)
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- `admin.html` war die einzige Datei mit noch offenen Stellen (`index.html` und `dashboard.html`
+  waren durch Phase 1+2 bereits vollständig abgedeckt): Kopf-Buttons des Ticket-Modals,
+  Frist-/Outlook-Termin-Buttons, Genehmigungs-Status-Blöcke, beide internen
+  Kommunikations-Tabs samt Formatierungs-Werkzeugleisten und Notiz-Typ-Auswahllisten,
+  Ticket-Aktionsleiste, Chat-Werkzeugleiste, "Konto erstellen"-Dialog und die
+  Schließen-Buttons der Anfragen-/Benutzerverwaltungs-Modals.
+- Nebenbefund behoben: Die Status-Auswahlliste im Ticket (`#m-status-edit`) hatte für die
+  Hauptwerte "Neu"/"In Bearbeitung"/"Geschlossen" überhaupt keine Übersetzung und für die drei
+  "Warten auf..."-Werte nur einen Ad-hoc-Ternary. Durch eine einzige Zeile ersetzt, die für jede
+  Option die bereits vorhandene `Lang.status()`-Zuordnungsfunktion verwendet -- konsistent mit
+  der Statusanzeige überall sonst im Programm.
+- 32 neue Schlüsselpaare in `js/lang.js`; Konsistenz-Check über alle elf bisher bearbeiteten
+  Dateien bestätigt 1091 DE- = 1091 EN-Schlüssel.
+- Damit sind Phasen 1-7 des Übersetzungsplans abgeschlossen. Letzter Schritt: Phase 8
+  (verbleibende Ad-hoc-Ternarys wie `chooseWaitingStatus` in echte Wörterbuch-Einträge
+  überführen).
+
+## 2026-10-25 - Vollständige Englisch-Übersetzung, Phase 6 (js/ui.js)
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- `js/ui.js` (gemeinsame Dialoge/Widgets, auf vielen Seiten wiederverwendet) komplett übersetzt:
+  Bestätigungs-/Prompt-Dialog, "Ticket einer Störung zuordnen"-Dialog, Ticket-Protokoll-Modal,
+  Farbwähler (Tooltips/aria-Labels), der komplette Datum/Uhrzeit-Picker (Monatsnamen,
+  Wochentage, Navigation, manuelle Eingabe, Fehlermeldung), Mehrfachauswahl-Komponente
+  (Platzhalter, Suche, "N ausgewählt"-Text) und eigene Formularfelder (Pflichtfeld-Auswahl).
+  39 neue Schlüsselpaare in `js/lang.js`; Konsistenz-Check über alle neun bisher bearbeiteten
+  Dateien bestätigt 1063 DE- = 1063 EN-Schlüssel.
+- Weiter laut Plan: Phase 7 (restliches statisches Markup in admin.html/dashboard.html/
+  index.html), Phase 8 (Ad-hoc-Ternarys aufräumen).
+
+## 2026-10-25 - Datumsauto-Format erneut geprüft (kein Bug), Englisch-Übersetzung Phase 5
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- **Punkt 5/9 (Datumsauto-Format) erneut untersucht**, diesmal mit der genaueren Beschreibung
+  "beim Eingeben soll das Datum automatisch in dd.mm.yyyy formatiert werden": `UI.bindDateInput`/
+  `UI.formatDateText` (js/ui.js) sind bei allen drei betroffenen Feldern (`ue-valid-until` im
+  Benutzer-Bearbeiten-Dialog, `custom-due-date` bei der eigenen Lösungsfrist,
+  `cal-event-start-date`/`cal-event-end-date` beim Outlook-Termin) korrekt verdrahtet --
+  Markup wird zuerst gesetzt, die Bindung läuft danach auf dem echten, aktuellen Element, ohne
+  doppelte IDs oder stehen gebliebene alte Modals. Die Formatierungslogik selbst funktioniert
+  nachweislich auch, wenn Nutzer Punkte selbst eintippen. Es gibt keine zweite,
+  unverdrahtete "Gültigkeit"-Stelle im Code. Sollte es weiterhin nicht funktionieren, bitte mit
+  Hard-Refresh erneut testen und genaue Reproduktionsschritte (Browser, welches Feld genau)
+  mitteilen.
+- Vollständige Englisch-Übersetzung, Phase 5 (`js/settings.js`): Hintergrund-Vorlagen-Namen,
+  Abwesenheit-Zeitraum-Labels/-Fehlermeldungen, das komplette eigene-Abwesenheit-Formular im
+  Portaleinstellungen-Dialog, das Konto-Formular (Felder, Sperrhinweis, Validierung, Speichern),
+  den gesamten Portaleinstellungen-Modal-Rahmen (Akzentfarben-Voreinstellungen, eigene Farbe,
+  Konto-/Benachrichtigungs-Bereich), 2FA-Status/-Deaktivieren-Dialog samt aller Fehlermeldungen,
+  die Benachrichtigungsmatrix-Zeilen und den Hintergrundbild-Upload. 49 neue Schlüsselpaare in
+  `js/lang.js`; Konsistenz-Check über alle acht bisher bearbeiteten Dateien bestätigt
+  1024 DE- = 1024 EN-Schlüssel.
+- Weiter laut Plan: Phase 6 (`js/ui.js`), Phase 7 (restliches statisches Markup), Phase 8
+  (Ad-hoc-Ternarys aufräumen).
+
+## 2026-10-25 - Vollständige Englisch-Übersetzung, Phase 4 abgeschlossen - js/admin-board.js
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- `js/admin-board.js` (6793 Zeilen, größter Teil der Übersetzung) ist jetzt vollständig auf
+  `Lang.t()`/`Lang.format()` umgestellt: SLA-Überfällig-Modal, Anhänge-Verwaltung, Mentions-
+  Autovervollständigung, Ticket-Karten, System-Protokoll (Modal/Filter/Druck), Gruppen- und
+  Kategorien-Verwaltung inkl. eigener Felder, komplette Benutzerverwaltung (Liste, Bearbeiten-
+  /Anlegen-/Löschen-Dialoge, LDAP-Box, Verwaltungsrechte), Sicherheitsbestätigungs-Modal
+  (Step-up), Update/Rollback, die komplette Systemeinstellungen-Seite (Sicherheit,
+  Benachrichtigungen, Outlook, LDAP, E-Mail/SMTP inkl. aller FieldHelp-Texte, Allgemein inkl.
+  Geschäftszeiten/SLA, Unternehmenseinstellungen, Ticketnummern-Formate, Genehmigungsworkflow),
+  komplette Listenansicht, Kontoanfragen, der zentrale Status-Wechsel-Pfad (`changeStatus`),
+  Zuständigkeiten/Teilaufgaben/Zeiterfassung im Ticket-Modal, Großstörungs-Verwaltung (Erstellen/
+  Markieren/Aufheben/Verknüpfen samt Druckausgabe), der komplette Abwesenheit/Vertretung-
+  Workflow (Banner, Übersicht, "Tickets zurückholen"-Dialog, alle Benachrichtigungstexte),
+  "Ticket-Ersteller archiviert"-Dialog, Ticket-Zusammenführen, Ticket-Erstellen-im-Namen-von,
+  eigene Lösungsfrist, Outlook-Kalendertermin-Dialog, Genehmigungsübersicht samt Ablehnungs-
+  Dialog, Textbausteine, Wissensdatenbank, Auswertungen/Berichte, wiederkehrende Tickets,
+  Verknüpfung verwandter Tickets, interne Notizen/Admin-Chat, Anhang-Vorschau (alle Dateiformat-
+  Fallback-Meldungen) und CSV-Benutzerimport.
+- Entscheidung zum Umfang: Im Ticket-/System-Protokoll gespeicherte Freitext-Aktionen
+  (`Store.addLog`/`addGlobalLog`, z. B. `'Ticket archiviert'`) bleiben bewusst unübersetzt --
+  das sind historische, bereits in der Datenbank gespeicherte Einträge, vergleichbar mit
+  Ticket-Status/-Priorität, die ebenfalls nicht im Datenmodell, sondern nur bei der Anzeige über
+  `Lang.status()`/`Lang.prio()` übersetzt werden. Alte, bereits gespeicherte Log-Einträge ließen
+  sich ohnehin nicht nachträglich übersetzen; nur die direkt angezeigten Toast-/Bestätigungs-/
+  E-Mail-Meldungen rund um diese Aktionen wurden übersetzt. Ebenfalls unverändert: zwei interne
+  Keyword-Abgleiche für Protokoll-Icons (`iconForLog`, vergleicht rohe Aktionstexte) und ein
+  bereits zuvor bestehender `Lang.current === 'en' ? ... : ...`-Ternary in
+  `chooseWaitingStatus` (liefert schon heute korrektes Englisch, wird wie geplant erst in
+  Phase 8 in das Wörterbuch-Muster überführt).
+- 975 Schlüsselpaare in `js/lang.js` insgesamt (Phasen 1-4 zusammen). Automatischer
+  Konsistenz-Check über alle bisher bearbeiteten Dateien bestätigt 975 DE- = 975 EN-Schlüssel,
+  alle 843 tatsächlich verwendeten Schlüssel in beiden Wörterbüchern vorhanden.
+- Weiter laut Plan: Phase 5 (`js/settings.js`), Phase 6 (`js/ui.js`), Phase 7 (restliches
+  statisches Markup), Phase 8 (Aufräumen bestehender Ad-hoc-Ternarys in `js/lang.js`).
+
+## 2026-10-25 - Vollständige Englisch-Übersetzung, Phase 3 (Todo-Liste)
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- `js/todos.js` (Admin-Todo-Liste in der Topbar) hatte bisher 0 `Lang.t()`-Aufrufe. Alle
+  hartkodierten Strings umgestellt: Modal-Markup (Tabs, Toolbar, Formular inkl. Intervall-
+  Dropdown Tag(e)/Woche(n)/Monat(e)), Fehlermeldungen aus `request()`, Validierungsfehler in
+  `saveForm()`, die Badge-aria-label-Vorlage mit Zähler-Interpolation, die Zeilen-Markups für
+  wiederkehrende Aufgaben (inkl. "Alle {n} Tag(e)"-Interpolation und Aktiv/Pausiert-Status) und
+  für normale Aufgaben (Eigene Aufgabe/Aufgabe bearbeiten/Aus meiner Liste entfernen) sowie der
+  Leerzustand "Keine Aufgaben".
+- 46 neue Schlüsselpaare in `js/lang.js` ergänzt. Automatischer Konsistenz-Check über alle bisher
+  bearbeiteten Dateien (Phase 1-3) bestätigt 286 DE- = 286 EN-Schlüssel, alle verwendeten
+  Schlüssel in beiden Wörterbüchern vorhanden.
+
+## 2026-10-25 - Vollständige Englisch-Übersetzung, Phase 1+2 (Login/2FA, Nutzer-Dashboard)
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- Befund: Das Wörterbuch in `js/lang.js` (`Lang.translations.de`/`en`) war bereits umfangreich,
+  aber an sehr vielen Stellen im Code stand deutscher Text direkt als String im JS statt per
+  `Lang.t('key')`/`Lang.format('key', {...})` übersetzt zu werden -- die Lücke lag in der
+  Anwendung des vorhandenen Mechanismus, nicht im Wörterbuch selbst.
+- **Phase 1 (Login/2FA):** `js/auth.js` und `script.js` hatten für die Login-/
+  Account-Anfrage-/2FA-Oberfläche 0 bzw. nur vereinzelte `Lang.t()`-Aufrufe. Alle hartkodierten
+  Strings (Toast-Meldungen, Modal-Überschriften, Button-Titel/aria-label, QR-Anleitung,
+  Begrüßungstexte mit Namens-Interpolation) auf `Lang.t()`/`Lang.format()` umgestellt; `index.html`
+  um 13 `data-i18n`/`data-i18n-placeholder`/`data-i18n-title`/`data-i18n-aria-label`-Attribute
+  ergänzt. `Lang.applyToDOM()` um die Behandlung von `data-i18n-title`, `data-i18n-aria-label` und
+  `data-i18n-alt` erweitert (bisher nur `textContent` und `placeholder`).
+- **Phase 2 (Nutzer-Dashboard):** `dashboard.html` um 28 `data-i18n*`-Attribute ergänzt (Topbar,
+  Neues-Ticket-Formular, Ticket-Liste, Ticket-Modal inkl. aller Meta-Labels, Chat-Toolbar,
+  Prioritäts-Auswahl). `js/user-dash.js` hatte dafür keine Entsprechung zu
+  `Lang.applyAdminDOM()` -- alle ~20 betroffenen Stellen (Toasts, Genehmigungs-Texte mit
+  Namens-/Datums-Interpolation, Datei-Anhang-Chips, E-Mail-Betreff/-Text für neue Tickets,
+  Rückmeldungs-Erinnerung, Status-Badges) auf `Lang.t()`/`Lang.format()` umgestellt. Eine eigene
+  `Lang.applyUserDOM()`-Funktion wurde zwar als Platzhalter angelegt, ist aber bewusst leer
+  geblieben: anders als in der Admin-Oberfläche steht `data-i18n` in `dashboard.html` immer auf
+  einem reinen Text-Element, nie auf dem Icon-Elternelement, wodurch das normale
+  `textContent`-Ersetzen kein Icon überschreibt.
+- 38 neue Schlüsselpaare in `js/lang.js` ergänzt (DE und EN je gleich viele); automatischer
+  Konsistenz-Check bestätigt 240 DE- = 240 EN-Schlüssel und dass jeder in Phase 1+2 verwendete
+  Schlüssel in beiden Wörterbüchern existiert.
+- Noch offen (nächste Schritte, separat geplant): `js/todos.js`, `js/admin-board.js`,
+  `js/settings.js`, `js/ui.js` sowie restliches statisches Markup und das Aufräumen bestehender
+  Ad-hoc-Ternarys in `js/lang.js`.
+
+## 2026-10-25 - Regression aus der CSP-Härtung behoben (Listenansicht & weitere verschwundene UI-Elemente), Logo-Druck-Bug
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- **Eigener Bug aus der letzten CSP-Härtungsrunde gefunden und behoben:** `style.css` enthält
+  `[hidden] { display: none !important; }`. Beim Entfernen von `style="display:none"` zugunsten
+  des `hidden`-Attributs (CSP ohne `style-src 'unsafe-inline'`) blieb der bestehende Toggle-Code
+  an mehreren Stellen unverändert bei `element.style.display = '...'` -- eine per JS gesetzte
+  inline `style.display` kann aber eine `!important`-Regel nicht schlagen, die Elemente blieben
+  dadurch für immer unsichtbar, unabhängig vom tatsächlichen Zustand. Betroffen und jetzt auf
+  `element.hidden = true/false` umgestellt: die Listenansicht (`#list-view`, erschien nie mehr),
+  der "System-Logs"-Button in der Navbar, der "Einer Störung zuordnen"-Button, der
+  "Archivieren"/"Reaktivieren"-Button im Ticket, das Admin-Zusatzfeld und die LDAP-Box im
+  Benutzer-Bearbeiten-Dialog sowie der Optionen-Editor bei Auswahl-Zusatzfeldern.
+- **Firmenlogo fehlte beim Drucken (Tickets, Gruppenmitglieder, Auswertungen):** alle vier
+  Druckfunktionen lasen `settings.companyBranding.logoDataUrl`, gespeichert wird das Logo aber
+  unter `settings.companyBrandingConfig` (mit "Config"-Suffix) -- ein reiner Property-Namens-
+  Tippfehler, der das Logo immer leer ausfallen ließ. Alle vier Stellen korrigiert.
+- Geprüft und als korrekt bestätigt (kein Bug gefunden): Datumsauto-Formatierung bei
+  Kontogültigkeit und beim Outlook-Termin-Dialog (beide nutzen bereits `UI.bindDateInput`,
+  identisch zu anderen funktionierenden Datumsfeldern) sowie die gemeldeten Browser-
+  Konsolenfehler zum "message channel" (stammen nachweislich nicht aus dem eigenen Code, enthält
+  kein `chrome.runtime`/`browser.runtime` -- typisches Symptom einer installierten
+  Browser-Erweiterung).
+- Klargestellt, kein Bug: Der In-App-Updater lehnt Updates aktuell bewusst ab, weil kein Commit
+  im Repository signiert ist -- exakt die in R-14 (siehe vorheriger Audit-Eintrag) beschriebene,
+  gewollte Fail-Closed-Sicherung. Erst durch Einrichten einer Commit-Signatur nutzbar.
+
+## 2026-10-24 - Security-Audit R-10 bis R-17 behoben
+- Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
+- **R-10 (CVE-2026-15144, mittel/hoch bei IPv6):** `@fastify/rate-limit` von 10.2.2 auf ^11.2.1
+  angehoben und `ipv6Subnet: 64` in der globalen Registrierung (`app.ts`) explizit gesetzt --
+  vor 11.2.0 bildete die Bibliothek den Zähler aus dem rohen `req.ip`-Text, wodurch jede neue
+  Schreibweise/Adresse aus demselben IPv6-/64-Netz ein frisches Kontingent bekam und das
+  Login-Limit (10/min) damit faktisch wirkungslos war. Zwei neue Regressionstests
+  (`test/rateLimitIpv6.test.ts`) bestätigen das für wechselnde Adressen im selben /64-Netz UND
+  für fünf Schreibweisen derselben Adresse.
+- **R-11 (mittel, Konto ohne Anmeldung sperrbar):** Die automatische Sperre nach Fehlversuchen
+  hing bisher allein am Konto -- wer einen Benutzernamen kennt (admin, vorname.nachname, ...),
+  konnte mit fünf falschen Passwörtern jedes Konto sperren, auch das eines Superadmins, ohne
+  selbst angemeldet zu sein. Neuer Mechanismus (`domain/loginThrottle.ts`, Migration 0046,
+  Tabelle `login_failure_sources`): die automatische Sperre gilt jetzt nur noch pro
+  (Konto, Quellnetz) und ist immer befristet, nie dauerhaft. Für das Konto insgesamt gibt es bei
+  anhaltenden Fehlversuchen nur noch eine wachsende Wartezeit (max. 5 Minuten,
+  `accountBackoffSecondsRemaining`). `users.locked_permanent`/`locked_until` bleiben unverändert
+  für die bewusste, manuelle Sperre durch eine Admin-Person. Neuer Rettungsanker
+  `node dist/cli/unlock.js <benutzername>` setzt beides zurück, falls doch einmal niemand mehr
+  hereinkommt. Die Einstellungs-Oberfläche ("Was passiert nach Erreichen der Fehlversuche?")
+  wurde entsprechend vereinfacht. Eigene Unit-Tests (`test/loginThrottle.test.ts`) decken dabei
+  einen echten Bug in der ersten Fassung der IPv6-/64-Normalisierung auf (führende Nullen wie
+  "0db8" vs. "db8" wurden als unterschiedliche Netze behandelt) und bestätigen die Korrektur.
+- **R-12 (mittel, Step-up ohne Fehlversuchsgrenze):** Passwortwechsel
+  (`POST /api/v2/users/:id/change-password`) sowie 2FA-Neueinrichtung und -Abschaltung
+  (`POST /api/v2/mfa/setup`, `/mfa/disable`) hatten bisher kein eigenes Rate-Limit und keinen
+  Fehlversuchszähler -- eine übernommene Session hätte das aktuelle Passwort dort mit hoher Rate
+  raten können. Jetzt: eigenes Rate-Limit (5 pro 15 Minuten, Schlüssel = Session bzw. IP) und
+  dieselbe Pro-Quellnetz-Sperre wie beim Login (R-11) bei jedem Fehlversuch. 2FA-Abschaltung
+  verlangt zusätzlich einen gültigen TOTP-Code (nicht mehr nur das Passwort), wird ins
+  `global_audit_log` eingetragen und löst eine Warn-Mail ans eigene Konto aus.
+- **R-13 (niedrig, Klartext-Kopien im Audit-Log):** Genehmigungsgrund, Entscheidungsbegründung
+  und Kalender-Betreff standen trotz verschlüsselter Originalspalte (`tickets.approval_text`,
+  `ticket_calendar_events.subject`) zusätzlich im Klartext in `ticket_audit_log.new_value` --
+  ein DB-Dump/Backup hätte sie trotz Verschlüsselungszusage preisgegeben. Jetzt nur noch
+  vermerkt, DASS eine Begründung mitgegeben wurde ("mit Begründung"), nie ihr Inhalt; Migration
+  0047 bereinigt bestehende Alteinträge per `REGEXP_REPLACE`.
+- **R-15 (niedrig, Mails an beendete Konten / abstürzende Requests):** `queueUserMail` prüfte
+  bisher nur `account_archived` -- dauerhaft gesperrte und per Ablaufdatum beendete Konten
+  bekamen weiterhin Benachrichtigungen mit Ticketinhalten an ihre (eventuell private) Adresse.
+  Jetzt zusätzlich `locked_permanent`/`isAccountExpired` geprüft. Zudem brach ein Fehler beim
+  Einreihen (`createNotification`) bisher den ganzen aufrufenden Request mit HTTP 500 ab, obwohl
+  die In-App-Benachrichtigung schon erfolgreich gespeichert war -- jetzt in try/catch gefasst und
+  nur noch geloggt.
+- **R-16 (niedrig, DSGVO-Datenminimierung):** `GET /api/v2/users/directory` gab bisher
+  Kontaktdaten (E-Mail, Telefon, Mobilnummer, Funktion, Standort, Vorgesetzte) ALLER aktiven
+  Konten an jede angemeldete Rolle "user" heraus, inklusive aller Admin-Konten -- ein einzelnes
+  kompromittiertes Nutzerkonto hätte damit eine vollständige Liste fürs Phishing geliefert. Für
+  die Rolle "user" jetzt nur noch `id`/`username`/`name` (ausreichend für Erwähnungen,
+  Zuweisungsanzeige und Auswahlfelder); volle Kontaktdaten bleiben Admin-/Superadmin-Konten
+  vorbehalten.
+- **R-17 (niedrig, veraltete Abhängigkeiten):** `mysql2`, `kysely`, `@fastify/helmet`, `argon2`,
+  `file-type` auf den aktuellen Patch-/Minor-Stand gehoben; `DOMPurify`-Vendor-Datei von 3.4.16
+  auf 3.4.17 (schließt drei gemeldete Advisories, Prüfsumme in `vendor/VERSIONS.md` aktualisiert).
+  `pino` (Major-Sprung 9→10) sowie die Dev-Only-Pakete `eslint`/`typescript`/`vitest` bewusst
+  NICHT angehoben -- größere Breaking-Change-Risiken, die eine eigene Prüfung verdienen, nicht
+  sicherheitskritisch in der aktuellen Nutzung. Neuer `.github/dependabot.yml` (npm/Docker/GitHub
+  Actions, wöchentlich/monatlich) sowie ein zusätzlicher OSV-Scanner-Schritt in der CI (auf einen
+  Commit-Hash fixiert) -- `npm audit` hatte CVE-2026-15144 (R-10) nicht gemeldet, obwohl die
+  Lücke öffentlich gelistet war; ein zweiter, unabhängiger Scanner schließt genau diese Lücke im
+  Nachweis.
+- **R-14 (niedrig, Updater durch unsignierte Commits faktisch gesperrt) -- teilweise:** Die
+  Signaturpflicht im Updater ist korrekt (siehe vorheriger Audit), aber kein Commit auf `main`
+  ist aktuell signiert, wodurch der optionale In-App-Updater nie aktualisieren kann und Betreiber
+  auf manuelle `git pull`-Updates ganz ohne Integritätsprüfung ausweichen. Neues Skript
+  `ops/verify-and-pull.sh` (per README referenziert) holt neue Commits und bricht fail-closed ab,
+  wenn der neue Stand nicht mit einem bekannten Schlüssel signiert ist, statt ihn ungeprüft zu
+  übernehmen. Das eigentliche Signieren der Commits (GPG-Schlüssel erzeugen, `main` damit
+  signieren, öffentlichen Schlüssel veröffentlichen) ist eine bewusste Betriebsentscheidung der
+  Projektverantwortlichen und wurde hier nicht automatisch vorgenommen.
+- **N-3 (mittel, Update-Container mit Host-Root) -- weiterhin bewusst nicht angegangen:** vom
+  Audit selbst als "langfristig" (1-2 Tage, Architekturänderung: Updates per systemd auf dem Host
+  statt per Docker-Socket im Container) eingestuft, nicht Teil dieser Runde.
+- Vollständiger Verifikationslauf: Typecheck, 159 Tests (10 davon neu), Build, Installer-
+  Testsuite, JS-/Shell-Syntax und `npm audit` durchgängig grün. `install-manifest.sha256` sowie
+  der gepinnte Hash im README-Installationsbefehl neu erzeugt.
+
 ## 2026-10-24 - Installer gegen falsch-positive "lokale Änderungen" abgesichert, zod v4
 - Verantwortliche Person: U:Bodigat (mit KI-Unterstützung)
 - **`install.sh` bricht nicht mehr grundlos mit "Your local changes ... would be

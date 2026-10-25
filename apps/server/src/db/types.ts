@@ -84,10 +84,30 @@ export interface UsersTable {
   // Security-Audit N6: zuletzt akzeptierter TOTP-Zeitschritt (siehe domain/totp.ts) -- verhindert
   // Mehrfachverwendung desselben Codes innerhalb seines ±30s-Gültigkeitsfensters.
   totp_last_step: Nullable<number>;
-  // Brute-Force-Schutz (auth.ts): Fehlversuche in Folge; nach Schwelle setzt auth.ts
-  // locked_until. Generated, da beim Insert immer der DB-Default (0) gilt.
+  // Brute-Force-Schutz (auth.ts): Fehlversuche in Folge, kontoweit (quellenunabhaengig).
+  // Security-Audit R-11: treibt NICHT mehr direkt locked_until/locked_permanent -- nur noch
+  // einen wachsenden Backoff (domain/loginThrottle.ts). Die eigentliche automatische Sperre
+  // laeuft jetzt pro (Konto, Quellnetz) ueber login_failure_sources.
   failed_login_count: Generated<number>;
+  failed_login_last_at: NullableTimestamp;
+  // Persönlicher Outlook-Kalender (delegierte OAuth-Berechtigung, siehe domain/graphClient.ts) --
+  // getrennt von der App-only-Integration in app_settings. outlook_connected_at = null bedeutet
+  // nicht verbunden; outlook_account_email ist reiner Anzeigetext (kein Secret), der Refresh-
+  // Token liegt verschlüsselt wie name_enc/email_enc.
+  outlook_refresh_token_enc: Buffer | null;
+  outlook_account_email: Nullable<string>;
+  outlook_connected_at: NullableTimestamp;
   created_at: CreatedAt;
+  updated_at: UpdatedAt;
+}
+
+// Security-Audit R-11: automatische Sperre nach Fehlversuchen pro (Konto, Quellnetz) statt
+// global am Konto -- siehe domain/loginThrottle.ts.
+export interface LoginFailureSourcesTable {
+  user_id: string;
+  source_prefix: string;
+  failure_count: Generated<number>;
+  locked_until: NullableTimestamp;
   updated_at: UpdatedAt;
 }
 
@@ -457,6 +477,7 @@ export interface Database {
   key_rotation_log: KeyRotationLogTable;
   groups: GroupsTable;
   users: UsersTable;
+  login_failure_sources: LoginFailureSourcesTable;
   sessions: SessionsTable;
   jobs: JobsTable;
   job_dead_letter: JobDeadLetterTable;

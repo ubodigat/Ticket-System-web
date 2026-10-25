@@ -17,6 +17,9 @@ import { migration_0042_notification_identity } from './migrations/0042_notifica
 import { migration_0043_encryption_checkpoints } from './migrations/0043_encryption_checkpoints.js';
 import { migration_0044_contact_ciphertext_capacity } from './migrations/0044_contact_ciphertext_capacity.js';
 import { migration_0045_account_valid_until } from './migrations/0045_account_valid_until.js';
+import { migration_0046_login_failure_sources } from './migrations/0046_login_failure_sources.js';
+import { migration_0047_audit_log_redact } from './migrations/0047_audit_log_redact.js';
+import { migration_0048_outlook_personal_calendar } from './migrations/0048_outlook_personal_calendar.js';
 import { migration_0001_installations } from './migrations/0001_installations.js';
 import { migration_0002_key_management } from './migrations/0002_key_management.js';
 import { migration_0003_users_and_groups } from './migrations/0003_users_and_groups.js';
@@ -101,7 +104,10 @@ const migrations: Record<string, Migration> = {
   '0042_notification_identity': migration_0042_notification_identity,
   '0043_encryption_checkpoints': migration_0043_encryption_checkpoints,
   '0044_contact_ciphertext_capacity': migration_0044_contact_ciphertext_capacity,
-  '0045_account_valid_until': migration_0045_account_valid_until
+  '0045_account_valid_until': migration_0045_account_valid_until,
+  '0046_login_failure_sources': migration_0046_login_failure_sources,
+  '0047_audit_log_redact': migration_0047_audit_log_redact,
+  '0048_outlook_personal_calendar': migration_0048_outlook_personal_calendar
 };
 
 const provider: MigrationProvider = {

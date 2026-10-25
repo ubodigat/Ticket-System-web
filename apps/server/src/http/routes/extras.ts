@@ -89,10 +89,18 @@ export async function createNotification(
     is_read: false
   }).execute();
 
-  // E-Mail-Zustellung ist best-effort und blockiert die In-App-Benachrichtigung nie (siehe
-  // sendMailSafe) -- ohne konfiguriertes SMTP oder ohne hinterlegte E-Mail passiert einfach nichts.
-  await queueUserMail({ db: app.db, ...deps }, params.recipientUserId,
-    params.ticketNumber ? `Ticket ${params.ticketNumber}` : 'Benachrichtigung', params.message, params.type);
+  // E-Mail-Zustellung ist best-effort und blockiert die In-App-Benachrichtigung nie.
+  // Security-Audit R-15: ein Fehler beim Einreihen (DB-Fehler, kaputtes JSON in
+  // notif_prefs_json, ...) liess bisher den ganzen Aufruf durchschlagen -- ein bereits
+  // gespeicherter Vorgang (neues Ticket, Statuswechsel) endete dadurch trotzdem mit HTTP 500,
+  // obwohl die In-App-Benachrichtigung oben schon erfolgreich angelegt war. Jetzt nur noch
+  // geloggt, nie mehr nach aussen durchgereicht.
+  try {
+    await queueUserMail({ db: app.db, ...deps }, params.recipientUserId,
+      params.ticketNumber ? `Ticket ${params.ticketNumber}` : 'Benachrichtigung', params.message, params.type);
+  } catch (err) {
+    app.log.error({ err, recipientUserId: params.recipientUserId }, 'Mail konnte nicht eingereiht werden');
+  }
 }
 
 export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDeps): void {

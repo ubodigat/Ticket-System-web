@@ -1159,10 +1159,14 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         updated_at: mysqlTimestamp()
       }).where('id', '=', id).execute();
 
+      // Security-Audit R-13: approval_text ist in tickets.approval_text verschlüsselt (N10) --
+      // der Genehmigungsgrund darf deshalb nicht zusätzlich im Klartext im Audit-Log landen, das
+      // würde die Verschlüsselungszusage faktisch aushöhlen (ein DB-Dump/Backup würde ihn trotzdem
+      // preisgeben). Nur noch vermerkt, DASS eine Begründung mitgegeben wurde, nicht ihr Inhalt.
       await app.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
         action: 'approval_requested', field: 'approval_status', old_value: null,
-        new_value: `pending (Prüfer: ${approver.username}${parsed.data.text ? `, Grund: ${parsed.data.text}` : ''})`
+        new_value: `pending (Prüfer: ${approver.username}${parsed.data.text ? ', mit Begründung' : ''})`
       }).execute();
 
       const ticketRow = await app.db.selectFrom('tickets').select(['ticket_number']).where('id', '=', id).executeTakeFirst();
@@ -1209,10 +1213,12 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         updated_at: mysqlTimestamp()
       }).where('id', '=', id).execute();
 
+      // Security-Audit R-13: wie bei approval_requested oben -- die Begründung der Entscheidung
+      // darf nicht zusätzlich zur verschlüsselten Spalte im Klartext im Audit-Log stehen.
       await app.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
         action: 'approval_decided', field: 'approval_status', old_value: 'pending',
-        new_value: parsed.data.reason ? `${parsed.data.decision}: ${parsed.data.reason}` : parsed.data.decision
+        new_value: parsed.data.reason ? `${parsed.data.decision} (mit Begründung)` : parsed.data.decision
       }).execute();
 
       if (ticket.approval_requested_by) {
@@ -1585,9 +1591,11 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         subject: parsed.data.subject, start_at: mysqlTimestamp(startAt), end_at: mysqlTimestamp(endAt),
         created_by_user_id: session.uid
       }).execute();
+      // Security-Audit R-13: der Betreff landet schon in ticket_calendar_events -- nicht nochmal
+      // im Klartext im Audit-Log.
       await app.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
-        action: 'calendar_event_created', field: 'calendar_event', old_value: null, new_value: parsed.data.subject
+        action: 'calendar_event_created', field: 'calendar_event', old_value: null, new_value: '(Termin angelegt)'
       }).execute();
       return reply.code(201).send({ id: eventId, webLink: created.webLink });
     } catch (e: any) {

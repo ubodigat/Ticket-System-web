@@ -24,10 +24,10 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
     <canvas id="stars"></canvas>
 
     <header class="hero">
-        <button id="theme-toggle" class="btn-ghost btn-icon login-settings" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
+        <button id="theme-toggle" class="btn-ghost btn-icon login-settings" data-i18n-title="settings" data-i18n-aria-label="settings" title="Einstellungen" aria-label="Einstellungen"><i data-lucide="settings"></i></button>
         <div class="hero-inner">
             <h1 class="brand">Support Portal</h1>
-            <p class="subtitle">Schnelle Hilfe. Klare Übersicht. Moderne Experience.</p>
+            <p class="subtitle" data-i18n="tagline">Schnelle Hilfe. Klare Übersicht. Moderne Experience.</p>
         </div>
     </header>
 
@@ -35,30 +35,30 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
         <section class="card">
             <h2 data-i18n="login">Anmelden</h2>
             <div class="field">
-                <label for="login-user">Benutzername</label>
-                <input id="login-user" type="text" autocomplete="username" placeholder="benutzername">
+                <label for="login-user" data-i18n="username">Benutzername</label>
+                <input id="login-user" type="text" autocomplete="username" data-i18n-placeholder="usernamePlaceholder" placeholder="benutzername">
             </div>
             <div class="field">
-                <label for="login-pass">Passwort</label>
+                <label for="login-pass" data-i18n="password">Passwort</label>
                 <input id="login-pass" type="password" autocomplete="current-password" placeholder="********">
             </div>
             <button class="btn-primary btn-block" id="btn-login" data-i18n="login">Anmelden</button>
-            <div class="note">Noch kein Zugang? Nutze die Kontoanfrage.</div>
+            <div class="note" data-i18n="noAccountYetNote">Noch kein Zugang? Nutze die Kontoanfrage.</div>
         </section>
 
         <section class="card">
-            <h2>Kein Account?</h2>
-            <p>Fordere einen Zugang an. Ein Admin schaltet dich frei.</p>
+            <h2 data-i18n="noAccountHeading">Kein Account?</h2>
+            <p data-i18n="requestAccessIntro">Fordere einen Zugang an. Ein Admin schaltet dich frei.</p>
             <div class="field">
-                <label for="req-name">Vollständiger Name</label>
-                <input id="req-name" type="text" placeholder="Max Mustermann">
+                <label for="req-name" data-i18n="fullName">Vollständiger Name</label>
+                <input id="req-name" type="text" data-i18n-placeholder="fullNamePlaceholder" placeholder="Max Mustermann">
             </div>
             <div class="field">
-                <label for="req-email">E-Mail</label>
+                <label for="req-email" data-i18n="email">E-Mail</label>
                 <input id="req-email" type="email" placeholder="max@example.com">
             </div>
-            <button class="btn-secondary btn-block" id="btn-request">Account anfragen</button>
-            <div class="note">Du erhältst Zugangsdaten, sobald ein Admin dich freigibt.</div>
+            <button class="btn-secondary btn-block" id="btn-request" data-i18n="requestAccount">Account anfragen</button>
+            <div class="note" data-i18n="requestAccountNote">Du erhältst Zugangsdaten, sobald ein Admin dich freigibt.</div>
         </section>
     </main>
     <div id="toast"></div>

@@ -33,8 +33,8 @@ export const UserDash = {
             btn = document.createElement('button');
             btn.id = 'btn-user-approvals';
             btn.className = 'btn-ghost btn-icon notification-button';
-            btn.title = 'Genehmigungen';
-            btn.setAttribute('aria-label', 'Genehmigungen');
+            btn.title = Lang.t('approvals');
+            btn.setAttribute('aria-label', Lang.t('approvals'));
             btn.innerHTML = `${Icon('badge-check', 18)}<span class="notification-count"></span>`;
             btn.onclick = () => AdminBoard.openApprovals();
             rightNav.insertBefore(btn, rightNav.firstChild);
@@ -79,18 +79,18 @@ export const UserDash = {
             const cat = selectedCats.length > 0 ? selectedCats : ['Allgemein'];
 
             if (!title) {
-                UI.toast('Bitte Titel angeben');
+                UI.toast(Lang.t('titleRequired'));
                 return;
             }
 
             const { values: customFieldValues, missing: missingFields } = UI.readCustomFieldsForm(q('#t-custom-fields'));
             if (missingFields.length) {
-                UI.toast(`Bitte Pflichtfeld${missingFields.length > 1 ? 'er' : ''} ausfüllen: ${missingFields.join(', ')}`);
+                UI.toast(Lang.format('requiredFieldsMissing', { fields: missingFields.join(', ') }));
                 return;
             }
 
             if (UserDash.createFiles.some(file => file.size > 15 * 1024 * 1024)) {
-                UI.toast('Anhänge dürfen maximal 15 MB groß sein.');
+                UI.toast(Lang.t('attachmentsTooLarge'));
                 return;
             }
             const activeIncidents = (await Store.getTickets()).filter(t => t.isMajorIncident && t.status !== 'Geschlossen' && !t.archived);
@@ -103,7 +103,7 @@ export const UserDash = {
             const user = await Store.currentUser();
             const newTicket = await Store.createTicket({ title, desc, prio, category: cat, customFieldValues });
             if (!newTicket) {
-                UI.toast('Ticket konnte nicht erstellt werden.');
+                UI.toast(Lang.t('ticketCreateFailed'));
                 return;
             }
             if (UserDash.createFiles.length) {
@@ -111,7 +111,7 @@ export const UserDash = {
                     await Promise.all(UserDash.createFiles.map(file => Store.saveAttachment(file, { ticketId: newTicket.id })));
                 } catch (error) {
                     console.error(error);
-                    UI.toast('Ticket wurde erstellt, aber Anhänge konnten nicht gespeichert werden.');
+                    UI.toast(Lang.t('ticketCreatedAttachmentsFailed'));
                 }
             }
             if (linkedIncidentId) {
@@ -130,11 +130,11 @@ export const UserDash = {
                 for (const admin of admins) {
                     if (!admin.email) continue;
                     const pref = await Store.resolveNotifPref(admin, 'newTicket');
-                    if (pref.email) Store.sendEmail(admin.email, `Neues Ticket: ${title}`, `Ticket #${newTicket.id} von ${user.name || user.username} erstellt.`);
+                    if (pref.email) Store.sendEmail(admin.email, Lang.format('newTicketEmailSubject', { title }), Lang.format('newTicketEmailBody', { id: newTicket.id, name: user.name || user.username }));
                 }
             }
 
-            UI.toast('Ticket erstellt!');
+            UI.toast(Lang.t('ticketCreated'));
             q('#t-title').value = '';
             q('#t-desc').value = '';
             UserDash.createFiles = [];
@@ -281,9 +281,9 @@ export const UserDash = {
         if (modal) modal.remove();
         modal = document.createElement('div'); modal.id = 'reply-reminder'; modal.className = 'modal-overlay open';
         modal.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="reply-reminder-title">
-            <div class="modal-header"><h3 id="reply-reminder-title">${Icon('message-circle-warning', 18)}Deine Rückmeldung wird benötigt (${tickets.length})</h3>
-            <button class="btn-ghost btn-icon" data-close title="Schließen" aria-label="Schließen">${Icon('x', 18)}</button></div>
-            <div class="modal-body">${tickets.map(t => `<button class="reply-reminder-item" data-ticket="${Utils.esc(t.id)}"><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span>${Utils.esc(t.waitingMessage || 'Bitte öffne den Chat und beantworte die Rückfrage des Supports.')}</span></button>`).join('')}</div></div>`;
+            <div class="modal-header"><h3 id="reply-reminder-title">${Icon('message-circle-warning', 18)}${Lang.format('replyNeededTitle', { count: tickets.length })}</h3>
+            <button class="btn-ghost btn-icon" data-close title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 18)}</button></div>
+            <div class="modal-body">${tickets.map(t => `<button class="reply-reminder-item" data-ticket="${Utils.esc(t.id)}"><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span>${Utils.esc(t.waitingMessage || Lang.t('replyReminderDefault'))}</span></button>`).join('')}</div></div>`;
         document.body.appendChild(modal);
         modal.querySelector('[data-close]').onclick = () => modal.remove();
         modal.addEventListener('keydown', e => { if (e.key === 'Escape') modal.remove(); });
@@ -305,7 +305,7 @@ export const UserDash = {
             UserDash.selectedFiles.forEach((f, idx) => {
                 const tag = document.createElement('div');
                 tag.className = 'file-chip';
-                tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
+                tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('removeFile')}" aria-label="${Lang.t('removeFile')}">${Icon('x', 13)}</button>`;
                 tag.querySelector('.remove-file').onclick = () => {
                     UserDash.selectedFiles.splice(idx, 1);
                     UserDash.renderFilePreview();
@@ -326,8 +326,8 @@ export const UserDash = {
         UserDash.createFiles.forEach((file, index) => {
             const chip = document.createElement('div');
             chip.className = 'file-chip file-chip-clickable';
-            chip.title = 'Vorschau anzeigen';
-            chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="Entfernen" aria-label="${Utils.esc(file.name)} entfernen">${Icon('x', 13)}</button>`;
+            chip.title = Lang.t('showPreview');
+            chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Lang.format('removeFileAriaLabel', { name: file.name })}">${Icon('x', 13)}</button>`;
             chip.querySelector('span').onclick = async () => {
                 const data = await Store.readFile(file);
                 AdminBoard.openAttachmentPreview({ name: file.name, type: file.type, data });
@@ -359,7 +359,7 @@ export const UserDash = {
             if (incidentBox) {
                 const incident = t.linkedIncidentId ? (await Store.getTickets()).find(x => x.id === t.linkedIncidentId) : null;
                 incidentBox.hidden = !incident;
-                incidentBox.innerHTML = incident ? `<div class="incident-notice-text"><strong>${Icon('siren', 14)}Zugeordnete Störung</strong><span>${Utils.esc(incident.ticketNumber || incident.id)} · ${Utils.esc(incident.title)}</span></div>` : '';
+                incidentBox.innerHTML = incident ? `<div class="incident-notice-text"><strong>${Icon('siren', 14)}${Lang.t('linkedIncident')}</strong><span>${Utils.esc(incident.ticketNumber || incident.id)} · ${Utils.esc(incident.title)}</span></div>` : '';
             }
         }
         {
@@ -379,17 +379,17 @@ export const UserDash = {
             // Wer ein Ticket nur zur Genehmigung einsieht (nicht der/die Erstellende), darf es nicht
             // selbst als gelöst schließen können.
             resolveBtn.hidden = t.archived || t.status === 'Geschlossen' || !isOwnTicket;
-            resolveBtn.onclick = () => UI.confirm('Ticket als gelöst schließen? Wenn du später noch einmal antwortest, wird es automatisch wieder geöffnet.', async () => {
+            resolveBtn.onclick = () => UI.confirm(Lang.t('confirmMarkResolved'), async () => {
                 const all = await Store.getTickets();
                 const ticket = all.find(x => x.id === t.id);
                 if (!ticket || ticket.status === 'Geschlossen') return;
                 ticket.status = 'Geschlossen';
                 ticket.slaPausedSince = null;
-                await Store.addLog(ticket, 'Vom Benutzer als gelöst geschlossen');
+                await Store.addLog(ticket, Lang.t('closedByUserLog'));
                 const saved = await Store.saveTickets(all);
-                if (!saved) return UI.toast('Ticket konnte nicht geschlossen werden.');
+                if (!saved) return UI.toast(Lang.t('ticketCloseFailed'));
                 await Notifications.refresh();
-                UI.toast('Ticket geschlossen.');
+                UI.toast(Lang.t('ticketClosed'));
                 await UserDash.openModal(t.id);
                 await UserDash.renderList();
             });
@@ -411,21 +411,21 @@ export const UserDash = {
             pendingBox.hidden = !pendingApproval;
             if (pendingApproval) {
                 const approverName = await Store.describeApprover(pendingApproval);
-                q('#u-approval-pending-text').textContent = `Wartet auf Genehmigung durch ${approverName} (seit ${Utils.fmtDate(pendingApproval.requestedAt)})`;
+                q('#u-approval-pending-text').textContent = Lang.format('awaitingApprovalBy', { name: approverName, date: Utils.fmtDate(pendingApproval.requestedAt) });
             }
         }
         const rejectedBox = q('#u-approval-rejected');
         if (rejectedBox) {
             rejectedBox.hidden = !t.rejectedApproval;
             if (t.rejectedApproval) {
-                q('#u-approval-rejected-text').textContent = `${t.rejectedApproval.byName || t.rejectedApproval.by} hat diese Anfrage abgelehnt: ${t.rejectedApproval.reason || '-'}`;
+                q('#u-approval-rejected-text').textContent = Lang.format('requestRejectedBy', { name: t.rejectedApproval.byName || t.rejectedApproval.by, reason: t.rejectedApproval.reason || '-' });
                 q('#u-approval-reuse').onclick = () => {
                     q('#u-ticket-modal').classList.remove('open');
                     q('#t-title').value = t.title || '';
                     q('#t-desc').value = t.desc || '';
                     if (q('#t-prio')) q('#t-prio').value = t.prio || 'Normal';
                     if (UserDash.categoryInstance) UserDash.categoryInstance.setValue(t.category || []);
-                    UI.toast('Angaben übernommen – bitte prüfen und erneut absenden.');
+                    UI.toast(Lang.t('detailsTakenOver'));
                     q('#t-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 };
             }
@@ -580,18 +580,18 @@ export const UserDash = {
                 const cats = Array.isArray(t.category) ? t.category : [t.category || '-'];
                 const catBadges = cats.map(c => `<span class="t-category">${Utils.esc(c)}</span>`).join('');
                 const archivedBadge = t.archived ? `<span class="archive-badge">${Icon('archive', 12)}${Lang.t('archived')}</span>` : '';
-                const overdueBadge = isOverdue ? `<span class="sla-overdue-icon sla-badge-muted" title="Frist überschritten">${Icon('timer', 11)}</span>` : '';
+                const overdueBadge = isOverdue ? `<span class="sla-overdue-icon sla-badge-muted" title="${Lang.t('deadlineExceeded')}">${Icon('timer', 11)}</span>` : '';
                 const pendingApproval = (t.approvals || []).some(a => a.status === 'pending');
-                const approvalBadge = pendingApproval ? `<span class="approval-badge" title="Wartet auf Genehmigung">${Icon('hourglass', 12)}Genehmigung</span>` : '';
+                const approvalBadge = pendingApproval ? `<span class="approval-badge" title="${Lang.t('awaitingApproval')}">${Icon('hourglass', 12)}${Lang.t('approvals')}</span>` : '';
 
                 el.innerHTML = `
                     <span class="status-dot ${getStatusColorClass(t.status)}" title="${Utils.esc(Lang.status(t.status))}"></span>
                     <div class="ticket-row-main">
                         <div class="row-title" title="${Utils.esc(t.title)}">${Utils.esc(t.title)}</div>
                         <div class="ticket-row-cats"><span class="ticket-number">${Utils.esc(t.ticketNumber || t.id)}</span>${catBadges}${archivedBadge}${overdueBadge}${approvalBadge}</div>
-                        ${needsReply ? `<div class="reply-required">${Icon('message-circle-warning', 15)}<span>Deine Antwort fehlt${t.waitingMessage ? ': ' + Utils.esc(t.waitingMessage) : ''}</span></div>` : ''}
+                        ${needsReply ? `<div class="reply-required">${Icon('message-circle-warning', 15)}<span>${Lang.t('replyMissing')}${t.waitingMessage ? ': ' + Utils.esc(t.waitingMessage) : ''}</span></div>` : ''}
                     </div>
-                    <div class="ticket-row-status${String(t.status).startsWith('Warten auf') ? ' is-waiting' : ''}"><span class="status-badge">${pendingApproval ? 'Wartet auf Genehmigung' : Lang.status(t.status)}</span></div>
+                    <div class="ticket-row-status${String(t.status).startsWith('Warten auf') ? ' is-waiting' : ''}"><span class="status-badge">${pendingApproval ? Lang.t('awaitingApproval') : Lang.status(t.status)}</span></div>
                     <div class="ticket-row-date date">${Utils.fmtDate(t.createdAt)}</div>
                     <div class="ticket-row-prio"><span class="prio-pill prio-${t.prio}">${Lang.prio(t.prio)}</span></div>
                 `;
@@ -600,7 +600,7 @@ export const UserDash = {
                         await UserDash.openModal(t.id);
                     } catch (err) {
                         console.error(err);
-                        UI.toast('Ticket konnte nicht geöffnet werden.');
+                        UI.toast(Lang.t('ticketOpenFailed'));
                     }
                 });
                 list.appendChild(el);

@@ -10,6 +10,7 @@ import { q, Icon, Utils } from './utils.js';
 import { Store } from './store.js';
 import { UI } from './ui.js';
 import { Settings } from './settings.js';
+import { Lang } from './lang.js';
 
 // --- Auth ---
 // Authentifizierung läuft ausschließlich über den Server (/api/v1/auth/*). Es gibt KEINEN
@@ -102,7 +103,7 @@ export const Auth = {
     open2FAModal: async (user) => {
         const setupRes = await fetch('/api/v2/mfa/setup', { method: 'POST', credentials: 'same-origin' }).catch(() => null);
         if (!setupRes || !setupRes.ok) {
-            UI.toast('2FA-Einrichtung konnte nicht gestartet werden.');
+            UI.toast(Lang.t('mfaSetupFailed'));
             return;
         }
         const { secret, qrDataUrl } = await setupRes.json();
@@ -116,19 +117,19 @@ export const Auth = {
         modal.innerHTML = `
             <div class="modal modal-sm">
                 <div class="modal-header">
-                    <h3>${Icon('shield-check', 18)} 2FA einrichten</h3>
+                    <h3>${Icon('shield-check', 18)} ${Lang.t('setup2FA')}</h3>
                     <div class="modal-actions">
-                        <button class="btn-ghost btn-icon" id="btn-close-2fa-setup" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        <button class="btn-ghost btn-icon" id="btn-close-2fa-setup" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                     </div>
                 </div>
                 <div class="modal-body text-center">
-                    <p>Scanne den QR-Code mit einer Authenticator-App (z. B. Google Authenticator).</p>
-                    <div class="qr-box"><img src="${qrDataUrl}" alt="QR-Code"></div>
-                    <p class="hint">Manuelle Eingabe: ${Utils.esc(secret)}</p>
+                    <p>${Lang.t('scanQrInstruction')}</p>
+                    <div class="qr-box"><img src="${qrDataUrl}" alt="${Lang.t('qrCodeAlt')}"></div>
+                    <p class="hint">${Lang.t('manualEntry')} ${Utils.esc(secret)}</p>
                     <input type="text" id="code-2fa-input" class="code-input" placeholder="123 456">
                 </div>
                 <div class="modal-footer">
-                    <button class="btn-primary btn-block" id="btn-verify-2fa">${Icon('shield-check', 16)} Einrichtung abschließen</button>
+                    <button class="btn-primary btn-block" id="btn-verify-2fa">${Icon('shield-check', 16)} ${Lang.t('complete2FASetup')}</button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
@@ -147,10 +148,10 @@ export const Auth = {
             }).catch(() => null);
             if (res && res.ok) {
                 modal.classList.remove('open');
-                UI.toast('2FA erfolgreich aktiviert!');
+                UI.toast(Lang.t('mfaActivated'));
                 Settings.openModal();
             } else {
-                UI.toast('Code ungültig. Bitte erneut versuchen.');
+                UI.toast(Lang.t('invalidCodeRetry'));
             }
         };
         modal.classList.add('open');

@@ -19,6 +19,7 @@ import { registerSetupRoutes } from './routes/setup.js';
 import { registerAuthRoutes, csrfCookieName } from './routes/auth.js';
 import { registerTicketsV2Routes } from './routes/tickets.js';
 import { registerUsersV2Routes } from './routes/users.js';
+import { registerOutlookPersonalRoutes } from './routes/outlookPersonal.js';
 import { registerExtrasV2Routes } from './routes/extras.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerKnowledgeRoutes } from './routes/knowledge.js';
@@ -187,7 +188,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     // bei normaler Nutzung zu 429 auf /api/v2/settings, /api/v2/users usw. Kritische Routen
     // wie Setup/Login/MFA behalten eigene engere Limits in den jeweiligen Route-Configs.
     max: 1000,
-    timeWindow: '1 minute'
+    timeWindow: '1 minute',
+    // Security-Audit R-10 / CVE-2026-15144: Vor 11.2.0 bildete @fastify/rate-limit den Zähler
+    // aus dem rohen Text von req.ip -- eine IPv6-Adresse hat beliebig viele gültige
+    // Schreibweisen und ein Anschluss verfügt meist über ein ganzes /64-Netz, wodurch jede neue
+    // Adresse ein frisches Kontingent bekam (Password-Spraying trotz Limit). ipv6Subnet fasst
+    // IPv6-Clients ausdrücklich auf das /64-Netz zusammen, statt sich auf den (ohnehin ab
+    // 11.2.0 geltenden) Default zu verlassen.
+    ipv6Subnet: 64
   });
 
   registerHealthRoutes(app);
@@ -197,6 +205,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // V2 API - vollständig sicher, RBAC, normalisiert
   registerTicketsV2Routes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerUsersV2Routes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerOutlookPersonalRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerExtrasV2Routes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerSettingsRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerKnowledgeRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });

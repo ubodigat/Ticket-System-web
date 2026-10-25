@@ -10,7 +10,7 @@ diese Tabelle mitpflegen (Security-Audit vom 10.10.2026, Befund B8).
 | `mammoth.browser.min.js` | 1.13.0 (entspricht aktueller npm-Version; im Bundle selbst nicht ausgewiesen) | npm `mammoth` (Browser-Build) | `2a0c24d419b8b6b307b2c59dcad9ac045ef43c29fdb23f3b0f2e82d5b09287fe` |
 | `xlsx.full.min.js` | 0.20.3 | `https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js` (offizielles SheetJS-CDN -- die npm-Version endet bei 0.18.5 und wird dort nicht mehr gepflegt) | `cc015130aa8521e7f088f88898eba949ccdcbfb38df0bd129b44b7273c3a6f41` |
 | `jszip.min.js` | 3.10.1 | npm `jszip` | `acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e` |
-| `dompurify.min.js` | 3.4.16 | npm `dompurify` (UMD-Build) | `2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2` |
+| `dompurify.min.js` | 3.4.17 | npm `dompurify` (UMD-Build) | `cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31` |
 
 ## Hinweis zu xlsx.full.min.js (Security-Audit B8)
 

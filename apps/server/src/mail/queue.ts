@@ -3,6 +3,7 @@ import { ensureDek } from '../crypto/dekService.js';
 import { fieldCipher } from '../crypto/fieldCrypto.js';
 import { mysqlTimestamp } from '../db/date.js';
 import { isSmtpConfigured, sendMail, type MailDeps } from './mailer.js';
+import { isAccountExpired } from '../domain/accountValidity.js';
 
 const MAIL_TYPE = 'smtp.delivery';
 const MAX_ATTEMPTS = 5;
@@ -29,9 +30,12 @@ export async function queueMailIfConfigured(deps: MailDeps, to: string, subject:
 
 export async function queueUserMail(deps: MailDeps, userId: string, subject: string, text: string, type = 'statusChange'): Promise<void> {
   if (!await isSmtpConfigured(deps)) return;
-  const user = await deps.db.selectFrom('users').select(['email_enc', 'account_archived', 'notif_prefs_json', 'role'])
+  const user = await deps.db.selectFrom('users').select(['email_enc', 'account_archived', 'locked_permanent', 'account_valid_until', 'notif_prefs_json', 'role'])
     .where('id', '=', userId).executeTakeFirst();
-  if (!user?.email_enc || user.account_archived) return;
+  // Security-Audit R-15: bisher ging eine Benachrichtigung mit Ticketinhalten auch an dauerhaft
+  // gesperrte oder per Ablaufdatum beendete Konten (z.B. ausgeschiedene Mitarbeiter, deren
+  // private Adresse hinterlegt war) -- archiviert war bisher der einzige geprüfte Zustand.
+  if (!user?.email_enc || user.account_archived || user.locked_permanent || isAccountExpired(user.account_valid_until)) return;
   const prefs = user.notif_prefs_json ? JSON.parse(user.notif_prefs_json) : {};
   const settings = await deps.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
   const config = settings?.config_json ? JSON.parse(settings.config_json) : {};

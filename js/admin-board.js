@@ -126,7 +126,7 @@ export const AdminBoard = {
                 <div class="modal modal-md">
                     <div class="modal-header">
                         <h3>${Icon('alarm-clock', 18)} ${Lang.t('overdue')} ${Lang.t('tickets')}</h3>
-                        <button class="btn-ghost btn-icon" data-close-sla title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        <button class="btn-ghost btn-icon" data-close-sla title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                     </div>
                     <div class="modal-body sla-overdue-list" id="sla-overdue-list"></div>
                 </div>`;
@@ -157,12 +157,12 @@ export const AdminBoard = {
                     <span class="sla-overdue-icon">${Icon('triangle-alert', 16)}</span>
                     <span class="sla-overdue-copy">
                         <strong>${Utils.esc(ticket.ticketNumber || ticket.id)} · ${Utils.esc(ticket.title)}</strong>
-                        <span>${Lang.prio(ticket.prio)} · Frist ${Utils.fmtDate(new Date(deadline).toISOString())}</span>
-                        <span>Hauptverantwortlicher: ${Utils.esc(ownerLabel)}</span>
+                        <span>${Lang.prio(ticket.prio)} · ${Lang.t('deadline')} ${Utils.fmtDate(new Date(deadline).toISOString())}</span>
+                        <span>${Lang.t('mainResponsible')}: ${Utils.esc(ownerLabel)}</span>
                         <time>${overdueText}</time>
                     </span>
                 </button>`;
-        }).join('') : `<div class="empty-state">${Lang.current === 'en' ? 'No overdue tickets' : 'Keine überfälligen Tickets'}</div>`;
+        }).join('') : `<div class="empty-state">${Lang.t('noOverdueTickets')}</div>`;
         list.querySelectorAll('.sla-overdue-item').forEach(item => {
             item.onclick = async () => {
                 modal.classList.remove('open');
@@ -247,7 +247,7 @@ export const AdminBoard = {
         if (!matches.length) {
             const empty = document.createElement('span');
             empty.className = 'mention-suggestion-empty';
-            empty.textContent = 'Keine Admins mit Ticketzugriff gefunden';
+            empty.textContent = Lang.t('noAdminsWithAccess');
             menu.appendChild(empty);
         }
         const rect = input.getBoundingClientRect();
@@ -292,7 +292,7 @@ export const AdminBoard = {
         if (!attachments.length && !mayManage) return;
         const heading = document.createElement('h4');
         heading.className = 'section-title';
-        heading.textContent = 'Anhänge';
+        heading.textContent = Lang.t('attachments');
         const list = document.createElement('div');
         list.className = 'ticket-attachment-list';
         attachments.forEach((file, index) => {
@@ -300,15 +300,15 @@ export const AdminBoard = {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'file-chip';
-            button.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name || 'Anhang')}</span>`;
+            button.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name || Lang.t('attachment'))}</span>`;
             button.onclick = () => AdminBoard.openAttachmentPreview(attachments[index]);
             item.appendChild(button);
             if (mayManage && file.uploadedByUserId === actor.id) {
                 const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-ghost btn-icon btn-sm';
-                remove.title = 'Eigenen Anhang entfernen'; remove.setAttribute('aria-label', 'Eigenen Anhang entfernen'); remove.innerHTML = Icon('trash-2', 15);
-                remove.onclick = () => UI.confirm('Eigenen Anhang entfernen?', async () => {
+                remove.title = Lang.t('removeOwnAttachment'); remove.setAttribute('aria-label', Lang.t('removeOwnAttachment')); remove.innerHTML = Icon('trash-2', 15);
+                remove.onclick = () => UI.confirm(Lang.t('confirmRemoveOwnAttachment'), async () => {
                     const response = await fetch(`/api/v2/attachments/${encodeURIComponent(file.id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
-                    if (!response?.ok) return UI.toast('Anhang konnte nicht entfernt werden.');
+                    if (!response?.ok) return UI.toast(Lang.t('attachmentRemoveFailed'));
                     await AdminBoard.renderTicketAttachments(ticket, container, { manage });
                 });
                 item.appendChild(remove);
@@ -318,13 +318,13 @@ export const AdminBoard = {
         container.append(heading, list);
         if (mayManage) {
             const add = document.createElement('label'); add.className = 'btn-secondary btn-icon attachment-add';
-            add.title = 'Anhänge hinzufügen'; add.setAttribute('aria-label', 'Anhänge hinzufügen'); add.tabIndex = 0;
+            add.title = Lang.t('addAttachments'); add.setAttribute('aria-label', Lang.t('addAttachments')); add.tabIndex = 0;
             add.innerHTML = `${Icon('paperclip', 16)}<input type="file" multiple hidden>`;
             const input = add.querySelector('input');
             add.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } };
             input.onchange = async () => {
                 try { for (const file of input.files) await Store.saveAttachment(file, { ticketId: ticket.id }); }
-                catch { UI.toast('Ein Anhang konnte nicht hochgeladen werden (maximal 15 MB pro Datei).'); }
+                catch { UI.toast(Lang.t('attachmentUploadFailed')); }
                 await AdminBoard.renderTicketAttachments(ticket, container, { manage });
             };
             container.appendChild(add);
@@ -394,7 +394,7 @@ export const AdminBoard = {
         if (isSuper || user?.canViewLogs) {
             const btnLogs = q('#btn-global-logs');
             if (btnLogs) {
-                btnLogs.style.display = 'inline-flex';
+                btnLogs.hidden = false;
                 btnLogs.onclick = AdminBoard.openGlobalLogsModal;
             }
         }
@@ -433,7 +433,7 @@ export const AdminBoard = {
             btnArch.onclick = () => {
                 viewKanban.style.display = 'none';
                 viewArchive.style.display = 'block';
-                q('#list-view').style.display = 'none';
+                q('#list-view').hidden = true;
                 q('.board-banners').hidden = true;
                 setListViewButtonState(false);
                 AdminBoard.renderArchive();
@@ -441,7 +441,7 @@ export const AdminBoard = {
             btnBack.onclick = () => {
                 viewArchive.style.display = 'none';
                 viewKanban.style.display = 'block';
-                q('#list-view').style.display = 'none';
+                q('#list-view').hidden = true;
                 q('.board-banners').hidden = false;
                 AdminBoard.render();
             };
@@ -456,17 +456,20 @@ export const AdminBoard = {
         if (btnListView) {
             setListViewButtonState(false);
             btnListView.onclick = async () => {
-                const isListActive = q('#list-view').style.display === 'block';
+                // Bugfix: style.css [hidden] { display: none !important; } sticht eine per JS
+                // gesetzte inline style.display -- #list-view muss deshalb ueber die hidden-
+                // Eigenschaft sichtbar/unsichtbar geschaltet werden, nicht ueber style.display.
+                const isListActive = !q('#list-view').hidden;
                 viewArchive.style.display = 'none';
                 q('.board-banners').hidden = false;
                 if (isListActive) {
-                    q('#list-view').style.display = 'none';
+                    q('#list-view').hidden = true;
                     viewKanban.style.display = 'block';
                     setListViewButtonState(false);
                     await AdminBoard.render();
                 } else {
                     viewKanban.style.display = 'none';
-                    q('#list-view').style.display = 'block';
+                    q('#list-view').hidden = false;
                     setListViewButtonState(true);
                     await AdminBoard.openListView();
                 }
@@ -656,7 +659,7 @@ export const AdminBoard = {
         if (roleSel) {
             roleSel.onchange = () => {
                 const dept = q('#a-dept-field');
-                if (dept) dept.style.display = roleSel.value === 'admin' ? '' : 'none';
+                if (dept) dept.hidden = roleSel.value !== 'admin';
             };
         }
 
@@ -784,8 +787,8 @@ export const AdminBoard = {
                 <div class="card-hover-meta" aria-hidden="true">
                     <span title="${Lang.t('messages')}">${Icon('message-square', 12)}${t.chatCount || 0}</span>
                     <span title="${Lang.t('internalNotesShort')}">${Icon('notebook-tabs', 12)}${t.noteCount || 0}</span>
-                    <span title="Anhänge">${Icon('paperclip', 12)}${attachmentCount}</span>
-                    <span title="${todoDone} von ${todoTotal} Teilaufgaben erledigt">${Icon('list-checks', 12)}${todoDone}/${todoTotal}</span>
+                    <span title="${Lang.t('attachments')}">${Icon('paperclip', 12)}${attachmentCount}</span>
+                    <span title="${Lang.format('subtasksDoneOf', { done: todoDone, total: todoTotal })}">${Icon('list-checks', 12)}${todoDone}/${todoTotal}</span>
                 </div>
             `;
             card.addEventListener('dragstart', (e) => {
@@ -809,7 +812,7 @@ export const AdminBoard = {
                     const draggedId = e.dataTransfer.getData('text/plain');
                     if (!draggedId || draggedId === t.id) return;
                     const linked = await AdminBoard.linkTicketToIncident(draggedId, t.id);
-                    if (linked) UI.toast('Ticket mit Großstörung verknüpft.');
+                    if (linked) UI.toast(Lang.t('ticketLinkedToIncident'));
                 });
             }
             card.addEventListener('click', () => AdminBoard.openModal(t.id));
@@ -819,7 +822,7 @@ export const AdminBoard = {
 
     // START OF MISSING FUNCTIONS
     archiveCurrent: () => {
-        UI.confirm('Ticket ins Archiv verschieben? Es wird aus dem Board entfernt.', async () => {
+        UI.confirm(Lang.t('confirmArchiveTicket'), async () => {
             const id = AdminBoard.currentTicketId;
             const tickets = await Store.getTickets();
             const t = tickets.find(x => x.id === id);
@@ -831,7 +834,7 @@ export const AdminBoard = {
                 await Store.addGlobalLog('Ticket archiviert', `Titel: ${t.title}`);
                 AdminBoard.closeModal();
                 await AdminBoard.render();
-                UI.toast('Ticket archiviert');
+                UI.toast(Lang.t('ticketArchivedToast'));
             }
         });
     },
@@ -845,20 +848,20 @@ export const AdminBoard = {
             modal.innerHTML = `
                 <div class="modal modal-xl">
                     <div class="modal-header">
-                        <h3>${Icon('bell', 18)} System-Protokoll</h3>
+                        <h3>${Icon('bell', 18)} ${Lang.t('systemLog')}</h3>
                         <div class="modal-actions">
-                            <input type="text" id="gl-search" placeholder="Benutzer, Aktion, Details, Datum oder Uhrzeit suchen...">
-                            <button class="btn-ghost btn-icon" id="btn-gl-print" title="Protokoll drucken" aria-label="Protokoll drucken">${Icon('printer', 16)}</button>
+                            <input type="text" id="gl-search" placeholder="${Lang.t('searchLogsPlaceholder')}">
+                            <button class="btn-ghost btn-icon" id="btn-gl-print" title="${Lang.t('printLog')}" aria-label="${Lang.t('printLog')}">${Icon('printer', 16)}</button>
                             <button class="btn-ghost btn-icon" id="global-logs-modal-close" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="log-datetime-filters">
-                        <label>Von ${UI.dateTimePickerMarkup('gl-from')}</label>
-                        <label>Bis ${UI.dateTimePickerMarkup('gl-to')}</label>
+                        <label>${Lang.t('from')} ${UI.dateTimePickerMarkup('gl-from')}</label>
+                        <label>${Lang.t('until')} ${UI.dateTimePickerMarkup('gl-to')}</label>
                     </div>
                     <div class="log-term-filters">
-                        <label><span>Enthält</span><input type="text" id="gl-include" placeholder="Begriffe, mit Komma trennen"></label>
-                        <label><span>Enthält nicht</span><input type="text" id="gl-exclude" placeholder="Begriffe, mit Komma trennen"></label>
+                        <label><span>${Lang.t('contains')}</span><input type="text" id="gl-include" placeholder="${Lang.t('termsCommaSeparated')}"></label>
+                        <label><span>${Lang.t('doesNotContain')}</span><input type="text" id="gl-exclude" placeholder="${Lang.t('termsCommaSeparated')}"></label>
                     </div>
                     <div class="modal-body flush" id="gl-body"></div>
                 </div>`;
@@ -903,7 +906,7 @@ export const AdminBoard = {
         const visibleLogs = await AdminBoard.getFilteredGlobalLogs();
         const settings = await Store.getSettings();
         const company = settings.companyConfig || {};
-        const companyLogo = company.logoUrl || settings.companyBranding?.logoDataUrl || '';
+        const companyLogo = company.logoUrl || settings.companyBrandingConfig?.logoDataUrl || '';
         const actor = await Store.currentUser();
         const rows = visibleLogs.map(l => `
             <tr>
@@ -912,17 +915,17 @@ export const AdminBoard = {
                 <td>${Utils.esc(l.action || '-')}</td>
                 <td>${Utils.esc(l.details || '')}</td>
             </tr>`).join('');
-        const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>System-Protokoll</title>
+        const html = `<!DOCTYPE html><html lang="${Lang.current}"><head><meta charset="UTF-8"><title>${Lang.t('systemLog')}</title>
             <link rel="stylesheet" href="/js/print.css"></head><body>
             <div class="print-head">
                 <div>
-                    <h1>System-Protokoll</h1>
-                    <div class="meta">Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))} &middot; ${visibleLogs.length} Einträge</div>
+                    <h1>${Lang.t('systemLog')}</h1>
+                    <div class="meta">${Lang.format('printedByOnEntries', { name: Utils.esc(actor?.name || actor?.username || '-'), date: Utils.esc(Utils.fmtDate(new Date().toISOString())), count: visibleLogs.length })}</div>
                 </div>
                 ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}
             </div>
-            <table><thead><tr><th>Datum/Uhrzeit</th><th>Benutzer</th><th>Aktion</th><th>Details</th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="4">Keine Einträge gefunden.</td></tr>'}</tbody></table>
+            <table><thead><tr><th>${Lang.t('dateTime')}</th><th>${Lang.t('user')}</th><th>${Lang.t('action')}</th><th>${Lang.t('details')}</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="4">${Lang.t('noEntriesFound')}</td></tr>`}</tbody></table>
             </body></html>`;
         UI.printHTML(html);
     },
@@ -952,7 +955,7 @@ export const AdminBoard = {
                 action: l.action,
                 details: l.details
             })).join('') :
-            '<div class="empty-state">Keine Einträge gefunden.</div>';
+            `<div class="empty-state">${Lang.t('noEntriesFound')}</div>`;
         if (window.lucide) lucide.createIcons();
     },
 
@@ -1058,10 +1061,10 @@ export const AdminBoard = {
                     <div class="user-manager-text">
                         <span class="user-manager-name">${Icon('users-round', 15)}${Utils.esc(g.name)}</span>
                         <span class="row-sub">${Utils.esc(g.description || '-')}</span>
-                        <span class="badge">${(g.members || []).length} ${(g.members || []).length === 1 ? 'Mitglied' : 'Mitglieder'}</span>
+                        <span class="badge">${(g.members || []).length} ${(g.members || []).length === 1 ? Lang.t('member') : Lang.t('members')}</span>
                     </div>
                     <div class="user-manager-actions">
-                        <button class="btn-ghost btn-icon members-g" title="Mitglieder anzeigen" aria-label="Mitglieder anzeigen">${Icon('list', 16)}</button>
+                        <button class="btn-ghost btn-icon members-g" title="${Lang.t('viewMembers')}" aria-label="${Lang.t('viewMembers')}">${Icon('list', 16)}</button>
                         <button class="btn-ghost btn-icon edit-g" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>
                         <button class="btn-ghost btn-icon btn-danger del-g" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
                     </div>
@@ -1069,8 +1072,8 @@ export const AdminBoard = {
                 el.querySelector('.members-g').onclick = () => AdminBoard.openGroupMembers(g);
                 el.querySelector('.edit-g').onclick = () => AdminBoard.openEditGroupModal(g);
                 el.querySelector('.del-g').onclick = () => {
-                    UI.confirm(`Gruppe "${g.name}" löschen?`, async () => {
-                        if (!(await Store.deleteGroup(g.id))) return UI.toast('Gruppe löschen fehlgeschlagen.');
+                    UI.confirm(Lang.format('confirmDeleteGroup', { name: g.name }), async () => {
+                        if (!(await Store.deleteGroup(g.id))) return UI.toast(Lang.t('groupDeleteFailed'));
                         Store._usersCache = null;
                         AdminBoard.renderUserManager('groups');
                     });
@@ -1097,8 +1100,8 @@ export const AdminBoard = {
                 `;
                 el.querySelector('.edit-c').onclick = () => AdminBoard.openEditCategoryModal(c);
                 el.querySelector('.del-c').onclick = () => {
-                    UI.confirm(`Kategorie "${c.name}" löschen?`, async () => {
-                        if (!(await Store.updateCategory(c.id, { archived: true }))) return UI.toast('Kategorie löschen fehlgeschlagen.');
+                    UI.confirm(Lang.format('confirmDeleteCategory', { name: c.name }), async () => {
+                        if (!(await Store.updateCategory(c.id, { archived: true }))) return UI.toast(Lang.t('categoryDeleteFailed'));
                         AdminBoard.renderUserManager('cats');
                     });
                 };
@@ -1122,7 +1125,7 @@ export const AdminBoard = {
 
         const archivedToggle = document.createElement('label');
         archivedToggle.className = 'check-row compact';
-        archivedToggle.innerHTML = `<input type="checkbox" ${AdminBoard.showArchivedUsers ? 'checked' : ''}><span>Archivierte anzeigen</span>`;
+        archivedToggle.innerHTML = `<input type="checkbox" ${AdminBoard.showArchivedUsers ? 'checked' : ''}><span>${Lang.t('showArchivedUsers')}</span>`;
         archivedToggle.querySelector('input').onchange = e => {
             AdminBoard.showArchivedUsers = e.target.checked;
             AdminBoard.renderUserManager(view);
@@ -1141,21 +1144,21 @@ export const AdminBoard = {
 
             el.innerHTML = `
                 <div class="user-manager-text">
-                    <span class="user-manager-name">${Utils.esc(u.username)}${u.twoFactorEnabled ? `<span class="badge badge-accent" title="2FA aktiv">${Icon('shield-check', 12)}2FA</span>` : ''}${u.accountLocked ? `<span class="badge badge-danger" title="Nach Fehlversuchen oder manuell gesperrt">${Icon('lock', 12)}Gesperrt</span>` : ''}${u.lockedUntil && u.lockedUntil > Date.now() ? `<span class="badge badge-danger" title="Vorübergehend nach Fehlversuchen gesperrt">${Icon('lock', 12)}Gesperrt bis ${new Date(u.lockedUntil).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</span>` : ''}${u.accountArchived ? `<span class="badge" title="Archiviert">${Icon('archive', 12)}Archiviert</span>` : ''}</span>
-                    <span class="row-sub">${Utils.esc(u.name || '-')} · ${Utils.esc(u.email || 'Keine E-Mail')}</span>
-                    ${u.accountValidUntil ? `<span class="badge ${validityExpired ? 'badge-danger' : ''}">${Icon(validityExpired ? 'lock' : 'calendar', 12)}${validityExpired ? 'Abgelaufen' : 'Gültig bis'} ${Utils.esc(u.accountValidUntil.split('-').reverse().join('.'))}</span>` : ''}
+                    <span class="user-manager-name">${Utils.esc(u.username)}${u.twoFactorEnabled ? `<span class="badge badge-accent" title="${Lang.t('twoFaActive')}">${Icon('shield-check', 12)}2FA</span>` : ''}${u.accountLocked ? `<span class="badge badge-danger" title="${Lang.t('lockedAfterFailedAttempts')}">${Icon('lock', 12)}${Lang.t('locked')}</span>` : ''}${u.lockedUntil && u.lockedUntil > Date.now() ? `<span class="badge badge-danger" title="${Lang.t('temporarilyLockedAfterFailedAttempts')}">${Icon('lock', 12)}${Lang.format('lockedUntilTime', { time: new Date(u.lockedUntil).toLocaleTimeString(Lang.current === 'en' ? 'en-US' : 'de-DE', { hour: '2-digit', minute: '2-digit' }) })}</span>` : ''}${u.accountArchived ? `<span class="badge" title="${Lang.t('archived')}">${Icon('archive', 12)}${Lang.t('archived')}</span>` : ''}</span>
+                    <span class="row-sub">${Utils.esc(u.name || '-')} · ${Utils.esc(u.email || Lang.t('noEmail'))}</span>
+                    ${u.accountValidUntil ? `<span class="badge ${validityExpired ? 'badge-danger' : ''}">${Icon(validityExpired ? 'lock' : 'calendar', 12)}${validityExpired ? Lang.t('expired') : Lang.t('validUntil')} ${Utils.esc(u.accountValidUntil.split('-').reverse().join('.'))}</span>` : ''}
                     <div class="group-chip-row">
                         <span class="badge">${Utils.esc(roleInfo)}</span>
                         ${userGroups.map(name => `<span class="group-chip">${Icon('users-round', 12)}${Utils.esc(name)}</span>`).join('')}
-                        ${u.absence?.active ? `<span class="badge badge-accent" title="${Utils.esc(AdminBoard.absenceInfoText(u.absence))}">${Icon('plane', 12)}Abwesend${u.absence.substitute ? ' → ' + Utils.esc((users.find(x => x.username === u.absence.substitute)?.name) || u.absence.substitute) : ' → zurück ins Team'} · ${Utils.esc(AdminBoard.absenceInfoText(u.absence).split(' · ')[0])}</span>` : ''}
-                        ${u.absence?.pending ? `<span class="badge" title="${Utils.esc(AdminBoard.absenceInfoText(u.absence))}">${Icon('plane', 12)}Geplant · ${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span>` : ''}
+                        ${u.absence?.active ? `<span class="badge badge-accent" title="${Utils.esc(AdminBoard.absenceInfoText(u.absence))}">${Icon('plane', 12)}${Lang.t('absent')}${u.absence.substitute ? ' → ' + Utils.esc((users.find(x => x.username === u.absence.substitute)?.name) || u.absence.substitute) : ' → ' + Lang.t('backToTeam')} · ${Utils.esc(AdminBoard.absenceInfoText(u.absence).split(' · ')[0])}</span>` : ''}
+                        ${u.absence?.pending ? `<span class="badge" title="${Utils.esc(AdminBoard.absenceInfoText(u.absence))}">${Icon('plane', 12)}${Lang.t('planned')} · ${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span>` : ''}
                     </div>
                 </div>
                 <div class="user-manager-actions">
-                    ${(isSuper || canManage2FA) && u.twoFactorEnabled ? `<button class="btn-ghost btn-sm reset-2fa" title="2FA zurücksetzen">${Icon('unlock-keyhole', 15)}2FA</button>` : ''}
-                    ${canManageUsers && u.username !== 'admin' && !u.accountArchived ? `<button class="btn-ghost btn-icon lock-u" title="${u.accountLocked ? 'Entsperren' : 'Sperren'}" aria-label="${u.accountLocked ? 'Entsperren' : 'Sperren'}">${Icon(u.accountLocked ? 'lock-open' : 'lock', 16)}</button>` : ''}
-                    ${canManageUsers && u.username !== 'admin' ? `<button class="btn-ghost btn-icon archive-u" title="${u.accountArchived ? 'Reaktivieren' : 'Archivieren'}" aria-label="${u.accountArchived ? 'Reaktivieren' : 'Archivieren'}">${Icon(u.accountArchived ? 'archive-restore' : 'archive', 16)}</button>` : ''}
-                    ${view === 'admins' && canManageUsers ? `<button class="btn-ghost btn-icon absence-btn" title="Abwesenheit &amp; Vertretung" aria-label="Abwesenheit und Vertretung">${Icon('plane', 16)}</button>` : ''}
+                    ${(isSuper || canManage2FA) && u.twoFactorEnabled ? `<button class="btn-ghost btn-sm reset-2fa" title="${Lang.t('reset2FA')}">${Icon('unlock-keyhole', 15)}2FA</button>` : ''}
+                    ${canManageUsers && u.username !== 'admin' && !u.accountArchived ? `<button class="btn-ghost btn-icon lock-u" title="${u.accountLocked ? Lang.t('unlock') : Lang.t('lock')}" aria-label="${u.accountLocked ? Lang.t('unlock') : Lang.t('lock')}">${Icon(u.accountLocked ? 'lock-open' : 'lock', 16)}</button>` : ''}
+                    ${canManageUsers && u.username !== 'admin' ? `<button class="btn-ghost btn-icon archive-u" title="${u.accountArchived ? Lang.t('reactivate') : Lang.t('archiveAction')}" aria-label="${u.accountArchived ? Lang.t('reactivate') : Lang.t('archiveAction')}">${Icon(u.accountArchived ? 'archive-restore' : 'archive', 16)}</button>` : ''}
+                    ${view === 'admins' && canManageUsers ? `<button class="btn-ghost btn-icon absence-btn" title="${Lang.t('absenceAndSubstitute')}" aria-label="${Lang.t('absenceAndSubstitute')}">${Icon('plane', 16)}</button>` : ''}
                     ${canManageUsers ? `<button class="btn-ghost btn-icon edit-u" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>` : ''}
                     ${canManageUsers && u.role !== 'superadmin' && u.username !== 'admin' ? `<button class="btn-ghost btn-icon btn-danger del-u" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>` : ''}
                 </div>
@@ -1173,14 +1176,14 @@ export const AdminBoard = {
                 if (!target.accountLocked) target.failedLogins = 0;
                 await Store.saveUsers(users);
                 await Store.addGlobalLog(target.accountLocked ? 'Konto gesperrt' : 'Konto entsperrt', `Benutzer: ${u.username}`);
-                UI.toast(target.accountLocked ? 'Konto gesperrt.' : 'Konto entsperrt.');
+                UI.toast(target.accountLocked ? Lang.t('accountLockedToast') : Lang.t('accountUnlockedToast'));
                 AdminBoard.renderUserManager(view);
             };
 
             const archiveBtn = el.querySelector('.archive-u');
             if (archiveBtn) archiveBtn.onclick = () => {
                 const restoring = !!u.accountArchived;
-                UI.confirm(restoring ? `${u.username} reaktivieren?` : `${u.username} archivieren? Das Konto kann sich dann nicht mehr anmelden.`, async () => {
+                UI.confirm(restoring ? Lang.format('confirmReactivateAccount', { username: u.username }) : Lang.format('confirmArchiveAccount', { username: u.username }), async () => {
                     const users = await Store.getUsers();
                     const target = users.find(x => x.id === u.id);
                     if (!target) return;
@@ -1190,23 +1193,23 @@ export const AdminBoard = {
                     await Store.saveUsers(users);
                     await AdminBoard.applyArchiveConsequences(target, restoring);
                     await Store.addGlobalLog(restoring ? 'Konto reaktiviert' : 'Konto archiviert', `Benutzer: ${u.username}`);
-                    UI.toast(restoring ? 'Konto reaktiviert.' : 'Konto archiviert.');
+                    UI.toast(restoring ? Lang.t('accountReactivatedToast') : Lang.t('accountArchivedToast2'));
                     AdminBoard.renderUserManager(view);
                 });
             };
 
             if (el.querySelector('.reset-2fa')) {
                 el.querySelector('.reset-2fa').onclick = () => {
-                    UI.confirm(`2FA für ${u.username} zurücksetzen?`, async () => {
+                    UI.confirm(Lang.format('confirmReset2FA', { username: u.username }), async () => {
                         const res = await fetch(`/api/v2/users/${encodeURIComponent(u.id)}/mfa-reset`, {
                             method: 'POST',
                             credentials: 'same-origin'
                         }).catch(() => null);
                         if (res && res.ok) {
-                            UI.toast('2FA zurückgesetzt');
+                            UI.toast(Lang.t('mfaResetToast'));
                             AdminBoard.renderUserManager(view);
                         } else {
-                            UI.toast('2FA-Zurücksetzen fehlgeschlagen.');
+                            UI.toast(Lang.t('mfaResetFailed'));
                         }
                     });
                 };
@@ -1221,18 +1224,18 @@ export const AdminBoard = {
                 const content = confirmModal.querySelector('.modal-body');
                 const footer = confirmModal.querySelector('.modal-footer');
 
-                title.textContent = 'Benutzer löschen';
+                title.textContent = Lang.t('deleteUser');
                 content.innerHTML = `
-                    <p>Möchtest du <strong>${Utils.esc(u.username)}</strong> wirklich löschen? Was soll mit den Tickets dieses Benutzers geschehen?</p>
+                    <p>${Lang.format('confirmDeleteUserBody', { username: Utils.esc(u.username) })}</p>
                     <div class="checkbox-list">
-                        <label class="check-row"><input type="radio" name="del-opt" value="archive" checked><span>Tickets archivieren (empfohlen)</span></label>
-                        <label class="check-row"><input type="radio" name="del-opt" value="delete"><span>Tickets unwiderruflich löschen</span></label>
+                        <label class="check-row"><input type="radio" name="del-opt" value="archive" checked><span>${Lang.t('archiveTicketsRecommended')}</span></label>
+                        <label class="check-row"><input type="radio" name="del-opt" value="delete"><span>${Lang.t('deleteTicketsIrrevocably')}</span></label>
                     </div>
                 `;
 
                 footer.innerHTML = `
-                    <button class="btn-secondary close-m">Abbrechen</button>
-                    <button class="btn-danger" id="btn-perform-del">${Icon('trash-2', 16)}Löschen</button>
+                    <button class="btn-secondary close-m">${Lang.t('cancel')}</button>
+                    <button class="btn-danger" id="btn-perform-del">${Icon('trash-2', 16)}${Lang.t('delete')}</button>
                 `;
 
                 confirmModal.querySelectorAll('.close-m').forEach(b => b.onclick = () => confirmModal.classList.remove('open'));
@@ -1243,10 +1246,10 @@ export const AdminBoard = {
                     const res = await fetch(`/api/v2/users/${encodeURIComponent(u.id)}?tickets=${opt}`, {
                         method: 'DELETE', credentials: 'same-origin'
                     }).catch(() => null);
-                    if (!res || !res.ok) return UI.toast('Benutzer löschen fehlgeschlagen.');
+                    if (!res || !res.ok) return UI.toast(Lang.t('userDeleteFailed'));
                     Store._usersCache = null;
                     Store._ticketsCache = null;
-                    UI.toast(`Benutzer ${u.username} gelöscht.`);
+                    UI.toast(Lang.format('userDeletedToast', { username: u.username }));
                     confirmModal.classList.remove('open');
                     AdminBoard.renderUserManager(view);
                 };
@@ -1274,21 +1277,21 @@ export const AdminBoard = {
         title.textContent = category ? 'Kategorie bearbeiten' : 'Neue Kategorie';
         content.innerHTML = `
             <div class="field">
-                <label>Name</label>
-                <input type="text" id="g-input" value="${Utils.esc(category?.name || '')}" placeholder="z. B. Technik">
+                <label>${Lang.t('name')}</label>
+                <input type="text" id="g-input" value="${Utils.esc(category?.name || '')}" placeholder="${Lang.t('egTechnik')}">
             </div>
             <div class="field">
-                <label>Automatische Zuweisung an Gruppe</label>
+                <label>${Lang.t('autoAssignToGroup')}</label>
                 <div id="cat-auto-group"></div>
             </div>
             <div class="field field-wide">
-                <label>Eigene Felder für diese Kategorie</label>
-                <p class="hint">Zusätzliche Angaben, die beim Erstellen eines Tickets in dieser Kategorie abgefragt werden, z. B. Standort, Raum, Gerätenummer oder Kostenstelle.</p>
+                <label>${Lang.t('customFieldsForCategory')}</label>
+                <p class="hint">${Lang.t('customFieldsHint')}</p>
                 <div id="cat-custom-fields" class="custom-fields-editor"></div>
-                <button type="button" class="btn-secondary btn-sm" id="cat-add-field">${Icon('plus', 15)}Feld hinzufügen</button>
+                <button type="button" class="btn-secondary btn-sm" id="cat-add-field">${Icon('plus', 15)}${Lang.t('addField')}</button>
             </div>
         `;
-        const autoGroupPicker = UI.createMultiSelect(q('#cat-auto-group'), groups.map(g => ({ value: g.id, label: g.name })), category?.autoAssignGroupId || '', null, { single: true, emptyLabel: 'Keine' });
+        const autoGroupPicker = UI.createMultiSelect(q('#cat-auto-group'), groups.map(g => ({ value: g.id, label: g.name })), category?.autoAssignGroupId || '', null, { single: true, emptyLabel: Lang.t('none') });
 
         const existingFields = category?.customFields ? category.customFields.slice() : [];
         const fieldsContainer = q('#cat-custom-fields');
@@ -1308,9 +1311,9 @@ export const AdminBoard = {
             const list = row.querySelector('.cf-options-list');
             list.innerHTML = (f.options || []).map((opt, oi) => `
                 <div class="cf-option-row" data-opt-index="${oi}">
-                    <input type="text" class="cf-option-input" placeholder="Option" value="${Utils.esc(opt)}">
-                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-option-remove" title="Option entfernen" aria-label="Option entfernen">${Icon('x', 13)}</button>
-                </div>`).join('') || '<div class="hint">Noch keine Optionen.</div>';
+                    <input type="text" class="cf-option-input" placeholder="${Lang.t('optionPlaceholder')}" value="${Utils.esc(opt)}">
+                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-option-remove" title="${Lang.t('removeOption')}" aria-label="${Lang.t('removeOption')}">${Icon('x', 13)}</button>
+                </div>`).join('') || `<div class="hint">${Lang.t('noOptionsYet')}</div>`;
             list.querySelectorAll('.cf-option-input').forEach((input, oi) => {
                 input.oninput = () => { f.options[oi] = input.value; };
             });
@@ -1322,26 +1325,26 @@ export const AdminBoard = {
             fieldsContainer.innerHTML = existingFields.length ? existingFields.map((f, i) => `
                 <div class="custom-field-row" data-index="${i}">
                     <div class="custom-field-row-main">
-                        <input type="text" class="cf-label" placeholder="Feldname (z. B. Standort)" value="${Utils.esc(f.label || '')}">
+                        <input type="text" class="cf-label" placeholder="${Lang.t('fieldNamePlaceholder')}" value="${Utils.esc(f.label || '')}">
                         <select class="cf-type">
-                            <option value="text" ${f.type === 'text' ? 'selected' : ''}>Text</option>
-                            <option value="number" ${f.type === 'number' ? 'selected' : ''}>Zahl</option>
-                            <option value="select" ${f.type === 'select' ? 'selected' : ''}>Auswahl</option>
+                            <option value="text" ${f.type === 'text' ? 'selected' : ''}>${Lang.t('fieldTypeText')}</option>
+                            <option value="number" ${f.type === 'number' ? 'selected' : ''}>${Lang.t('fieldTypeNumber')}</option>
+                            <option value="select" ${f.type === 'select' ? 'selected' : ''}>${Lang.t('fieldTypeSelect')}</option>
                         </select>
-                        <label class="check-row compact"><input type="checkbox" class="cf-required" ${f.required ? 'checked' : ''}>Pflicht</label>
-                        <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-remove" title="Feld entfernen" aria-label="Feld entfernen">${Icon('x', 14)}</button>
+                        <label class="check-row compact"><input type="checkbox" class="cf-required" ${f.required ? 'checked' : ''}>${Lang.t('required')}</label>
+                        <button type="button" class="btn-ghost btn-icon btn-xs btn-danger cf-remove" title="${Lang.t('removeField')}" aria-label="${Lang.t('removeField')}">${Icon('x', 14)}</button>
                     </div>
                     <div class="cf-options-editor" ${f.type === 'select' ? '' : 'hidden'}>
                         <div class="cf-options-list"></div>
-                        <button type="button" class="btn-ghost btn-sm cf-add-option">${Icon('plus', 13)}Option hinzufügen</button>
+                        <button type="button" class="btn-ghost btn-sm cf-add-option">${Icon('plus', 13)}${Lang.t('addOption')}</button>
                     </div>
-                </div>`).join('') : '<div class="empty-state compact">Keine eigenen Felder definiert.</div>';
+                </div>`).join('') : `<div class="empty-state compact">${Lang.t('noCustomFieldsDefined')}</div>`;
             fieldsContainer.querySelectorAll('.custom-field-row').forEach(row => {
                 const i = Number(row.dataset.index);
                 const f = existingFields[i];
                 renderOptionsList(row, f, i);
                 row.querySelector('.cf-type').onchange = (e) => {
-                    row.querySelector('.cf-options-editor').style.display = e.target.value === 'select' ? '' : 'none';
+                    row.querySelector('.cf-options-editor').hidden = e.target.value !== 'select';
                 };
                 row.querySelector('.cf-add-option').onclick = () => {
                     syncFieldsFromDOM();
@@ -1384,25 +1387,25 @@ export const AdminBoard = {
             const ok = category
                 ? await Store.updateCategory(category.id, { name: val, autoAssignGroupId, customFields: collectedFields })
                 : await Store.createCategory({ name: val, autoAssignGroupId, customFields: collectedFields });
-            if (!ok) return UI.toast('Kategorie speichern fehlgeschlagen.');
+            if (!ok) return UI.toast(Lang.t('categorySaveFailed'));
 
             modal.classList.remove('open');
             AdminBoard.renderUserManager('cats');
-            UI.toast(category ? 'Kategorie bearbeitet' : 'Kategorie erstellt');
+            UI.toast(category ? Lang.t('categoryEdited') : Lang.t('categoryCreated'));
         };
     },
 
     openGroupMembers: async (group) => {
         const modal = AdminBoard.openDialog({
             id: 'group-members-modal',
-            title: `Mitglieder · ${group.name}`,
+            title: Lang.format('membersOfGroup', { name: group.name }),
             icon: 'users-round',
             size: 'sm',
             headerButtons: [
-                { id: 'gm-add', icon: 'user-plus', title: 'Mitglied hinzufügen' },
-                { id: 'gm-print', icon: 'printer', title: 'Drucken' }
+                { id: 'gm-add', icon: 'user-plus', title: Lang.t('addMember') },
+                { id: 'gm-print', icon: 'printer', title: Lang.t('print') }
             ],
-            body: `<input type="search" id="gm-search" class="section-search" placeholder="Mitglied suchen...">
+            body: `<input type="search" id="gm-search" class="section-search" placeholder="${Lang.t('searchMemberPlaceholder')}">
                    <div id="gm-list" class="mt-3"></div>`
         });
         const render = async () => {
@@ -1415,8 +1418,8 @@ export const AdminBoard = {
             modal.querySelector('#gm-list').innerHTML = members.length ? members.map(u => `
                 <div class="absence-overview-row" data-username="${Utils.esc(u.username)}">
                     <div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(u.username)}${u.email ? ' · ' + Utils.esc(u.email) : ''} · ${Utils.esc(u.role)}</span></div>
-                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger gm-remove" title="Aus Gruppe entfernen" aria-label="Aus Gruppe entfernen">${Icon('x', 14)}</button>
-                </div>`).join('') : '<div class="empty-state compact">Keine Mitglieder.</div>';
+                    <button type="button" class="btn-ghost btn-icon btn-xs btn-danger gm-remove" title="${Lang.t('removeFromGroup')}" aria-label="${Lang.t('removeFromGroup')}">${Icon('x', 14)}</button>
+                </div>`).join('') : `<div class="empty-state compact">${Lang.t('noMembers')}</div>`;
             modal.querySelectorAll('.gm-remove').forEach(btn => btn.onclick = async () => {
                 const username = btn.closest('[data-username]').dataset.username;
                 await Store.setGroupMembers([username], null);
@@ -1429,16 +1432,16 @@ export const AdminBoard = {
         modal.querySelector('#gm-add').onclick = async () => {
             const users = await Store.getUsers();
             const candidates = users.filter(u => !(group.members || []).includes(u.username) && !u.accountArchived);
-            if (!candidates.length) return UI.toast('Alle Benutzer sind bereits Mitglied.');
+            if (!candidates.length) return UI.toast(Lang.t('allUsersAlreadyMembers'));
             const addModal = AdminBoard.openDialog({
                 id: 'group-members-add-modal',
-                title: 'Mitglieder hinzufügen',
+                title: Lang.t('addMembers'),
                 icon: 'user-plus',
                 size: 'sm',
-                body: `<div class="field"><label>Personen auswählen</label><div id="gma-picker"></div></div>`,
+                body: `<div class="field"><label>${Lang.t('selectPeople')}</label><div id="gma-picker"></div></div>`,
                 onSave: async (m) => {
                     const chosen = picker.getValue();
-                    if (!chosen.length) return UI.toast('Bitte mindestens eine Person wählen.');
+                    if (!chosen.length) return UI.toast(Lang.t('selectAtLeastOnePerson'));
                     await Store.setGroupMembers(chosen, group.id);
                     m.remove();
                     await render();
@@ -1450,16 +1453,16 @@ export const AdminBoard = {
         modal.querySelector('#gm-print').onclick = async () => {
             const settings = await Store.getSettings();
             const company = settings.companyConfig || {};
-            const companyLogo = company.logoUrl || settings.companyBranding?.logoDataUrl || '';
+            const companyLogo = company.logoUrl || settings.companyBrandingConfig?.logoDataUrl || '';
             const actor = await Store.currentUser();
             const users = await Store.getUsers();
             const members = users.filter(u => (group.members || []).includes(u.username));
-            UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Mitglieder · ${Utils.esc(group.name)}</title>
+            UI.printHTML(`<!DOCTYPE html><html lang="${Lang.current}"><head><meta charset="UTF-8"><title>${Lang.format('membersOfGroup', { name: Utils.esc(group.name) })}</title>
                 <link rel="stylesheet" href="/js/print.css"></head>
-                <body><div class="print-head"><div><h1>${Utils.esc(company.name || 'Support Portal')} · Gruppe ${Utils.esc(group.name)}</h1>
-                <div class="meta">${members.length} Mitglieder &middot; Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div></div>
+                <body><div class="print-head"><div><h1>${Lang.format('companyGroupHeading', { company: Utils.esc(company.name || 'Support Portal'), group: Utils.esc(group.name) })}</h1>
+                <div class="meta">${Lang.format('membersPrintedByOn', { count: members.length, name: Utils.esc(actor?.name || actor?.username || '-'), date: Utils.esc(Utils.fmtDate(new Date().toISOString())) })}</div></div>
                 ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}</div>
-                <table><thead><tr><th>Name</th><th>Benutzername</th><th>E-Mail</th><th>Rolle</th></tr></thead><tbody>
+                <table><thead><tr><th>${Lang.t('name')}</th><th>${Lang.t('username')}</th><th>${Lang.t('email')}</th><th>${Lang.t('role')}</th></tr></thead><tbody>
                 ${members.map(u => `<tr><td>${Utils.esc(u.name || '-')}</td><td>${Utils.esc(u.username)}</td><td>${Utils.esc(u.email || '-')}</td><td>${Utils.esc(u.role)}</td></tr>`).join('')}
                 </tbody></table></body></html>`);
         };
@@ -1476,12 +1479,12 @@ export const AdminBoard = {
         const users = await Store.getUsers();
         const members = group?.members || [];
 
-        title.textContent = group ? `Gruppe ${group.name} bearbeiten` : 'Neue Gruppe';
+        title.textContent = group ? Lang.format('editGroupName', { name: group.name }) : Lang.t('newGroup');
         content.innerHTML = `
-            <div class="field"><label>Name</label><input id="ge-name" type="text" value="${group?.name || ''}" placeholder="z.B. Verwaltung"></div>
+            <div class="field"><label>${Lang.t('name')}</label><input id="ge-name" type="text" value="${group?.name || ''}" placeholder="${Lang.t('egVerwaltung')}"></div>
             <div class="field">
-                <label>Mitglieder</label>
-                <p class="hint">Eine Person gehört höchstens einer Gruppe an.</p>
+                <label>${Lang.t('members')}</label>
+                <p class="hint">${Lang.t('onePersonOneGroupHint')}</p>
                 <div class="checkbox-list">
                     ${users.map(u => `
                         <label class="check-row">
@@ -1496,7 +1499,7 @@ export const AdminBoard = {
         confirmBtn.onclick = async () => {
             const name = q('#ge-name').value.trim();
             if (!name) {
-                UI.toast('Bitte Gruppennamen angeben');
+                UI.toast(Lang.t('enterGroupName'));
                 return;
             }
             const selectedMembers = qa('#generic-modal .checkbox-list input:checked').map(x => x.value);
@@ -1504,7 +1507,7 @@ export const AdminBoard = {
             let groupId = group?.id;
             if (group) {
                 if (name !== group.name && !(await Store.renameGroup(group.id, name))) {
-                    return UI.toast('Gruppe umbenennen fehlgeschlagen.');
+                    return UI.toast(Lang.t('groupRenameFailed'));
                 }
             } else {
                 const createRes = await fetch('/api/v2/groups', {
@@ -1512,7 +1515,7 @@ export const AdminBoard = {
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({ name })
                 }).catch(() => null);
-                if (!createRes || !createRes.ok) return UI.toast('Gruppe erstellen fehlgeschlagen.');
+                if (!createRes || !createRes.ok) return UI.toast(Lang.t('groupCreateFailed'));
                 groupId = (await createRes.json()).id;
             }
 
@@ -1522,7 +1525,7 @@ export const AdminBoard = {
 
             modal.classList.remove('open');
             AdminBoard.renderUserManager('groups');
-            UI.toast(group ? 'Gruppe gespeichert' : 'Gruppe erstellt');
+            UI.toast(group ? Lang.t('groupSavedToast') : Lang.t('groupCreatedToast'));
         };
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
@@ -1537,67 +1540,67 @@ export const AdminBoard = {
             editModal.innerHTML = `
                 <div class="modal modal-lg">
                     <div class="modal-header">
-                        <h3>Benutzer bearbeiten</h3>
+                        <h3>${Lang.t('editUser')}</h3>
                         <div class="modal-actions">
-                            <button class="btn-ghost btn-icon" id="ue-save-head" title="Speichern" aria-label="Speichern">${Icon('save', 16)}</button>
+                            <button class="btn-ghost btn-icon" id="ue-save-head" title="${Lang.t('save')}" aria-label="${Lang.t('save')}">${Icon('save', 16)}</button>
                             <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="modal-body form-grid">
-                        <div class="field"><label>Benutzername</label><input id="ue-user" type="text"></div>
-                        <div class="field"><label>Name</label><input id="ue-name" type="text"></div>
-                        <div class="field"><label>E-Mail</label><input id="ue-email" type="email"></div>
+                        <div class="field"><label>${Lang.t('username')}</label><input id="ue-user" type="text"></div>
+                        <div class="field"><label>${Lang.t('name')}</label><input id="ue-name" type="text"></div>
+                        <div class="field"><label>${Lang.t('email')}</label><input id="ue-email" type="email"></div>
                         <div class="field field-wide" id="ue-similar-hint" hidden></div>
-                        <div class="field"><label>Passwort (leer = unverändert)</label><input id="ue-pass" type="password"></div>
-                        <div class="field field-wide" id="ue-validity-box"><label for="ue-valid-until">Gültig bis einschließlich (optional)</label>${UI.dateFieldMarkup('ue-valid-until')}</div>
+                        <div class="field"><label>${Lang.t('passwordLeaveEmptyUnchanged')}</label><input id="ue-pass" type="password"></div>
+                        <div class="field field-wide" id="ue-validity-box"><label for="ue-valid-until">${Lang.t('validUntilInclusiveOptional')}</label>${UI.dateFieldMarkup('ue-valid-until')}</div>
                         <div class="field field-wide" id="ue-contact-box">
-                            <label>Kontaktdaten</label>
+                            <label>${Lang.t('contactData')}</label>
                             <div class="perm-grid">
-                                <div class="field"><label>Telefon</label><input id="ue-phone" type="text"></div>
-                                <div class="field"><label>Mobil</label><input id="ue-mobile" type="text"></div>
-                                <div class="field"><label>Position / Jobtitel</label><input id="ue-job-title" type="text"></div>
-                                <div class="field"><label>Standort</label><input id="ue-office-location" type="text"></div>
+                                <div class="field"><label>${Lang.t('phone')}</label><input id="ue-phone" type="text"></div>
+                                <div class="field"><label>${Lang.t('mobile')}</label><input id="ue-mobile" type="text"></div>
+                                <div class="field"><label>${Lang.t('jobTitle')}</label><input id="ue-job-title" type="text"></div>
+                                <div class="field"><label>${Lang.t('location')}</label><input id="ue-office-location" type="text"></div>
                             </div>
                         </div>
-                        <div class="field field-wide" id="ue-role-box"><label>Rolle</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
+                        <div class="field field-wide" id="ue-role-box"><label>${Lang.t('role')}</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
                         <div class="field field-wide" id="ue-ldap-box" hidden>
-                            <label class="check-row"><input type="checkbox" id="ue-ldap-enabled"><span>LDAP-Login für dieses Konto erlauben</span></label>
-                            <div class="hint">LDAP ist eine Ergänzung zum lokalen Passwort (Fallback, falls das lokale Passwort nicht passt). Standardmäßig für jedes Konto deaktiviert; nur Superadmins können das freischalten. Für Superadmin-Konten selbst immer deaktiviert.</div>
+                            <label class="check-row"><input type="checkbox" id="ue-ldap-enabled"><span>${Lang.t('allowLdapLoginForAccount')}</span></label>
+                            <div class="hint">${Lang.t('ldapHintText')}</div>
                         </div>
                         <div class="field field-wide" id="ue-groups-box">
-                            <label>Gruppe</label>
+                            <label>${Lang.t('group')}</label>
                             <div id="ue-groups-list"></div>
                         </div>
                         <div class="field field-wide">
-                            <label>Vorgesetzte Person</label>
+                            <label>${Lang.t('supervisor')}</label>
                             <div id="ue-supervisor"></div>
                         </div>
                         <div class="field field-wide" id="ue-man-box" hidden>
-                            <label>Verwaltung</label>
+                            <label>${Lang.t('administration')}</label>
                             <div class="perm-grid">
-                                <label class="check-row"><input type="checkbox" id="ue-can-manage-req"><span>Kontoanfragen verwalten</span></label>
-                                <label class="check-row"><input type="checkbox" id="ue-can-manage-users"><span>Benutzerverwaltung (nur User)</span></label>
-                                <label class="check-row"><input type="checkbox" id="ue-can-view-logs"><span>Systemlogs anzeigen</span></label>
-                                <label class="check-row"><input type="checkbox" id="ue-can-manage-2fa"><span>2FA von Benutzern zurücksetzen</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-manage-req"><span>${Lang.t('manageAccountRequests')}</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-manage-users"><span>${Lang.t('userManagementUsersOnly')}</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-view-logs"><span>${Lang.t('viewSystemLogs')}</span></label>
+                                <label class="check-row"><input type="checkbox" id="ue-can-manage-2fa"><span>${Lang.t('resetUsersMfaPermission')}</span></label>
                             </div>
-                            <label>Zusatzfunktionen</label>
+                            <label>${Lang.t('additionalFeatures')}</label>
                             <div class="perm-grid">
-                                <label class="check-row"><input type="checkbox" data-perm="textBlocks"><span>Textbausteine verwalten</span></label>
-                                <label class="check-row"><input type="checkbox" data-perm="reports"><span>Auswertung ansehen</span></label>
-                                <label class="check-row"><input type="checkbox" data-perm="approvals"><span>Genehmigungen entscheiden</span></label>
-                                <label class="check-row"><input type="checkbox" data-perm="recurring"><span>Wiederkehrende Tickets verwalten</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="textBlocks"><span>${Lang.t('manageTextBlocks')}</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="reports"><span>${Lang.t('viewReports')}</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="approvals"><span>${Lang.t('decideApprovals')}</span></label>
+                                <label class="check-row"><input type="checkbox" data-perm="recurring"><span>${Lang.t('manageRecurringTickets')}</span></label>
                             </div>
-                            <label for="ue-kb">Wissensdatenbank</label>
+                            <label for="ue-kb">${Lang.t('knowledgeBase')}</label>
                             <select id="ue-kb">
-                                <option value="none">Kein Zugriff</option>
-                                <option value="read">Nur lesen</option>
-                                <option value="edit">Lesen und bearbeiten</option>
+                                <option value="none">${Lang.t('noAccess')}</option>
+                                <option value="read">${Lang.t('readOnly')}</option>
+                                <option value="edit">${Lang.t('readAndEdit')}</option>
                             </select>
                         </div>
                     </div>
                     <div class="modal-footer action-footer">
-                        <button class="btn-secondary close-m footer-cancel">Abbrechen</button>
-                        <button class="btn-primary" id="ue-save">Speichern</button>
+                        <button class="btn-secondary close-m footer-cancel">${Lang.t('cancel')}</button>
+                        <button class="btn-primary" id="ue-save">${Lang.t('save')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(editModal);
@@ -1612,7 +1615,7 @@ export const AdminBoard = {
         const isSuper = currentUser && currentUser.role === 'superadmin';
         const canSetValidity = isSuper || !!currentUser?.canManageUsers;
         editModal._validityPicker?.destroy();
-        q('#ue-validity-box').innerHTML = `<label for="ue-valid-until">Gültig bis einschließlich (optional)</label>${UI.dateFieldMarkup('ue-valid-until')}`;
+        q('#ue-validity-box').innerHTML = `<label for="ue-valid-until">${Lang.t('validUntilInclusiveOptional')}</label>${UI.dateFieldMarkup('ue-valid-until')}`;
         q('#ue-validity-box').hidden = !canSetValidity;
         const validUntil = user?.accountValidUntil || null;
         q('#ue-valid-until').value = validUntil ? validUntil.split('-').reverse().join('.') : '';
@@ -1624,6 +1627,7 @@ export const AdminBoard = {
         q('#ue-name').value = isNew ? '' : (user.name || '');
         q('#ue-email').value = isNew ? '' : (user.email || '');
         q('#ue-pass').value = '';
+        UI.bindPasswordRequirements(q('#ue-pass'));
         q('#ue-phone').value = isNew ? '' : (user.phone || '');
         q('#ue-mobile').value = isNew ? '' : (user.mobile || '');
         q('#ue-job-title').value = isNew ? '' : (user.jobTitle || '');
@@ -1652,8 +1656,8 @@ export const AdminBoard = {
                     hintBox.hidden = false;
                     hintBox.className = `field field-wide callout ${result.exact ? 'callout-danger' : ''}`;
                     hintBox.innerHTML = result.exact
-                        ? `<strong>Dieser Benutzer existiert bereits:</strong> ${result.similar.map(describe).join(', ')}. Anlegen ist blockiert.`
-                        : `<strong>Ähnliche(r) Benutzer gefunden:</strong> ${result.similar.map(describe).join(', ')}. Trotzdem fortfahren ist möglich.`;
+                        ? Lang.format('userAlreadyExistsBlocked', { list: result.similar.map(describe).join(', ') })
+                        : Lang.format('similarUsersFound', { list: result.similar.map(describe).join(', ') });
                 }, 350);
             };
             q('#ue-name').oninput = runSimilarCheck;
@@ -1674,7 +1678,7 @@ export const AdminBoard = {
 
         // Zusatzrechte: nur Superadmin darf sie vergeben, nur bei Rolle "admin" sinnvoll.
         const manBox = q('#ue-man-box');
-        const updateManBoxVisibility = () => { if (manBox) manBox.style.display = (isSuper && q('#ue-role').value === 'admin') ? '' : 'none'; };
+        const updateManBoxVisibility = () => { if (manBox) manBox.hidden = !(isSuper && q('#ue-role').value === 'admin'); };
         q('#ue-can-manage-req').checked = user ? !!user.canManageRequests : false;
         q('#ue-can-manage-users').checked = user ? !!user.canManageUsers : false;
         q('#ue-can-view-logs').checked = user ? !!user.canViewLogs : false;
@@ -1685,7 +1689,7 @@ export const AdminBoard = {
         // Security-Audit N7: LDAP-Login ist Opt-in je Konto und nur fuer Nicht-Superadmin-Ziele
         // relevant (Superadmins sind serverseitig ohnehin hart ausgeschlossen).
         const ldapBox = q('#ue-ldap-box');
-        const updateLdapBoxVisibility = () => { if (ldapBox) ldapBox.style.display = (isSuper && q('#ue-role').value !== 'superadmin') ? '' : 'none'; };
+        const updateLdapBoxVisibility = () => { if (ldapBox) ldapBox.hidden = !(isSuper && q('#ue-role').value !== 'superadmin'); };
         q('#ue-ldap-enabled').checked = user ? !!user.ldapLoginEnabled : false;
 
         roleSel.onchange = () => { updateManBoxVisibility(); updateLdapBoxVisibility(); };
@@ -1697,7 +1701,7 @@ export const AdminBoard = {
         let groupPicker = null;
         if (groupList) {
             const groups = await Store.getGroups();
-            groupPicker = UI.createMultiSelect(groupList, groups.map(g => ({ value: g.id, label: g.name })), user?.department_group_id || '', null, { single: true, emptyLabel: 'Keine' });
+            groupPicker = UI.createMultiSelect(groupList, groups.map(g => ({ value: g.id, label: g.name })), user?.department_group_id || '', null, { single: true, emptyLabel: Lang.t('none') });
         }
         // Vorgesetzte Person -- genutzt vom automatischen Genehmigungsworkflow (Systemeinstellungen).
         const supervisorBox = q('#ue-supervisor');
@@ -1705,10 +1709,10 @@ export const AdminBoard = {
         if (supervisorBox) {
             const allUsers = await Store.getUsers();
             const choices = allUsers.filter(u => u.id !== user?.id && !u.accountArchived).map(u => ({ value: u.id, label: u.name || u.username }));
-            supervisorPicker = UI.createMultiSelect(supervisorBox, choices, user?.supervisorUserId || '', null, { single: true, emptyLabel: 'Keine' });
+            supervisorPicker = UI.createMultiSelect(supervisorBox, choices, user?.supervisorUserId || '', null, { single: true, emptyLabel: Lang.t('none') });
         }
 
-        editModal.querySelector('h3').textContent = isNew ? 'Neuen Benutzer anlegen' : `Benutzer ${user.username} bearbeiten`;
+        editModal.querySelector('h3').textContent = isNew ? Lang.t('createNewUser') : Lang.format('editUserName', { username: user.username });
         editModal.classList.add('open');
 
         q('#ue-save').onclick = async () => {
@@ -1723,7 +1727,7 @@ export const AdminBoard = {
             const validityText = q('#ue-valid-until').value.trim();
             const validityParts = validityText.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
             if (canSetValidity && validityText && (!validityParts || !Number.isFinite(Utils.parseGermanDateTime(validityText, '12:00')))) {
-                return UI.toast('Gültigkeitsdatum bitte als dd.mm.jjjj eingeben.');
+                return UI.toast(Lang.t('validityDateFormatHint'));
             }
             const validityVal = validityParts ? `${validityParts[3]}-${validityParts[2]}-${validityParts[1]}` : null;
             const rVal = q('#ue-role').value;
@@ -1740,15 +1744,15 @@ export const AdminBoard = {
             const ldapLoginEnabledVal = (isSuper && rVal !== 'superadmin') ? q('#ue-ldap-enabled').checked : false;
 
             if (!uVal) {
-                UI.toast('Benutzername fehlt');
+                UI.toast(Lang.t('usernameMissing'));
                 return;
             }
             if (!eVal || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eVal)) {
-                UI.toast('Gültige E-Mail-Adresse fehlt');
+                UI.toast(Lang.t('validEmailMissing'));
                 return;
             }
             if (isNew && hasExactDuplicate) {
-                UI.toast('Dieser Benutzer existiert bereits -- Anlegen abgebrochen.');
+                UI.toast(Lang.t('userExistsCreateAborted'));
                 return;
             }
 
@@ -1756,15 +1760,15 @@ export const AdminBoard = {
 
             if (isNew) {
                 if (users.find(x => x.username === uVal)) {
-                    UI.toast('Benutzer existiert schon');
+                    UI.toast(Lang.t('userAlreadyExists'));
                     return;
                 }
                 if (!pVal) {
-                    UI.toast('Passwort fehlt');
+                    UI.toast(Lang.t('passwordMissing'));
                     return;
                 }
                 if (pVal.length < 14) {
-                    UI.toast('Passwort muss mindestens 14 Zeichen lang sein.');
+                    UI.toast(Lang.t('passwordMinLength'));
                     return;
                 }
                 users.push({
@@ -1811,16 +1815,16 @@ export const AdminBoard = {
             const ok = await Store.saveUsers(users);
             if (!ok) {
                 const errText = Store.lastError || '';
-                const friendly = errText.includes('email_taken') ? 'Diese E-Mail-Adresse wird bereits von einem anderen Konto verwendet.'
-                    : errText.includes('last_superadmin') ? 'Der letzte dauerhaft verfügbare Superadmin darf nicht befristet oder gesperrt werden.'
-                    : errText.includes('username_taken') ? 'Dieser Benutzername ist bereits vergeben.'
-                    : 'Speichern fehlgeschlagen -- bitte Eingaben prüfen (z.B. Passwort mind. 14 Zeichen, gültige E-Mail).';
+                const friendly = errText.includes('email_taken') ? Lang.t('emailTakenError')
+                    : errText.includes('last_superadmin') ? Lang.t('lastSuperadminError')
+                    : errText.includes('username_taken') ? Lang.t('usernameTakenError')
+                    : Lang.t('saveFailedGeneric');
                 UI.toast(friendly);
                 return;
             }
             editModal.classList.remove('open');
             AdminBoard.renderUserManager(viewContext);
-            UI.toast('Gespeichert');
+            UI.toast(Lang.t('savedToast'));
         };
     },
 
@@ -1839,8 +1843,8 @@ export const AdminBoard = {
                     </div>
                     <div class="modal-body"></div>
                 <div class="modal-footer action-footer">
-                    <button class="btn-secondary close-m footer-cancel">Abbrechen</button>
-                    <button class="btn-primary">Speichern</button>
+                    <button class="btn-secondary close-m footer-cancel">${Lang.t('cancel')}</button>
+                    <button class="btn-primary">${Lang.t('save')}</button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
@@ -1857,18 +1861,18 @@ export const AdminBoard = {
     confirmStepUp: (message, commitLabel) => {
         return new Promise(resolve => {
             const modal = q('#generic-modal') || AdminBoard.createGenericModal();
-            modal.querySelector('h3').textContent = 'Sicherheitsbestätigung erforderlich';
+            modal.querySelector('h3').textContent = Lang.t('securityConfirmationRequired');
             modal.querySelector('.modal-body').innerHTML = `
                 <p>${Utils.esc(message)}</p>
-                ${commitLabel ? `<div class="callout callout-info">Ziel-Commit: <code>${Utils.esc(commitLabel)}</code></div>` : ''}
-                <div class="field"><label>Dein aktuelles Passwort</label><input id="stepup-password" type="password" autocomplete="current-password"></div>
-                <div class="field"><label>2FA-Code (falls aktiviert)</label><input id="stepup-totp" type="text" inputmode="numeric" maxlength="6" placeholder="123456"></div>
+                ${commitLabel ? `<div class="callout callout-info">${Lang.t('targetCommit')}: <code>${Utils.esc(commitLabel)}</code></div>` : ''}
+                <div class="field"><label>${Lang.t('yourCurrentPassword')}</label><input id="stepup-password" type="password" autocomplete="current-password"></div>
+                <div class="field"><label>${Lang.t('mfaCodeIfEnabled')}</label><input id="stepup-totp" type="text" inputmode="numeric" maxlength="6" placeholder="123456"></div>
             `;
             AdminBoard.makeModalFooterVisible(modal);
             const footerBtn = modal.querySelector('.modal-footer button:last-child');
             const cancelBtn = modal.querySelector('.modal-footer button:first-child');
-            footerBtn.textContent = 'Bestätigen und fortfahren';
-            cancelBtn.textContent = 'Abbrechen';
+            footerBtn.textContent = Lang.t('confirmAndContinue');
+            cancelBtn.textContent = Lang.t('cancel');
             modal.classList.add('open');
             let settled = false;
             const finish = (value) => {
@@ -1885,7 +1889,7 @@ export const AdminBoard = {
             footerBtn.onclick = () => {
                 const password = q('#stepup-password').value;
                 const totpCode = q('#stepup-totp').value.trim();
-                if (!password) { UI.toast('Passwort erforderlich'); return; }
+                if (!password) { UI.toast(Lang.t('passwordRequired')); return; }
                 finish({ password, totpCode });
             };
         });
@@ -1910,11 +1914,11 @@ export const AdminBoard = {
     // Haenger. job.step bleibt auch nach einem Fehler auf dem Namen des zuletzt gestarteten
     // Schritts stehen (updater-server.mjs), job.failed zeigt den Fehlschlag separat an.
     updateSteps: [
-        { key: 'fetch', label: 'Abrufen' },
-        { key: 'reset', label: 'Aktualisieren' },
-        { key: 'build', label: 'Bauen' },
-        { key: 'migrate', label: 'Migrieren' },
-        { key: 'restart', label: 'Neustarten' }
+        { key: 'fetch', get label() { return Lang.t('stepFetch'); } },
+        { key: 'reset', get label() { return Lang.t('stepUpdate'); } },
+        { key: 'build', get label() { return Lang.t('stepBuild'); } },
+        { key: 'migrate', get label() { return Lang.t('stepMigrate'); } },
+        { key: 'restart', get label() { return Lang.t('stepRestart'); } }
     ],
     renderUpdateProgress: (job) => {
         const steps = AdminBoard.updateSteps;
@@ -1946,54 +1950,54 @@ export const AdminBoard = {
         if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
         const actor = await Store.currentUser();
         if (actor?.role !== 'superadmin') {
-            area.textContent = 'Nur Superadmins können Updates prüfen und starten.';
+            area.textContent = Lang.t('onlySuperadminsCanUpdate');
             return;
         }
-        area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} Update-Status wird gepr&uuml;ft...</div>`;
+        area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} ${Lang.t('updateStatusChecking')}</div>`;
         const status = await Store.getUpdateStatus();
         if (!q('#sys-update-status')) return; // Modal inzwischen geschlossen
         // httpStatus unterscheidet, WARUM der Abruf fehlschlug -- vorher zeigte jeder Fehlschlag
         // (auch ein voruebergehender Gateway-Timeout waehrend eines laufenden Updates) dieselbe,
         // irrefuehrende "nicht konfiguriert"-Meldung.
         if (status.httpStatus === 0) {
-            area.innerHTML = `<div class="callout callout-danger">Server nicht erreichbar. Bitte Internetverbindung pr&uuml;fen und erneut versuchen.</div>`;
+            area.innerHTML = `<div class="callout callout-danger">${Lang.t('serverUnreachableRetry')}</div>`;
             if (window.lucide) lucide.createIcons();
             return;
         }
         if (status.error === 'update_service_disabled' || status.error === 'update_service_not_configured') {
-            area.innerHTML = `<div class="callout callout-info">Online-Updates sind aus Sicherheitsgr&uuml;nden in der Standardinstallation deaktiviert. Installiere Updates per Server-Command oder aktiviere den Updater bewusst nur tempor&auml;r.</div>`;
+            area.innerHTML = `<div class="callout callout-info">${Lang.t('onlineUpdatesDisabled')}</div>`;
             const runBtn = q('#sys-update-run');
             if (runBtn) runBtn.disabled = true;
             if (window.lucide) lucide.createIcons();
             return;
         }
         if (status.error === 'update_signature_not_configured') {
-            area.innerHTML = `<div class="callout callout-info">Updates sind gesperrt: Es fehlt ein vertrauensw&uuml;rdiger Signaturschl&uuml;ssel. Schl&uuml;ssel in ops/docker/update-keys einrichten und den Updater neu starten.</div>`;
+            area.innerHTML = `<div class="callout callout-info">${Lang.t('updatesLockedNoSignature')}</div>`;
             if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
             return;
         }
         if (status.error === 'update_runner_disabled' || status.enabled === false) {
-            area.innerHTML = `<div class="callout callout-info">Der Updater-Dienst ist erreichbar, darf aber keine Deployments starten. UPDATE_ALLOW_MAIN_DEPLOY ist deaktiviert.</div>`;
+            area.innerHTML = `<div class="callout callout-info">${Lang.t('updaterDeploymentDisabled')}</div>`;
             const runBtn = q('#sys-update-run');
             if (runBtn) runBtn.disabled = true;
             if (window.lucide) lucide.createIcons();
             return;
         }
         if (status.httpStatus === 503 || status.httpStatus === 504 || status.httpStatus === 502) {
-            area.innerHTML = `<div class="callout callout-danger">Updater antwortet gerade nicht (${Utils.esc(String(status.httpStatus))}) -- kann an einem laufenden Neustart des App-Containers liegen. In K&uuml;rze erneut versuchen.</div>
-                <button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}Erneut pr&uuml;fen</button>`;
+            area.innerHTML = `<div class="callout callout-danger">${Lang.format('updaterNotResponding', { code: Utils.esc(String(status.httpStatus)) })}</div>
+                <button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}${Lang.t('checkAgain')}</button>`;
             q('#sys-update-retry').onclick = () => AdminBoard.renderUpdateStatus();
             if (window.lucide) lucide.createIcons();
             return;
         }
         if (status.error === 'github_unreachable') {
-            area.innerHTML = `<div class="callout callout-danger">GitHub ist vom Server aus nicht erreichbar -- Internetverbindung des Updater-Dienstes pr&uuml;fen.</div>`;
+            area.innerHTML = `<div class="callout callout-danger">${Lang.t('githubUnreachable')}</div>`;
             if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
             if (window.lucide) lucide.createIcons();
             return;
         }
         if (status.error || status.httpStatus !== 200) {
-            area.innerHTML = `<div class="callout callout-danger">Update-Status konnte nicht geladen werden (${Utils.esc(String(status.httpStatus))}).</div>`;
+            area.innerHTML = `<div class="callout callout-danger">${Lang.format('updateStatusLoadFailed', { code: Utils.esc(String(status.httpStatus)) })}</div>`;
             return;
         }
         const job = status.job;
@@ -2002,12 +2006,12 @@ export const AdminBoard = {
         AdminBoard._lastUpdateStatus = status;
         area.innerHTML = `
             <div class="settings-summary-grid">
-                <div class="summary-card"><span>Lokale Version</span><strong>${Utils.esc((status.localCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.localSubject || '')}</small></div>
-                <div class="summary-card"><span>GitHub Version</span><strong>${Utils.esc((status.remoteCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.remoteSubject || '')}</small></div>
-                <div class="summary-card"><span>Status</span><strong>${updateAvailable ? `${status.commitsBehind || 1} Update(s) verf&uuml;gbar` : 'Aktuell'}</strong><small>${Utils.esc(status.branch || 'main')}</small></div>
+                <div class="summary-card"><span>${Lang.t('localVersion')}</span><strong>${Utils.esc((status.localCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.localSubject || '')}</small></div>
+                <div class="summary-card"><span>${Lang.t('githubVersion')}</span><strong>${Utils.esc((status.remoteCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.remoteSubject || '')}</small></div>
+                <div class="summary-card"><span>${Lang.t('status')}</span><strong>${updateAvailable ? Lang.format('updatesAvailable', { count: status.commitsBehind || 1 }) : Lang.t('upToDate')}</strong><small>${Utils.esc(status.branch || 'main')}</small></div>
             </div>
             ${job ? `<div class="update-log ${job.failed ? 'failed' : job.ok ? 'ok' : 'running'}">
-                <strong>${job.running ? 'Update l&auml;uft...' : job.ok ? 'Letztes Update erfolgreich' : job.failed ? 'Letztes Update fehlgeschlagen' : ''}</strong>
+                <strong>${job.running ? Lang.t('updateRunning') : job.ok ? Lang.t('lastUpdateSuccessful') : job.failed ? Lang.t('lastUpdateFailed') : ''}</strong>
                 ${AdminBoard.renderUpdateProgress(job)}
                 <pre>${Utils.esc((job.log || []).slice(-18).join('\n'))}</pre>
             </div>` : ''}
@@ -2022,31 +2026,31 @@ export const AdminBoard = {
         if (runBtn) {
             runBtn.disabled = (!updateAvailable && !canRetryFailed) || !!job?.running;
             runBtn.innerHTML = canRetryFailed
-                ? `${Icon('refresh-cw', 15)}Letztes Update erneut installieren`
-                : `${Icon('download-cloud', 15)}Update installieren`;
+                ? `${Icon('refresh-cw', 15)}${Lang.t('reinstallLastUpdate')}`
+                : `${Icon('download-cloud', 15)}${Lang.t('installUpdate')}`;
         }
         if (canRetryFailed) {
-            area.insertAdjacentHTML('beforeend', `<div class="callout callout-info">Kein neuer Commit auf GitHub, aber der letzte Installationslauf ist fehlgeschlagen. Die Installation kann für die aktuelle Version erneut gestartet werden (wiederholt Build, Migration und Neustart).</div>`);
+            area.insertAdjacentHTML('beforeend', `<div class="callout callout-info">${Lang.t('noNewCommitButFailedRun')}</div>`);
         }
         // Rollback-Button: nur sichtbar, wenn der Updater einen Commit von vor dem letzten
         // erfolgreichen Update kennt (siehe updater-server.mjs runUpdate -> writeHistory).
         if (status.rollbackAvailable && !job?.running) {
             area.insertAdjacentHTML('beforeend', `
                 <div class="setting-row">
-                    <span class="hint">Letztes Update rückgängig machen (Code zurück auf <code>${Utils.esc((status.rollbackCommit || '').slice(0, 12))}</code> -- Datenbank-Schema bleibt unverändert, siehe Hinweis im Log nach dem Rollback).</span>
-                    <button class="btn-secondary btn-sm" id="sys-update-rollback" type="button">${Icon('undo-2', 15)}Rollback</button>
+                    <span class="hint">${Lang.format('rollbackHint', { commit: `<code>${Utils.esc((status.rollbackCommit || '').slice(0, 12))}</code>` })}</span>
+                    <button class="btn-secondary btn-sm" id="sys-update-rollback" type="button">${Icon('undo-2', 15)}${Lang.t('rollback')}</button>
                 </div>`);
             q('#sys-update-rollback').onclick = async () => {
-                const stepUp = await AdminBoard.confirmStepUp('Diese Aktion setzt den Code auf die vorherige Version zurück und startet die Anwendung neu.', (status.rollbackCommit || '').slice(0, 12));
+                const stepUp = await AdminBoard.confirmStepUp(Lang.t('rollbackConfirmMessage'), (status.rollbackCommit || '').slice(0, 12));
                 if (!stepUp) return;
                 q('#sys-update-rollback').disabled = true;
                 const result = await Store.runRollback(status.rollbackCommit, stepUp.password, stepUp.totpCode);
                 if (!result || ![200, 202].includes(result.httpStatus)) {
-                    UI.toast(result?.error === 'wrong_password' ? 'Falsches Passwort.' : result?.error === 'invalid_totp_code' ? 'Ungültiger 2FA-Code.' : 'Rollback fehlgeschlagen oder nicht erreichbar.');
+                    UI.toast(result?.error === 'wrong_password' ? Lang.t('wrongPassword') : result?.error === 'invalid_totp_code' ? Lang.t('invalidMfaCode') : Lang.t('rollbackFailed'));
                     await AdminBoard.renderUpdateStatus();
                     return;
                 }
-                UI.toast('Rollback wurde gestartet.');
+                UI.toast(Lang.t('rollbackStarted'));
                 await AdminBoard.renderUpdateStatus();
             };
         }
@@ -2090,13 +2094,13 @@ export const AdminBoard = {
                             <i data-lucide="server"></i><span>LDAP</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-outlook">
-                            <i data-lucide="mail-check"></i><span>Outlook Einrichtung</span>
+                            <i data-lucide="mail-check"></i><span>${Lang.t('outlookSetupTab')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-company">
-                            <i data-lucide="building-2"></i><span>Unternehmenseinstellungen</span>
+                            <i data-lucide="building-2"></i><span>${Lang.t('companySettingsTab')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-update">
-                            <i data-lucide="download-cloud"></i><span>Update</span>
+                            <i data-lucide="download-cloud"></i><span>${Lang.t('update')}</span>
                         </button>
                     </nav>
                     <div class="modal-body sys-settings-content">
@@ -2106,180 +2110,175 @@ export const AdminBoard = {
                         <!-- Sicherheit -->
                         <div id="sys-security" class="tab-content">
                             <div class="field">
-                                <label>2FA erzwingen</label>
+                                <label>${Lang.t('enforce2FA')}</label>
                                 <select id="sys-2fa-enforce">
-                                    <option value="none">Nicht erzwingen (optional)</option>
-                                    <option value="all">Alle Benutzer</option>
-                                    <option value="admin">Nur Administratoren</option>
-                                    <option value="user">Nur Benutzer</option>
+                                    <option value="none">${Lang.t('enforceNone')}</option>
+                                    <option value="all">${Lang.t('enforceAll')}</option>
+                                    <option value="admin">${Lang.t('enforceAdminOnly')}</option>
+                                    <option value="user">${Lang.t('enforceUserOnly')}</option>
                                 </select>
-                                <div class="hint">Benutzer werden beim Login aufgefordert, 2FA einzurichten, wenn sie betroffen sind.</div>
+                                <div class="hint">${Lang.t('enforce2FAHint')}</div>
                             </div>
                             <div class="field">
-                                <label>Session-Timeout (Minuten)</label>
+                                <label>${Lang.t('sessionTimeoutMinutes')}</label>
                                 <input id="sys-session-timeout" type="number" placeholder="480" min="5">
-                                <div class="hint">Mindestens 5 Minuten. Unbegrenzte Sessions sind aus Sicherheitsgründen deaktiviert.</div>
+                                <div class="hint">${Lang.t('sessionTimeoutHint')}</div>
                             </div>
                             <div class="field">
-                                <label>Idle-Timeout (Minuten ohne Aktivität)</label>
+                                <label>${Lang.t('idleTimeoutMinutes')}</label>
                                 <input id="sys-idle-timeout" type="number" placeholder="60" min="1">
-                                <div class="hint">Mindestens 1 Minute. Eine Sitzung ohne jede Aktivität länger als dieser Wert wird unabhängig vom Session-Timeout widerrufen.</div>
+                                <div class="hint">${Lang.t('idleTimeoutHint')}</div>
                             </div>
                             <div class="field">
-                                <label>Max. Fehlversuche beim Login</label>
+                                <label>${Lang.t('maxLoginAttempts')}</label>
                                 <input id="sys-max-login-attempts" type="number" placeholder="5" min="1">
-                                <div class="hint">Mindestens 1 Versuch. Abschalten der Login-Sperre ist aus Sicherheitsgründen deaktiviert.</div>
+                                <div class="hint">${Lang.t('maxLoginAttemptsHint')}</div>
                             </div>
                             <div class="field">
-                                <label>Was passiert nach Erreichen der Fehlversuche?</label>
+                                <label>${Lang.t('afterFailedAttemptsQuestion')}</label>
                                 <select id="sys-lockout-action">
-                                    <option value="lock">Konto sperren (Admin muss entsperren)</option>
-                                    <option value="temp">Konto vorübergehend sperren</option>
-                                    <option value="none">Nur protokollieren</option>
+                                    <option value="temp">${Lang.t('lockoutActionTemp')}</option>
+                                    <option value="none">${Lang.t('lockoutActionLogOnly')}</option>
                                 </select>
+                                <div class="hint">${Lang.t('lockoutActionHint')}</div>
                             </div>
                             <div class="field" id="sys-lockout-minutes-field">
-                                <label>Sperrdauer (Minuten)</label>
+                                <label>${Lang.t('lockoutDurationMinutes')}</label>
                                 <input id="sys-lockout-minutes" type="number" placeholder="15" min="1">
                             </div>
-                            <div class="settings-section-title">Konto-Selbstverwaltung</div>
-                            <div class="hint">Welche Angaben dürfen Benutzer in ihrem Konto selbst ändern?</div>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-name"><span>Name</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-email"><span>E-Mail</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-dept"><span>Einrichtung / Abteilung</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-phone"><span>Telefon</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-mobile"><span>Mobil</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-jobTitle"><span>Position / Jobtitel</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-officeLocation"><span>Standort</span></label>
+                            <div class="settings-section-title">${Lang.t('accountSelfManagement')}</div>
+                            <div class="hint">${Lang.t('accountSelfManagementHint')}</div>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-name"><span>${Lang.t('name')}</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-email"><span>${Lang.t('email')}</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-dept"><span>${Lang.t('department')}</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-phone"><span>${Lang.t('phone')}</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-mobile"><span>${Lang.t('mobile')}</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-jobTitle"><span>${Lang.t('jobTitle')}</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-acc-officeLocation"><span>${Lang.t('location')}</span></label>
                         </div>
 
                         <!-- Benachrichtigungen -->
                         <div id="sys-notifications" class="tab-content">
-                            <div class="settings-section-title">${Icon('bell-ring', 15)}Lege fest, wann automatisch E-Mails versendet werden.</div>
+                            <div class="settings-section-title">${Icon('bell-ring', 15)}${Lang.t('emailAutoSendHeading')}</div>
                             <div class="checkbox-list">
                                 <label class="check-row">
                                     <input type="checkbox" id="notif-account-approved">
-                                    <span class="check-text"><strong>Konto genehmigt</strong><span>Antragsteller erhalten eine E-Mail wenn ihr Konto genehmigt wurde.</span></span>
+                                    <span class="check-text"><strong>${Lang.t('accountApproved')}</strong><span>${Lang.t('accountApprovedHint')}</span></span>
                                 </label>
                             </div>
-                            <div class="settings-section-title">${Icon('sliders-horizontal', 15)}Richtlinie je Ereignis (Benutzer &amp; Admins getrennt)</div>
-                            <p class="hint">Standardwerte gelten, solange eine Person nichts Eigenes einstellt (unter Portaleinstellungen &gt; Benachrichtigungen). Wird ein Kästchen unter „anpassbar" deaktiviert, ist der Standardwert für alle verbindlich.</p>
+                            <div class="settings-section-title">${Icon('sliders-horizontal', 15)}${Lang.t('policyPerEvent')}</div>
+                            <p class="hint">${Lang.t('policyPerEventHint')}</p>
                             <div id="sys-notif-matrix" class="notif-matrix"></div>
                         </div>
 
                         <!-- Outlook -->
                         <div id="sys-outlook" class="tab-content">
-                            <div class="callout">Mit App-Registrierung (Tenant-/Client-ID, Client-Secret, Postfach) können aus einem Ticket heraus
-                                echte Outlook-Kalendertermine angelegt werden ${FieldHelp('Benötigt eine Azure-App-Registrierung mit Application-Permission "Calendars.ReadWrite" (App-only, Admin-Zustimmung erforderlich) für das angegebene Postfach.')}.
-                                Eingehende E-Mails als Tickets automatisch zu importieren ist weiterhin nicht möglich -- das würde einen laufenden Mailbox-Sync-Dienst voraussetzen, den es aktuell nicht gibt.</div>
-                            <label class="check-row"><input type="checkbox" id="sys-outlook-enabled"><span><strong>Outlook/Graph Integration aktivieren</strong></span></label>
+                            <div class="callout">${Lang.format('outlookIntegrationCallout', { help: FieldHelp(Lang.t('outlookIntegrationHelp')) })}</div>
+                            <div class="callout callout-info">${Lang.format('outlookPersonalCalendarHint', { redirectUri: `<code>${Utils.esc(window.location.origin + '/api/v2/outlook/callback')}</code>` })}</div>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-enabled"><span><strong>${Lang.t('outlookEnableIntegration')}</strong></span></label>
                             <div class="form-grid">
-                                <div class="field"><label>Tenant-ID ${FieldHelp('Die Azure-AD-Tenant-ID (Verzeichnis-ID) der Organisation, in der die App-Registrierung angelegt wurde.')}</label><input id="sys-outlook-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
-                                <div class="field"><label>Client-ID ${FieldHelp('Die Anwendungs-ID (Client-ID) der App-Registrierung in Azure AD.')}</label><input id="sys-outlook-client" type="text" placeholder="App Registration Client-ID"></div>
+                                <div class="field"><label>${Lang.t('tenantId')} ${FieldHelp(Lang.t('tenantIdHelp'))}</label><input id="sys-outlook-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
+                                <div class="field"><label>${Lang.t('clientId')} ${FieldHelp(Lang.t('clientIdHelp'))}</label><input id="sys-outlook-client" type="text" placeholder="App Registration Client-ID"></div>
                             </div>
-                            <div class="field"><label>Client-Secret ${FieldHelp('Geheimer Schlüssel der App-Registrierung (Zertifikate &amp; Geheimnisse). Wird verschlüsselt gespeichert. Leer lassen, um ein bereits gespeichertes Secret unverändert zu lassen.')}</label><input id="sys-outlook-secret" type="password" placeholder="Leer lassen = unverändert"></div>
-                            <div class="field"><label>Support-Postfach ${FieldHelp('Postfach (E-Mail-Adresse), in dem die App-only-Berechtigung Kalendertermine anlegen darf.')}</label><input id="sys-outlook-mailbox" type="email" placeholder="support@example.com"></div>
-                            <label class="check-row"><input type="checkbox" id="sys-outlook-sync" disabled><span>Eingehende E-Mails synchronisieren (noch nicht verfügbar)</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-outlook-create" disabled><span>Aus E-Mails automatisch Tickets erstellen (noch nicht verfügbar)</span></label>
+                            <div class="field"><label>${Lang.t('clientSecret')} ${FieldHelp(Lang.t('clientSecretHelp'))}</label><input id="sys-outlook-secret" type="password" placeholder="${Lang.t('leaveEmptyUnchanged')}"></div>
+                            <div class="field"><label>${Lang.t('supportMailbox')} ${FieldHelp(Lang.t('supportMailboxHelp'))}</label><input id="sys-outlook-mailbox" type="email" placeholder="support@example.com"></div>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-sync" disabled><span>${Lang.t('outlookSyncNotAvailable')}</span></label>
+                            <label class="check-row"><input type="checkbox" id="sys-outlook-create" disabled><span>${Lang.t('outlookCreateNotAvailable')}</span></label>
                             <div class="setting-row">
                                 <span class="hint" id="sys-outlook-status"></span>
-                                <button class="btn-secondary btn-sm" id="sys-outlook-save" type="button">${Icon('save', 15)}Outlook-Einstellungen speichern</button>
+                                <button class="btn-secondary btn-sm" id="sys-outlook-save" type="button">${Icon('save', 15)}${Lang.t('saveOutlookSettings')}</button>
                             </div>
                         </div>
 
                         <!-- Update -->
                         <div id="sys-update" class="tab-content">
-                            <div class="callout">Pr&uuml;ft den aktuellen Stand gegen GitHub und aktualisiert die Serverinstallation per internem Updater. W&auml;hrend des Updates wird der App-Container neu gebaut und kurz neu gestartet.</div>
+                            <div class="callout">${Lang.t('updateTabCallout')}</div>
                             <div class="update-status" id="sys-update-status">
-                                <div class="empty-state compact">Noch nicht gepr&uuml;ft.</div>
+                                <div class="empty-state compact">${Lang.t('notCheckedYet')}</div>
                             </div>
                             <div class="setting-row">
-                                <span class="hint">Nur Superadmins können Updates starten.</span>
+                                <span class="hint">${Lang.t('onlySuperadminsCanStartUpdates')}</span>
                                 <div class="button-row">
-                                    <button class="btn-secondary btn-sm" id="sys-update-check" type="button">${Icon('refresh-cw', 15)}Pr&uuml;fen</button>
-                                    <button class="btn-primary btn-sm" id="sys-update-run" type="button">${Icon('download-cloud', 15)}Update installieren</button>
+                                    <button class="btn-secondary btn-sm" id="sys-update-check" type="button">${Icon('refresh-cw', 15)}${Lang.t('check')}</button>
+                                    <button class="btn-primary btn-sm" id="sys-update-run" type="button">${Icon('download-cloud', 15)}${Lang.t('installUpdate')}</button>
                                 </div>
                             </div>
                             <div class="setting-row">
-                                <span class="hint">Datenbank hängt dem Code hinterher (z.B. nach einem abgebrochenen Update) -- äußert sich als Fehler &quot;500&quot; beim Speichern an vielen Stellen. Holt die Datenbank ohne Code-Update auf den aktuellen Stand.</span>
+                                <span class="hint">${Lang.t('dbBehindCodeHint')}</span>
                                 <div class="button-row">
-                                    <button class="btn-secondary btn-sm" id="sys-update-migrate" type="button">${Icon('database', 15)}Datenbank-Migrationen ausf&uuml;hren</button>
+                                    <button class="btn-secondary btn-sm" id="sys-update-migrate" type="button">${Icon('database', 15)}${Lang.t('runDbMigrations')}</button>
                                 </div>
                             </div>
                         </div>
 
                         <!-- LDAP -->
                         <div id="sys-ldap" class="tab-content">
-                            <div class="callout">LDAP-Login ist eine ERGÄNZUNG zum lokalen Passwort, kein Ersatz: Die Person
-                                braucht weiterhin ein lokales Konto mit demselben Benutzernamen (Benutzerverwaltung) -- Rolle und
-                                Rechte kommen immer aus dieser Datenbank, nie aus LDAP-Gruppen. Passt das lokale Passwort nicht,
-                                wird zusätzlich ein LDAP-Bind versucht.</div>
-                            <label class="check-row"><input type="checkbox" id="sys-ldap-enabled"><span><strong>LDAP-Login aktivieren</strong></span></label>
-                            <div class="field"><label>Server-URL</label><input id="sys-ldap-url" type="text" placeholder="ldap://dc.example.com:389 oder ldaps://..."></div>
-                            <div class="field"><label>Such-Basis (Base DN)</label><input id="sys-ldap-base-dn" type="text" placeholder="dc=example,dc=com"></div>
-                            <div class="field"><label>Benutzer-Filter</label><input id="sys-ldap-filter" type="text" placeholder="(uid={username})"></div>
-                            <div class="settings-section-title">Service-Account (für die Suche nach Personen)</div>
-                            <div class="field"><label>Bind-DN</label><input id="sys-ldap-bind-dn" type="text" placeholder="cn=service,dc=example,dc=com"></div>
-                            <div class="field"><label>Bind-Passwort</label><input id="sys-ldap-bind-pass" type="password" placeholder="Leer lassen = unverändert"></div>
+                            <div class="callout">${Lang.t('ldapSupplementCallout')}</div>
+                            <label class="check-row"><input type="checkbox" id="sys-ldap-enabled"><span><strong>${Lang.t('enableLdapLogin')}</strong></span></label>
+                            <div class="field"><label>${Lang.t('serverUrl')}</label><input id="sys-ldap-url" type="text" placeholder="ldap://dc.example.com:389 oder ldaps://..."></div>
+                            <div class="field"><label>${Lang.t('searchBaseDn')}</label><input id="sys-ldap-base-dn" type="text" placeholder="dc=example,dc=com"></div>
+                            <div class="field"><label>${Lang.t('userFilter')}</label><input id="sys-ldap-filter" type="text" placeholder="(uid={username})"></div>
+                            <div class="settings-section-title">${Lang.t('serviceAccountForPersonSearch')}</div>
+                            <div class="field"><label>${Lang.t('bindDn')}</label><input id="sys-ldap-bind-dn" type="text" placeholder="cn=service,dc=example,dc=com"></div>
+                            <div class="field"><label>${Lang.t('bindPassword')}</label><input id="sys-ldap-bind-pass" type="password" placeholder="${Lang.t('leaveEmptyUnchanged')}"></div>
                             <div class="setting-row">
                                 <span class="hint" id="sys-ldap-status"></span>
-                                <button class="btn-secondary btn-sm" id="sys-ldap-save" type="button">${Icon('save', 15)}Speichern</button>
+                                <button class="btn-secondary btn-sm" id="sys-ldap-save" type="button">${Icon('save', 15)}${Lang.t('save')}</button>
                             </div>
-                            <div class="settings-section-title">Verbindung testen</div>
-                            <div class="hint">Testet Service-Bind, Suche und Bind als die eigene Person (dein LDAP-Konto muss denselben Benutzernamen wie hier haben).</div>
+                            <div class="settings-section-title">${Lang.t('testConnection')}</div>
+                            <div class="hint">${Lang.t('testConnectionHint')}</div>
                             <div class="form-grid">
-                                <div class="field"><label>Eigenes LDAP-Passwort</label><input id="sys-ldap-test-pass" type="password"></div>
+                                <div class="field"><label>${Lang.t('ownLdapPassword')}</label><input id="sys-ldap-test-pass" type="password"></div>
                             </div>
-                            <button class="btn-secondary btn-sm" id="sys-ldap-test" type="button">${Icon('send', 15)}Verbindung testen</button>
+                            <button class="btn-secondary btn-sm" id="sys-ldap-test" type="button">${Icon('send', 15)}${Lang.t('testConnection')}</button>
                         </div>
                         <!-- E-Mail / SMTP -->
                         <div id="sys-email" class="tab-content">
-                            <div class="callout">Wird hier ein SMTP-Server eingetragen, verschickt der Server echte E-Mails bei
-                                Benachrichtigungen (neues Ticket, Statusänderung, Genehmigung, ...), zusätzlich zur In-App-Benachrichtigung.</div>
-                            <div class="field"><label>SMTP-Host ${FieldHelp('Adresse des Mailservers, über den E-Mails versendet werden (z. B. smtp.office365.com). Ohne diese Angabe verschickt der Server keine E-Mails -- Benachrichtigungen bleiben dann auf die In-App-Ansicht beschränkt.')}</label><input id="sys-smtp-host" type="text" placeholder="smtp.example.com"></div>
+                            <div class="callout">${Lang.t('smtpIntroCallout')}</div>
+                            <div class="field"><label>${Lang.t('smtpHost')} ${FieldHelp(Lang.t('smtpHostHelp'))}</label><input id="sys-smtp-host" type="text" placeholder="smtp.example.com"></div>
                             <div class="form-grid">
-                                <div class="field"><label>Port ${FieldHelp('TCP-Port des Mailservers. Üblich: 587 für STARTTLS, 465 für TLS/SSL, 25 für unverschlüsselt (nicht empfohlen).')}</label><input id="sys-smtp-port" type="number" placeholder="587"></div>
-                                <div class="field"><label>Verschlüsselung ${FieldHelp('Legt fest, wie die Verbindung zum Mailserver abgesichert wird. STARTTLS startet unverschlüsselt und wechselt dann zu TLS -- das ist der gängige Standard bei Port 587. TLS/SSL verschlüsselt von Anfang an (meist Port 465).')}</label><select id="sys-smtp-secure"><option value="false">STARTTLS (empfohlen)</option><option value="true">TLS/SSL</option></select></div>
+                                <div class="field"><label>${Lang.t('smtpPort')} ${FieldHelp(Lang.t('smtpPortHelp'))}</label><input id="sys-smtp-port" type="number" placeholder="587"></div>
+                                <div class="field"><label>${Lang.t('encryption')} ${FieldHelp(Lang.t('encryptionHelp'))}</label><select id="sys-smtp-secure"><option value="false">${Lang.t('starttlsRecommended')}</option><option value="true">TLS/SSL</option></select></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>Benutzername ${FieldHelp('Login-Name für den SMTP-Server (meist die vollständige Absender-E-Mail-Adresse).')}</label><input id="sys-smtp-user" type="text" placeholder="support@example.com"></div>
-                                <div class="field"><label>Passwort ${FieldHelp('Zugehöriges Passwort bzw. App-Passwort für den SMTP-Login. Wird verschlüsselt gespeichert. Leer lassen, um ein bereits gespeichertes Passwort unverändert zu lassen.')}</label><input id="sys-smtp-pass" type="password" placeholder="Leer lassen = unverändert"></div>
+                                <div class="field"><label>${Lang.t('smtpUsername')} ${FieldHelp(Lang.t('smtpUsernameHelp'))}</label><input id="sys-smtp-user" type="text" placeholder="support@example.com"></div>
+                                <div class="field"><label>${Lang.t('smtpPassword')} ${FieldHelp(Lang.t('smtpPasswordHelp'))}</label><input id="sys-smtp-pass" type="password" placeholder="${Lang.t('leaveEmptyUnchanged')}"></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>Absender-Adresse ${FieldHelp('E-Mail-Adresse, die Empfänger als Absender aller Benachrichtigungen sehen (das "Von"-Feld).')}</label><input id="sys-smtp-from" type="email" placeholder="support@example.com"></div>
-                                <div class="field"><label>Absender-Name ${FieldHelp('Anzeigename, der zusammen mit der Absender-Adresse im Postfach des Empfängers erscheint, z. B. "Support Portal".')}</label><input id="sys-smtp-fromname" type="text" placeholder="Support Portal"></div>
+                                <div class="field"><label>${Lang.t('senderAddress')} ${FieldHelp(Lang.t('senderAddressHelp'))}</label><input id="sys-smtp-from" type="email" placeholder="support@example.com"></div>
+                                <div class="field"><label>${Lang.t('senderName')} ${FieldHelp(Lang.t('senderNameHelp'))}</label><input id="sys-smtp-fromname" type="text" placeholder="Support Portal"></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>Antwort-an Adresse ${FieldHelp('Optionale abweichende Adresse für das "Antworten"-Feld, falls Antworten nicht an die Absender-Adresse, sondern an ein anderes Postfach gehen sollen.')}</label><input id="sys-email-replyto" type="email" placeholder="reply@example.com"></div>
-                                <div class="field"><label>BCC Archiv-Adresse ${FieldHelp('Optionale Adresse, die bei jeder versendeten Benachrichtigung automatisch als Blindkopie (BCC) mitgeschickt wird -- z. B. für ein zentrales Mail-Archiv.')}</label><input id="sys-email-bcc" type="email" placeholder="archiv@example.com"></div>
+                                <div class="field"><label>${Lang.t('replyToAddress')} ${FieldHelp(Lang.t('replyToAddressHelp'))}</label><input id="sys-email-replyto" type="email" placeholder="reply@example.com"></div>
+                                <div class="field"><label>${Lang.t('bccArchiveAddress')} ${FieldHelp(Lang.t('bccArchiveAddressHelp'))}</label><input id="sys-email-bcc" type="email" placeholder="archiv@example.com"></div>
                             </div>
-                            <div class="settings-section-title">${Icon('mail-check', 15)}Vorlage und Signatur</div>
-                            <div class="field field-wide"><label>E-Mail-Vorlage ${FieldHelp('Textbaustein für den Inhalt der Benachrichtigungs-E-Mail. Platzhalter wie {{ticketTitle}}, {{status}} und {{message}} werden beim Versand durch die jeweiligen Ticketdaten ersetzt.')}</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
-                            <div class="field field-wide"><label>Signatur (Text) ${FieldHelp('Textsignatur, die an jede reine Text-E-Mail angehängt wird, z. B. mit Firmenname und Kontaktdaten.')}</label><textarea id="sys-email-text-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
+                            <div class="settings-section-title">${Icon('mail-check', 15)}${Lang.t('templateAndSignature')}</div>
+                            <div class="field field-wide"><label>${Lang.t('emailTemplate')} ${FieldHelp(Lang.t('emailTemplateHelp'))}</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
+                            <div class="field field-wide"><label>${Lang.t('signatureText')} ${FieldHelp(Lang.t('signatureTextHelp'))}</label><textarea id="sys-email-text-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
                             <div class="field">
                                 <label class="check-row">
                                     <input type="checkbox" id="sys-email-html-enabled">
-                                    <span class="check-text"><strong>HTML-E-Mails aktivieren</strong><span>Benachrichtigungen zusätzlich mit HTML-Signatur und formatiertem Inhalt verschicken.</span></span>
+                                    <span class="check-text"><strong>${Lang.t('enableHtmlEmails')}</strong><span>${Lang.t('enableHtmlEmailsHint')}</span></span>
                                 </label>
                             </div>
-                            <div class="field field-wide"><label>Signatur (HTML, nur bei aktiviertem HTML-Versand) ${FieldHelp('Formatierte HTML-Variante der Signatur (z. B. mit Logo oder Hervorhebungen), wird nur verwendet, wenn HTML-E-Mails oben aktiviert sind.')}</label><textarea id="sys-email-signature" rows="5" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
-                            <div class="settings-section-title">${Icon('shield-check', 15)}Sicherheit und Zertifikate</div>
-                            <div class="callout"><strong>E-Mail Sicherheit:</strong> Zertifikate und Schlüssel werden gespeichert und für Backend/SMTP-Integration bereitgestellt.</div>
+                            <div class="field field-wide"><label>${Lang.t('signatureHtml')} ${FieldHelp(Lang.t('signatureHtmlHelp'))}</label><textarea id="sys-email-signature" rows="5" placeholder="<p>Mit freundlichen Grüßen</p><strong>IT Service Desk</strong>"></textarea></div>
+                            <div class="settings-section-title">${Icon('shield-check', 15)}${Lang.t('securityAndCertificates')}</div>
+                            <div class="callout">${Lang.t('emailSecurityCallout')}</div>
                             <div class="form-grid">
-                                <div class="field"><label>Transport-Sicherheit ${FieldHelp('Bestimmt, wie streng eine verschlüsselte Verbindung zum Mailserver erzwungen wird. "Erzwingen" bricht den Versand ab, wenn keine Verschlüsselung zustande kommt -- sicherer, aber ggf. inkompatibel mit sehr alten Servern. "Opportunistisch" versucht Verschlüsselung, versendet notfalls aber auch unverschlüsselt.')}</label><select id="sys-email-transport"><option value="starttls">STARTTLS erzwingen</option><option value="tls">TLS/SSL erzwingen</option><option value="opportunistic">Opportunistisch</option></select></div>
-                                <div class="field"><label>Zertifikatsprüfung ${FieldHelp('Legt fest, wie genau das TLS-Zertifikat des Mailservers geprüft wird. "Strikt" lehnt ungültige/selbstsignierte Zertifikate ab. "Self-signed erlauben" ist nur für interne Testserver gedacht. "Deaktiviert" prüft gar nicht und sollte nie in Produktion verwendet werden.')}</label><select id="sys-email-cert-mode"><option value="strict">Strikt pr&uuml;fen</option><option value="allow-self-signed">Self-signed erlauben</option><option value="disabled">Deaktiviert</option></select></div>
+                                <div class="field"><label>${Lang.t('transportSecurity')} ${FieldHelp(Lang.t('transportSecurityHelp'))}</label><select id="sys-email-transport"><option value="starttls">${Lang.t('forceStarttls')}</option><option value="tls">${Lang.t('forceTls')}</option><option value="opportunistic">${Lang.t('opportunistic')}</option></select></div>
+                                <div class="field"><label>${Lang.t('certificateCheck')} ${FieldHelp(Lang.t('certificateCheckHelp'))}</label><select id="sys-email-cert-mode"><option value="strict">${Lang.t('checkStrict')}</option><option value="allow-self-signed">${Lang.t('allowSelfSigned')}</option><option value="disabled">${Lang.t('disabled')}</option></select></div>
                             </div>
-                            <div class="field field-wide"><label>S/MIME Zertifikat (PEM) ${FieldHelp('Öffentliches S/MIME-Zertifikat im PEM-Format, mit dem ausgehende E-Mails digital signiert werden -- Empfänger können damit die Echtheit des Absenders prüfen.')}</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
-                            <div class="field field-wide"><label>S/MIME Private Key (PEM) ${FieldHelp('Zugehöriger privater Schlüssel zum S/MIME-Zertifikat. Wird verschlüsselt gespeichert und ausschließlich serverseitig zum Signieren verwendet -- niemals weitergeben.')}</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+                            <div class="field field-wide"><label>${Lang.t('smimeCert')} ${FieldHelp(Lang.t('smimeCertHelp'))}</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+                            <div class="field field-wide"><label>${Lang.t('smimeKey')} ${FieldHelp(Lang.t('smimeKeyHelp'))}</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
                             <div class="form-grid">
-                                <div class="field"><label>Key-Passphrase ${FieldHelp('Optionales Passwort, falls der S/MIME Private Key selbst verschlüsselt gespeichert ist.')}</label><input id="sys-email-smime-pass" type="password" placeholder="Optional"></div>
-                                <div class="field"><label>DKIM Selector ${FieldHelp('Name des DKIM-Schlüssels, wie er im DNS-Eintrag der Domain veröffentlicht ist (z. B. "default"). Muss zum DNS-TXT-Eintrag passen, sonst schlägt die DKIM-Prüfung beim Empfänger fehl.')}</label><input id="sys-email-dkim-selector" type="text" placeholder="default"></div>
+                                <div class="field"><label>${Lang.t('keyPassphrase')} ${FieldHelp(Lang.t('keyPassphraseHelp'))}</label><input id="sys-email-smime-pass" type="password" placeholder="Optional"></div>
+                                <div class="field"><label>${Lang.t('dkimSelector')} ${FieldHelp(Lang.t('dkimSelectorHelp'))}</label><input id="sys-email-dkim-selector" type="text" placeholder="default"></div>
                             </div>
-                            <div class="field"><label>DKIM Domain ${FieldHelp('Domain, für die die DKIM-Signatur ausgestellt wird -- muss mit der Absender-Domain übereinstimmen, damit Empfänger-Mailserver die Signatur akzeptieren.')}</label><input id="sys-email-dkim-domain" type="text" placeholder="example.com"></div>
-                            <div class="field field-wide"><label>DKIM Private Key (PEM) ${FieldHelp('Privater DKIM-Schlüssel, mit dem ausgehende E-Mails signiert werden, um Spoofing/Phishing-Filter positiv zu beeinflussen. Der zugehörige öffentliche Schlüssel muss als DNS-TXT-Eintrag unter dem gewählten Selector veröffentlicht sein.')}</label><textarea id="sys-email-dkim-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+                            <div class="field"><label>${Lang.t('dkimDomain')} ${FieldHelp(Lang.t('dkimDomainHelp'))}</label><input id="sys-email-dkim-domain" type="text" placeholder="example.com"></div>
+                            <div class="field field-wide"><label>${Lang.t('dkimPrivateKey')} ${FieldHelp(Lang.t('dkimPrivateKeyHelp'))}</label><textarea id="sys-email-dkim-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
                             <div class="setting-row">
                                 <span class="hint" id="sys-smtp-status"></span>
-                                <button class="btn-secondary btn-sm" id="sys-smtp-save-test" type="button">${Icon('send', 15)}Speichern &amp; Test-E-Mail senden</button>
+                                <button class="btn-secondary btn-sm" id="sys-smtp-save-test" type="button">${Icon('send', 15)}${Lang.t('saveAndSendTestEmail')}</button>
                             </div>
                         </div>
                         <!-- Allgemein -->
@@ -2293,51 +2292,51 @@ export const AdminBoard = {
                                 <input id="sys-auto-archive" type="number" placeholder="0" min="0">
                             </div>
                             <div class="field">
-                                <label>Standard-Priorität für neue Tickets</label>
+                                <label>${Lang.t('defaultPriorityForNewTickets')}</label>
                                 <select id="sys-default-prio">
-                                    <option value="Normal">Normal</option>
-                                    <option value="Hoch">Hoch</option>
-                                    <option value="Niedrig">Niedrig</option>
+                                    <option value="Normal">${Lang.t('normal')}</option>
+                                    <option value="Hoch">${Lang.t('high')}</option>
+                                    <option value="Niedrig">${Lang.t('low')}</option>
                                 </select>
                             </div>
-                            <div class="settings-section-title">Warten auf Benutzer</div>
+                            <div class="settings-section-title">${Lang.t('waitingForUser')}</div>
                             <div class="form-grid">
-                                <div class="field"><label for="sys-wait-remind">Erinnerung nach (Tagen)</label><input id="sys-wait-remind" type="number" min="1" placeholder="2"></div>
-                                <div class="field"><label for="sys-wait-close">Automatisch schließen nach (Tagen)</label><input id="sys-wait-close" type="number" min="1" placeholder="7"></div>
+                                <div class="field"><label for="sys-wait-remind">${Lang.t('reminderAfterDays')}</label><input id="sys-wait-remind" type="number" min="1" placeholder="2"></div>
+                                <div class="field"><label for="sys-wait-close">${Lang.t('autoCloseAfterDays')}</label><input id="sys-wait-close" type="number" min="1" placeholder="7"></div>
                             </div>
-                            <div class="settings-section-title">Lösungsfrist je Priorität</div>
-                            <div class="hint">Zeit bis zur Lösung, wahlweise in Stunden oder Tagen.</div>
+                            <div class="settings-section-title">${Lang.t('resolutionDeadlinePerPriority')}</div>
+                            <div class="hint">${Lang.t('resolutionTimeHint')}</div>
                             <div class="form-grid">
-                                <div class="field"><label for="sys-sla-low">Niedrig</label><div class="sla-field-row"><input id="sys-sla-low" type="number" min="0.25" step="0.25"><select id="sys-sla-low-unit" aria-label="Einheit Niedrig"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
-                                <div class="field"><label for="sys-sla-normal">Normal</label><div class="sla-field-row"><input id="sys-sla-normal" type="number" min="0.25" step="0.25"><select id="sys-sla-normal-unit" aria-label="Einheit Normal"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
-                                <div class="field"><label for="sys-sla-high">Hoch</label><div class="sla-field-row"><input id="sys-sla-high" type="number" min="0.25" step="0.25"><select id="sys-sla-high-unit" aria-label="Einheit Hoch"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
-                                <div class="field"><label for="sys-sla-critical">Kritisch</label><div class="sla-field-row"><input id="sys-sla-critical" type="number" min="0.25" step="0.25"><select id="sys-sla-critical-unit" aria-label="Einheit Kritisch"><option value="hours">Stunden</option><option value="days">Tage</option></select></div></div>
+                                <div class="field"><label for="sys-sla-low">${Lang.t('low')}</label><div class="sla-field-row"><input id="sys-sla-low" type="number" min="0.25" step="0.25"><select id="sys-sla-low-unit" aria-label="${Lang.format('unitFor', { name: Lang.t('low') })}"><option value="hours">${Lang.t('hoursUnit')}</option><option value="days">${Lang.t('daysUnit')}</option></select></div></div>
+                                <div class="field"><label for="sys-sla-normal">${Lang.t('normal')}</label><div class="sla-field-row"><input id="sys-sla-normal" type="number" min="0.25" step="0.25"><select id="sys-sla-normal-unit" aria-label="${Lang.format('unitFor', { name: Lang.t('normal') })}"><option value="hours">${Lang.t('hoursUnit')}</option><option value="days">${Lang.t('daysUnit')}</option></select></div></div>
+                                <div class="field"><label for="sys-sla-high">${Lang.t('high')}</label><div class="sla-field-row"><input id="sys-sla-high" type="number" min="0.25" step="0.25"><select id="sys-sla-high-unit" aria-label="${Lang.format('unitFor', { name: Lang.t('high') })}"><option value="hours">${Lang.t('hoursUnit')}</option><option value="days">${Lang.t('daysUnit')}</option></select></div></div>
+                                <div class="field"><label for="sys-sla-critical">${Lang.t('critical')}</label><div class="sla-field-row"><input id="sys-sla-critical" type="number" min="0.25" step="0.25"><select id="sys-sla-critical-unit" aria-label="${Lang.format('unitFor', { name: Lang.t('critical') })}"><option value="hours">${Lang.t('hoursUnit')}</option><option value="days">${Lang.t('daysUnit')}</option></select></div></div>
                             </div>
                             <label class="check-row sla-user-visibility-row">
                                 <input type="checkbox" id="sys-sla-show-users">
-                                <span class="check-text"><strong>Frist auch Benutzern anzeigen</strong><span>Dezenter Hinweis im Ticket, ohne Alarmfarben – auch wenn die Frist überschritten ist.</span></span>
+                                <span class="check-text"><strong>${Lang.t('showDeadlineToUsers')}</strong><span>${Lang.t('showDeadlineToUsersHint')}</span></span>
                             </label>
 
-                            <div class="settings-section-title">Geschäftszeiten für Fristen</div>
+                            <div class="settings-section-title">${Lang.t('businessHoursForDeadlines')}</div>
                             <label class="check-row">
                                 <input type="checkbox" id="sys-bh-enabled">
-                                <span class="check-text"><strong>Geschäftszeiten berücksichtigen</strong><span>Außerhalb dieser Zeiten sowie an Feiertagen l&auml;uft die Lösungsfrist nicht weiter.</span></span>
+                                <span class="check-text"><strong>${Lang.t('considerBusinessHours')}</strong><span>${Lang.t('businessHoursHint')}</span></span>
                             </label>
                             <div class="field field-wide">
-                                <label>Geschäftszeiten je Tag</label>
+                                <label>${Lang.t('businessHoursPerDay')}</label>
                                 <div class="business-hours-grid" id="sys-bh-days">
-                                    ${[1, 2, 3, 4, 5, 6, 0].map(i => ({ i, d: ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'][i] })).map(({ i, d }) => `
+                                    ${[1, 2, 3, 4, 5, 6, 0].map(i => ({ i, d: Lang.t(['daySunday', 'dayMonday', 'dayTuesday', 'dayWednesday', 'dayThursday', 'dayFriday', 'daySaturday'][i]) })).map(({ i, d }) => `
                                         <div class="business-day-row" data-day="${i}">
                                             <label class="check-row compact"><input type="checkbox" class="bh-day-enabled" value="${i}"><span>${d}</span></label>
-                                            <input class="bh-day-start" type="time" aria-label="${d} Beginn">
-                                            <span class="business-day-sep">bis</span>
-                                            <input class="bh-day-end" type="time" aria-label="${d} Ende">
+                                            <input class="bh-day-start" type="time" aria-label="${Lang.format('dayStart', { day: d })}">
+                                            <span class="business-day-sep">${Lang.t('to')}</span>
+                                            <input class="bh-day-end" type="time" aria-label="${Lang.format('dayEnd', { day: d })}">
                                         </div>
                                     `).join('')}
                                 </div>
                             </div>
                             <div class="field field-wide">
-                                <label for="sys-bh-holidays">Feiertage (ein Datum pro Zeile, dd.mm.jjjj)</label>
+                                <label for="sys-bh-holidays">${Lang.t('holidaysOneDatePerLine')}</label>
                                 <textarea id="sys-bh-holidays" rows="4" placeholder="01.01.2026&#10;25.12.2026"></textarea>
                             </div>
                         </div>
@@ -2345,55 +2344,55 @@ export const AdminBoard = {
                         <!-- Unternehmenseinstellungen -->
                         <div id="sys-company" class="tab-content">
                             <div class="form-grid">
-                                <div class="field"><label>Firmenname</label><input id="sys-company-name" type="text" placeholder="Muster GmbH"></div>
-                                <div class="field"><label>Support-Abteilung</label><input id="sys-company-dept" type="text" placeholder="IT Service Desk"></div>
+                                <div class="field"><label>${Lang.t('companyName')}</label><input id="sys-company-name" type="text" placeholder="Muster GmbH"></div>
+                                <div class="field"><label>${Lang.t('supportDepartment')}</label><input id="sys-company-dept" type="text" placeholder="IT Service Desk"></div>
                             </div>
-                            <div class="settings-section-title">Branding &amp; Kontaktdaten</div>
+                            <div class="settings-section-title">${Lang.t('brandingAndContactData')}</div>
                             <div class="field">
-                                <label>Firmenlogo / Logo-URL</label>
+                                <label>${Lang.t('companyLogoUrl')}</label>
                                 <div class="form-grid company-logo-grid">
                                     <input id="sys-company-logo" type="text" placeholder="https://example.com/logo.png oder hochladen">
-                                    <label class="btn btn-secondary btn-sm nowrap">${Icon('upload', 15)}Hochladen<input type="file" id="sys-company-logo-file" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" hidden></label>
+                                    <label class="btn btn-secondary btn-sm nowrap">${Icon('upload', 15)}${Lang.t('upload')}<input type="file" id="sys-company-logo-file" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" hidden></label>
                                 </div>
                                 <div class="hint" id="sys-company-logo-hint"></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>Support-E-Mail</label><input id="sys-company-support" type="email" placeholder="support@example.com"></div>
-                                <div class="field"><label>Telefon</label><input id="sys-company-phone" type="text" placeholder="+49 ..."></div>
+                                <div class="field"><label>${Lang.t('supportEmail')}</label><input id="sys-company-support" type="email" placeholder="support@example.com"></div>
+                                <div class="field"><label>${Lang.t('phone')}</label><input id="sys-company-phone" type="text" placeholder="+49 ..."></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>Standard-Zeitzone</label><input id="sys-company-timezone" type="text" placeholder="Europe/Berlin"></div>
-                                <div class="field"><label>Standort / Region</label><input id="sys-company-location" type="text" placeholder="Deutschland"></div>
+                                <div class="field"><label>${Lang.t('defaultTimezone')}</label><input id="sys-company-timezone" type="text" placeholder="Europe/Berlin"></div>
+                                <div class="field"><label>${Lang.t('locationRegion')}</label><input id="sys-company-location" type="text" placeholder="Deutschland"></div>
                             </div>
-                            <div class="field field-wide"><label>Adresse</label><textarea id="sys-company-address" rows="3" placeholder="Straße, PLZ Ort"></textarea></div>
+                            <div class="field field-wide"><label>${Lang.t('address')}</label><textarea id="sys-company-address" rows="3" placeholder="Straße, PLZ Ort"></textarea></div>
                             <div class="form-grid">
-                                <div class="field"><label>Impressum-URL</label><input id="sys-company-imprint" type="url" placeholder="https://example.com/impressum"></div>
-                                <div class="field"><label>Datenschutz-URL</label><input id="sys-company-privacy" type="url" placeholder="https://example.com/datenschutz"></div>
+                                <div class="field"><label>${Lang.t('imprintUrl')}</label><input id="sys-company-imprint" type="url" placeholder="https://example.com/impressum"></div>
+                                <div class="field"><label>${Lang.t('privacyUrl')}</label><input id="sys-company-privacy" type="url" placeholder="https://example.com/datenschutz"></div>
                             </div>
-                            <div class="hint">Die E-Mail-Signatur wird zentral unter E-Mail Einstellungen / Benachrichtigungen &gt; Vorlage und Signatur gepflegt.</div>
-                            <div class="settings-section-title">Ticketnummern für neue Tickets</div>
-                            <div class="callout">Formatvorlagen unterstützen <code>{prefix}</code>, <code>{category}</code> (Code der ersten Ticketkategorie) und <code>{number}</code>. Jede Vorlage muss <code>{number}</code> enthalten. Bestehende Ticketnummern bleiben unverändert.</div>
+                            <div class="hint">${Lang.t('emailSignatureManagedElsewhere')}</div>
+                            <div class="settings-section-title">${Lang.t('ticketNumbersForNewTickets')}</div>
+                            <div class="callout">${Lang.format('ticketNumberFormatCallout', {})}</div>
                             <div class="form-grid">
-                                <div class="field"><label>Format (Standard)</label><input id="sys-ticket-number-format" type="text" placeholder="{prefix}-{number}"></div>
-                                <div class="field"><label>Zusatz / Präfix</label><input id="sys-ticket-number-prefix" type="text" placeholder="TS"></div>
-                                <div class="field"><label>Stellen der laufenden Nummer</label><input id="sys-ticket-number-padding" type="number" min="1" max="12" placeholder="5"></div>
+                                <div class="field"><label>${Lang.t('defaultFormat')}</label><input id="sys-ticket-number-format" type="text" placeholder="{prefix}-{number}"></div>
+                                <div class="field"><label>${Lang.t('prefixLabel')}</label><input id="sys-ticket-number-prefix" type="text" placeholder="TS"></div>
+                                <div class="field"><label>${Lang.t('sequenceDigits')}</label><input id="sys-ticket-number-padding" type="number" min="1" max="12" placeholder="5"></div>
                             </div>
                             <div class="field field-wide">
-                                <label>Kategorieformate (leer = Standardformat)</label>
+                                <label>${Lang.t('categoryFormats')}</label>
                                 <div id="sys-ticket-category-formats" class="ticket-number-category-formats"></div>
                             </div>
-                            <div class="settings-section-title">Genehmigungen durch Vorgesetzte</div>
-                            <div class="hint">Wenn eine Person mit hinterlegter Vorgesetzter Person ein Ticket mit einer der gewählten Prioritäten anlegt, wird automatisch eine Genehmigung angefordert. Vorgesetzte Person wird je Benutzer unter Benutzerverwaltung festgelegt.</div>
-                            <label class="check-row"><input type="checkbox" id="sys-appr-enabled"><span><strong>Genehmigungsworkflow aktivieren</strong></span></label>
+                            <div class="settings-section-title">${Lang.t('supervisorApprovals')}</div>
+                            <div class="hint">${Lang.t('supervisorApprovalsHint')}</div>
+                            <label class="check-row"><input type="checkbox" id="sys-appr-enabled"><span><strong>${Lang.t('enableApprovalWorkflow')}</strong></span></label>
                             <div class="perm-grid">
-                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Niedrig"><span>Niedrig</span></label>
-                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Normal"><span>Normal</span></label>
-                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Hoch"><span>Hoch</span></label>
-                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Kritisch"><span>Kritisch</span></label>
+                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Niedrig"><span>${Lang.t('low')}</span></label>
+                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Normal"><span>${Lang.t('normal')}</span></label>
+                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Hoch"><span>${Lang.t('high')}</span></label>
+                                <label class="check-row"><input type="checkbox" class="sys-appr-prio" value="Kritisch"><span>${Lang.t('critical')}</span></label>
                             </div>
                             <div class="field">
-                                <label>Ersatzperson ohne Vorgesetzte(n)</label>
-                                <p class="hint">Wird verwendet, wenn die erstellende Person keine Vorgesetzte Person hinterlegt hat. Ohne Auswahl springt die Anfrage an eine beliebige Superadmin-Person.</p>
+                                <label>${Lang.t('fallbackApproverNoSupervisor')}</label>
+                                <p class="hint">${Lang.t('fallbackApproverHint')}</p>
                                 <div id="sys-appr-fallback"></div>
                             </div>
                         </div>
@@ -2432,40 +2431,40 @@ export const AdminBoard = {
                 // sie zuletzt auf dem Bildschirm gesehen hat, siehe update.ts Commit-Pinning.
                 const status = AdminBoard._lastUpdateStatus || {};
                 const targetCommit = status.updateAvailable ? status.remoteCommit : status.localCommit;
-                if (!targetCommit) { UI.toast('Kein Ziel-Commit bekannt -- bitte zuerst erneut prüfen.'); return; }
-                const stepUp = await AdminBoard.confirmStepUp('Diese Aktion baut die Anwendung neu, führt Datenbank-Migrationen aus und startet den App-Container neu.', targetCommit.slice(0, 12));
+                if (!targetCommit) { UI.toast(Lang.t('noTargetCommitKnown')); return; }
+                const stepUp = await AdminBoard.confirmStepUp(Lang.t('updateConfirmMessage'), targetCommit.slice(0, 12));
                 if (!stepUp) return;
                 q('#sys-update-run').disabled = true;
                 const result = await Store.runUpdate(targetCommit, stepUp.password, stepUp.totpCode);
                 if (!result || ![200, 202].includes(result.httpStatus)) {
-                    const msg = result?.error === 'wrong_password' ? 'Falsches Passwort.'
-                        : result?.error === 'invalid_totp_code' ? 'Ungültiger 2FA-Code.'
-                        : result?.error === 'commit_mismatch' ? 'Der Stand auf GitHub hat sich gerade geändert -- bitte erneut prüfen und bestätigen.'
-                        : 'Online-Update ist deaktiviert oder nicht erreichbar.';
+                    const msg = result?.error === 'wrong_password' ? Lang.t('wrongPassword')
+                        : result?.error === 'invalid_totp_code' ? Lang.t('invalidMfaCode')
+                        : result?.error === 'commit_mismatch' ? Lang.t('commitMismatchError')
+                        : Lang.t('updateDisabledOrUnreachable');
                     UI.toast(msg);
                     await AdminBoard.renderUpdateStatus();
                     return;
                 }
-                UI.toast('Update wurde gestartet. Die Anwendung wird gleich neu gebaut und kurz neu gestartet.');
+                UI.toast(Lang.t('updateStartedToast'));
                 await AdminBoard.renderUpdateStatus();
             };
             q('#sys-update-migrate').onclick = async () => {
-                const stepUp = await AdminBoard.confirmStepUp('Diese Aktion führt ausstehende Datenbank-Migrationen für den bereits laufenden Code aus.');
+                const stepUp = await AdminBoard.confirmStepUp(Lang.t('migrateConfirmMessage'));
                 if (!stepUp) return;
                 const btn = q('#sys-update-migrate');
                 btn.disabled = true;
-                UI.toast('Datenbank-Migrationen laufen...');
+                UI.toast(Lang.t('migrationsRunning'));
                 const result = await Store.runMigrate(stepUp.password, stepUp.totpCode);
                 btn.disabled = false;
                 if (!result || result.httpStatus !== 200) {
-                    const msg = result?.error === 'wrong_password' ? 'Falsches Passwort.'
-                        : result?.error === 'invalid_totp_code' ? 'Ungültiger 2FA-Code.'
-                        : result?.log ? `Migrationen fehlgeschlagen: ${result.log.slice(0, 200)}`
-                        : 'Migrationen fehlgeschlagen oder Updater nicht erreichbar.';
+                    const msg = result?.error === 'wrong_password' ? Lang.t('wrongPassword')
+                        : result?.error === 'invalid_totp_code' ? Lang.t('invalidMfaCode')
+                        : result?.log ? Lang.format('migrationsFailedWithLog', { log: result.log.slice(0, 200) })
+                        : Lang.t('migrationsFailedUnreachable');
                     UI.toast(msg);
                     return;
                 }
-                UI.toast('Datenbank ist jetzt auf dem aktuellen Stand.');
+                UI.toast(Lang.t('dbNowUpToDate'));
             };
         }
 
@@ -2519,12 +2518,12 @@ export const AdminBoard = {
             // vergrößert die Rohdatei um ca. 1/3, deshalb hier konservativ bei 650 KB abschneiden
             // statt die kryptische Fehlermeldung des Servers abzuwarten.
             if (file.size > 650 * 1024) {
-                UI.toast('Bild ist zu groß (max. ca. 650 KB). Bitte kleineres Logo verwenden.');
+                UI.toast(Lang.t('imageTooLarge'));
                 return;
             }
             const dataUrl = await Store.readFile(file);
             q('#sys-company-logo').value = dataUrl;
-            q('#sys-company-logo-hint').textContent = `Hochgeladen: ${file.name} (${Math.round(file.size / 1024)} KB)`;
+            q('#sys-company-logo-hint').textContent = Lang.format('uploadedFileSize', { name: file.name, size: Math.round(file.size / 1024) });
         };
         q('#sys-company-support').value = companyBranding.supportEmail || '';
         q('#sys-company-phone').value = companyBranding.phone || '';
@@ -2544,14 +2543,17 @@ export const AdminBoard = {
                 <div class="ticket-number-category-row">
                     <label>${Utils.esc(c.name)}</label>
                     <input type="text" data-ticket-category="${Utils.esc(c.name)}" placeholder="{prefix}-{number}" value="${Utils.esc(categoryFormatValues[c.name] || '')}">
-                </div>`).join('') : '<div class="empty-state compact">Keine Kategorien angelegt.</div>';
+                </div>`).join('') : `<div class="empty-state compact">${Lang.t('noCategoriesCreated')}</div>`;
         }
 
         q('#sys-2fa-enforce').value = security.force2FA || 'none';
         q('#sys-session-timeout').value = security.sessionTimeout ?? 480;
         q('#sys-idle-timeout').value = security.idleTimeoutMinutes ?? 60;
         q('#sys-max-login-attempts').value = security.maxLoginAttempts ?? 5;
-        q('#sys-lockout-action').value = security.lockoutAction || 'temp';
+        // Security-Audit R-11: 'lock' (frueher "dauerhaft") verhaelt sich serverseitig jetzt wie
+        // 'temp' -- eine automatische Sperre ist nie mehr dauerhaft. Bestehende gespeicherte 'lock'-
+        // Konfigurationen werden beim Laden deshalb als 'temp' angezeigt.
+        q('#sys-lockout-action').value = security.lockoutAction === 'none' ? 'none' : 'temp';
         q('#sys-lockout-minutes').value = security.lockoutMinutes || 15;
 
         q('#notif-account-approved').checked = !!notif.accountApproved;
@@ -2580,9 +2582,9 @@ export const AdminBoard = {
         q('#sys-outlook-create').checked = !!outlook.createTicketsFromMail;
         const outlookServer = await Store.getOutlookConfig();
         q('#sys-outlook-secret').value = '';
-        q('#sys-outlook-secret').placeholder = outlookServer?.hasClientSecret ? 'Leer lassen = unverändert' : 'Client-Secret eingeben';
+        q('#sys-outlook-secret').placeholder = outlookServer?.hasClientSecret ? Lang.t('leaveEmptyUnchanged') : Lang.t('enterClientSecret');
         q('#sys-outlook-status').textContent = outlookServer?.enabled && outlookServer?.hasClientSecret
-            ? 'Outlook-Integration ist konfiguriert.' : 'Outlook-Integration ist noch nicht vollständig konfiguriert.';
+            ? Lang.t('outlookConfigured') : Lang.t('outlookNotFullyConfigured');
         q('#sys-outlook-save').onclick = async () => {
             const secret = q('#sys-outlook-secret').value;
             const configOk = await Store.updateServerSettings({
@@ -2597,14 +2599,14 @@ export const AdminBoard = {
             });
             const secretOk = secret ? await Store.updateOutlookSecret(secret) : true;
             if (configOk && secretOk) {
-                UI.toast('Outlook-Einstellungen gespeichert.');
+                UI.toast(Lang.t('outlookSettingsSaved'));
                 q('#sys-outlook-secret').value = '';
                 const refreshed = await Store.getOutlookConfig();
-                q('#sys-outlook-secret').placeholder = refreshed?.hasClientSecret ? 'Leer lassen = unverändert' : 'Client-Secret eingeben';
+                q('#sys-outlook-secret').placeholder = refreshed?.hasClientSecret ? Lang.t('leaveEmptyUnchanged') : Lang.t('enterClientSecret');
                 q('#sys-outlook-status').textContent = refreshed?.enabled && refreshed?.hasClientSecret
-                    ? 'Outlook-Integration ist konfiguriert.' : 'Outlook-Integration ist noch nicht vollständig konfiguriert.';
+                    ? Lang.t('outlookConfigured') : Lang.t('outlookNotFullyConfigured');
             } else {
-                UI.toast('Speichern fehlgeschlagen.');
+                UI.toast(Lang.t('saveFailed'));
             }
         };
 
@@ -2624,7 +2626,7 @@ export const AdminBoard = {
         apprFallbackPicker = UI.createMultiSelect(
             q('#sys-appr-fallback'),
             apprFallbackUsers.map(u => ({ value: u.id, label: u.name || u.username })),
-            appr.fallbackApproverUserId || '', null, { single: true, emptyLabel: 'Keine (Superadmin automatisch)' }
+            appr.fallbackApproverUserId || '', null, { single: true, emptyLabel: Lang.t('noneAutoSuperadmin') }
         );
 
         const smtp = await Store.getSmtpConfig();
@@ -2633,16 +2635,16 @@ export const AdminBoard = {
         q('#sys-smtp-secure').value = smtp?.secure ? 'true' : 'false';
         q('#sys-smtp-user').value = smtp?.user || '';
         q('#sys-smtp-pass').value = '';
-        q('#sys-smtp-pass').placeholder = smtp?.hasPassword ? 'Leer lassen = unverändert' : 'Passwort eingeben';
+        q('#sys-smtp-pass').placeholder = smtp?.hasPassword ? Lang.t('leaveEmptyUnchanged') : Lang.t('enterPassword');
         q('#sys-smtp-from').value = smtp?.from || '';
         q('#sys-smtp-fromname').value = smtp?.fromName || '';
-        q('#sys-smtp-status').textContent = smtp?.configured ? 'SMTP ist konfiguriert.' : 'SMTP ist noch nicht konfiguriert.';
+        q('#sys-smtp-status').textContent = smtp?.configured ? Lang.t('smtpConfigured') : Lang.t('smtpNotConfigured');
         q('#sys-smtp-save-test').onclick = async () => {
             const host = q('#sys-smtp-host').value.trim();
             const from = q('#sys-smtp-from').value.trim();
-            if (!host || !from) return UI.toast('Bitte Host und Absender-Adresse angeben.');
+            if (!host || !from) return UI.toast(Lang.t('enterHostAndSenderAddress'));
             const user = await Store.currentUser();
-            if (!user?.email) return UI.toast('Kein E-Mail im eigenen Profil hinterlegt -- wohin soll die Test-Mail gehen?');
+            if (!user?.email) return UI.toast(Lang.t('noEmailInOwnProfile'));
             const ok = await Store.updateSmtpConfig({
                 host, port: parseInt(q('#sys-smtp-port').value, 10) || 587,
                 secure: q('#sys-smtp-secure').value === 'true',
@@ -2650,12 +2652,12 @@ export const AdminBoard = {
                 password: q('#sys-smtp-pass').value || undefined,
                 from, fromName: q('#sys-smtp-fromname').value.trim() || null
             });
-            if (!ok) return UI.toast('SMTP-Einstellungen speichern fehlgeschlagen.');
-            UI.toast('SMTP-Einstellungen gespeichert, sende Test-E-Mail...');
+            if (!ok) return UI.toast(Lang.t('smtpSaveFailed'));
+            UI.toast(Lang.t('smtpSavedSendingTest'));
             const sent = await Store.sendTestSmtpEmail(user.email);
-            UI.toast(sent ? `Test-E-Mail an ${user.email} gesendet.` : 'Test-E-Mail senden fehlgeschlagen -- bitte Zugangsdaten prüfen.');
+            UI.toast(sent ? Lang.format('testEmailSentTo', { email: user.email }) : Lang.t('testEmailFailed'));
             q('#sys-smtp-pass').value = '';
-            q('#sys-smtp-status').textContent = 'SMTP ist konfiguriert.';
+            q('#sys-smtp-status').textContent = Lang.t('smtpConfigured');
         };
 
         const ldap = await Store.getLdapConfig();
@@ -2665,30 +2667,30 @@ export const AdminBoard = {
         q('#sys-ldap-filter').value = ldap?.userFilter || '(uid={username})';
         q('#sys-ldap-bind-dn').value = ldap?.bindDn || '';
         q('#sys-ldap-bind-pass').value = '';
-        q('#sys-ldap-bind-pass').placeholder = ldap?.hasBindPassword ? 'Leer lassen = unverändert' : 'Passwort eingeben';
-        q('#sys-ldap-status').textContent = ldap?.enabled ? 'LDAP-Login ist aktiviert.' : 'LDAP-Login ist deaktiviert.';
+        q('#sys-ldap-bind-pass').placeholder = ldap?.hasBindPassword ? Lang.t('leaveEmptyUnchanged') : Lang.t('enterPassword');
+        q('#sys-ldap-status').textContent = ldap?.enabled ? Lang.t('ldapEnabled') : Lang.t('ldapDisabled');
         q('#sys-ldap-save').onclick = async () => {
             const url = q('#sys-ldap-url').value.trim();
             const baseDn = q('#sys-ldap-base-dn').value.trim();
             const bindDn = q('#sys-ldap-bind-dn').value.trim();
-            if (!url || !baseDn || !bindDn) return UI.toast('Bitte Server-URL, Such-Basis und Bind-DN angeben.');
+            if (!url || !baseDn || !bindDn) return UI.toast(Lang.t('enterServerUrlBaseDnBindDn'));
             const ok = await Store.updateLdapConfig({
                 enabled: q('#sys-ldap-enabled').checked,
                 url, baseDn, bindDn,
                 bindPassword: q('#sys-ldap-bind-pass').value || undefined,
                 userFilter: q('#sys-ldap-filter').value.trim() || '(uid={username})'
             });
-            if (!ok) return UI.toast('LDAP-Einstellungen speichern fehlgeschlagen.');
-            UI.toast('LDAP-Einstellungen gespeichert.');
+            if (!ok) return UI.toast(Lang.t('ldapSaveFailed'));
+            UI.toast(Lang.t('ldapSettingsSaved'));
             q('#sys-ldap-bind-pass').value = '';
-            q('#sys-ldap-status').textContent = q('#sys-ldap-enabled').checked ? 'LDAP-Login ist aktiviert.' : 'LDAP-Login ist deaktiviert.';
+            q('#sys-ldap-status').textContent = q('#sys-ldap-enabled').checked ? Lang.t('ldapEnabled') : Lang.t('ldapDisabled');
         };
         q('#sys-ldap-test').onclick = async () => {
             const password = q('#sys-ldap-test-pass').value;
-            if (!password) return UI.toast('Bitte das eigene LDAP-Passwort eingeben.');
-            UI.toast('Teste LDAP-Verbindung...');
+            if (!password) return UI.toast(Lang.t('enterOwnLdapPassword'));
+            UI.toast(Lang.t('testingLdapConnection'));
             const ok = await Store.testLdapConfig(password);
-            UI.toast(ok ? 'LDAP-Test erfolgreich.' : 'LDAP-Test fehlgeschlagen -- Konfiguration oder Passwort prüfen.');
+            UI.toast(ok ? Lang.t('ldapTestSuccess') : Lang.t('ldapTestFailed'));
             q('#sys-ldap-test-pass').value = '';
         };
 
@@ -2805,12 +2807,12 @@ export const AdminBoard = {
             });
             if (!ok) {
                 console.error('Systemeinstellungen speichern fehlgeschlagen:', Store.lastError);
-                return UI.toast('Systemeinstellungen speichern fehlgeschlagen. Details stehen in der Konsole.');
+                return UI.toast(Lang.t('systemSettingsSaveFailed'));
             }
             if (q('.kanban-board')) await AdminBoard.render();
             if (q('#user-tickets')) await UserDash.renderList();
             modal.classList.remove('open');
-            UI.toast('Systemeinstellungen gespeichert');
+            UI.toast(Lang.t('systemSettingsSaved'));
         };
     },
 
@@ -2825,45 +2827,45 @@ export const AdminBoard = {
             container.dataset.built = '1';
             container.innerHTML = `
                 <div class="list-view-toolbar">
-                    <input type="search" id="lv-search" class="section-search" placeholder="Suchen...">
-                    <select id="lv-status"><option value="">Alle Status</option></select>
-                    <select id="lv-prio"><option value="">Alle Prioritäten</option><option>Niedrig</option><option>Normal</option><option>Hoch</option><option>Kritisch</option></select>
-                    <select id="lv-category"><option value="">Alle Kategorien</option></select>
-                    <select id="lv-team"><option value="">Alle Teams</option></select>
+                    <input type="search" id="lv-search" class="section-search" placeholder="${Lang.t('search')}">
+                    <select id="lv-status"><option value="">${Lang.t('allStatuses')}</option></select>
+                    <select id="lv-prio"><option value="">${Lang.t('allPriorities')}</option><option value="Niedrig">${Lang.t('low')}</option><option value="Normal">${Lang.t('normal')}</option><option value="Hoch">${Lang.t('high')}</option><option value="Kritisch">${Lang.t('critical')}</option></select>
+                    <select id="lv-category"><option value="">${Lang.t('allCategories')}</option></select>
+                    <select id="lv-team"><option value="">${Lang.t('allTeams')}</option></select>
                     <details class="lv-more">
-                        <summary class="btn-secondary btn-sm">${Icon('sliders-horizontal', 15)}Filter &amp; Ansichten</summary>
+                        <summary class="btn-secondary btn-sm">${Icon('sliders-horizontal', 15)}${Lang.t('filtersAndViews')}</summary>
                         <div class="lv-more-body">
-                            <label class="check-row compact"><input type="checkbox" id="lv-mine">Nur meine</label>
-                            <label class="check-row compact"><input type="checkbox" id="lv-sla-risk">SLA in Gefahr</label>
-                            <select id="lv-saved-views"><option value="">Gespeicherte Ansicht...</option></select>
-                            <button id="lv-save-view" class="btn-secondary btn-sm">${Icon('bookmark-plus', 15)}Ansicht speichern</button>
-                            <button id="lv-delete-view" class="btn-ghost btn-icon btn-danger btn-sm" title="Ausgewählte Ansicht löschen" aria-label="Ausgewählte Ansicht löschen">${Icon('trash-2', 15)}</button>
+                            <label class="check-row compact"><input type="checkbox" id="lv-mine">${Lang.t('onlyMine')}</label>
+                            <label class="check-row compact"><input type="checkbox" id="lv-sla-risk">${Lang.t('slaAtRisk')}</label>
+                            <select id="lv-saved-views"><option value="">${Lang.t('savedViewPlaceholder')}</option></select>
+                            <button id="lv-save-view" class="btn-secondary btn-sm">${Icon('bookmark-plus', 15)}${Lang.t('saveView')}</button>
+                            <button id="lv-delete-view" class="btn-ghost btn-icon btn-danger btn-sm" title="${Lang.t('deleteSelectedView')}" aria-label="${Lang.t('deleteSelectedView')}">${Icon('trash-2', 15)}</button>
                         </div>
                     </details>
                 </div>
                 <div id="lv-bulk-bar" class="list-view-bulk-bar" hidden>
                     <span id="lv-selected-count"></span>
                     <select id="lv-bulk-status">
-                        <option value="">Status setzen...</option>
-                        <option value="Neu">Neu</option>
-                        <option value="In Bearbeitung">In Bearbeitung</option>
-                        <option value="Geschlossen">Geschlossen</option>
+                        <option value="">${Lang.t('setStatusPlaceholder')}</option>
+                        <option value="Neu">${Lang.t('statusNew')}</option>
+                        <option value="In Bearbeitung">${Lang.t('statusDoing')}</option>
+                        <option value="Geschlossen">${Lang.t('statusClosed')}</option>
                     </select>
-                    <button id="lv-bulk-apply-status" class="btn-secondary btn-sm">Anwenden</button>
-                    <button id="lv-bulk-archive" class="btn-secondary btn-sm">${Icon('archive', 15)}Archivieren</button>
+                    <button id="lv-bulk-apply-status" class="btn-secondary btn-sm">${Lang.t('apply')}</button>
+                    <button id="lv-bulk-archive" class="btn-secondary btn-sm">${Icon('archive', 15)}${Lang.t('archiveAction')}</button>
                 </div>
                 <div class="list-view-table-wrap">
                     <table class="list-view-table">
                         <thead><tr>
                             <th><input type="checkbox" id="lv-select-all"></th>
-                            <th data-sort="ticketNumber">Ticket-Nr</th>
-                            <th data-sort="title">Titel</th>
-                            <th data-sort="status">Status</th>
-                            <th data-sort="prio">Priorität</th>
-                            <th data-sort="category">Kategorie</th>
-                            <th data-sort="owner">Verantwortlich</th>
-                            <th data-sort="createdAt">Erstellt</th>
-                            <th data-sort="sla">Frist</th>
+                            <th data-sort="ticketNumber">${Lang.t('colTicketNo')}</th>
+                            <th data-sort="title">${Lang.t('colTitle')}</th>
+                            <th data-sort="status">${Lang.t('status')}</th>
+                            <th data-sort="prio">${Lang.t('prio')}</th>
+                            <th data-sort="category">${Lang.t('category')}</th>
+                            <th data-sort="owner">${Lang.t('colResponsible')}</th>
+                            <th data-sort="createdAt">${Lang.t('colCreated')}</th>
+                            <th data-sort="sla">${Lang.t('colDeadline')}</th>
                         </tr></thead>
                         <tbody id="lv-body"></tbody>
                     </table>
@@ -2906,10 +2908,10 @@ export const AdminBoard = {
             };
             q('#lv-save-view').onclick = async () => {
                 const name = await UI.promptText({
-                    title: 'Ansicht speichern',
-                    label: 'Name der Ansicht',
-                    placeholder: 'z. B. Meine offenen oder SLA in Gefahr',
-                    saveLabel: 'Ansicht speichern'
+                    title: Lang.t('saveView'),
+                    label: Lang.t('viewName'),
+                    placeholder: Lang.t('viewNamePlaceholderExample'),
+                    saveLabel: Lang.t('saveView')
                 });
                 if (!name || !name.trim()) return;
                 const ok = await Store.createListView(name.trim(), {
@@ -2921,15 +2923,15 @@ export const AdminBoard = {
                     mine: q('#lv-mine').checked,
                     slaRisk: q('#lv-sla-risk').checked
                 });
-                UI.toast(ok ? 'Ansicht gespeichert.' : 'Ansicht speichern fehlgeschlagen.');
+                UI.toast(ok ? Lang.t('viewSavedToast') : Lang.t('viewSaveFailedToast'));
                 await AdminBoard.populateListViewFilters();
             };
             q('#lv-delete-view').onclick = async () => {
                 const id = q('#lv-saved-views').value;
-                if (!id) return UI.toast('Bitte zuerst eine gespeicherte Ansicht auswählen.');
-                UI.confirm('Diese gespeicherte Ansicht löschen?', async () => {
+                if (!id) return UI.toast(Lang.t('selectSavedViewFirst'));
+                UI.confirm(Lang.t('confirmDeleteSavedView'), async () => {
                     const ok = await Store.deleteListView(id);
-                    UI.toast(ok ? 'Ansicht gelöscht.' : 'Löschen fehlgeschlagen.');
+                    UI.toast(ok ? Lang.t('viewDeletedToast') : Lang.t('deleteFailedToast'));
                     await AdminBoard.populateListViewFilters();
                 });
             };
@@ -2946,13 +2948,13 @@ export const AdminBoard = {
                 });
                 await Store.saveTickets(tickets);
                 await Store.addGlobalLog('Sammelaktion: Status geändert', `${changed} Ticket(s) auf "${status}" gesetzt`);
-                UI.toast(`${changed} Ticket(s) aktualisiert.`);
+                UI.toast(Lang.format('ticketsUpdatedCount', { count: changed }));
                 AdminBoard.listViewState.selected = new Set();
                 await AdminBoard.renderListView();
             };
             q('#lv-bulk-archive').onclick = async () => {
                 if (!AdminBoard.listViewState.selected.size) return;
-                UI.confirm(`${AdminBoard.listViewState.selected.size} ausgewählte Ticket(s) archivieren?`, async () => {
+                UI.confirm(Lang.format('confirmArchiveSelectedTickets', { count: AdminBoard.listViewState.selected.size }), async () => {
                     const tickets = await Store.getTickets();
                     let changed = 0;
                     tickets.forEach(t => {
@@ -2964,7 +2966,7 @@ export const AdminBoard = {
                     });
                     await Store.saveTickets(tickets);
                     await Store.addGlobalLog('Sammelaktion: Archiviert', `${changed} Ticket(s) archiviert`);
-                    UI.toast(changed ? `${changed} Ticket(s) archiviert.` : 'Nur geschlossene Tickets können archiviert werden.');
+                    UI.toast(changed ? Lang.format('ticketsArchivedCount', { count: changed }) : Lang.t('onlyClosedTicketsCanBeArchived'));
                     AdminBoard.listViewState.selected = new Set();
                     await AdminBoard.renderListView();
                 });
@@ -2981,22 +2983,22 @@ export const AdminBoard = {
         const actor = await Store.currentUser();
         const statusSel = q('#lv-status');
         const curStatus = statusSel.value;
-        statusSel.innerHTML = '<option value="">Alle Status</option>' + ['Neu', 'In Bearbeitung', 'Warten auf Benutzer', 'Warten auf externen Dienstleister', 'Warten auf interne Rückmeldung', 'Geschlossen'].map(s => `<option ${s === curStatus ? 'selected' : ''}>${Utils.esc(s)}</option>`).join('');
+        statusSel.innerHTML = `<option value="">${Lang.t('allStatuses')}</option>` + ['Neu', 'In Bearbeitung', 'Warten auf Benutzer', 'Warten auf externen Dienstleister', 'Warten auf interne Rückmeldung', 'Geschlossen'].map(s => `<option value="${Utils.esc(s)}" ${s === curStatus ? 'selected' : ''}>${Utils.esc(Lang.status(s))}</option>`).join('');
         const catSel = q('#lv-category');
         const curCat = catSel.value;
-        catSel.innerHTML = '<option value="">Alle Kategorien</option>' + (settings.categories || []).map(c => `<option ${c === curCat ? 'selected' : ''}>${Utils.esc(c)}</option>`).join('');
+        catSel.innerHTML = `<option value="">${Lang.t('allCategories')}</option>` + (settings.categories || []).map(c => `<option ${c === curCat ? 'selected' : ''}>${Utils.esc(c)}</option>`).join('');
         const teamSel = q('#lv-team');
         const curTeam = teamSel.value;
-        teamSel.innerHTML = '<option value="">Alle Teams</option>' + groups.map(g => `<option value="${Utils.esc(g.id)}" ${g.id === curTeam ? 'selected' : ''}>${Utils.esc(g.name)}</option>`).join('');
+        teamSel.innerHTML = `<option value="">${Lang.t('allTeams')}</option>` + groups.map(g => `<option value="${Utils.esc(g.id)}" ${g.id === curTeam ? 'selected' : ''}>${Utils.esc(g.name)}</option>`).join('');
         const viewsSel = q('#lv-saved-views');
-        viewsSel.innerHTML = '<option value="">Gespeicherte Ansicht...</option>' + views.filter(v => v.ownerUserId === actor?.id || v.isShared).map(v => `<option value="${v.id}">${Utils.esc(v.name)}${v.isShared ? ' (geteilt)' : ''}</option>`).join('');
+        viewsSel.innerHTML = `<option value="">${Lang.t('savedViewPlaceholder')}</option>` + views.filter(v => v.ownerUserId === actor?.id || v.isShared).map(v => `<option value="${v.id}">${Utils.esc(v.name)}${v.isShared ? ` (${Lang.t('shared')})` : ''}</option>`).join('');
     },
 
     updateListViewBulkBar: () => {
         const bar = q('#lv-bulk-bar');
         const count = AdminBoard.listViewState.selected.size;
         bar.hidden = count === 0;
-        q('#lv-selected-count').textContent = `${count} ausgewählt`;
+        q('#lv-selected-count').textContent = Lang.format('selectedCount', { count });
     },
 
     renderListView: async () => {
@@ -3061,14 +3063,14 @@ export const AdminBoard = {
                 <td><input type="checkbox" data-id="${Utils.esc(t.id)}" ${checked}></td>
                 <td>${Utils.esc(t.ticketNumber || t.id)}</td>
                 <td class="lv-title" title="${Utils.esc(t.title)}">${t.isMajorIncident ? `<span class="t-incident-badge lv-incident-icon" title="${Lang.t('majorIncident')}">${Icon('siren', 12)}</span> ` : ''}${Utils.esc(t.title)}</td>
-                <td>${pendingApproval ? `<span class="approval-badge" title="Wartet auf Genehmigung">${Icon('hourglass', 12)}Genehmigung</span>` : `<span class="status-badge">${Utils.esc(Lang.status(t.status))}</span>`}</td>
+                <td>${pendingApproval ? `<span class="approval-badge" title="${Lang.t('awaitingApproval')}">${Icon('hourglass', 12)}${Lang.t('approvals')}</span>` : `<span class="status-badge">${Utils.esc(Lang.status(t.status))}</span>`}</td>
                 <td><span class="t-tag prio-${t.prio}">${Utils.esc(Lang.prio(t.prio))}</span></td>
                 <td>${Utils.esc((Array.isArray(t.category) ? t.category : [t.category]).filter(Boolean).join(', ') || '-')}${team ? ` <span class="t-team">${Icon('route', 10)}${Utils.esc(team.name)}</span>` : ''}</td>
                 <td>${Utils.esc(nameFor(t.owner))}</td>
                 <td>${Utils.esc(Utils.fmtDate(t.createdAt))}</td>
-                <td>${countdown ? `<span class="sla-mini-badge sla-badge-${countdown.tone}" title="Frist: ${Utils.esc(countdown.dueDateLabel)}">${Utils.esc(countdown.dueDateLabel)} · ${Utils.esc(countdown.label)}</span>` : '-'}</td>
+                <td>${countdown ? `<span class="sla-mini-badge sla-badge-${countdown.tone}" title="${Lang.t('deadline')}: ${Utils.esc(countdown.dueDateLabel)}">${Utils.esc(countdown.dueDateLabel)} · ${Utils.esc(countdown.label)}</span>` : '-'}</td>
             </tr>`;
-        }).join('') : `<tr><td colspan="9"><div class="empty-state">Keine Tickets gefunden.</div></td></tr>`;
+        }).join('') : `<tr><td colspan="9"><div class="empty-state">${Lang.t('noTickets')}</div></td></tr>`;
 
         qa('#lv-body tr.lv-row').forEach(row => {
             row.querySelector('td:not(:first-child)').parentElement.onclick = null;
@@ -3171,7 +3173,7 @@ export const AdminBoard = {
         if (count) count.textContent = String(reqs.length);
         list.innerHTML = '';
         if (reqs.length === 0) {
-            list.innerHTML = '<div class="empty-state compact">Keine offenen Anfragen</div>';
+            list.innerHTML = `<div class="empty-state compact">${Lang.t('noOpenRequests')}</div>`;
             return;
         }
         const existingUsers = await Store.getUsers();
@@ -3179,15 +3181,15 @@ export const AdminBoard = {
             const el = document.createElement('div');
             el.className = 'ticket-card request-card';
             const match = existingUsers.find(u => u.email && u.email.toLowerCase() === String(r.email || '').toLowerCase());
-            const restoreLabel = match?.accountArchived ? 'Reaktivieren' : 'Entsperren';
+            const restoreLabel = match?.accountArchived ? Lang.t('reactivate') : Lang.t('unlock');
             const showRestore = !!match && (match.accountLocked || match.accountArchived);
             el.innerHTML = `
                 <div class="req-name">${Utils.esc(r.name)}</div>
                 <div class="req-mail">${Utils.esc(r.email)}</div>
                 <div class="req-actions">
-                    <button class="btn-primary btn-sm req-accept">${Icon('check', 15)}Annehmen</button>
+                    <button class="btn-primary btn-sm req-accept">${Icon('check', 15)}${Lang.t('accept')}</button>
                     ${showRestore ? `<button class="btn-secondary btn-sm req-restore">${Icon(match.accountArchived ? 'archive-restore' : 'lock-open', 15)}${restoreLabel}</button>` : ''}
-                    <button class="btn-secondary btn-sm req-decline">${Icon('x', 15)}Ablehnen</button>
+                    <button class="btn-secondary btn-sm req-decline">${Icon('x', 15)}${Lang.t('decline')}</button>
                 </div>
             `;
             el.querySelector('.req-accept').onclick = () => AdminBoard.openApproveModal(r);
@@ -3201,11 +3203,11 @@ export const AdminBoard = {
                 target.failedLogins = 0;
                 await Store.saveUsers(users);
                 await Store.addGlobalLog('Konto über Kontoanfrage reaktiviert', `Benutzer: ${target.username}`);
-                UI.toast(`${target.username} wurde ${restoreLabel === 'Reaktivieren' ? 'reaktiviert' : 'entsperrt'}.`);
+                UI.toast(Lang.format(restoreLabel === Lang.t('reactivate') ? 'accountReactivatedByUsername' : 'accountUnlockedByUsername', { username: target.username }));
                 AdminBoard.renderRequests();
             };
             el.querySelector('.req-decline').onclick = () => {
-                UI.confirm('Anfrage ablehnen?', async () => {
+                UI.confirm(Lang.t('confirmDeclineRequest'), async () => {
                     await Store.decideAccountRequest(r.id, 'rejected');
                     AdminBoard.renderRequests();
                 });
@@ -3225,29 +3227,16 @@ export const AdminBoard = {
         const cancel = q('#waiting-status-cancel');
         if (!modal || !select || !reasonField || !messageField || !messageInput || !confirm || !cancel) return resolve(null);
 
-        if (Lang.current === 'en') {
-            select.options[0].textContent = 'Choose a reason';
-            select.options[1].textContent = 'Waiting for user';
-            select.options[2].textContent = 'Waiting for external provider';
-            select.options[3].textContent = 'Waiting for internal feedback';
-            q('#waiting-status-title').lastChild.textContent = fixedStatus ? 'What do you need from the user?' : 'What are you waiting for?';
-            reasonField.querySelector('label').textContent = 'Waiting reason';
-            messageField.querySelector('label').textContent = 'Message to the user';
-            messageInput.placeholder = 'Describe what you need from the user.';
-            confirm.title = confirm.ariaLabel = 'Apply';
-            cancel.title = cancel.ariaLabel = 'Cancel';
-        } else {
-            select.options[0].textContent = 'Bitte auswählen';
-            select.options[1].textContent = 'Auf Benutzer';
-            select.options[2].textContent = 'Auf externen Dienstleister';
-            select.options[3].textContent = 'Auf interne Rückmeldung';
-            q('#waiting-status-title').lastChild.textContent = fixedStatus ? 'Was wird vom Benutzer benötigt?' : 'Worauf wird gewartet?';
-            reasonField.querySelector('label').textContent = 'Wartegrund';
-            messageField.querySelector('label').textContent = 'Nachricht an den Benutzer';
-            messageInput.placeholder = 'Was wird vom Benutzer benötigt?';
-            confirm.title = confirm.ariaLabel = 'Übernehmen';
-            cancel.title = cancel.ariaLabel = 'Abbrechen';
-        }
+        select.options[0].textContent = Lang.t('chooseReasonPlaceholder');
+        select.options[1].textContent = Lang.t('onUserOption');
+        select.options[2].textContent = Lang.t('onExternalProviderOption');
+        select.options[3].textContent = Lang.t('onInternalFeedbackOption');
+        q('#waiting-status-title').lastChild.textContent = fixedStatus ? Lang.t('whatDoYouNeedFromUser') : Lang.t('whatAreYouWaitingFor');
+        reasonField.querySelector('label').textContent = Lang.t('waitingReasonLabel');
+        messageField.querySelector('label').textContent = Lang.t('messageToUserLabel');
+        messageInput.placeholder = Lang.t('whatDoYouNeedFromUser');
+        confirm.title = confirm.ariaLabel = Lang.t('applyShort');
+        cancel.title = cancel.ariaLabel = Lang.t('cancel');
 
         select.value = fixedStatus;
         select.disabled = !!fixedStatus;
@@ -3299,11 +3288,11 @@ export const AdminBoard = {
         const ticket = tickets.find(item => item.id === id);
         if (!ticket || ticket.archived || ticket.status === newStatus) return false;
         if (newStatus === 'Warten auf Benutzer' && !waitingMessage.trim()) {
-            UI.toast('Bitte beschreiben, was vom Benutzer benötigt wird.');
+            UI.toast(Lang.t('describeWhatIsNeededFromUser'));
             return false;
         }
         if (newStatus !== 'Geschlossen' && (ticket.approvals || []).some(a => a.status === 'pending')) {
-            UI.toast('Dieses Ticket wartet noch auf eine Genehmigung.');
+            UI.toast(Lang.t('ticketAwaitingApprovalCannotChange'));
             return false;
         }
         const beforeChange = {
@@ -3359,7 +3348,7 @@ export const AdminBoard = {
             });
             await AdminBoard.render();
             console.error('Status speichern fehlgeschlagen:', Store.lastError);
-            UI.toast('Status konnte nicht gespeichert werden. Details stehen in der Konsole.');
+            UI.toast(Lang.t('statusSaveFailed'));
             return false;
         }
         if (newStatus === 'Geschlossen' && ticket.isMajorIncident) {
@@ -3370,8 +3359,8 @@ export const AdminBoard = {
         const requestDetails = newStatus === 'Warten auf Benutzer' ? `\nAnforderung: ${ticket.waitingMessage}` : '';
         await Store.addGlobalLog('Ticket Status geändert', `Ticket: ${ticket.title}, Status: ${newStatus}${requestDetails}`);
         const notificationMessage = newStatus === 'Warten auf Benutzer' ?
-            `Wir benötigen noch folgende Angaben: ${ticket.waitingMessage}` :
-            `Status geändert: ${Lang.status(newStatus)}`;
+            Lang.format('infoNeededColon', { message: ticket.waitingMessage }) :
+            Lang.format('statusChangedTo', { status: Lang.status(newStatus) });
         const statusNotifType = newStatus === 'Geschlossen' ? 'ticketClosed' : 'statusChange';
         const participantRecipients = (ticket.participants || []).filter(name => name && name !== ticket.author);
         if (participantRecipients.length) {
@@ -3383,9 +3372,9 @@ export const AdminBoard = {
         if (author?.email && settings.emailConfig?.host) {
             const statusPref = await Store.resolveNotifPref(author, statusNotifType);
             if (statusNotifType === 'ticketClosed' && statusPref.email) {
-                await Store.sendEmail(author.email, `Ticket geschlossen: ${ticket.title}`, 'Dein Ticket wurde geschlossen. Du kannst den Verlauf weiterhin im Portal einsehen.');
+                await Store.sendEmail(author.email, Lang.format('ticketClosedEmailSubject', { title: ticket.title }), Lang.t('ticketClosedEmailBody'));
             } else if (statusNotifType === 'statusChange' && statusPref.email) {
-                await Store.sendEmail(author.email, `Ticket Update: ${ticket.title}`, `Status geändert auf: ${Lang.status(newStatus)}${newStatus === 'Warten auf Benutzer' ? `\n\nWir benötigen noch folgende Angaben:\n${ticket.waitingMessage}` : ''}`);
+                await Store.sendEmail(author.email, Lang.format('ticketUpdateEmailSubject', { title: ticket.title }), Lang.format('ticketUpdateEmailBody', { status: Lang.status(newStatus) }) + (newStatus === 'Warten auf Benutzer' ? `\n\n${Lang.format('infoNeededColon', { message: ticket.waitingMessage })}` : ''));
             }
         }
         await AdminBoard.render();
@@ -3423,10 +3412,10 @@ export const AdminBoard = {
                             return;
                         }
                         const changed = await AdminBoard.changeStatus(id, waitingChoice.status, waitingChoice.message);
-                        if (changed) UI.toast(`Status geändert: ${Lang.status(waitingChoice.status)}`);
+                        if (changed) UI.toast(Lang.format('statusChangedTo', { status: Lang.status(waitingChoice.status) }));
                     } else {
                         const changed = await AdminBoard.changeStatus(id, newStatus);
-                        if (changed) UI.toast(`Status geändert: ${Lang.status(newStatus)}`);
+                        if (changed) UI.toast(Lang.format('statusChangedTo', { status: Lang.status(newStatus) }));
                     }
                 }
             });
@@ -3484,40 +3473,40 @@ export const AdminBoard = {
         section.id = 'ticket-responsibility';
         section.className = 'responsibility-section';
         section.innerHTML = `
-            <div class="section-title">${Icon('user-check', 15)} Zuständigkeiten</div>
+            <div class="section-title">${Icon('user-check', 15)} ${Lang.t('responsibilities')}</div>
             <div class="responsibility-grid">
                 <div class="field">
-                    <label>Hauptverantwortlicher</label>
+                    <label>${Lang.t('mainResponsible')}</label>
                     <select id="m-owner-select">
-                        <option value="">Nicht zugewiesen</option>
+                        <option value="">${Lang.t('notAssigned')}</option>
                         ${staff.map(u => `<option value="${u.username}">${u.name || u.username}</option>`).join('')}
                     </select>
                 </div>
                 <div class="field">
-                    <label>Beteiligte Personen</label>
+                    <label>${Lang.t('involvedPersons')}</label>
                     <div id="participants-multi" class="multi-select-container"></div>
                 </div>
             </div>
             <div class="ticket-todo-panel">
-                <div class="section-title todo-section-title"><span class="todo-title-group">${Icon('list-checks', 15)}Teilaufgaben</span><span id="todo-progress-count" class="todo-progress-count"></span></div>
+                <div class="section-title todo-section-title"><span class="todo-title-group">${Icon('list-checks', 15)}${Lang.t('subtasks')}</span><span id="todo-progress-count" class="todo-progress-count"></span></div>
                 <div id="todo-progress-bar" class="todo-progress-bar" hidden><div id="todo-progress-fill" class="todo-progress-fill"></div></div>
                 <div id="ticket-todos" class="ticket-todos"></div>
                 <div class="todo-create-row">
-                    <input id="todo-title" type="text" placeholder="Neue Teilaufgabe">
+                    <input id="todo-title" type="text" placeholder="${Lang.t('newSubtaskPlaceholder')}">
                     <select id="todo-assignee">
-                        <option value="">Ohne Zuweisung</option>
+                        <option value="">${Lang.t('withoutAssignment')}</option>
                         ${AdminBoard.getTodoAssigneeOptions(t, staff, actor?.username).map(u => `<option value="${Utils.esc(u.username)}"${u.username === actor?.username ? ' selected' : ''}>${Utils.esc(u.name || u.username)}</option>`).join('')}
                     </select>
-                    <button class="btn-primary" id="todo-add" type="button">${Icon('plus', 16)}Hinzufügen</button>
+                    <button class="btn-primary" id="todo-add" type="button">${Icon('plus', 16)}${Lang.t('add')}</button>
                 </div>
             </div>
             <div class="time-tracking-panel">
-                <div class="section-title todo-section-title"><span class="todo-title-group">${Icon('clock', 15)}Zeiterfassung</span><span id="time-total-label" class="todo-progress-count"></span></div>
+                <div class="section-title todo-section-title"><span class="todo-title-group">${Icon('clock', 15)}${Lang.t('timeTracking')}</span><span id="time-total-label" class="todo-progress-count"></span></div>
                 <div id="time-entry-list" class="time-entry-list"></div>
                 <div class="todo-create-row">
-                    <input id="time-minutes" type="number" min="1" step="5" placeholder="Minuten">
-                    <input id="time-note" type="text" placeholder="Notiz (optional)">
-                    <button class="btn-primary" id="time-add" type="button">${Icon('plus', 16)}Hinzufügen</button>
+                    <input id="time-minutes" type="number" min="1" step="5" placeholder="${Lang.t('minutesPlaceholder')}">
+                    <input id="time-note" type="text" placeholder="${Lang.t('notePlaceholderOptional')}">
+                    <button class="btn-primary" id="time-add" type="button">${Icon('plus', 16)}${Lang.t('add')}</button>
                 </div>
             </div>
         `;
@@ -3554,7 +3543,7 @@ export const AdminBoard = {
             const filtered = newParticipants.filter(username => username !== t.owner);
             const userIds = filtered.map(username => users.find(u => u.username === username)?.id).filter(Boolean);
             if (!(await Store.setTicketParticipants(t.id, userIds))) {
-                UI.toast('Beteiligte speichern fehlgeschlagen.');
+                UI.toast(Lang.t('participantsSaveFailed'));
                 return;
             }
             t.participants = filtered;
@@ -3582,16 +3571,16 @@ export const AdminBoard = {
         if (!list || !addBtn) return;
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/time-entries`, { credentials: 'same-origin' }).catch(() => null);
         const entries = res && res.ok ? (await res.json()).entries || [] : [];
-        const fmtMinutes = (mins) => mins >= 60 ? `${(mins / 60).toFixed(mins % 60 === 0 ? 0 : 1)} Std.` : `${mins} Min.`;
+        const fmtMinutes = (mins) => mins >= 60 ? `${(mins / 60).toFixed(mins % 60 === 0 ? 0 : 1)} ${Lang.t('hoursAbbr')}` : `${mins} ${Lang.t('minutesAbbr')}`;
         const totalMinutes = entries.reduce((sum, e) => sum + (e.minutes || 0), 0);
         const totalLabel = q('#time-total-label');
-        if (totalLabel) totalLabel.textContent = totalMinutes ? `${fmtMinutes(totalMinutes)} erfasst` : '';
+        if (totalLabel) totalLabel.textContent = totalMinutes ? Lang.format('recordedTime', { label: fmtMinutes(totalMinutes) }) : '';
         list.innerHTML = entries.length ? entries.slice().reverse().map(e => `
             <div class="time-entry-row" data-id="${Utils.esc(e.id)}">
                 <span class="time-entry-duration">${fmtMinutes(e.minutes)}</span>
                 <span class="time-entry-meta">${Utils.esc(e.username)} · ${Utils.esc(Utils.fmtDate(e.created_at))}${e.note ? ' · ' + Utils.esc(e.note) : ''}</span>
-                <button type="button" class="btn-ghost btn-icon btn-xs btn-danger time-entry-remove" title="Eintrag entfernen" aria-label="Eintrag entfernen">${Icon('x', 13)}</button>
-            </div>`).join('') : '<div class="empty-state compact">Noch keine Zeit erfasst.</div>';
+                <button type="button" class="btn-ghost btn-icon btn-xs btn-danger time-entry-remove" title="${Lang.t('removeEntry')}" aria-label="${Lang.t('removeEntry')}">${Icon('x', 13)}</button>
+            </div>`).join('') : `<div class="empty-state compact">${Lang.t('noTimeRecordedYet')}</div>`;
         list.querySelectorAll('.time-entry-remove').forEach(btn => {
             btn.onclick = async () => {
                 const id = btn.closest('.time-entry-row').dataset.id;
@@ -3605,7 +3594,7 @@ export const AdminBoard = {
             const noteInput = q('#time-note');
             const minutes = parseInt(minutesInput.value, 10);
             if (!Number.isFinite(minutes) || minutes <= 0) {
-                UI.toast('Bitte eine gültige Dauer in Minuten angeben.');
+                UI.toast(Lang.t('enterValidDurationMinutes'));
                 return;
             }
             await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/time-entries`, {
@@ -3650,19 +3639,19 @@ export const AdminBoard = {
         modal.innerHTML = `
             <div class="modal modal-md">
                 <div class="modal-header">
-                    <h3>${Icon('list-tree', 18)}Tickets zur Störung hinzufügen</h3>
+                    <h3>${Icon('list-tree', 18)}${Lang.t('addTicketsToIncident')}</h3>
                     <div class="modal-actions">
-                        <button class="btn-ghost btn-icon" id="iam-save" title="Hinzufügen" aria-label="Hinzufügen">${Icon('save', 16)}</button>
-                        <button class="btn-ghost btn-icon" id="iam-close" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        <button class="btn-ghost btn-icon" id="iam-save" title="${Lang.t('add')}" aria-label="${Lang.t('add')}">${Icon('save', 16)}</button>
+                        <button class="btn-ghost btn-icon" id="iam-close" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                     </div>
                 </div>
                 <div class="modal-body">
-                    <input type="search" id="iam-search" class="section-search" placeholder="Ticket-Nr, Titel oder Person suchen...">
+                    <input type="search" id="iam-search" class="section-search" placeholder="${Lang.t('searchTicketNoTitlePerson')}">
                     <div class="checkbox-list" id="iam-list">${candidates.map(t => `
                         <label class="check-row" data-search="${Utils.esc(`${t.ticketNumber || ''} ${t.title} ${t.authorName || ''} ${t.author || ''}`.toLowerCase())}"><input type="checkbox" value="${Utils.esc(t.id)}">
                             <span class="check-text"><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span>${Utils.esc(t.authorName || t.author || '-')} · ${Lang.status(t.status)}</span></span>
                         </label>`).join('')}</div>
-                    <div class="empty-state compact" id="iam-empty" ${candidates.length ? 'hidden' : ''}>Keine Treffer.</div>
+                    <div class="empty-state compact" id="iam-empty" ${candidates.length ? 'hidden' : ''}>${Lang.t('noMatches')}</div>
                 </div>
             </div>`;
         document.body.appendChild(modal);
@@ -3682,10 +3671,10 @@ export const AdminBoard = {
         modal.onclick = e => { if (e.target === modal) close(); };
         modal.querySelector('#iam-save').onclick = async () => {
             const ids = [...modal.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
-            if (!ids.length) return UI.toast('Bitte mindestens ein Ticket auswählen.');
+            if (!ids.length) return UI.toast(Lang.t('selectAtLeastOneTicket'));
             for (const ticketId of ids) await AdminBoard.linkTicketToIncident(ticketId, incidentId);
             close();
-            UI.toast(`${ids.length} Ticket(s) zur Störung hinzugefügt.`);
+            UI.toast(Lang.format('ticketsAddedToIncident', { count: ids.length }));
             await AdminBoard.openModal(incidentId);
         };
         modal.classList.add('open');
@@ -3714,7 +3703,7 @@ export const AdminBoard = {
                         </button>
                     </div>
                 `).join('')}
-            </div>` : '<div class="empty-state compact">Noch keine Tickets zugeordnet.</div>'}
+            </div>` : `<div class="empty-state compact">${Lang.t('noTicketsLinkedYet')}</div>`}
         `;
         box.querySelectorAll('.incident-linked-open').forEach(btn => {
             btn.onclick = () => AdminBoard.openModal(btn.closest('[data-ticket-id]').dataset.ticketId);
@@ -3722,7 +3711,7 @@ export const AdminBoard = {
         const addBtn = document.createElement('button');
         addBtn.type = 'button';
         addBtn.className = 'btn-secondary btn-sm incident-linked-add';
-        addBtn.innerHTML = `${Icon('plus', 14)}Ticket hinzufügen`;
+        addBtn.innerHTML = `${Icon('plus', 14)}${Lang.t('addTicket')}`;
         addBtn.disabled = !!ticket.archived;
         addBtn.onclick = () => AdminBoard.openAddTicketsToIncident(ticket.id);
         box.querySelector('.section-title')?.after(addBtn);
@@ -3766,15 +3755,15 @@ export const AdminBoard = {
                 <label>
                     <input type="checkbox" ${todo.done ? 'checked' : ''} ${t.archived ? 'disabled' : ''}>
                     <span>${esc(todo.content)}</span>
-                    ${todo.done && todo.done_at ? `<span class="todo-done-at" title="Erledigt am">${Icon('check', 11)}${Utils.esc(Utils.fmtDate(todo.done_at))}</span>` : ''}
+                    ${todo.done && todo.done_at ? `<span class="todo-done-at" title="${Lang.t('doneOn')}">${Icon('check', 11)}${Utils.esc(Utils.fmtDate(todo.done_at))}</span>` : ''}
                 </label>
                 <div class="todo-meta">
-                    ${todo.assignee_username ? `<span class="badge">${Icon('user-round', 12)}${esc(getName(todo.assignee_username))}</span>` : '<span class="badge">Nicht zugewiesen</span>'}
-                    <button class="btn-ghost btn-icon btn-sm todo-edit" title="Teilaufgabe bearbeiten" aria-label="Teilaufgabe bearbeiten" ${t.archived ? 'disabled' : ''}>${Icon('pencil', 14)}</button>
-                    <button class="btn-ghost btn-icon btn-sm btn-danger todo-delete" title="Teilaufgabe löschen" aria-label="Teilaufgabe löschen" ${t.archived ? 'disabled' : ''}>${Icon('trash-2', 15)}</button>
+                    ${todo.assignee_username ? `<span class="badge">${Icon('user-round', 12)}${esc(getName(todo.assignee_username))}</span>` : `<span class="badge">${Lang.t('notAssigned')}</span>`}
+                    <button class="btn-ghost btn-icon btn-sm todo-edit" title="${Lang.t('editSubtask')}" aria-label="${Lang.t('editSubtask')}" ${t.archived ? 'disabled' : ''}>${Icon('pencil', 14)}</button>
+                    <button class="btn-ghost btn-icon btn-sm btn-danger todo-delete" title="${Lang.t('deleteSubtask')}" aria-label="${Lang.t('deleteSubtask')}" ${t.archived ? 'disabled' : ''}>${Icon('trash-2', 15)}</button>
                 </div>
             </div>
-        `).join('') : '<div class="empty-state compact">Noch keine Teilaufgaben.</div>';
+        `).join('') : `<div class="empty-state compact">${Lang.t('noSubtasksYet')}</div>`;
 
         list.querySelectorAll('input[type="checkbox"]').forEach(chk => {
             chk.onchange = async () => {
@@ -3795,21 +3784,21 @@ export const AdminBoard = {
                 if (!todo) return;
                 row.innerHTML = `
                     <div class="todo-edit-fields">
-                        <input class="todo-title-edit" type="text" value="${esc(todo.content)}" aria-label="Teilaufgabe">
-                        <select class="todo-assignee-edit" aria-label="Zuständige Person">
-                            <option value="">Ohne Zuweisung</option>
+                        <input class="todo-title-edit" type="text" value="${esc(todo.content)}" aria-label="${Lang.t('subtaskLabel')}">
+                        <select class="todo-assignee-edit" aria-label="${Lang.t('responsiblePerson')}">
+                            <option value="">${Lang.t('withoutAssignment')}</option>
                             ${assigneeOptions.map(user => `<option value="${esc(user.username)}">${esc(user.name || user.username)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="todo-meta">
-                        <button class="btn-ghost btn-icon btn-sm todo-save" title="Speichern" aria-label="Speichern">${Icon('check', 14)}</button>
-                        <button class="btn-ghost btn-icon btn-sm todo-cancel" title="Abbrechen" aria-label="Abbrechen">${Icon('x', 14)}</button>
+                        <button class="btn-ghost btn-icon btn-sm todo-save" title="${Lang.t('save')}" aria-label="${Lang.t('save')}">${Icon('check', 14)}</button>
+                        <button class="btn-ghost btn-icon btn-sm todo-cancel" title="${Lang.t('cancel')}" aria-label="${Lang.t('cancel')}">${Icon('x', 14)}</button>
                     </div>`;
                 const select = row.querySelector('.todo-assignee-edit');
                 if (assigneeOptions.some(user => user.username === todo.assignee_username)) select.value = todo.assignee_username;
                 row.querySelector('.todo-save').onclick = async () => {
                     const title = row.querySelector('.todo-title-edit').value.trim();
-                    if (!title) return UI.toast('Bitte einen Titel angeben.');
+                    if (!title) return UI.toast(Lang.t('enterATitle'));
                     const assigneeUser = users.find(u => u.username === select.value);
                     await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/todos/${encodeURIComponent(todo.id)}`, {
                         method: 'PATCH', credentials: 'same-origin',
@@ -3862,19 +3851,19 @@ export const AdminBoard = {
         const modal = AdminBoard.createGenericModal();
         modal.id = 'absence-modal';
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
-        modal.querySelector('.modal-header h3').textContent = `Abwesenheit · ${target.name || target.username}`;
+        modal.querySelector('.modal-header h3').textContent = Lang.format('absenceOf', { name: target.name || target.username });
         modal.querySelector('.modal-body').innerHTML = `
-            <label class="check-row"><input type="checkbox" id="abs-active" ${target.absence?.active ? 'checked' : ''}>Als abwesend markieren</label>
+            <label class="check-row"><input type="checkbox" id="abs-active" ${target.absence?.active ? 'checked' : ''}>${Lang.t('markAsAbsent')}</label>
             ${Settings.absencePeriodMarkup(target.absence, 'abm')}
-            <label class="check-row"><input type="checkbox" id="abs-visible" ${target.absence?.visible ? 'checked' : ''}>Anderen Admins anzeigen, dass ich abwesend bin</label>
+            <label class="check-row"><input type="checkbox" id="abs-visible" ${target.absence?.visible ? 'checked' : ''}>${Lang.t('showOtherAdminsAbsent')}</label>
             <div class="field">
-                <label for="abs-substitute">Vertretung</label>
+                <label for="abs-substitute">${Lang.t('substitute')}</label>
                 <select id="abs-substitute">
-                    <option value="">Keine – Tickets zurück ins Team</option>
+                    <option value="">${Lang.t('noneTicketsBackToTeam')}</option>
                     ${substitutes.map(u => `<option value="${Utils.esc(u.username)}" ${target.absence?.substitute === u.username ? 'selected' : ''}>${Utils.esc(u.name || u.username)}</option>`).join('')}
                 </select>
             </div>
-            <p class="hint">Beim Aktivieren werden alle offenen Tickets, bei denen ${Utils.esc(target.name || target.username)} Hauptverantwortlicher ist, sofort an die Vertretung übergeben – oder ohne Vertretung dem Team zur erneuten Verteilung zurückgegeben.</p>`;
+            <p class="hint">${Lang.format('absenceActivateHint', { name: Utils.esc(target.name || target.username) })}</p>`;
         Settings.bindAbsencePeriod('abm', target.absence || {});
         modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
             const active = q('#abs-active').checked;
@@ -3919,12 +3908,12 @@ export const AdminBoard = {
         const isSelf = me?.id === target.id;
         const result = await Store.setUserAbsence(isSelf ? null : target.id, payload);
         if (!result) {
-            UI.toast('Abwesenheit speichern fehlgeschlagen.');
+            UI.toast(Lang.t('absenceSaveFailed'));
             return;
         }
         if (fromMs && fromMs > now) {
             await Store.addGlobalLog('Abwesenheit geplant', `Benutzer: ${target.name || username}, von ${fmt(fromMs)} bis ${untilMs ? fmt(untilMs) : 'offen'}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, Anzeige für andere Admins: ${visible ? 'ja' : 'nein'}`);
-            UI.toast(`Abwesenheit geplant ab ${fmt(fromMs)}.`);
+            UI.toast(Lang.format('absenceScheduledFrom', { date: fmt(fromMs) }));
             await AdminBoard.render();
             return;
         }
@@ -3950,7 +3939,7 @@ export const AdminBoard = {
             await Store.addGlobalLog('Abwesenheit aktiviert', `Benutzer: ${target.name || username}, Vertretung: ${substitute ? (substitute.name || substitute.username) : 'keine'}, bis ${untilMs ? fmt(untilMs) : 'offen'}, keine offenen Tickets`);
         }
         if (substitute && openTickets.length) await AdminBoard.notifySubstituteAbsence(substitute, target, openTickets, addedAsParticipant);
-        UI.toast(openTickets.length ? `${openTickets.length} Ticket(s) übergeben.` : 'Abwesenheit aktiviert.');
+        UI.toast(openTickets.length ? Lang.format('ticketsHandedOver', { count: openTickets.length }) : Lang.t('absenceActivatedToast'));
         await AdminBoard.render();
     },
 
@@ -3959,11 +3948,11 @@ export const AdminBoard = {
         const isSelf = me?.id === target.id;
         const result = await Store.setUserAbsence(isSelf ? null : target.id, { active: false });
         if (!result) {
-            UI.toast('Abwesenheit beenden fehlgeschlagen.');
+            UI.toast(Lang.t('absenceEndFailed'));
             return;
         }
         await Store.addGlobalLog('Abwesenheit beendet', `Benutzer: ${target.name || target.username}`);
-        UI.toast('Abwesenheit beendet.');
+        UI.toast(Lang.t('absenceEndedToast'));
     },
 
     processAbsences: async () => {
@@ -4000,11 +3989,11 @@ export const AdminBoard = {
         }
         if (ticketIds.length) await Store.saveTickets(tickets);
         for (const [fromUser, list] of byFrom) {
-            const message = `${absent?.name || absentUsername} hat ${list.length} Ticket(s) zurückgeholt:\n` + list.map(t => `${t.ticketNumber || t.id} „${t.title}“ · Status: ${Lang.status(t.status)}`).join('\n');
+            const message = Lang.format('ticketsReclaimedNotification', { name: absent?.name || absentUsername, count: list.length }) + '\n' + list.map(t => Lang.format('ticketLineStatus', { num: t.ticketNumber || t.id, title: t.title, status: Lang.status(t.status) })).join('\n');
             await Store.addNotifications([fromUser], { id: null }, message, null, 'absence');
         }
         await Notifications.refresh();
-        if (ticketIds.length) UI.toast(`${ticketIds.length} Ticket(s) zurückgeholt.`);
+        if (ticketIds.length) UI.toast(Lang.format('ticketsReclaimedToast', { count: ticketIds.length }));
     },
 
     openAbsenceReturnPopup: async (user) => {
@@ -4024,20 +4013,20 @@ export const AdminBoard = {
         modal.innerHTML = `
             <div class="modal modal-md substitute-popup">
                 <div class="modal-header">
-                    <h3>${Icon('plane', 20)}Abwesenheit beendet – Tickets zurückholen?</h3>
+                    <h3>${Icon('plane', 20)}${Lang.t('absenceEndedReclaimTickets')}</h3>
                 </div>
                 <div class="modal-body">
-                    <p class="hint">Diese Tickets lagen während deiner Abwesenheit bei deiner Vertretung. Wähle aus, welche du zurückholen möchtest.</p>
+                    <p class="hint">${Lang.t('absenceReturnHint')}</p>
                     <div class="checkbox-list">${tickets.map(t => {
                         const owner = users.find(u => u.username === t.owner);
                         return `<label class="check-row"><input type="checkbox" value="${Utils.esc(t.id)}" checked>
-                            <span class="check-text"><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span>Status: ${Utils.esc(Lang.status(t.status))} · Aktuell bei: ${Utils.esc(owner?.name || t.owner || 'niemandem')}</span></span>
+                            <span class="check-text"><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span>${Lang.format('statusCurrentlyWith', { status: Utils.esc(Lang.status(t.status)), owner: Utils.esc(owner?.name || t.owner || Lang.t('nobody')) })}</span></span>
                         </label>`;
                     }).join('')}</div>
                 </div>
                 <div class="modal-footer modal-footer-visible">
-                    <button class="btn-secondary" id="arp-keep">Nicht zurückholen</button>
-                    <button class="btn-primary" id="arp-return">${Icon('undo-2', 16)}Ausgewählte zurückholen</button>
+                    <button class="btn-secondary" id="arp-keep">${Lang.t('doNotReclaim')}</button>
+                    <button class="btn-primary" id="arp-return">${Icon('undo-2', 16)}${Lang.t('reclaimSelected')}</button>
                 </div>
             </div>`;
         document.body.appendChild(modal);
@@ -4070,11 +4059,11 @@ export const AdminBoard = {
 
     absenceInfoText: absence => {
         const fmt = ms => new Date(ms).toLocaleDateString('de-DE');
-        const period = absence.fromMs && absence.untilMs ? `von ${fmt(absence.fromMs)} bis ${fmt(absence.untilMs)}`
-            : absence.untilMs ? `bis ${fmt(absence.untilMs)}`
-            : absence.fromMs ? `ab ${fmt(absence.fromMs)}, unbefristet`
-            : 'unbefristet';
-        const visibility = absence.visible ? 'für andere Admins sichtbar' : 'nur für dich sichtbar';
+        const period = absence.fromMs && absence.untilMs ? Lang.format('periodFromTo', { from: fmt(absence.fromMs), until: fmt(absence.untilMs) })
+            : absence.untilMs ? Lang.format('periodUntil', { until: fmt(absence.untilMs) })
+            : absence.fromMs ? Lang.format('periodFromIndefinite', { from: fmt(absence.fromMs) })
+            : Lang.t('indefinite');
+        const visibility = absence.visible ? Lang.t('visibleToOtherAdmins') : Lang.t('onlyVisibleToYou');
         return `${period} · ${visibility}`;
     },
 
@@ -4085,10 +4074,12 @@ export const AdminBoard = {
         const users = await Store.getUsers();
         const person = users.find(u => u.username === username);
         if (!person?.absence?.active) return false;
-        UI.toast(`${person.name || person.username} ist aktuell abwesend${person.absence.substitute ? ' – Vertretung: ' + (users.find(u => u.username === person.absence.substitute)?.name || person.absence.substitute) : ' – keine Vertretung hinterlegt'}.`);
-        await Store.addNotifications([username], ticket, `Dir wurde ein Ticket zugewiesen, während du als abwesend markiert bist: ${ticket.title}`, actorUsername, 'newTicket');
+        UI.toast(person.absence.substitute
+            ? Lang.format('personCurrentlyAbsentSubstitute', { name: person.name || person.username, substitute: users.find(u => u.username === person.absence.substitute)?.name || person.absence.substitute })
+            : Lang.format('personCurrentlyAbsentNoSubstitute', { name: person.name || person.username }));
+        await Store.addNotifications([username], ticket, Lang.format('ticketAssignedWhileAbsent', { title: ticket.title }), actorUsername, 'newTicket');
         if (person.absence.substitute) {
-            await Store.addNotifications([person.absence.substitute], ticket, `${person.name || person.username} ist abwesend und hat ein neues Ticket bekommen – bitte übernehmen: ${ticket.title}`, actorUsername, 'newTicket');
+            await Store.addNotifications([person.absence.substitute], ticket, Lang.format('absentPersonGotNewTicket', { name: person.name || person.username, title: ticket.title }), actorUsername, 'newTicket');
         }
         await Notifications.refresh();
         return true;
@@ -4151,8 +4142,8 @@ export const AdminBoard = {
                     <h3>${Icon(icon, 18)}${Utils.esc(title)}</h3>
                     <div class="modal-actions">
                         ${headerButtons.map(b => `<button class="btn-ghost btn-icon" id="${Utils.esc(b.id)}" title="${Utils.esc(b.title)}" aria-label="${Utils.esc(b.title)}">${Icon(b.icon, 16)}</button>`).join('')}
-                        ${onSave ? `<button class="btn-ghost btn-icon" data-dialog-save title="Speichern" aria-label="Speichern">${Icon('save', 16)}</button>` : ''}
-                        <button class="btn-ghost btn-icon" data-dialog-close title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                        ${onSave ? `<button class="btn-ghost btn-icon" data-dialog-save title="${Lang.t('save')}" aria-label="${Lang.t('save')}">${Icon('save', 16)}</button>` : ''}
+                        <button class="btn-ghost btn-icon" data-dialog-close title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                     </div>
                 </div>
                 <div class="modal-body">${body}</div>
@@ -4182,8 +4173,8 @@ export const AdminBoard = {
         btn.type = 'button';
         btn.id = 'm-chat-blocks';
         btn.className = 'btn-ghost btn-icon';
-        btn.title = 'Textbaustein einfügen';
-        btn.setAttribute('aria-label', 'Textbaustein einfügen');
+        btn.title = Lang.t('insertTextBlock');
+        btn.setAttribute('aria-label', Lang.t('insertTextBlock'));
         btn.innerHTML = Icon('message-square-plus', 16);
         btn.onclick = () => AdminBoard.pickTextBlock('#m-chat-input');
         link.before(btn);
@@ -4193,15 +4184,15 @@ export const AdminBoard = {
     openTextBlocks: async () => {
         const modal = AdminBoard.openDialog({
             id: 'textblocks-modal',
-            title: 'Textbausteine',
+            title: Lang.t('textBlocks'),
             icon: 'message-square-plus',
             size: 'md',
             body: `
                 <div id="tb-list"></div>
-                <div class="field"><label for="tb-title">Titel</label><input id="tb-title" type="text" placeholder="z. B. Rückfrage Gerätetyp"></div>
-                <div class="field"><label for="tb-text">Text</label><textarea id="tb-text" rows="4" placeholder="Der Text, der im Chat eingefügt wird"></textarea></div>
-                <div class="setting-row"><span class="hint">Die Bausteine stehen im Chat über das Symbol neben den Formatierungsoptionen bereit.</span>
-                    <button class="btn-primary btn-sm" id="tb-add" type="button">${Icon('plus', 15)}Hinzufügen</button>
+                <div class="field"><label for="tb-title">${Lang.t('titleLabel')}</label><input id="tb-title" type="text" placeholder="${Lang.t('egDeviceTypeQuery')}"></div>
+                <div class="field"><label for="tb-text">${Lang.t('textLabel')}</label><textarea id="tb-text" rows="4" placeholder="${Lang.t('chatInsertTextPlaceholder')}"></textarea></div>
+                <div class="setting-row"><span class="hint">${Lang.t('textBlocksAvailableHint')}</span>
+                    <button class="btn-primary btn-sm" id="tb-add" type="button">${Icon('plus', 15)}${Lang.t('add')}</button>
                 </div>`
         });
         const render = async () => {
@@ -4209,8 +4200,8 @@ export const AdminBoard = {
             modal.querySelector('#tb-list').innerHTML = list.length ? list.map(b => `
                 <div class="absence-overview-row">
                     <div><strong>${Utils.esc(b.title)}</strong><span class="hint">${Utils.esc(b.text)}</span></div>
-                    <button class="btn-ghost btn-icon btn-danger tb-del" type="button" data-id="${Utils.esc(b.id)}" title="Löschen" aria-label="Löschen">${Icon('trash-2', 16)}</button>
-                </div>`).join('') : '<div class="empty-state compact">Noch keine Textbausteine.</div>';
+                    <button class="btn-ghost btn-icon btn-danger tb-del" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
+                </div>`).join('') : `<div class="empty-state compact">${Lang.t('noTextBlocksYet')}</div>`;
             modal.querySelectorAll('.tb-del').forEach(btn => btn.onclick = async () => {
                 await Store.deleteTextBlock(btn.dataset.id);
                 await render();
@@ -4220,8 +4211,8 @@ export const AdminBoard = {
         modal.querySelector('#tb-add').onclick = async () => {
             const title = modal.querySelector('#tb-title').value.trim();
             const text = modal.querySelector('#tb-text').value.trim();
-            if (!title || !text) return UI.toast('Bitte Titel und Text eingeben.');
-            if (!(await Store.createTextBlock(title, text))) return UI.toast('Speichern fehlgeschlagen.');
+            if (!title || !text) return UI.toast(Lang.t('enterTitleAndText'));
+            if (!(await Store.createTextBlock(title, text))) return UI.toast(Lang.t('saveFailed'));
             modal.querySelector('#tb-title').value = '';
             modal.querySelector('#tb-text').value = '';
             await render();
@@ -4233,12 +4224,12 @@ export const AdminBoard = {
         const list = await Store.getTextBlocks();
         const modal = AdminBoard.openDialog({
             id: 'textblock-pick-modal',
-            title: 'Textbaustein einfügen',
+            title: Lang.t('insertTextBlock'),
             icon: 'message-square',
             size: 'sm',
-            body: list.length ? `${list.length > 5 ? '<input type="search" id="tb-pick-search" class="section-search" placeholder="Textbaustein suchen...">' : ''}<div class="checkbox-list" id="tb-pick-list">${list.map(b => `
+            body: list.length ? `${list.length > 5 ? `<input type="search" id="tb-pick-search" class="section-search" placeholder="${Lang.t('searchTextBlockPlaceholder')}">` : ''}<div class="checkbox-list" id="tb-pick-list">${list.map(b => `
                 <button type="button" class="btn-secondary tb-pick" data-id="${Utils.esc(b.id)}" data-search="${Utils.esc(`${b.title} ${b.text}`.toLowerCase())}" class="justify-start w-full">${Utils.esc(b.title)}</button>`).join('')}</div>`
-                : '<div class="empty-state compact">Noch keine Textbausteine. Lege sie unter Verwaltung → Textbausteine an.</div>'
+                : `<div class="empty-state compact">${Lang.t('noTextBlocksYetCreateHint')}</div>`
         });
         const search = modal.querySelector('#tb-pick-search');
         if (search) search.oninput = () => {
@@ -4273,7 +4264,7 @@ export const AdminBoard = {
             const html = modal.querySelector('#rep-body').innerHTML;
             const settings = await Store.getSettings();
             const company = settings.companyConfig || {};
-            const companyLogo = company.logoUrl || settings.companyBranding?.logoDataUrl || '';
+            const companyLogo = company.logoUrl || settings.companyBrandingConfig?.logoDataUrl || '';
             const actor = await Store.currentUser();
             const rangeLabel = modal.querySelector('#rep-range').selectedOptions[0]?.textContent || '';
             UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Auswertung</title>
@@ -4336,7 +4327,7 @@ export const AdminBoard = {
             let personal = '';
             if (personalAllowed) {
                 const admins = users.filter(u => u.role === 'admin' || u.role === 'superadmin');
-                personal = `<h4 class="section-title">Pro Mitarbeiter</h4><table class="list-view-table"><thead><tr><th>Name</th><th>Tickets (Verantwortlich)</th><th>Geschlossen</th><th>Ø Erstreaktion</th></tr></thead><tbody>${admins.map(a => {
+                personal = `<h4 class="section-title">${Lang.t('perEmployee')}</h4><table class="list-view-table"><thead><tr><th>${Lang.t('name')}</th><th>${Lang.t('ticketsResponsible')}</th><th>${Lang.t('statusClosed')}</th><th>${Lang.t('avgFirstResponse')}</th></tr></thead><tbody>${admins.map(a => {
                     const owned = created.filter(t => t.owner === a.username);
                     const ownedClosed = closed.filter(x => x.t.owner === a.username).length;
                     const responseTimes = owned.map(firstResponse).filter(v => v != null);
@@ -4346,16 +4337,16 @@ export const AdminBoard = {
             const kpi = (label, value) => `<div class="report-kpi"><span>${Utils.esc(label)}</span><strong>${Utils.esc(String(value))}</strong></div>`;
             modal.querySelector('#rep-body').innerHTML = `
                 <div class="report-kpis">
-                    ${kpi('Tickets erstellt', created.length)}
-                    ${kpi('Geschlossen', closed.length)}
-                    ${kpi('Ø Erstreaktion', fmtDuration(avg(responses)))}
-                    ${kpi('Ø Lösungszeit', fmtDuration(avg(resolutions)))}
-                    ${kpi('Fristen eingehalten', dueMet == null ? '–' : dueMet + ' %')}
+                    ${kpi(Lang.t('ticketsCreated'), created.length)}
+                    ${kpi(Lang.t('statusClosed'), closed.length)}
+                    ${kpi(Lang.t('avgFirstResponse'), fmtDuration(avg(responses)))}
+                    ${kpi(Lang.t('avgResolutionTime'), fmtDuration(avg(resolutions)))}
+                    ${kpi(Lang.t('deadlinesMet'), dueMet == null ? '–' : dueMet + ' %')}
                 </div>
-                <h4 class="section-title">Nach Status</h4>
-                <div class="report-list">${Object.entries(byStatus).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="report-row"><span>${Utils.esc(Lang.status(k))}</span><strong>${v}</strong></div>`).join('') || '<div class="empty-state compact">Keine Daten.</div>'}</div>
-                <h4 class="section-title">Nach Kategorie</h4>
-                <div class="report-list">${Object.entries(byCategory).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="report-row"><span>${Utils.esc(k)}</span><strong>${v}</strong></div>`).join('') || '<div class="empty-state compact">Keine Daten.</div>'}</div>
+                <h4 class="section-title">${Lang.t('byStatus')}</h4>
+                <div class="report-list">${Object.entries(byStatus).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="report-row"><span>${Utils.esc(Lang.status(k))}</span><strong>${v}</strong></div>`).join('') || `<div class="empty-state compact">${Lang.t('noData')}</div>`}</div>
+                <h4 class="section-title">${Lang.t('byCategory')}</h4>
+                <div class="report-list">${Object.entries(byCategory).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="report-row"><span>${Utils.esc(k)}</span><strong>${v}</strong></div>`).join('') || `<div class="empty-state compact">${Lang.t('noData')}</div>`}</div>
                 ${personal}`;
         };
         modal.querySelector('#rep-range').onchange = render;
@@ -4369,26 +4360,26 @@ export const AdminBoard = {
         const canEdit = user?.role === 'superadmin' || user?.permissions?.kb === 'edit';
         const modal = AdminBoard.openDialog({
             id: 'kb-modal',
-            title: 'Wissensdatenbank',
+            title: Lang.t('knowledgeBase'),
             icon: 'book-open',
             size: 'md',
-            body: `<input type="search" id="kb-search" class="section-search" placeholder="Artikel durchsuchen...">
+            body: `<input type="search" id="kb-search" class="section-search" placeholder="${Lang.t('searchArticlesPlaceholder')}">
                    <div id="kb-list" class="mt-3"></div>
                    ${canEdit ? `<div class="kb-editor">
-                       <h4 class="section-title">Neuer Artikel</h4>
-                       <div class="field"><label for="kb-new-title">Titel</label><input id="kb-new-title" type="text"></div>
+                       <h4 class="section-title">${Lang.t('newArticle')}</h4>
+                       <div class="field"><label for="kb-new-title">${Lang.t('titleLabel')}</label><input id="kb-new-title" type="text"></div>
                        <div class="field">
-                           <label for="kb-new-body">Inhalt</label>
+                           <label for="kb-new-body">${Lang.t('content')}</label>
                            <div class="note-toolbar">
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-bold" title="Fett" aria-label="Fett">${Icon('bold', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-italic" title="Kursiv" aria-label="Kursiv">${Icon('italic', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-list" title="Liste" aria-label="Liste">${Icon('list', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-numbered" title="Nummerierte Liste" aria-label="Nummerierte Liste">${Icon('list-ordered', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-table" title="Tabelle einfügen" aria-label="Tabelle einfügen">${Icon('table', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-link" title="Link einfügen" aria-label="Link einfügen">${Icon('link', 15)}</button>
-                               <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen">${Icon('paperclip', 15)}<input type="file" id="kb-file-input" hidden multiple></label>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-bold" title="${Lang.t('bold')}" aria-label="${Lang.t('bold')}">${Icon('bold', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-italic" title="${Lang.t('italic')}" aria-label="${Lang.t('italic')}">${Icon('italic', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-list" title="${Lang.t('list')}" aria-label="${Lang.t('list')}">${Icon('list', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-numbered" title="${Lang.t('numberedList')}" aria-label="${Lang.t('numberedList')}">${Icon('list-ordered', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-table" title="${Lang.t('insertTable')}" aria-label="${Lang.t('insertTable')}">${Icon('table', 15)}</button>
+                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-link" title="${Lang.t('insertLink')}" aria-label="${Lang.t('insertLink')}">${Icon('link', 15)}</button>
+                               <label class="btn btn-ghost btn-icon btn-sm" title="${Lang.t('addAttachment')}" aria-label="${Lang.t('addAttachment')}">${Icon('paperclip', 15)}<input type="file" id="kb-file-input" hidden multiple></label>
                            </div>
-                           <div id="kb-new-body" class="rich-editor" contenteditable="true" data-placeholder="Schreibe wie in einem Textverarbeitungsprogramm: Formatierungen, Listen und Tabellen direkt bearbeiten."></div>
+                           <div id="kb-new-body" class="rich-editor" contenteditable="true" data-placeholder="${Lang.t('richEditorPlaceholder')}"></div>
                            <div id="kb-file-preview" class="file-preview"></div>
                        </div>
                    </div>` : ''}`,
@@ -4396,21 +4387,21 @@ export const AdminBoard = {
                 const title = m.querySelector('#kb-new-title').value.trim();
                 const bodyEl = m.querySelector('#kb-new-body');
                 const body = Utils.sanitizeRichHtml(bodyEl.innerHTML);
-                if (!title || !bodyEl.textContent.trim()) return UI.toast('Bitte Titel und Inhalt eingeben.');
+                if (!title || !bodyEl.textContent.trim()) return UI.toast(Lang.t('enterTitleAndContent'));
                 const articleId = await Store.createKbArticle(title, body);
-                if (!articleId) return UI.toast('Speichern fehlgeschlagen.');
+                if (!articleId) return UI.toast(Lang.t('saveFailed'));
                 if (AdminBoard.kbFiles.length) {
                     try {
                         await Promise.all(AdminBoard.kbFiles.map(f => Store.saveKbAttachment(articleId, f)));
                     } catch (e) {
-                        UI.toast(e.message === 'ATTACHMENT_TOO_LARGE' ? 'Anhang ist zu groß (max. 15 MB).' : 'Artikel gespeichert, aber ein Anhang konnte nicht hochgeladen werden.');
+                        UI.toast(e.message === 'ATTACHMENT_TOO_LARGE' ? Lang.t('attachmentTooLarge15MB') : Lang.t('articleSavedAttachmentFailed'));
                     }
                 }
                 m.querySelector('#kb-new-title').value = '';
                 bodyEl.innerHTML = '';
                 AdminBoard.kbFiles = [];
                 renderKbFilePreview();
-                UI.toast('Artikel gespeichert.');
+                UI.toast(Lang.t('articleSavedToast'));
                 await render();
             } : null
         });
@@ -4422,7 +4413,7 @@ export const AdminBoard = {
             AdminBoard.kbFiles.forEach((file, index) => {
                 const chip = document.createElement('div');
                 chip.className = 'file-chip';
-                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="Entfernen" aria-label="${Utils.esc(file.name)} entfernen">${Icon('x', 13)}</button>`;
+                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Lang.format('removeFileAriaLabel', { name: file.name })}">${Icon('x', 13)}</button>`;
                 chip.querySelector('button').onclick = () => {
                     AdminBoard.kbFiles.splice(index, 1);
                     renderKbFilePreview();
@@ -4444,9 +4435,9 @@ export const AdminBoard = {
                 const sel = window.getSelection();
                 const savedRange = (sel && sel.rangeCount && bodyInput.contains(sel.anchorNode)) ? sel.getRangeAt(0).cloneRange() : null;
                 const selectedText = savedRange ? savedRange.toString() : '';
-                const href = await UI.promptText({ title: 'Link einfügen', label: 'Link-Adresse', value: '', placeholder: 'https://example.com oder mailto:name@example.com', saveLabel: 'Link einfügen' });
+                const href = await UI.promptText({ title: Lang.t('insertLink'), label: Lang.t('linkAddress'), value: '', placeholder: Lang.t('linkPlaceholderExample'), saveLabel: Lang.t('insertLink') });
                 if (!href || !href.trim()) return;
-                if (!/^(https?:\/\/|mailto:)/i.test(href.trim())) return UI.toast('Nur http-, https- und mailto-Links sind erlaubt.');
+                if (!/^(https?:\/\/|mailto:)/i.test(href.trim())) return UI.toast(Lang.t('onlyHttpMailtoLinksAllowed'));
                 bodyInput.focus();
                 const sel2 = window.getSelection();
                 sel2.removeAllRanges();
@@ -4476,8 +4467,8 @@ export const AdminBoard = {
                     <summary><strong>${Utils.esc(a.title)}</strong> <span class="hint">${Utils.esc(a.source || '')} · ${Utils.fmtDate(a.createdAt)}</span></summary>
                     <div class="desc-text rich-content">${Utils.sanitizeRichHtml(a.body)}</div>
                     <div class="file-preview kb-article-attachments" hidden></div>
-                    ${canEdit ? `<button class="btn-ghost btn-sm kb-del" type="button" data-id="${Utils.esc(a.id)}">${Icon('trash-2', 14)}Löschen</button>` : ''}
-                </details>`).join('') : '<div class="empty-state compact">Keine Artikel gefunden.</div>';
+                    ${canEdit ? `<button class="btn-ghost btn-sm kb-del" type="button" data-id="${Utils.esc(a.id)}">${Icon('trash-2', 14)}${Lang.t('delete')}</button>` : ''}
+                </details>`).join('') : `<div class="empty-state compact">${Lang.t('noArticlesFound')}</div>`;
             modal.querySelectorAll('.kb-del').forEach(btn => btn.onclick = async () => {
                 await Store.deleteKbArticle(btn.dataset.id);
                 await render();
@@ -4512,12 +4503,12 @@ export const AdminBoard = {
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/notes`, { credentials: 'same-origin' }).catch(() => null);
         const notes = res && res.ok ? (await res.json()).notes || [] : [];
         const solution = notes.filter(n => n.stream === 'solution');
-        if (!solution.length) return UI.toast('Es gibt noch keinen Lösungsweg in diesem Ticket.');
-        const title = await UI.promptText({ title: 'Wissensartikel', label: 'Titel des Artikels', value: t.title, saveLabel: 'Speichern' });
+        if (!solution.length) return UI.toast(Lang.t('noSolutionYetInTicket'));
+        const title = await UI.promptText({ title: Lang.t('knowledgeArticle'), label: Lang.t('articleTitle'), value: t.title, saveLabel: Lang.t('save') });
         if (!title || !title.trim()) return;
         const body = solution.map(n => n.content || '').join('\n\n');
-        if (!(await Store.createKbArticle(title.trim(), body, t.id))) return UI.toast('Speichern fehlgeschlagen.');
-        UI.toast('Als Wissensartikel gespeichert.');
+        if (!(await Store.createKbArticle(title.trim(), body, t.id))) return UI.toast(Lang.t('saveFailed'));
+        UI.toast(Lang.t('savedAsKnowledgeArticle'));
     },
 
     // Ausführung l&auml;uft serverseitig per Timer (jobs/maintenance.ts runRecurringTickets),
@@ -4528,34 +4519,34 @@ export const AdminBoard = {
         const categories = settings.categories || ['Allgemein'];
         const modal = AdminBoard.openDialog({
             id: 'recurring-modal',
-            title: 'Wiederkehrende Tickets',
+            title: Lang.t('recurringTickets'),
             icon: 'repeat',
             size: 'md',
             body: `
                 <div id="rec-list"></div>
-                <div class="field"><label for="rec-title">Betreff</label><input id="rec-title" type="text" placeholder="z. B. Backup pr&uuml;fen"></div>
-                <div class="field"><label for="rec-desc">Beschreibung</label><textarea id="rec-desc" rows="3"></textarea></div>
+                <div class="field"><label for="rec-title">${Lang.t('subject')}</label><input id="rec-title" type="text" placeholder="${Lang.t('egCheckBackup')}"></div>
+                <div class="field"><label for="rec-desc">${Lang.t('description')}</label><textarea id="rec-desc" rows="3"></textarea></div>
                 <div class="form-grid">
-                    <div class="field"><label for="rec-cat">Kategorie</label><select id="rec-cat">${categories.map(c => `<option value="${Utils.esc(c)}">${Utils.esc(c)}</option>`).join('')}</select></div>
-                    <div class="field"><label for="rec-prio">Priorität</label><select id="rec-prio"><option>Niedrig</option><option selected>Normal</option><option>Hoch</option><option>Kritisch</option></select></div>
-                    <div class="field"><label for="rec-interval">Einheit</label><select id="rec-interval"><option value="day">Tag(e)</option><option value="week" selected>Woche(n)</option><option value="month">Monat(e)</option></select></div>
-                    <div class="field"><label for="rec-count">Alle wie viele Einheiten</label><input id="rec-count" type="number" min="1" value="1"></div>
+                    <div class="field"><label for="rec-cat">${Lang.t('category')}</label><select id="rec-cat">${categories.map(c => `<option value="${Utils.esc(c)}">${Utils.esc(c)}</option>`).join('')}</select></div>
+                    <div class="field"><label for="rec-prio">${Lang.t('priority')}</label><select id="rec-prio"><option>${Lang.t('low')}</option><option selected>${Lang.t('normal')}</option><option>${Lang.t('high')}</option><option>${Lang.t('critical')}</option></select></div>
+                    <div class="field"><label for="rec-interval">${Lang.t('unit')}</label><select id="rec-interval"><option value="day">${Lang.t('days')}</option><option value="week" selected>${Lang.t('weeks')}</option><option value="month">${Lang.t('months')}</option></select></div>
+                    <div class="field"><label for="rec-count">${Lang.t('everyHowManyUnits')}</label><input id="rec-count" type="number" min="1" value="1"></div>
                 </div>
-                <div class="field"><label>Erste Ausführung</label>${UI.dateTimePickerMarkup('rec-next-run')}</div>
-                <div class="setting-row"><span class="hint">Das erste Ticket wird zum gewählten Zeitpunkt automatisch angelegt, danach jeweils im gewählten Abstand.</span>
-                    <button class="btn-primary btn-sm" id="rec-add" type="button">${Icon('plus', 15)}Hinzufügen</button>
+                <div class="field"><label>${Lang.t('firstRun')}</label>${UI.dateTimePickerMarkup('rec-next-run')}</div>
+                <div class="setting-row"><span class="hint">${Lang.t('firstTicketAutoCreatedHint')}</span>
+                    <button class="btn-primary btn-sm" id="rec-add" type="button">${Icon('plus', 15)}${Lang.t('add')}</button>
                 </div>`
         });
         let recNextRunMs = Date.now();
         UI.createDateTimePicker(modal.querySelector('#rec-next-run'), { onChange: (ms) => { recNextRunMs = ms; } });
-        const unitLabel = { day: 'Tag(e)', week: 'Woche(n)', month: 'Monat(e)' };
+        const unitLabel = { day: Lang.t('days'), week: Lang.t('weeks'), month: Lang.t('months') };
         const render = async () => {
             const list = await Store.getRecurringRules();
             modal.querySelector('#rec-list').innerHTML = list.length ? list.map(r => `
                 <div class="absence-overview-row">
-                    <div><strong>${Utils.esc(r.title)}</strong><span class="hint">Alle ${r.intervalCount} ${unitLabel[r.intervalUnit] || r.intervalUnit} · nächste Ausführung ${Utils.fmtDate(r.nextRunAt)} · ${Utils.esc(r.category || '-')} · ${Utils.esc(r.prio)}${r.active ? '' : ' · pausiert'}</span></div>
-                    <button class="btn-ghost btn-icon btn-danger rec-del" type="button" data-id="${Utils.esc(r.id)}" title="Löschen" aria-label="Löschen">${Icon('trash-2', 16)}</button>
-                </div>`).join('') : '<div class="empty-state compact">Keine wiederkehrenden Tickets.</div>';
+                    <div><strong>${Utils.esc(r.title)}</strong><span class="hint">${Lang.format('recurringRuleSummary', { count: r.intervalCount, unit: unitLabel[r.intervalUnit] || r.intervalUnit, date: Utils.fmtDate(r.nextRunAt), category: Utils.esc(r.category || '-'), prio: Utils.esc(r.prio) })}${r.active ? '' : ' · ' + Lang.t('paused')}</span></div>
+                    <button class="btn-ghost btn-icon btn-danger rec-del" type="button" data-id="${Utils.esc(r.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
+                </div>`).join('') : `<div class="empty-state compact">${Lang.t('noRecurringTickets')}</div>`;
             modal.querySelectorAll('.rec-del').forEach(btn => btn.onclick = async () => {
                 await Store.deleteRecurringRule(btn.dataset.id);
                 await render();
@@ -4564,7 +4555,7 @@ export const AdminBoard = {
         };
         modal.querySelector('#rec-add').onclick = async () => {
             const title = modal.querySelector('#rec-title').value.trim();
-            if (!title) return UI.toast('Bitte einen Betreff eingeben.');
+            if (!title) return UI.toast(Lang.t('enterASubject'));
             const ok = await Store.createRecurringRule({
                 title,
                 desc: modal.querySelector('#rec-desc').value.trim(),
@@ -4574,7 +4565,7 @@ export const AdminBoard = {
                 intervalCount: Math.max(1, parseInt(modal.querySelector('#rec-count').value, 10) || 1),
                 nextRunAt: new Date(recNextRunMs).toISOString()
             });
-            if (!ok) return UI.toast('Speichern fehlgeschlagen.');
+            if (!ok) return UI.toast(Lang.t('saveFailed'));
             modal.querySelector('#rec-title').value = '';
             modal.querySelector('#rec-desc').value = '';
             await render();
@@ -4601,7 +4592,7 @@ export const AdminBoard = {
             body: JSON.stringify({ decision: status, reason: reason || undefined })
         }).catch(() => null);
         if (!res || !res.ok) {
-            UI.toast(res && res.status === 403 ? 'Keine Berechtigung für diese Entscheidung.' : 'Entscheidung fehlgeschlagen.');
+            UI.toast(res && res.status === 403 ? Lang.t('noPermissionForDecision') : Lang.t('decisionFailed'));
             return false;
         }
         Store._ticketsCache = null;
@@ -4614,7 +4605,7 @@ export const AdminBoard = {
     openApprovals: async () => {
         const me = await Store.currentUser();
         const settings = await Store.getSettings();
-        const modal = AdminBoard.openDialog({ id: 'approvals-modal', title: 'Genehmigungen', icon: 'badge-check', size: 'lg', body: '<div id="apr-list"></div>' });
+        const modal = AdminBoard.openDialog({ id: 'approvals-modal', title: Lang.t('approvals'), icon: 'badge-check', size: 'lg', body: '<div id="apr-list"></div>' });
         const render = async () => {
             const tickets = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => isPendingApprover(a, me.id)));
             const box = modal.querySelector('#apr-list');
@@ -4624,23 +4615,23 @@ export const AdminBoard = {
                 return `<details class="kb-article apr-row" open data-id="${Utils.esc(t.id)}">
                     <summary>
                         <strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong>
-                        <span class="hint">Angefragt von ${Utils.esc(a.requestedByName)}${a.reason ? ' · ' + Utils.esc(a.reason) : ''}</span>
+                        <span class="hint">${Lang.format('requestedBy', { name: Utils.esc(a.requestedByName) })}${a.reason ? ' · ' + Utils.esc(a.reason) : ''}</span>
                     </summary>
                     <div class="meta-grid">
-                        <div class="meta-item"><strong>Priorität</strong><span class="meta-value">${Utils.esc(t.prio)}</span></div>
-                        <div class="meta-item"><strong>Kategorie</strong><span class="meta-value">${Utils.esc((t.category || []).join(', ') || '-')}</span></div>
+                        <div class="meta-item"><strong>${Lang.t('priority')}</strong><span class="meta-value">${Utils.esc(t.prio)}</span></div>
+                        <div class="meta-item"><strong>${Lang.t('category')}</strong><span class="meta-value">${Utils.esc((t.category || []).join(', ') || '-')}</span></div>
                     </div>
-                    <h4 class="section-title">Beschreibung</h4>
+                    <h4 class="section-title">${Lang.t('description')}</h4>
                     <p class="desc-text">${Utils.esc(t.desc || '-')}</p>
                     ${fields.length ? `<div class="apr-fields"></div>` : ''}
                     <div class="apr-attachments"></div>
-                    <div class="field approval-comment"><label>Kommentar zur Entscheidung (bei Freigabe optional)</label><textarea class="apr-comment" rows="3" maxlength="5000" placeholder="Kommentar zur Freigabe oder Begründung der Ablehnung"></textarea></div>
+                    <div class="field approval-comment"><label>${Lang.t('decisionCommentLabel')}</label><textarea class="apr-comment" rows="3" maxlength="5000" placeholder="${Lang.t('decisionCommentPlaceholder')}"></textarea></div>
                     <div class="aa-actions">
-                        <button class="btn-secondary btn-sm apr-open" type="button">${Icon('external-link', 14)}Ticket öffnen</button>
-                        <button class="btn-primary btn-sm apr-yes" type="button">${Icon('check', 14)}Freigeben</button>
-                        <button class="btn-secondary btn-sm btn-danger apr-no" type="button">${Icon('x', 14)}Ablehnen</button>
+                        <button class="btn-secondary btn-sm apr-open" type="button">${Icon('external-link', 14)}${Lang.t('openTicket')}</button>
+                        <button class="btn-primary btn-sm apr-yes" type="button">${Icon('check', 14)}${Lang.t('approve')}</button>
+                        <button class="btn-secondary btn-sm btn-danger apr-no" type="button">${Icon('x', 14)}${Lang.t('decline')}</button>
                     </div></details>`;
-            }).join('') : '<div class="empty-state compact">Keine offenen Genehmigungen. Hier erscheinen Anfragen, die deine Zustimmung brauchen.</div>';
+            }).join('') : `<div class="empty-state compact">${Lang.t('noOpenApprovalsHint')}</div>`;
             box.querySelectorAll('.apr-row').forEach(row => {
                 const t = tickets.find(x => x.id === row.dataset.id);
                 const fieldsBox = row.querySelector('.apr-fields');
@@ -4658,7 +4649,7 @@ export const AdminBoard = {
                 row.querySelector('.apr-yes').onclick = () => decide('approved', row.querySelector('.apr-comment').value.trim());
                 row.querySelector('.apr-no').onclick = async () => {
                     const reason = row.querySelector('.apr-comment').value.trim();
-                    if (!reason || !reason.trim()) return UI.toast('Bitte eine Begründung angeben.');
+                    if (!reason || !reason.trim()) return UI.toast(Lang.t('enterAReason'));
                     await decide('rejected', reason.trim());
                 };
             });
@@ -4672,28 +4663,28 @@ export const AdminBoard = {
     requestApproval: async (t) => {
         const me = await Store.currentUser();
         const approvers = (await Store.getUsers()).filter(u => u.id !== me.id && u.role !== 'user' && !u.accountArchived);
-        if (!approvers.length) return UI.toast('Keine weiteren Personen zum Genehmigen vorhanden.');
+        if (!approvers.length) return UI.toast(Lang.t('noOtherApproversAvailable'));
         const modal = AdminBoard.openDialog({
             id: 'approval-request-modal',
-            title: 'Genehmigung anfordern',
+            title: Lang.t('requestApprovalTitle'),
             icon: 'badge-check',
             size: 'sm',
-            body: `<div class="field"><label>Genehmigende Person</label><div id="apr-approver"></div></div>
-                   <div class="field"><label for="apr-note">Hinweis</label><textarea id="apr-note" rows="3" placeholder="Was soll genehmigt werden?"></textarea></div>`,
+            body: `<div class="field"><label>${Lang.t('approvingPerson')}</label><div id="apr-approver"></div></div>
+                   <div class="field"><label for="apr-note">${Lang.t('noteLabel')}</label><textarea id="apr-note" rows="3" placeholder="${Lang.t('whatShouldBeApprovedPlaceholder')}"></textarea></div>`,
             onSave: async (m) => {
                 const approverId = approverPicker.getValue();
                 const note = m.querySelector('#apr-note').value.trim();
-                if (!approverId) return UI.toast('Bitte eine genehmigende Person wählen.');
+                if (!approverId) return UI.toast(Lang.t('selectApprovingPerson'));
                 const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/request-approval`, {
                     method: 'POST', credentials: 'same-origin',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({ approver_user_id: approverId, text: note || undefined })
                 }).catch(() => null);
-                if (!res || !res.ok) return UI.toast('Genehmigung anfordern fehlgeschlagen.');
+                if (!res || !res.ok) return UI.toast(Lang.t('requestApprovalFailed'));
                 Store._ticketsCache = null;
                 await Notifications.refresh();
                 m.remove();
-                UI.toast('Genehmigung angefordert.');
+                UI.toast(Lang.t('approvalRequestedToast'));
                 await AdminBoard.openModal(t.id);
                 await AdminBoard.render();
             }
@@ -4702,7 +4693,7 @@ export const AdminBoard = {
         const preselect = (owner?.supervisor && approvers.some(u => u.username === owner.supervisor))
             ? approvers.find(u => u.username === owner.supervisor)?.id
             : (approvers[0]?.id || '');
-        const approverPicker = UI.createMultiSelect(modal.querySelector('#apr-approver'), approvers.map(u => ({ value: u.id, label: u.name || u.username })), preselect, null, { single: true, emptyLabel: 'Bitte wählen...' });
+        const approverPicker = UI.createMultiSelect(modal.querySelector('#apr-approver'), approvers.map(u => ({ value: u.id, label: u.name || u.username })), preselect, null, { single: true, emptyLabel: Lang.t('pleaseChoose') });
         return modal;
     },
 
@@ -4711,18 +4702,18 @@ export const AdminBoard = {
         const existingRelatedIds = await Store.getRelatedTicketIds(t.id);
         const modal = AdminBoard.openDialog({
             id: 'related-modal',
-            title: 'Verwandtes Ticket verknüpfen',
+            title: Lang.t('linkRelatedTicketTitle'),
             icon: 'link',
             size: 'md',
-            body: `<input type="search" id="rel-search" class="section-search" placeholder="Ticket-Nr oder Titel suchen...">
-                   <label class="check-row compact mt-2"><input type="checkbox" id="rel-show-archived"><span>Auch geschlossene/archivierte Tickets anzeigen</span></label>
+            body: `<input type="search" id="rel-search" class="section-search" placeholder="${Lang.t('searchTicketNoTitle')}">
+                   <label class="check-row compact mt-2"><input type="checkbox" id="rel-show-archived"><span>${Lang.t('showClosedArchivedAlso')}</span></label>
                    <div class="checkbox-list mt-3" id="rel-list"></div>`,
             onSave: async (m) => {
                 const ids = [...m.querySelectorAll('input[type="checkbox"].rel-pick:checked')].map(cb => cb.value);
-                if (!ids.length) return UI.toast('Bitte mindestens ein Ticket auswählen.');
+                if (!ids.length) return UI.toast(Lang.t('selectAtLeastOneTicket'));
                 const results = await Promise.all(ids.map(id => Store.linkRelatedTicketIds(t.id, id)));
                 m.remove();
-                UI.toast(results.every(Boolean) ? 'Verknüpft.' : 'Verknüpfen teilweise fehlgeschlagen.');
+                UI.toast(results.every(Boolean) ? Lang.t('linkedToast') : Lang.t('linkPartiallyFailedToast'));
                 await AdminBoard.openModal(t.id);
             }
         });
@@ -4746,18 +4737,18 @@ export const AdminBoard = {
         const all = await Store.getTickets();
         const modal = AdminBoard.openDialog({
             id: 'merge-modal',
-            title: 'Ticket zusammenführen',
+            title: Lang.t('mergeTicketsTitle'),
             icon: 'git-merge',
             size: 'md',
-            body: `<p class="hint">Chat, Notizen, Teilaufgaben, Zeiten, Anhänge und Beteiligte von <strong>${Utils.esc(t.ticketNumber || t.id)}</strong> werden in das gewählte Ticket übernommen. Das Ursprungsticket wird archiviert.</p>
-                   <label class="check-row compact"><input type="checkbox" id="merge-show-archived"><span>Auch geschlossene/archivierte Tickets anzeigen</span></label>
-                   <div class="field"><label>Zielticket</label><div id="merge-target"></div></div>`,
+            body: `<p class="hint">${Lang.format('mergeTicketsHint', { number: Utils.esc(t.ticketNumber || t.id) })}</p>
+                   <label class="check-row compact"><input type="checkbox" id="merge-show-archived"><span>${Lang.t('showClosedArchivedAlso')}</span></label>
+                   <div class="field"><label>${Lang.t('targetTicket')}</label><div id="merge-target"></div></div>`,
             onSave: async (m) => {
                 const targetId = mergeTargetPicker.getValue();
-                if (!targetId) return UI.toast('Bitte ein Zielticket wählen.');
-                if (!(await Store.mergeTickets(t.id, targetId))) return UI.toast('Zusammenführen fehlgeschlagen.');
+                if (!targetId) return UI.toast(Lang.t('selectTargetTicket'));
+                if (!(await Store.mergeTickets(t.id, targetId))) return UI.toast(Lang.t('mergeFailed'));
                 m.remove();
-                UI.toast('Tickets zusammengeführt.');
+                UI.toast(Lang.t('ticketsMergedToast'));
                 await AdminBoard.render();
             }
         });
@@ -4766,7 +4757,7 @@ export const AdminBoard = {
             const showArchived = modal.querySelector('#merge-show-archived').checked;
             const candidates = all.filter(x => x.id !== t.id && (showArchived || !x.archived));
             const current = mergeTargetPicker?.getValue();
-            mergeTargetPicker = UI.createMultiSelect(modal.querySelector('#merge-target'), candidates.map(x => ({ value: x.id, label: `${x.ticketNumber || x.id} · ${x.title}${x.archived ? ' (archiviert)' : ''}` })), current && candidates.some(c => c.id === current) ? current : '', null, { single: true, emptyLabel: 'Bitte wählen...' });
+            mergeTargetPicker = UI.createMultiSelect(modal.querySelector('#merge-target'), candidates.map(x => ({ value: x.id, label: `${x.ticketNumber || x.id} · ${x.title}${x.archived ? Lang.t('archivedParenthetical') : ''}` })), current && candidates.some(c => c.id === current) ? current : '', null, { single: true, emptyLabel: Lang.t('pleaseChoose') });
         };
         modal.querySelector('#merge-show-archived').onchange = renderTargetPicker;
         renderTargetPicker();
@@ -4884,22 +4875,22 @@ export const AdminBoard = {
         modal.innerHTML = `
             <div class="modal modal-md">
                 <div class="modal-header">
-                    <h3>${Icon('archive', 18)}Ticket-Ersteller archiviert</h3>
+                    <h3>${Icon('archive', 18)}${Lang.t('ticketAuthorArchivedTitle')}</h3>
                 </div>
                 <div class="modal-body" id="aa-body"></div>
             </div>`;
         document.body.appendChild(modal);
         const body = modal.querySelector('#aa-body');
-        body.innerHTML = `<p class="hint">Der Ersteller dieser Tickets wurde archiviert und kann nicht mehr antworten. Entscheide je Ticket, wie es weitergeht.</p>` + open.map(t => {
+        body.innerHTML = `<p class="hint">${Lang.t('authorArchivedDecideHint')}</p>` + open.map(t => {
             const author = users.find(u => u.username === t.author);
             return `
                 <div class="absence-overview-row aa-row" data-id="${Utils.esc(t.id)}">
-                    <div><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span class="hint">Ersteller: ${Utils.esc(author?.name || t.author)}</span></div>
+                    <div><strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong><span class="hint">${Lang.format('creatorLabel', { name: Utils.esc(author?.name || t.author) })}</span></div>
                     <div class="aa-actions">
-                        <select class="aa-assign"><option value="">Zuordnen an…</option>${admins.map(a => `<option value="${Utils.esc(a.username)}">${Utils.esc(a.name || a.username)}</option>`).join('')}</select>
-                        <button class="btn-secondary btn-sm aa-assign-btn" type="button">Zuordnen</button>
-                        <button class="btn-secondary btn-sm aa-keep" type="button">Weiter bearbeiten</button>
-                        <button class="btn-secondary btn-sm aa-archive" type="button">Archivieren</button>
+                        <select class="aa-assign"><option value="">${Lang.t('assignToEllipsis')}</option>${admins.map(a => `<option value="${Utils.esc(a.username)}">${Utils.esc(a.name || a.username)}</option>`).join('')}</select>
+                        <button class="btn-secondary btn-sm aa-assign-btn" type="button">${Lang.t('assign')}</button>
+                        <button class="btn-secondary btn-sm aa-keep" type="button">${Lang.t('keepWorking')}</button>
+                        <button class="btn-secondary btn-sm aa-archive" type="button">${Lang.t('archiveAction')}</button>
                     </div>
                 </div>`;
         }).join('');
@@ -4924,14 +4915,14 @@ export const AdminBoard = {
             const id = row.dataset.id;
             row.querySelector('.aa-assign-btn').onclick = () => {
                 const newOwner = row.querySelector('.aa-assign').value;
-                if (!newOwner) return UI.toast('Bitte einen Benutzer auswählen.');
+                if (!newOwner) return UI.toast(Lang.t('selectAUser'));
                 updateTicket(id, t => {
                     t.owner = newOwner;
                     t.ownerUserId = admins.find(a => a.username === newOwner)?.id || null;
                 }, `Ticket nach Archivierung des Erstellers neu zugeordnet an ${newOwner}`);
             };
             row.querySelector('.aa-keep').onclick = () => updateTicket(id, t => { t.archivedAuthorAck = true; }, 'Ticket nach Archivierung des Erstellers weiter bearbeitet (Ersteller kann nicht antworten)');
-            row.querySelector('.aa-archive').onclick = () => UI.confirm('Ticket archivieren?', () => updateTicket(id, t => { t.archived = true; }, 'Ticket nach Archivierung des Erstellers archiviert'));
+            row.querySelector('.aa-archive').onclick = () => UI.confirm(Lang.t('confirmArchiveTicketSimple'), () => updateTicket(id, t => { t.archived = true; }, 'Ticket nach Archivierung des Erstellers archiviert'));
         });
         if (window.lucide) lucide.createIcons();
     },
@@ -4948,11 +4939,11 @@ export const AdminBoard = {
         banner.className = 'absence-banner';
         banner.innerHTML = `
             <div class="absence-banner-text">
-                <strong>${Icon('plane', 14)}Du bist als abwesend markiert</strong>
-                <span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Tickets liegen im Team'}</span>
+                <strong>${Icon('plane', 14)}${Lang.t('youAreMarkedAbsent')}</strong>
+                <span>${sub ? Lang.format('substituteLabel', { name: Utils.esc(sub.name || sub.username) }) : Lang.t('noneTicketsStayInTeam')}</span>
                 <span>${Utils.esc(AdminBoard.absenceInfoText(me.absence))}</span>
             </div>
-            <button class="btn-secondary btn-sm" id="absence-banner-end">Abwesenheit beenden</button>`;
+            <button class="btn-secondary btn-sm" id="absence-banner-end">${Lang.t('endAbsenceButton')}</button>`;
         document.body.appendChild(banner);
         banner.querySelector('#absence-banner-end').onclick = async () => {
             await AdminBoard.setAbsence(me.username, false, null, false);
@@ -4968,15 +4959,15 @@ export const AdminBoard = {
         const modal = AdminBoard.createGenericModal();
         modal.id = 'absence-overview-modal';
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
-        modal.querySelector('.modal-header h3').textContent = 'Abwesenheiten';
+        modal.querySelector('.modal-header h3').textContent = Lang.t('absencesTitle');
         modal.querySelector('#generic-save-head')?.remove();
         modal.querySelector('.modal-body').innerHTML = absent.length ? absent.map(u => {
             const sub = u.absence.substitute ? users.find(x => x.username === u.absence.substitute) : null;
-            return `<div class="absence-overview-row"><div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span></div><span>Vertretung: ${sub ? Utils.esc(sub.name || sub.username) : 'keine – Team'}</span></div>`;
-        }).join('') : '<div class="empty-state compact">Aktuell ist niemand abwesend.</div>';
+            return `<div class="absence-overview-row"><div><strong>${Utils.esc(u.name || u.username)}</strong><span class="hint">${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span></div><span>${sub ? Lang.format('substituteLabel', { name: Utils.esc(sub.name || sub.username) }) : Lang.t('noneTeam')}</span></div>`;
+        }).join('') : `<div class="empty-state compact">${Lang.t('noOneCurrentlyAbsent')}</div>`;
         modal.querySelector('.modal-body').insertAdjacentHTML('beforeend', `
             <div class="setting-row mt-3">
-                <button type="button" class="btn-primary btn-sm" id="abs-overview-own">${Icon('plane', 15)}Meine Abwesenheit einstellen</button>
+                <button type="button" class="btn-primary btn-sm" id="abs-overview-own">${Icon('plane', 15)}${Lang.t('setMyAbsence')}</button>
             </div>`);
         modal.querySelector('#abs-overview-own').onclick = () => {
             modal.classList.remove('open');
@@ -4991,10 +4982,10 @@ export const AdminBoard = {
         const absentName = absentUser.name || absentUser.username;
         const lines = [];
         if (transferred.length) {
-            lines.push(`Als Hauptverantwortlicher übernommen (${transferred.length}): ` + transferred.map(t => `${t.ticketNumber || t.id} ${t.title}`).join('; '));
+            lines.push(Lang.format('takenOverAsMainResponsible', { count: transferred.length }) + transferred.map(t => `${t.ticketNumber || t.id} ${t.title}`).join('; '));
         }
         if (addedAsParticipant.length) {
-            lines.push(`Als Beteiligter hinzugefügt (${addedAsParticipant.length}): ` + addedAsParticipant.map(t => `${t.ticketNumber || t.id} ${t.title}`).join('; '));
+            lines.push(Lang.format('addedAsParticipantLabel', { count: addedAsParticipant.length }) + addedAsParticipant.map(t => `${t.ticketNumber || t.id} ${t.title}`).join('; '));
         }
         const todos = transferred.flatMap(t => (t.todos || []).filter(todo => !todo.done).map(todo => `${t.ticketNumber || t.id}: ${todo.title}`));
         if (todos.length) lines.push(`Offene Teilaufgaben: ` + todos.join('; '));
@@ -5013,53 +5004,53 @@ export const AdminBoard = {
             modal.innerHTML = `
                 <div class="modal modal-md">
                     <div class="modal-header">
-                        <h3>${Icon('plus', 18)}Neues Ticket anlegen</h3>
+                        <h3>${Icon('plus', 18)}${Lang.t('createNewTicketTitle')}</h3>
                         <div class="modal-actions">
-                            <button class="btn-ghost btn-icon close-m" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                            <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="modal-body form-grid">
                         <div class="field field-wide">
-                            <label for="act-on-behalf-search">Im Namen von</label>
-                            <input type="text" id="act-on-behalf-search" placeholder="Nach Namen oder Benutzername suchen...">
+                            <label for="act-on-behalf-search">${Lang.t('onBehalfOf')}</label>
+                            <input type="text" id="act-on-behalf-search" placeholder="${Lang.t('searchByNameOrUsername')}">
                             <div id="act-on-behalf-list" class="user-picker-list"></div>
-                            <p class="hint">Person nicht dabei? Lege sie zuerst in der Benutzerverwaltung an.</p>
+                            <p class="hint">${Lang.t('personNotListedHint')}</p>
                         </div>
                         <div class="field field-wide">
-                            <label for="act-title">Betreff</label>
-                            <input id="act-title" type="text" placeholder="Kurzer Titel">
+                            <label for="act-title">${Lang.t('subject')}</label>
+                            <input id="act-title" type="text" placeholder="${Lang.t('titlePlaceholder')}">
                         </div>
                         <div class="field field-wide">
-                            <label for="act-desc">Beschreibung</label>
-                            <textarea id="act-desc" rows="6" placeholder="Worum geht es?"></textarea>
+                            <label for="act-desc">${Lang.t('description')}</label>
+                            <textarea id="act-desc" rows="6" placeholder="${Lang.t('whatIsThisAboutPlaceholder')}"></textarea>
                         </div>
                         <div class="field">
-                            <label for="act-prio">Priorität</label>
+                            <label for="act-prio">${Lang.t('priority')}</label>
                             <select id="act-prio">
-                                <option value="Niedrig">Niedrig</option>
-                                <option value="Normal">Normal</option>
-                                <option value="Hoch">Hoch</option>
-                                <option value="Kritisch">Kritisch</option>
+                                <option value="Niedrig">${Lang.t('low')}</option>
+                                <option value="Normal">${Lang.t('normal')}</option>
+                                <option value="Hoch">${Lang.t('high')}</option>
+                                <option value="Kritisch">${Lang.t('critical')}</option>
                             </select>
                         </div>
                         <div class="field">
-                            <label>Kategorie</label>
+                            <label>${Lang.t('category')}</label>
                             <div id="act-cat-container"></div>
                         </div>
                         <div id="act-custom-fields" class="field-wide custom-fields-fill"></div>
                         <div class="field field-wide">
-                            <label>Anhänge</label>
+                            <label>${Lang.t('attachments')}</label>
                             <label for="act-files" class="dropzone" id="act-files-dropzone">
                                 <i data-lucide="upload-cloud"></i>
-                                <span class="dropzone-text"><strong>Dateien hierher ziehen</strong> oder klicken zum Auswählen</span>
+                                <span class="dropzone-text"><strong>${Lang.t('dragFilesHere')}</strong> ${Lang.t('orClickToSelect')}</span>
                                 <input id="act-files" type="file" multiple>
                             </label>
                             <div id="act-files-preview" class="file-preview"></div>
                         </div>
                     </div>
                     <div class="modal-footer modal-footer-visible">
-                        <button class="btn-secondary" id="act-cancel">Abbrechen</button>
-                        <button class="btn-primary" id="act-submit">${Icon('plus', 16)}Ticket anlegen</button>
+                        <button class="btn-secondary" id="act-cancel">${Lang.t('cancel')}</button>
+                        <button class="btn-primary" id="act-submit">${Icon('plus', 16)}${Lang.t('createTicketButton')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -5076,8 +5067,8 @@ export const AdminBoard = {
             listEl.innerHTML = filtered.length ? filtered.map(u => `
                 <div class="user-picker-row${u.username === selectedBehalfUsername ? ' selected' : ''}" data-username="${Utils.esc(u.username)}">
                     <span class="user-picker-name">${Utils.esc(u.name || u.username)}</span>
-                    <span class="user-picker-meta">${Utils.esc(u.username)} · ${u.role === 'user' ? 'Benutzer' : 'Admin'}</span>
-                </div>`).join('') : '<div class="empty-state compact">Keine Treffer.</div>';
+                    <span class="user-picker-meta">${Utils.esc(u.username)} · ${u.role === 'user' ? Lang.t('roleUserLabel') : Lang.t('roleAdminLabel')}</span>
+                </div>`).join('') : `<div class="empty-state compact">${Lang.t('noMatches')}</div>`;
             listEl.querySelectorAll('.user-picker-row').forEach(row => {
                 row.onclick = () => {
                     selectedBehalfUsername = row.dataset.username;
@@ -5101,7 +5092,7 @@ export const AdminBoard = {
             AdminBoard.createTicketFiles.forEach((file, index) => {
                 const chip = document.createElement('div');
                 chip.className = 'file-chip';
-                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="Entfernen" aria-label="${Utils.esc(file.name)} entfernen">${Icon('x', 13)}</button>`;
+                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Lang.format('removeFileAriaLabel', { name: file.name })}">${Icon('x', 13)}</button>`;
                 chip.querySelector('button').onclick = () => {
                     AdminBoard.createTicketFiles.splice(index, 1);
                     renderActFilePreview();
@@ -5142,13 +5133,13 @@ export const AdminBoard = {
         q('#act-submit').onclick = async () => {
             const title = q('#act-title').value.trim();
             const desc = q('#act-desc').value.trim();
-            if (!title) return UI.toast('Bitte einen Titel angeben.');
+            if (!title) return UI.toast(Lang.t('enterATitle'));
             const { values: customFieldValues, missing: missingFields } = UI.readCustomFieldsForm(q('#act-custom-fields'));
-            if (missingFields.length) return UI.toast(`Bitte Pflichtfeld${missingFields.length > 1 ? 'er' : ''} ausfüllen: ${missingFields.join(', ')}`);
+            if (missingFields.length) return UI.toast(Lang.format('requiredFieldsMissing', { fields: missingFields.join(', ') }));
             const onBehalfUser = users.find(u => u.username === selectedBehalfUsername);
-            if (!onBehalfUser) return UI.toast('Bitte eine Person auswählen.');
+            if (!onBehalfUser) return UI.toast(Lang.t('selectAPerson'));
             if (AdminBoard.createTicketFiles.some(file => file.size > 15 * 1024 * 1024)) {
-                UI.toast('Anhänge dürfen maximal 15 MB groß sein.');
+                UI.toast(Lang.t('attachmentsTooLarge'));
                 return;
             }
             const cat = AdminBoard.createTicketCategoryInstance.getValue();
@@ -5158,7 +5149,7 @@ export const AdminBoard = {
                 onBehalfOfUserId: onBehalfUser.id, customFieldValues
             });
             if (!newTicket) {
-                UI.toast('Ticket konnte nicht erstellt werden.');
+                UI.toast(Lang.t('ticketCreateFailed'));
                 return;
             }
             if (AdminBoard.createTicketFiles.length) {
@@ -5166,12 +5157,12 @@ export const AdminBoard = {
                     await Promise.all(AdminBoard.createTicketFiles.map(file => Store.saveAttachment(file, { ticketId: newTicket.id })));
                 } catch (error) {
                     console.error(error);
-                    UI.toast('Ticket wurde angelegt, aber Anhänge konnten nicht gespeichert werden.');
+                    UI.toast(Lang.t('ticketCreatedAttachmentsFailed'));
                 }
             }
             Store._ticketsCache = null;
             modal.classList.remove('open');
-            UI.toast('Ticket wurde angelegt.');
+            UI.toast(Lang.t('ticketCreatedPlain'));
             await AdminBoard.render();
         };
         modal.classList.add('open');
@@ -5188,11 +5179,11 @@ export const AdminBoard = {
         modal.querySelector('.modal-body').innerHTML = `
             <div class="field">
                 <label>${Lang.t('incidentTitle')}</label>
-                <input id="incident-title" type="text" placeholder="z. B. VPN-Störung">
+                <input id="incident-title" type="text" placeholder="${Lang.t('egVpnIncident')}">
             </div>
             <div class="field">
                 <label>${Lang.t('incidentNotice')}</label>
-                <textarea id="incident-notice" rows="4" placeholder="Kurze Beschreibung der Störung und was betroffen ist."></textarea>
+                <textarea id="incident-notice" rows="4" placeholder="${Lang.t('incidentDescriptionPlaceholder')}"></textarea>
             </div>
             <div class="form-grid">
                 <div class="field">
@@ -5204,7 +5195,7 @@ export const AdminBoard = {
                     </select>
                 </div>
                 <div class="field">
-                    <label>Kategorie</label>
+                    <label>${Lang.t('category')}</label>
                     <select id="incident-category">
                         ${categories.map(c => `<option value="${Utils.esc(c)}">${Utils.esc(c)}</option>`).join('')}
                     </select>
@@ -5212,19 +5203,19 @@ export const AdminBoard = {
             </div>
         `;
         const saveBtn = modal.querySelector('.modal-footer .btn-primary');
-        saveBtn.textContent = 'Störung erstellen';
+        saveBtn.textContent = Lang.t('createIncidentButton');
         saveBtn.onclick = async () => {
             const title = q('#incident-title').value.trim();
             const notice = q('#incident-notice').value.trim();
-            if (!title) return UI.toast('Bitte einen Titel angeben.');
-            if (!notice) return UI.toast('Bitte einen sichtbaren Hinweis eintragen.');
+            if (!title) return UI.toast(Lang.t('enterATitle'));
+            if (!notice) return UI.toast(Lang.t('enterVisibleNotice'));
             const tickets = await Store.getTickets();
             const category = [q('#incident-category').value || 'Allgemein'];
             let ticketNumberData;
             try {
                 ticketNumberData = Store.nextTicketNumber(tickets, category, settings);
             } catch {
-                return UI.toast('Ticketnummernformat ungültig: Das Format muss {number} enthalten.');
+                return UI.toast(Lang.t('invalidTicketNumberFormat'));
             }
             const actor = await Store.currentUser();
             const incidentTicket = {
@@ -5255,7 +5246,7 @@ export const AdminBoard = {
             await Store.saveTickets(tickets);
             await Store.addGlobalLog('Störung erstellt', `Ticket: ${title}`);
             modal.classList.remove('open');
-            UI.toast('Störung wurde erstellt.');
+            UI.toast(Lang.t('incidentCreatedToast'));
             await AdminBoard.render();
             await AdminBoard.openModal(incidentTicket.id);
         };
@@ -5319,7 +5310,7 @@ export const AdminBoard = {
                     <label>${Lang.t('dateFormatLabel')}</label>
                     <div class="date-input-row">
                         <input id="custom-due-date" type="text" inputmode="numeric" placeholder="31.12.2026" value="${initialDate ? Utils.fmtDateOnly(initialDate) : ''}">
-                        <button type="button" class="btn-ghost btn-icon" id="custom-due-calendar-btn" title="Kalender öffnen" aria-label="Kalender öffnen">${Icon('calendar', 16)}</button>
+                        <button type="button" class="btn-ghost btn-icon" id="custom-due-calendar-btn" title="${Lang.t('openCalendar')}" aria-label="${Lang.t('openCalendar')}">${Icon('calendar', 16)}</button>
                     </div>
                 </div>
                 <div class="field">
@@ -5328,8 +5319,8 @@ export const AdminBoard = {
                 </div>
             </div>
             <div id="custom-due-dtp-host" hidden>${UI.dateTimePickerMarkup('custom-due-dtp')}</div>
-            <p class="hint">${t.customDueAt ? 'Diese Frist wurde manuell gesetzt und ersetzt die automatische Berechnung.' : 'Standardmäßig wird die Frist aus Priorität und Geschäftszeiten berechnet. Hier kannst du sie für dieses Ticket überschreiben.'}</p>
-            ${t.customDueAt ? `<button type="button" class="btn-secondary btn-sm" id="custom-due-reset">${Icon('rotate-ccw', 15)}Automatisch berechnen (zurücksetzen)</button>` : ''}
+            <p class="hint">${t.customDueAt ? Lang.t('customDueManualHint') : Lang.t('customDueAutoHint')}</p>
+            ${t.customDueAt ? `<button type="button" class="btn-secondary btn-sm" id="custom-due-reset">${Icon('rotate-ccw', 15)}${Lang.t('recalculateAutomatically')}</button>` : ''}
         `;
         const dtpPicker = UI.createDateTimePicker(q('#custom-due-dtp'), {
             value: initialMs,
@@ -5348,7 +5339,7 @@ export const AdminBoard = {
             const dateMs = Utils.parseGermanDateTime(q('#custom-due-date').value.trim(), '00:00');
             if (dateMs) dtpPicker.setValue(Utils.parseGermanDateTime(q('#custom-due-date').value.trim(), q('#custom-due-time').value.trim() || '00:00') || dateMs);
         });
-        modal.querySelector('.modal-footer .btn-primary').textContent = 'Speichern';
+        modal.querySelector('.modal-footer .btn-primary').textContent = Lang.t('save');
         const resetBtn = q('#custom-due-reset');
         if (resetBtn) resetBtn.onclick = async () => {
             delete t.customDueAt;
@@ -5360,12 +5351,12 @@ export const AdminBoard = {
         };
         modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
             const pickedMs = Utils.parseGermanDateTime(q('#custom-due-date').value, q('#custom-due-time').value);
-            if (!pickedMs) { UI.toast('Bitte ein Datum/Uhrzeit wählen.'); return; }
+            if (!pickedMs) { UI.toast(Lang.t('selectDateTime')); return; }
             t.customDueAt = new Date(pickedMs).toISOString();
             await Store.addLog(t, 'Eigene Frist gesetzt', Utils.fmtDate(t.customDueAt));
             await Store.saveTickets(tickets);
             modal.classList.remove('open');
-            UI.toast('Frist gespeichert.');
+            UI.toast(Lang.t('deadlineSavedToast'));
             await AdminBoard.openModal(id);
             await AdminBoard.render();
         };
@@ -5384,7 +5375,7 @@ export const AdminBoard = {
         q('#calendar-event-modal')?.remove();
         const modal = AdminBoard.createGenericModal();
         modal.id = 'calendar-event-modal';
-        modal.querySelector('.modal-header h3').textContent = 'Outlook-Termin erstellen';
+        modal.querySelector('.modal-header h3').textContent = Lang.t('createOutlookEventTitle');
 
         const settings = await Store.getSettings();
         const dueMs = t.customDueAt ? new Date(t.customDueAt).getTime() : Store.ticketSlaDueAt(t, settings);
@@ -5395,36 +5386,37 @@ export const AdminBoard = {
 
         const existingEvents = await Store.getTicketCalendarEvents(id);
         const eventsListHtml = existingEvents.length
-            ? `<div class="field"><label>Bereits erstellte Termine</label><ul class="calendar-event-list">${existingEvents.map(e =>
+            ? `<div class="field"><label>${Lang.t('alreadyCreatedEvents')}</label><ul class="calendar-event-list">${existingEvents.map(e =>
                 `<li>${Icon('calendar-check', 13)}${Utils.esc(e.subject)} -- ${Utils.esc(Utils.fmtDate(e.startAt))}${e.webLink ? ` <a href="${Utils.esc(e.webLink)}" target="_blank" rel="noopener">${Icon('external-link', 11)}</a>` : ''}</li>`
             ).join('')}</ul></div>`
             : '';
 
         modal.querySelector('.modal-body').innerHTML = `
             ${eventsListHtml}
-            <div class="field"><label>Betreff</label><input id="cal-event-subject" type="text" value="${Utils.esc(`${t.ticketNumber || ''} ${t.title || ''}`.trim())}" maxlength="512"></div>
+            <div class="field"><label>${Lang.t('subjectLabel')}</label><input id="cal-event-subject" type="text" value="${Utils.esc(`${t.ticketNumber || ''} ${t.title || ''}`.trim())}" maxlength="512"></div>
             <div class="form-grid">
                 <div class="field">
-                    <label>Beginn</label>
+                    <label>${Lang.t('startLabel')}</label>
                     <div class="date-input-row">
                         <input id="cal-event-start-date" type="text" inputmode="numeric" placeholder="31.12.2026" value="${Utils.fmtDateOnly(startInitial)}">
-                        <button type="button" class="btn-ghost btn-icon" id="cal-event-start-calendar-btn" title="Kalender öffnen" aria-label="Kalender öffnen">${Icon('calendar', 16)}</button>
+                        <button type="button" class="btn-ghost btn-icon" id="cal-event-start-calendar-btn" title="${Lang.t('openCalendar')}" aria-label="${Lang.t('openCalendar')}">${Icon('calendar', 16)}</button>
                     </div>
                     <input id="cal-event-start-time" type="text" inputmode="numeric" placeholder="17:00" value="${Utils.fmtTimeOnly(startInitial)}">
                 </div>
                 <div class="field">
-                    <label>Ende</label>
+                    <label>${Lang.t('endLabel')}</label>
                     <div class="date-input-row">
                         <input id="cal-event-end-date" type="text" inputmode="numeric" placeholder="31.12.2026" value="${Utils.fmtDateOnly(endInitial)}">
-                        <button type="button" class="btn-ghost btn-icon" id="cal-event-end-calendar-btn" title="Kalender öffnen" aria-label="Kalender öffnen">${Icon('calendar', 16)}</button>
+                        <button type="button" class="btn-ghost btn-icon" id="cal-event-end-calendar-btn" title="${Lang.t('openCalendar')}" aria-label="${Lang.t('openCalendar')}">${Icon('calendar', 16)}</button>
                     </div>
                     <input id="cal-event-end-time" type="text" inputmode="numeric" placeholder="17:30" value="${Utils.fmtTimeOnly(endInitial)}">
                 </div>
             </div>
             <div id="cal-event-start-dtp-host" hidden>${UI.dateTimePickerMarkup('cal-event-start-dtp')}</div>
             <div id="cal-event-end-dtp-host" hidden>${UI.dateTimePickerMarkup('cal-event-end-dtp')}</div>
-            <div class="field"><label>Notiz (im Termin sichtbar)</label><textarea id="cal-event-notes" rows="3" maxlength="5000"></textarea></div>
-            <p class="hint">Legt den Termin direkt im konfigurierten Outlook-Postfach an (Systemeinstellungen &gt; Outlook). Ist die Integration nicht konfiguriert, erscheint eine entsprechende Fehlermeldung.</p>
+            <div class="field"><label>${Lang.t('attendeesLabel')}</label><div id="cal-event-attendees"></div></div>
+            <div class="field"><label>${Lang.t('calendarNoteLabel')}</label><textarea id="cal-event-notes" rows="3" maxlength="5000"></textarea></div>
+            <p class="hint">${Lang.t('calendarEventHint')}</p>
         `;
         const startDtp = UI.createDateTimePicker(q('#cal-event-start-dtp'), {
             value: startMs,
@@ -5453,32 +5445,38 @@ export const AdminBoard = {
         UI.bindDateInput(q('#cal-event-end-date'));
         UI.bindTimeInput(q('#cal-event-end-time'));
 
-        modal.querySelector('.modal-footer .btn-primary').textContent = 'Termin erstellen';
+        const attendeeUsers = (await Store.getUsers()).filter(u => !u.accountArchived && u.email);
+        const attendeePicker = UI.createMultiSelect(q('#cal-event-attendees'), attendeeUsers.map(u => ({ value: u.id, label: u.name || u.username })), [], null, { emptyLabel: Lang.t('none') });
+
+        modal.querySelector('.modal-footer .btn-primary').textContent = Lang.t('createEventButton');
         modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
             const startPickedMs = Utils.parseGermanDateTime(q('#cal-event-start-date').value, q('#cal-event-start-time').value);
             const endPickedMs = Utils.parseGermanDateTime(q('#cal-event-end-date').value, q('#cal-event-end-time').value);
             const subject = q('#cal-event-subject').value.trim();
-            if (!subject) { UI.toast('Bitte einen Betreff eingeben.'); return; }
-            if (!startPickedMs || !endPickedMs || endPickedMs <= startPickedMs) { UI.toast('Bitte ein gültiges Beginn/Ende wählen.'); return; }
+            if (!subject) { UI.toast(Lang.t('enterASubject')); return; }
+            if (!startPickedMs || !endPickedMs || endPickedMs <= startPickedMs) { UI.toast(Lang.t('selectValidStartEnd')); return; }
 
+            const attendeeIds = attendeePicker.getValue();
+            const attendeeEmails = attendeeUsers.filter(u => attendeeIds.includes(u.id)).map(u => u.email);
             const result = await Store.createTicketCalendarEvent(id, {
                 subject,
                 notes: q('#cal-event-notes').value.trim() || undefined,
                 start_at: new Date(startPickedMs).toISOString(),
-                end_at: new Date(endPickedMs).toISOString()
+                end_at: new Date(endPickedMs).toISOString(),
+                attendee_emails: attendeeEmails.length ? attendeeEmails : undefined
             });
             if (!result) {
                 const errMap = {
-                    outlook_not_configured: 'Outlook-Integration ist nicht vollständig konfiguriert (Systemeinstellungen > Outlook).',
-                    outlook_auth_failed: 'Anmeldung bei Microsoft Graph fehlgeschlagen -- Tenant-/Client-ID oder Client-Secret prüfen.',
-                    outlook_event_create_failed: 'Der Termin konnte nicht angelegt werden -- Postfach/Berechtigung bei Microsoft Graph prüfen.'
+                    outlook_not_configured: Lang.t('outlookNotConfiguredError'),
+                    outlook_auth_failed: Lang.t('outlookAuthFailedError'),
+                    outlook_event_create_failed: Lang.t('outlookEventCreateFailedError')
                 };
-                UI.toast(errMap[Store.lastError] || 'Termin konnte nicht erstellt werden.');
+                UI.toast(errMap[Store.lastError] || Lang.t('eventCreateFailedGeneric'));
                 return;
             }
             await Store.addLog(t, 'Outlook-Termin erstellt', subject);
             modal.classList.remove('open');
-            UI.toast('Termin erstellt.');
+            UI.toast(Lang.t('eventCreatedToast'));
         };
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
@@ -5490,7 +5488,7 @@ export const AdminBoard = {
         const t = tickets.find(x => x.id === id);
         if (!t) return;
         if (t.isMajorIncident) {
-            UI.confirm('Großstörung wirklich aufheben? Neue Tickets erhalten dann keinen Hinweis mehr auf diese Störung.', async () => {
+            UI.confirm(Lang.t('confirmLiftMajorIncident'), async () => {
                 await fetch(`/api/v2/tickets/${encodeURIComponent(id)}`, {
                     method: 'PATCH', credentials: 'same-origin',
                     headers: { 'content-type': 'application/json' },
@@ -5504,25 +5502,25 @@ export const AdminBoard = {
         q('#generic-modal')?.remove();
         const modal = AdminBoard.createGenericModal();
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
-        modal.querySelector('.modal-header h3').textContent = 'Als Störung markieren';
+        modal.querySelector('.modal-header h3').textContent = Lang.t('markAsIncidentTitle');
         modal.querySelector('.modal-body').innerHTML = `
             <div class="field">
-                <label>Sichtbarer Hinweis für Benutzer</label>
+                <label>${Lang.t('visibleNoticeForUsers')}</label>
                 <textarea id="incident-existing-notice" rows="4">${Utils.esc(t.incidentNotice || t.title)}</textarea>
             </div>
-            <p class="hint">Diese Störung wird Benutzern beim Erstellen eines Tickets angeboten.</p>
+            <p class="hint">${Lang.t('incidentOfferedToUsersHint')}</p>
         `;
         modal.querySelector('.modal-footer .btn-primary').onclick = async () => {
             const notice = q('#incident-existing-notice').value.trim();
-            if (!notice) return UI.toast('Bitte einen Hinweis eintragen.');
+            if (!notice) return UI.toast(Lang.t('enterANotice'));
             const res = await fetch(`/api/v2/tickets/${encodeURIComponent(id)}`, {
                 method: 'PATCH', credentials: 'same-origin',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ type: 'incident', incident_notice: notice })
             }).catch(() => null);
-            if (!res || !res.ok) return UI.toast('Als Störung markieren fehlgeschlagen.');
+            if (!res || !res.ok) return UI.toast(Lang.t('markAsIncidentFailed'));
             modal.classList.remove('open');
-            UI.toast('Als Störung markiert. Benutzer können Tickets damit verknüpfen.');
+            UI.toast(Lang.t('markedAsIncidentToast'));
             await AdminBoard.openModal(id);
             await AdminBoard.render();
         };
@@ -5542,11 +5540,11 @@ export const AdminBoard = {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ content: `Update zur bekannten Störung "${incidentTicket.title}": ${resolutionText || 'Die Störung wurde behoben.'}` })
+                body: JSON.stringify({ content: Lang.format('incidentUpdateMessage', { title: incidentTicket.title, text: resolutionText || Lang.t('incidentResolvedDefault') }) })
             }).catch(() => {});
         }
         await Store.addGlobalLog('Großstörung behoben – verknüpfte Tickets informiert', `Haupt-Ticket: ${incidentTicket.title}, Betroffene Tickets: ${linked.length}`);
-        UI.toast(`${linked.length} verknüpfte Ticket(s) wurden über die Lösung informiert.`);
+        UI.toast(Lang.format('linkedTicketsInformedToast', { count: linked.length }));
     },
 
     openPrintOptions: async (id) => {
@@ -5558,25 +5556,25 @@ export const AdminBoard = {
             modal.innerHTML = `
                 <div class="modal modal-sm">
                     <div class="modal-header">
-                        <h3>${Icon('printer', 18)}Ticket drucken</h3>
+                        <h3>${Icon('printer', 18)}${Lang.t('printTicketTitle')}</h3>
                         <div class="modal-actions">
-                            <button class="btn-ghost btn-icon close-m" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                            <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="modal-body">
-                        <p class="hint">Wähle aus, welche Inhalte mit ausgedruckt werden sollen.</p>
+                        <p class="hint">${Lang.t('choosePrintContentHint')}</p>
                         <div class="checkbox-list">
-                            <label class="check-row"><input type="checkbox" id="pp-todos" checked>Teilaufgaben</label>
-                            <label class="check-row"><input type="checkbox" id="pp-admin-chat" checked>Admin-Chat (intern)</label>
-                            <label class="check-row"><input type="checkbox" id="pp-solution" checked>Lösungsweg (intern)</label>
-                            <label class="check-row"><input type="checkbox" id="pp-chat" checked>Chat-Verlauf mit Benutzer</label>
-                            <label class="check-row"><input type="checkbox" id="pp-time" checked>Zeiterfassung</label>
-                            <label class="check-row"><input type="checkbox" id="pp-log">Ticket-Protokoll</label>
+                            <label class="check-row"><input type="checkbox" id="pp-todos" checked>${Lang.t('subtasks')}</label>
+                            <label class="check-row"><input type="checkbox" id="pp-admin-chat" checked>${Lang.t('adminChatInternal')}</label>
+                            <label class="check-row"><input type="checkbox" id="pp-solution" checked>${Lang.t('solutionPathInternal')}</label>
+                            <label class="check-row"><input type="checkbox" id="pp-chat" checked>${Lang.t('chatHistoryWithUser')}</label>
+                            <label class="check-row"><input type="checkbox" id="pp-time" checked>${Lang.t('timeTracking')}</label>
+                            <label class="check-row"><input type="checkbox" id="pp-log">${Lang.t('ticketLog')}</label>
                         </div>
                     </div>
                     <div class="modal-footer modal-footer-visible">
-                        <button class="btn-secondary" id="pp-cancel">Abbrechen</button>
-                        <button class="btn-primary" id="pp-confirm">${Icon('printer', 16)}Drucken</button>
+                        <button class="btn-secondary" id="pp-cancel">${Lang.t('cancel')}</button>
+                        <button class="btn-primary" id="pp-confirm">${Icon('printer', 16)}${Lang.t('print')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
@@ -5611,7 +5609,7 @@ export const AdminBoard = {
         };
         const settings = await Store.getSettings();
         const company = settings.companyConfig || {};
-        const companyLogo = company.logoUrl || settings.companyBranding?.logoDataUrl || '';
+        const companyLogo = company.logoUrl || settings.companyBrandingConfig?.logoDataUrl || '';
         const actor = await Store.currentUser();
         const slaCountdown = Store.formatSlaCountdown(t, settings);
         // Die Ticket-Liste (Store.getTickets) liefert bewusst nur Zaehlungen, keine vollen
@@ -5663,38 +5661,38 @@ export const AdminBoard = {
         const participants = [...new Set([t.owner, ...(t.participants || [])].filter(Boolean))].map(nameFor).join(', ') || '-';
         const incidentOf = t.linkedIncidentId ? tickets.find(x => x.id === t.linkedIncidentId) : null;
         const linkedToIncident = t.isMajorIncident ? tickets.filter(x => x.linkedIncidentId === t.id && !x.archived) : [];
-        const incidentSection = t.isMajorIncident ? `<h2>Großstörung</h2>
+        const incidentSection = t.isMajorIncident ? `<h2>${Lang.t('majorIncidentHeading')}</h2>
             <p class="desc">${Utils.esc(t.incidentNotice || '')}</p>
-            <div class="grid"><div><strong>Zugeordnete Tickets</strong>${linkedToIncident.length}</div></div>
-            ${linkedToIncident.length ? `<ul>${linkedToIncident.map(x => `<li>${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)} – ${Utils.esc(nameFor(x.author) || x.author || '-')} – ${Utils.esc(x.status)}</li>`).join('')}</ul>` : '<p class="desc">Keine Tickets zugeordnet.</p>'}` : incidentOf ? `<h2>Großstörung</h2><p class="desc">Zugeordnet zu ${Utils.esc(incidentOf.ticketNumber || incidentOf.id)} · ${Utils.esc(incidentOf.title)}</p>` : '';
+            <div class="grid"><div><strong>${Lang.t('assignedTickets')}</strong>${linkedToIncident.length}</div></div>
+            ${linkedToIncident.length ? `<ul>${linkedToIncident.map(x => `<li>${Utils.esc(x.ticketNumber || x.id)} · ${Utils.esc(x.title)} – ${Utils.esc(nameFor(x.author) || x.author || '-')} – ${Utils.esc(x.status)}</li>`).join('')}</ul>` : `<p class="desc">${Lang.t('noTicketsAssigned')}</p>`}` : incidentOf ? `<h2>${Lang.t('majorIncidentHeading')}</h2><p class="desc">${Lang.format('assignedToIncident', { ticket: Utils.esc(incidentOf.ticketNumber || incidentOf.id) + ' · ' + Utils.esc(incidentOf.title) })}</p>` : '';
         const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>${Utils.esc(t.ticketNumber || t.id)}</title>
             <link rel="stylesheet" href="/js/print.css"></head><body>
             <div class="print-head">
                 <div>
                     <h1>${Utils.esc(t.ticketNumber || t.id)} &middot; ${Utils.esc(t.title)}</h1>
-                    <div class="meta">Gedruckt von ${Utils.esc(actor?.name || actor?.username || '-')} am ${Utils.esc(Utils.fmtDate(new Date().toISOString()))}</div>
+                    <div class="meta">${Lang.format('printedByOn', { name: Utils.esc(actor?.name || actor?.username || '-'), date: Utils.esc(Utils.fmtDate(new Date().toISOString())) })}</div>
                 </div>
                 ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}
             </div>
             <div class="grid">
-                <div><strong>Von</strong>${Utils.esc(nameFor(t.author) || t.author)}</div>
-                <div><strong>Erstellt am</strong>${Utils.esc(Utils.fmtDate(t.createdAt))}</div>
-                <div><strong>Status</strong>${Utils.esc(t.status)}</div>
-                <div><strong>Priorität</strong>${Utils.esc(t.prio)}</div>
-                <div><strong>Kategorie</strong>${Utils.esc((t.category || []).join(', ') || '-')}</div>
-                <div><strong>Hauptverantwortlicher</strong>${Utils.esc(nameFor(t.owner))}</div>
-                <div><strong>Beteiligte Personen</strong>${Utils.esc(participants)}</div>
-                ${slaCountdown ? `<div><strong>Frist</strong>${Utils.esc(slaCountdown.label)} (${Utils.esc(slaCountdown.dueDateLabel)})</div>` : ''}
+                <div><strong>${Lang.t('from')}</strong>${Utils.esc(nameFor(t.author) || t.author)}</div>
+                <div><strong>${Lang.t('createdOn')}</strong>${Utils.esc(Utils.fmtDate(t.createdAt))}</div>
+                <div><strong>${Lang.t('status')}</strong>${Utils.esc(t.status)}</div>
+                <div><strong>${Lang.t('priority')}</strong>${Utils.esc(t.prio)}</div>
+                <div><strong>${Lang.t('category')}</strong>${Utils.esc((t.category || []).join(', ') || '-')}</div>
+                <div><strong>${Lang.t('mainResponsible')}</strong>${Utils.esc(nameFor(t.owner))}</div>
+                <div><strong>${Lang.t('involvedPersons')}</strong>${Utils.esc(participants)}</div>
+                ${slaCountdown ? `<div><strong>${Lang.t('deadline')}</strong>${Utils.esc(slaCountdown.label)} (${Utils.esc(slaCountdown.dueDateLabel)})</div>` : ''}
             </div>
-            <h2>Beschreibung</h2>
-            <p class="desc">${Utils.esc(t.desc || 'Keine Beschreibung')}</p>
+            <h2>${Lang.t('description')}</h2>
+            <p class="desc">${Utils.esc(t.desc || Lang.t('noDescription'))}</p>
             ${incidentSection}
-            ${todos ?`<h2>Teilaufgaben</h2><ul>${todos}</ul>` : ''}
-            ${adminChatEntries ? `<h2>Admin-Chat</h2>${adminChatEntries}` : ''}
-            ${solutionEntries ? `<h2>Lösungsweg</h2>${solutionEntries}` : ''}
-            ${chat ? `<h2>Chat-Verlauf</h2>${chat}` : ''}
-            ${timeEntries ? `<h2>Zeiterfassung (gesamt: ${Utils.esc(fmtMinutesPrint(totalMinutes))})</h2>${timeEntries}` : ''}
-            ${logEntries ? `<h2>Ticket-Protokoll</h2>${logEntries}` : ''}
+            ${todos ?`<h2>${Lang.t('subtasks')}</h2><ul>${todos}</ul>` : ''}
+            ${adminChatEntries ? `<h2>${Lang.t('adminChatHeading')}</h2>${adminChatEntries}` : ''}
+            ${solutionEntries ? `<h2>${Lang.t('solutionPathHeading')}</h2>${solutionEntries}` : ''}
+            ${chat ? `<h2>${Lang.t('chatHistoryHeading')}</h2>${chat}` : ''}
+            ${timeEntries ? `<h2>${Lang.format('timeTrackingTotal', { total: Utils.esc(fmtMinutesPrint(totalMinutes)) })}</h2>${timeEntries}` : ''}
+            ${logEntries ? `<h2>${Lang.t('ticketLog')}</h2>${logEntries}` : ''}
             </body></html>`;
         UI.printHTML(html);
     },
@@ -5740,8 +5738,8 @@ export const AdminBoard = {
                             }
                         };
                         q('#m-approval-no').onclick = async () => {
-                            const reason = await UI.promptText({ title: 'Genehmigung ablehnen', label: 'Warum lehnst du diese Anfrage ab? Die Begründung sieht die antragstellende Person.', saveLabel: 'Ablehnen' });
-                            if (!reason || !reason.trim()) return UI.toast('Bitte eine Begründung angeben.');
+                            const reason = await UI.promptText({ title: Lang.t('declineApprovalTitle'), label: Lang.t('declineApprovalLabel'), saveLabel: Lang.t('decline') });
+                            if (!reason || !reason.trim()) return UI.toast(Lang.t('enterAReason'));
                             if (await AdminBoard.decideApproval(t.id, 'rejected', reason.trim())) {
                                 UI.toast('Genehmigung abgelehnt.');
                                 await AdminBoard.openModal(t.id);
@@ -5782,7 +5780,7 @@ export const AdminBoard = {
             const btnIncident = q('#btn-mark-incident');
             if (btnIncident) {
                 btnIncident.style.display = (t.archived || t.linkedIncidentId) ? 'none' : '';
-                btnIncident.innerHTML = t.isMajorIncident ? `${Icon('siren', 16)}Großstörung aufheben` : `${Icon('siren', 16)}Als Großstörung markieren`;
+                btnIncident.innerHTML = t.isMajorIncident ? `${Icon('siren', 16)}${Lang.t('liftMajorIncidentButton')}` : `${Icon('siren', 16)}${Lang.t('markAsMajorIncidentButton')}`;
                 btnIncident.classList.toggle('btn-danger', !!t.isMajorIncident);
                 btnIncident.onclick = () => AdminBoard.toggleMajorIncident(t.id);
             }
@@ -5804,10 +5802,10 @@ export const AdminBoard = {
                     actionsRow.after(related);
                 }
                 extra.innerHTML = t.archived ? '' : `
-                    <button class="btn-secondary" id="m-link-related" type="button">${Icon('link', 16)}Verwandt verknüpfen</button>
-                    <button class="btn-secondary" id="m-merge" type="button">${Icon('git-merge', 16)}Zusammenführen</button>
+                    <button class="btn-secondary" id="m-link-related" type="button">${Icon('link', 16)}${Lang.t('linkRelatedButton')}</button>
+                    <button class="btn-secondary" id="m-merge" type="button">${Icon('git-merge', 16)}${Lang.t('mergeButton')}</button>
                     <button class="btn-secondary" id="m-request-approval" type="button">${Icon('badge-check', 16)}Genehmigung anfordern</button>
-                    <button class="btn-secondary" id="m-kb-add" type="button">${Icon('book-open', 16)}Als Wissensartikel übernehmen</button>`;
+                    <button class="btn-secondary" id="m-kb-add" type="button">${Icon('book-open', 16)}${Lang.t('takeOverAsKnowledgeArticle')}</button>`;
                 const bindAction = (sel, fn) => { const el = q(sel); if (el) el.onclick = () => fn(t); };
                 bindAction('#m-link-related', AdminBoard.linkRelatedTicket);
                 bindAction('#m-merge', AdminBoard.mergeTicketInto);
@@ -5825,7 +5823,7 @@ export const AdminBoard = {
                                 <span>${Utils.esc(x.authorName || x.author || '-')}</span>
                                 <span>${Lang.status(x.status)}</span>
                             </button>
-                            <button type="button" class="btn-ghost btn-icon btn-xs btn-danger incident-linked-unlink" title="Verknüpfung aufheben" aria-label="Verknüpfung aufheben">${Icon('link-2-off', 14)}</button>
+                            <button type="button" class="btn-ghost btn-icon btn-xs btn-danger incident-linked-unlink" title="${Lang.t('unlinkIncident')}" aria-label="${Lang.t('unlinkIncident')}">${Icon('link-2-off', 14)}</button>
                         </div>`).join('')}</div>` : '';
                 related.querySelectorAll('.incident-linked-open').forEach(btn => { btn.onclick = () => AdminBoard.openModal(btn.closest('[data-ticket-id]').dataset.ticketId); });
                 related.querySelectorAll('.incident-linked-unlink').forEach(btn => {
@@ -5833,9 +5831,9 @@ export const AdminBoard = {
                         e.stopPropagation();
                         const otherId = btn.closest('[data-ticket-id]').dataset.ticketId;
                         const other = tickets.find(x => x.id === otherId);
-                        UI.confirm(`Verknüpfung zwischen diesem Ticket und "${other?.ticketNumber || otherId} · ${other?.title || ''}" aufheben?`, async () => {
+                        UI.confirm(Lang.format('confirmUnlinkIncident', { other: `${other?.ticketNumber || otherId} · ${other?.title || ''}` }), async () => {
                             const ok = await Store.unlinkRelatedTicketIds(t.id, otherId);
-                            UI.toast(ok ? 'Verknüpfung aufgehoben.' : 'Verknüpfung aufheben fehlgeschlagen.');
+                            UI.toast(ok ? Lang.t('unlinkedToast') : Lang.t('unlinkFailedToast'));
                             await AdminBoard.openModal(t.id);
                         });
                     };
@@ -5845,9 +5843,9 @@ export const AdminBoard = {
             const btnAssignIncident = q('#btn-assign-incident');
             if (btnAssignIncident) {
                 const activeIncidents = tickets.filter(x => x.isMajorIncident && !x.archived && x.status !== 'Geschlossen' && x.id !== t.id);
-                btnAssignIncident.style.display = (t.archived || t.isMajorIncident || t.linkedIncidentId || !activeIncidents.length) ? 'none' : '';
+                btnAssignIncident.hidden = t.archived || t.isMajorIncident || t.linkedIncidentId || !activeIncidents.length;
                 btnAssignIncident.onclick = async () => {
-                    const choice = await UI.askIncidentLink(activeIncidents, { title: 'Ticket einer Störung zuordnen', confirmLabel: 'Zuordnen' });
+                    const choice = await UI.askIncidentLink(activeIncidents, { title: Lang.t('assignToIncidentTitle'), confirmLabel: Lang.t('assignButton') });
                     if (choice) {
                         await AdminBoard.linkTicketToIncident(t.id, choice);
                         await AdminBoard.openModal(t.id);
@@ -5866,7 +5864,7 @@ export const AdminBoard = {
             }
 
             if (t.archived) {
-                if (btnArch) btnArch.style.display = 'none';
+                if (btnArch) btnArch.hidden = true;
                 if (btnReact) {
                     btnReact.style.display = isSuper ? 'inline-flex' : 'none';
                     btnReact.onclick = () => AdminBoard.reactivateTicket(t.id);
@@ -5874,7 +5872,7 @@ export const AdminBoard = {
             } else {
                 if (btnReact) btnReact.style.display = 'none';
                 if (btnArch) {
-                    btnArch.style.display = (t.status === 'Geschlossen') ? 'inline-flex' : 'none';
+                    btnArch.hidden = t.status !== 'Geschlossen';
                     btnArch.onclick = () => AdminBoard.archiveCurrent();
                 }
             }
@@ -5950,7 +5948,7 @@ export const AdminBoard = {
                         const users = await Store.getUsers();
                         const author = users.find(u => u.username === t.author);
                         if (author && author.email) {
-                            Store.sendEmail(author.email, `Ticket Update: ${t.title}`, `Priorität geändert auf: ${t.prio}`);
+                            Store.sendEmail(author.email, Lang.format('ticketUpdateEmailSubject', { title: t.title }), Lang.format('priorityChangedTo', { prio: t.prio }));
                         }
                     }
                     await Store.addGlobalLog('Ticket Priorität geändert', `Ticket: ${t.title}, Priorität: ${t.prio}`);
@@ -6019,7 +6017,7 @@ export const AdminBoard = {
             q('#ticket-modal').classList.add('open');
         } catch (e) {
             console.error('Error opening modal:', e);
-            UI.toast('Fehler beim Öffnen des Tickets');
+            UI.toast(Lang.t('errorOpeningTicket'));
         }
     },
 
@@ -6027,7 +6025,7 @@ export const AdminBoard = {
     // stehen gar nicht in Store.getTickets() (siehe getArchivedTickets), waeren im Diff also nie
     // gefunden worden.
     reactivateTicket: (id) => {
-        UI.confirm('Möchtest du dieses Ticket reaktivieren?', async () => {
+        UI.confirm(Lang.t('confirmReactivateTicket'), async () => {
             const res = await fetch(`/api/v2/tickets/${encodeURIComponent(id)}`, {
                 method: 'PATCH', credentials: 'same-origin',
                 headers: { 'content-type': 'application/json' },
@@ -6152,7 +6150,7 @@ export const AdminBoard = {
         if (searchWrap) searchWrap.style.display = commentsRaw.length ? 'flex' : 'none';
         if (commentsRaw.length === 0 && searchInput) searchInput.value = '';
         if (commentsRaw.length === 0) {
-            box.innerHTML = `<div class="empty-state compact">${channel === 'admin-chat' ? 'Noch keine Admin-Nachrichten.' : 'Noch keine Lösungsversuche dokumentiert.'}</div>`;
+            box.innerHTML = `<div class="empty-state compact">${channel === 'admin-chat' ? Lang.t('noAdminMessagesYet') : Lang.t('noSolutionAttemptsYet')}</div>`;
             return;
         }
         const renderText = (value = '') => highlightMentions(Utils.renderMarkdown(value));
@@ -6161,7 +6159,7 @@ export const AdminBoard = {
             .filter(c => !query || [c.content, c.author_name, c.note_type, Utils.fmtDate(c.created_at)].join(' ').toLowerCase().includes(query))
             .sort((a, b) => Number(!!b.is_pinned) - Number(!!a.is_pinned) || Number(!!b.is_resolution) - Number(!!a.is_resolution) || new Date(b.created_at) - new Date(a.created_at));
         if (comments.length === 0) {
-            box.innerHTML = '<div class="empty-state compact">Keine passenden internen Kommentare gefunden.</div>';
+            box.innerHTML = `<div class="empty-state compact">${Lang.t('noMatchingInternalComments')}</div>`;
             return;
         }
         comments.forEach(c => {
@@ -6173,12 +6171,12 @@ export const AdminBoard = {
                     <div class="note-author">
                         ${c.is_pinned ? Icon('pin', 13) : ''}
                         <strong>${Utils.esc(c.author_name || c.author_username)}</strong>
-                        <span class="note-type">${Utils.esc(c.note_type || 'Notiz')}</span>
-                        ${c.is_resolution ? `<span class="note-type note-resolution">${Icon('check-circle', 12)}Endgültige Lösung</span>` : ''}
+                        <span class="note-type">${Utils.esc(c.note_type || Lang.t('noteFallback'))}</span>
+                        ${c.is_resolution ? `<span class="note-type note-resolution">${Icon('check-circle', 12)}${Lang.t('finalSolution')}</span>` : ''}
                     </div>
                     <div class="note-actions">
                         <span>${Utils.fmtDate(c.created_at)}</span>
-                        <button class="btn-ghost btn-icon btn-xs note-edit" title="Kommentar bearbeiten" aria-label="Kommentar bearbeiten">${Icon('pencil', 13)}</button>
+                        <button class="btn-ghost btn-icon btn-xs note-edit" title="${Lang.t('editComment')}" aria-label="${Lang.t('editComment')}">${Icon('pencil', 13)}</button>
                     </div>
                 </div>
                 <div class="note-body">${renderText(c.content)}</div>
@@ -6353,9 +6351,9 @@ export const AdminBoard = {
                     <div class="modal-header">
                         <h3 id="attachment-preview-title"></h3>
                         <div class="modal-actions">
-                            <a class="btn-ghost btn-icon" id="attachment-preview-open" target="_blank" rel="noopener" title="In neuem Tab öffnen" aria-label="In neuem Tab öffnen">${Icon('external-link', 16)}</a>
-                            <a class="btn-ghost btn-icon" id="attachment-preview-download" title="Herunterladen" aria-label="Herunterladen">${Icon('download', 16)}</a>
-                            <button class="btn-ghost btn-icon" data-close-preview title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                            <a class="btn-ghost btn-icon" id="attachment-preview-open" target="_blank" rel="noopener" title="${Lang.t('openInNewTab')}" aria-label="${Lang.t('openInNewTab')}">${Icon('external-link', 16)}</a>
+                            <a class="btn-ghost btn-icon" id="attachment-preview-download" title="${Lang.t('download')}" aria-label="${Lang.t('download')}">${Icon('download', 16)}</a>
+                            <button class="btn-ghost btn-icon" data-close-preview title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="modal-body attachment-preview-body" id="attachment-preview-body"></div>
@@ -6368,13 +6366,13 @@ export const AdminBoard = {
         }
         const name = String(attachment.name || '').toLowerCase();
         const mime = attachment.type || 'application/octet-stream';
-        q('#attachment-preview-title').textContent = attachment.name || 'Anhang';
+        q('#attachment-preview-title').textContent = attachment.name || Lang.t('attachment');
         const topDownload = q('#attachment-preview-download');
         const topOpen = q('#attachment-preview-open');
         const previewSrc = blobUrl || attachment.data;
         if (topDownload) {
             topDownload.href = previewSrc;
-            topDownload.download = attachment.name || 'Anhang';
+            topDownload.download = attachment.name || Lang.t('attachment');
         }
         if (topOpen) {
             topOpen.href = previewSrc;
@@ -6386,7 +6384,7 @@ export const AdminBoard = {
         const savedId = attachment.attachmentId || attachment.id;
         if (savedId && /\.(pdf|docx|doc|odt|xlsx|xls|ods|pptx|ppt|odp)$/.test(name)) {
             const documentUrl = `/api/v2/attachments/${encodeURIComponent(savedId)}/preview`;
-            body.textContent = 'Dokumentvorschau wird erstellt...';
+            body.textContent = Lang.t('documentPreviewGenerating');
             try {
                 const response = await fetch(documentUrl, { credentials: 'same-origin' });
                 if (!response.ok || !response.headers.get('content-type')?.includes('application/pdf')) throw new Error('preview_unavailable');
@@ -6397,7 +6395,7 @@ export const AdminBoard = {
             } catch {
                 body.replaceChildren();
                 const hint = document.createElement('p'); hint.className = 'callout';
-                hint.textContent = 'Die Dokumentansicht ist momentan nicht verfügbar. Vereinfachte Vorschau; die Originaldatei steht zum Download bereit.';
+                hint.textContent = Lang.t('documentViewUnavailableHint');
                 body.appendChild(hint);
             }
         }
@@ -6410,24 +6408,24 @@ export const AdminBoard = {
         if (mime === 'application/pdf' || name.endsWith('.pdf')) {
             if (previewBlob) {
                 try { AdminBoard._pdfViewer = await renderPdfPreview(await previewBlob.arrayBuffer(), body); }
-                catch { addText('PDF-Vorschau konnte nicht geladen werden. Die Originaldatei steht zum Download bereit.'); }
+                catch { addText(Lang.t('pdfPreviewFailedHint')); }
             } else {
                 const message = document.createElement('div');
                 message.className = 'attachment-download-fallback';
-                message.innerHTML = `${Icon('file-text', 28)}<strong>PDF-Vorschau konnte nicht geladen werden</strong><span>Nutze oben das Öffnen- oder Download-Icon.</span>`;
+                message.innerHTML = `${Icon('file-text', 28)}<strong>${Lang.t('pdfPreviewFailedShort')}</strong><span>${Lang.t('useOpenOrDownloadIcon')}</span>`;
                 body.appendChild(message);
             }
         } else if (mime.startsWith('image/')) {
             const image = document.createElement('img');
             image.className = 'attachment-image-preview';
             image.src = previewSrc;
-            image.alt = attachment.name || 'Bildanhang';
+            image.alt = attachment.name || Lang.t('imageAttachment');
             body.append(image);
         } else if (/\.(txt|csv|tsv|json|xml|md|log|html?)$/.test(name) || mime.startsWith('text/')) {
             try {
-                addText(previewBlob ? await previewBlob.text() : 'Diese Datei kann nicht als Text gelesen werden.');
+                addText(previewBlob ? await previewBlob.text() : Lang.t('fileCannotBeReadAsText'));
             } catch {
-                addText('Diese Datei kann nicht als Text gelesen werden.');
+                addText(Lang.t('fileCannotBeReadAsText'));
             }
         } else if (/\.(docx|xlsx|xls|pptx)$/.test(name)) {
             try {
@@ -6443,7 +6441,7 @@ export const AdminBoard = {
                     const result = await window.mammoth.extractRawText({
                         arrayBuffer: buffer
                     });
-                    addText(result.value || 'Das Dokument enthält keinen extrahierbaren Text.');
+                    addText(result.value || Lang.t('documentNoExtractableText'));
                 } else if (/\.(xlsx|xls)$/.test(name) && window.XLSX) {
                     const workbook = window.XLSX.read(buffer, {
                         type: 'array', cellStyles: true, cellNF: true
@@ -6462,16 +6460,16 @@ export const AdminBoard = {
                             .filter(Boolean)
                             .join(' ');
                         const heading = document.createElement('h4');
-                        heading.textContent = `Folie ${index + 1}`;
+                        heading.textContent = Lang.format('slideNumber', { n: index + 1 });
                         const paragraph = document.createElement('p');
-                        paragraph.textContent = text || 'Kein Text auf dieser Folie.';
+                        paragraph.textContent = text || Lang.t('noTextOnSlide');
                         body.append(heading, paragraph);
                     }
                 } else {
-                    addText('Die Office-Vorschau konnte nicht geladen werden.');
+                    addText(Lang.t('officePreviewFailed'));
                 }
             } catch {
-                addText('Die Datei konnte nicht geöffnet werden. Nutze das Download-Icon oben.');
+                addText(Lang.t('fileCouldNotBeOpenedHint'));
             }
         } else if (mime.startsWith('audio/') || mime.startsWith('video/')) {
             const media = document.createElement(mime.startsWith('audio/') ? 'audio' : 'video');
@@ -6482,7 +6480,7 @@ export const AdminBoard = {
         } else {
             const message = document.createElement('p');
             message.className = 'empty-state';
-            message.textContent = 'Für dieses Dateiformat ist keine sichere Vorschau verfügbar. Nutze das Download-Icon oben.';
+            message.textContent = Lang.t('noSafePreviewForFormat');
             body.append(message);
         }
         modal.classList.add('open');
@@ -6577,6 +6575,7 @@ export const AdminBoard = {
         q('#a-name-disp').textContent = req.name;
         q('#a-username').value = req.name.toLowerCase().replace(/\s+/g, '');
         q('#a-password').value = Utils.secureToken(18);
+        UI.bindPasswordRequirements(q('#a-password'));
         q('#approve-modal').classList.add('open');
 
         // Permissions check: only superadmins can set role/dept
@@ -6588,13 +6587,13 @@ export const AdminBoard = {
         let permissions = q('#a-permissions');
         if (!permissions) {
             permissions = document.createElement('div'); permissions.id = 'a-permissions';
-            permissions.innerHTML = `<label>Admin-Rechte</label><div class="perm-grid">${[
-                ['canManageRequests', 'Kontoanfragen verwalten'], ['canManageUsers', 'Benutzerverwaltung (nur User)'],
-                ['canViewLogs', 'Systemlogs anzeigen'], ['canManage2FA', '2FA zurücksetzen'],
-                ['textBlocks', 'Textbausteine verwalten'], ['reports', 'Auswertung ansehen'],
-                ['approvals', 'Genehmigungen entscheiden'], ['recurring', 'Wiederkehrende Tickets verwalten']
+            permissions.innerHTML = `<label>${Lang.t('adminRights')}</label><div class="perm-grid">${[
+                ['canManageRequests', Lang.t('manageAccountRequests')], ['canManageUsers', Lang.t('userManagementUsersOnly')],
+                ['canViewLogs', Lang.t('viewSystemLogs')], ['canManage2FA', Lang.t('reset2FA')],
+                ['textBlocks', Lang.t('manageTextBlocks')], ['reports', Lang.t('viewReports')],
+                ['approvals', Lang.t('decideApprovals')], ['recurring', Lang.t('manageRecurringTickets')]
             ].map(([key, label]) => `<label class="check-row"><input type="checkbox" data-permission="${key}"><span>${label}</span></label>`).join('')}</div>
-            <label for="a-kb">Wissensdatenbank</label><select id="a-kb"><option value="none">Kein Zugriff</option><option value="read">Nur lesen</option><option value="edit">Lesen und bearbeiten</option></select>`;
+            <label for="a-kb">${Lang.t('knowledgeBase')}</label><select id="a-kb"><option value="none">${Lang.t('noAccess')}</option><option value="read">${Lang.t('readOnly')}</option><option value="edit">${Lang.t('readAndEdit')}</option></select>`;
             q('#a-dept-field').after(permissions);
         }
         permissions.hidden = true;
@@ -6730,10 +6729,10 @@ export const AdminBoard = {
         if (addedCount > 0) {
             await Store.saveUsers(users);
             AdminBoard.renderUserManager('users');
-            UI.toast(`${addedCount} Benutzer importiert, ${skippedCount} übersprungen`);
+            UI.toast(Lang.format('usersImportedSkipped', { added: addedCount, skipped: skippedCount }));
             await Store.addGlobalLog('Benutzer per CSV importiert', `Hinzugefügt: ${addedCount}, Übersprungen: ${skippedCount}`);
         } else {
-            UI.toast(`Keine neuen Benutzer importiert (${skippedCount} Duplikate)`);
+            UI.toast(Lang.format('noNewUsersImportedDuplicates', { count: skippedCount }));
         }
     },
 
@@ -6748,11 +6747,11 @@ export const AdminBoard = {
         const dept = q('#a-dept').value;
 
         if (!username || !password) {
-            UI.toast('Bitte alle Felder füllen');
+            UI.toast(Lang.t('fillFields'));
             return;
         }
         if (password.length < 14) {
-            UI.toast('Passwort muss mindestens 14 Zeichen lang sein');
+            UI.toast(Lang.t('passwordMinLength'));
             return;
         }
 

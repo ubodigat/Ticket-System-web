@@ -19,6 +19,7 @@ import { APP_JS, AUTH_CSS, LOGIN_JS } from '../assets/authPage.js';
 import { authenticateLdap } from '../../auth/ldap.js';
 import { loadSecurityPolicy, force2faAppliesToRole, type SecurityPolicy } from '../../domain/securityPolicy.js';
 import { isAccountExpired } from '../../domain/accountValidity.js';
+import { isSourceLocked, recordSourceFailure, clearSourceFailures, accountBackoffSecondsRemaining } from '../../domain/loginThrottle.js';
 
 const PROD_SESSION_COOKIE = '__Host-ticket_session';
 const DEV_SESSION_COOKIE = 'ticket_session';
@@ -226,36 +227,23 @@ function getDummyPasswordHash(): Promise<string> {
 }
 
 // Brute-Force-Schutz (Anforderungsliste "Brute-Force-Angriffe": Hoch). Wird bei jedem
-// fehlgeschlagenen Passwort- ODER TOTP-Versuch aufgerufen; Schwelle, Aktion (dauerhaft sperren/
-// zeitweise sperren/nur protokollieren) und Sperrdauer kommen aus Systemeinstellungen >
-// Sicherheit (securityPolicy.ts) statt wie zuvor fest einprogrammiert zu sein.
-// maxLoginAttempts === 0 bedeutet "kein Limit" -- der Zähler läuft zu Audit-Zwecken trotzdem
-// mit, löst aber nie eine Sperre aus.
-// Läuft in einer Transaktion mit Zeilensperre (SELECT ... FOR UPDATE), damit parallele
-// fehlgeschlagene Login-Versuche für dasselbe Konto sich nicht gegenseitig überschreiben --
-// ein reines Read-Modify-Write ohne Sperre könnte unter Last Erhöhungen verlieren und so die
-// konfigurierte Sperrschwelle (maxLoginAttempts) umgehbar machen.
-async function recordFailedLogin(app: FastifyInstance, userId: string, _currentCount: number, policy: SecurityPolicy): Promise<void> {
-  await app.db.transaction().execute(async trx => {
-    const row = await trx.selectFrom('users').select(['failed_login_count']).where('id', '=', userId).forUpdate().executeTakeFirst();
-    if (!row) return;
-    const nextCount = (row.failed_login_count ?? 0) + 1;
-    const updates: Record<string, unknown> = { failed_login_count: nextCount };
-    const limitReached = policy.maxLoginAttempts > 0 && nextCount >= policy.maxLoginAttempts;
-    if (limitReached && policy.lockoutAction !== 'none') {
-      if (policy.lockoutAction === 'lock') {
-        updates.locked_permanent = true;
-      } else {
-        updates.locked_until = new Date(Date.now() + policy.lockoutMinutes * 60 * 1000);
-      }
-      updates.failed_login_count = 0;
-    }
-    await trx.updateTable('users').set(updates).where('id', '=', userId).execute();
-  });
+// fehlgeschlagenen Passwort- ODER TOTP-Versuch aufgerufen.
+// Security-Audit R-11: die eigentliche (immer nur befristete) Sperre läuft jetzt pro
+// (Konto, Quellnetz) über domain/loginThrottle.ts -- wer nur den Benutzernamen kennt, kann ein
+// fremdes Konto damit nicht mehr sperren, da die Sperre an das eigene Quellnetz des Angreifers
+// gebunden bleibt. Der hier weiter mitgezählte, kontoweite failed_login_count treibt nur noch
+// einen wachsenden Backoff (accountBackoffSecondsRemaining), nie mehr eine Sperre.
+// maxLoginAttempts === 0 bedeutet "kein Limit" -- der Zähler läuft zu Audit-Zwecken trotzdem mit.
+async function recordFailedLogin(app: FastifyInstance, userId: string, ip: string, policy: SecurityPolicy): Promise<void> {
+  await recordSourceFailure(app.db, userId, ip, policy);
+  await app.db.updateTable('users')
+    .set(eb => ({ failed_login_count: eb('failed_login_count', '+', 1), failed_login_last_at: new Date() }))
+    .where('id', '=', userId).execute();
 }
 
 async function resetFailedLogins(app: FastifyInstance, userId: string): Promise<void> {
-  await app.db.updateTable('users').set({ failed_login_count: 0 }).where('id', '=', userId).execute();
+  await clearSourceFailures(app.db, userId);
+  await app.db.updateTable('users').set({ failed_login_count: 0, failed_login_last_at: null }).where('id', '=', userId).execute();
 }
 
 async function issueSession(app: FastifyInstance, req: FastifyRequest, reply: FastifyReply, user: { id: string; username: string; role: string }, policy: SecurityPolicy): Promise<void> {
@@ -338,12 +326,17 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const policy = await loadSecurityPolicy(app.db);
     const user = await app.db
       .selectFrom('users')
-      .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'failed_login_count', 'ldap_login_enabled', 'account_valid_until'])
+      .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'password_hash', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'failed_login_count', 'failed_login_last_at', 'ldap_login_enabled', 'account_valid_until'])
       .where('username', '=', input.username)
       .executeTakeFirst();
 
+    // Security-Audit R-11: Sperre jetzt zusätzlich pro (Konto, Quellnetz) prüfen (siehe
+    // domain/loginThrottle.ts) -- users.locked_permanent/locked_until bleiben die manuelle
+    // Admin-Sperre, isSourceLocked ist die automatische, nur das Quellnetz des Angreifers
+    // betreffende Sperre.
+    const sourceLocked = user ? await isSourceLocked(app.db, user.id, req.ip) : false;
     const lockedUntil = timestampMillis(user?.locked_until);
-    if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || isAccountExpired(user.account_valid_until)) {
+    if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || sourceLocked || isAccountExpired(user.account_valid_until)) {
       // Absichtlich dieselbe Fehlermeldung wie bei falschem Passwort (kein Account-Enumeration
       // über unterschiedliche Fehlertexte, siehe Anforderungsliste "Account Enumeration").
       if (user) {
@@ -357,6 +350,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         await argon2.verify(await getDummyPasswordHash(), input.password).catch(() => false);
       }
       return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Benutzername oder Passwort ist falsch.');
+    }
+    // Security-Audit R-11: kontoweiter Backoff (quellenunabhängig) -- verhindert, dass verteilte
+    // Fehlversuche aus vielen Netzen die Pro-Quelle-Sperre umgehen, ohne selbst wieder zu einer
+    // durch Dritte auslösbaren harten Sperre zu werden (nur eine wachsende Wartezeit, max. 5 min).
+    const backoffSeconds = accountBackoffSecondsRemaining(user.failed_login_count, user.failed_login_last_at);
+    if (backoffSeconds > 0) {
+      reply.header('retry-after', String(backoffSeconds));
+      return authProblem(reply, 429, 'Zu viele Fehlversuche', `Bitte in ${backoffSeconds} Sekunden erneut versuchen.`);
     }
     let ok = false;
     try {
@@ -377,7 +378,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       if (ok) await logSecurityEvent(app, 'login.ldap_success', input.username);
     }
     if (!ok) {
-      await recordFailedLogin(app, user.id, user.failed_login_count, policy);
+      await recordFailedLogin(app, user.id, req.ip, policy);
       await logSecurityEvent(app, 'login.wrong_password', input.username);
       return loginFailure(reply);
     }
@@ -416,12 +417,19 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       const policy = await loadSecurityPolicy(app.db);
       const user = await app.db
         .selectFrom('users')
-        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'totp_secret_enc', 'failed_login_count', 'account_valid_until'])
+        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'totp_secret_enc', 'failed_login_count', 'failed_login_last_at', 'account_valid_until'])
         .where('id', '=', pending.uid)
         .executeTakeFirst();
+      // Security-Audit R-11: siehe Kommentar beim Login-Endpunkt oben.
+      const sourceLocked = user ? await isSourceLocked(app.db, user.id, req.ip) : false;
       const lockedUntil = timestampMillis(user?.locked_until);
-      if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || isAccountExpired(user.account_valid_until) || !user.totp_enabled || !user.totp_secret_enc) {
+      if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || sourceLocked || isAccountExpired(user.account_valid_until) || !user.totp_enabled || !user.totp_secret_enc) {
         return authProblem(reply, 401, 'Anmeldung fehlgeschlagen', 'Bitte erneut anmelden.');
+      }
+      const backoffSeconds = accountBackoffSecondsRemaining(user.failed_login_count, user.failed_login_last_at);
+      if (backoffSeconds > 0) {
+        reply.header('retry-after', String(backoffSeconds));
+        return authProblem(reply, 429, 'Zu viele Fehlversuche', `Bitte in ${backoffSeconds} Sekunden erneut versuchen.`);
       }
 
       const totpDek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
@@ -435,7 +443,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       });
 
       if (!(await verifyAndConsumeTotp(app.db, user.id, secret, parsed.data.code))) {
-        await recordFailedLogin(app, user.id, user.failed_login_count, policy);
+        await recordFailedLogin(app, user.id, req.ip, policy);
         await logSecurityEvent(app, 'login.wrong_totp_code', user.username);
         return authProblem(reply, 401, 'Code ungültig', 'Der eingegebene Code ist falsch, abgelaufen oder wurde bereits verwendet.');
       }

@@ -47,7 +47,7 @@ export const UI = {
         doc.open();
         doc.write('<!DOCTYPE html>' + parsed.documentElement.outerHTML);
         doc.close();
-        UI.toast('Druckvorschau wird geöffnet...');
+        UI.toast(Lang.t('printPreviewOpening'));
     },
     // Ersetzt native title-Tooltips (vom Browser gezeichnet, nicht stylebar) durch eine
     // ans Design angepasste, abgerundete Tooltip-Box. Funktioniert per Delegation auch für
@@ -302,23 +302,23 @@ export const UI = {
             modal.innerHTML = `
                 <div class="modal modal-sm">
                     <div class="modal-header">
-                        <h3>${Icon('siren', 18)}Gehört dein Ticket zu einer Störung?</h3>
+                        <h3>${Icon('siren', 18)}${Lang.t('doesYourTicketBelongToIncident')}</h3>
                         <div class="modal-actions">
-                            <button class="btn-ghost btn-icon" id="ilk-close" title="Schließen" aria-label="Schließen">${Icon('x', 16)}</button>
+                            <button class="btn-ghost btn-icon" id="ilk-close" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
                     <div class="modal-body">
                         <div class="incident-link-options" id="ilk-options"></div>
                     </div>
                     <div class="modal-footer modal-footer-visible">
-                        <button class="btn-secondary" id="ilk-cancel">Abbrechen</button>
-                        <button class="btn-primary" id="ilk-confirm">Ticket absenden</button>
+                        <button class="btn-secondary" id="ilk-cancel">${Lang.t('cancel')}</button>
+                        <button class="btn-primary" id="ilk-confirm">${Lang.t('submitTicket')}</button>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
         }
-        modal.querySelector('.modal-header h3').innerHTML = `${Icon('siren', 18)}${Utils.esc(opts.title || 'Gehört dein Ticket zu einer Störung?')}`;
-        modal.querySelector('#ilk-confirm').textContent = opts.confirmLabel || 'Ticket absenden';
+        modal.querySelector('.modal-header h3').innerHTML = `${Icon('siren', 18)}${Utils.esc(opts.title || Lang.t('doesYourTicketBelongToIncident'))}`;
+        modal.querySelector('#ilk-confirm').textContent = opts.confirmLabel || Lang.t('submitTicket');
         const options = modal.querySelector('#ilk-options');
         options.innerHTML = [
             ...incidents.map((incident, i) => `
@@ -328,7 +328,7 @@ export const UI = {
                 </label>`),
             `<label class="check-row incident-link-option">
                 <input type="radio" name="ilk-incident" value="">
-                <span class="check-text"><strong>Nein, keine dieser Störungen</strong></span>
+                <span class="check-text"><strong>${Lang.t('noneOfTheseIncidents')}</strong></span>
             </label>`
         ].join('');
         const finish = (result) => {
@@ -430,7 +430,7 @@ export const UI = {
             modal.innerHTML = `
                 <div class="modal modal-md">
                     <div class="modal-header">
-                        <h3>${Icon('scroll-text', 18)} Ticket-Protokoll</h3>
+                        <h3>${Icon('scroll-text', 18)} ${Lang.t('ticketLog')}</h3>
                         <div class="modal-actions">
                             <button class="btn-ghost btn-icon" id="logs-modal-close" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
@@ -457,7 +457,7 @@ export const UI = {
         body.innerHTML = '';
         const logs = await Store.getTicketAuditLog(id);
         if (!logs.length) {
-            body.innerHTML = '<div class="empty-state">Keine Einträge vorhanden.</div>';
+            body.innerHTML = `<div class="empty-state">${Lang.t('noEntriesAvailable')}</div>`;
         } else {
             body.innerHTML = logs.slice().reverse().map(l => UI.logRow({
                 icon: iconForLog(l.action),
@@ -476,11 +476,11 @@ export const UI = {
         <div class="color-field">
             <button type="button" class="color-swatch-btn" id="${id}" popovertarget="${id}-pop" title="${label}" aria-label="${label}" aria-haspopup="dialog" aria-expanded="false"></button>
             <div class="color-popover" id="${id}-pop" popover role="dialog" aria-label="${label}">
-                <div class="cp-area" tabindex="0" aria-label="Sättigung und Helligkeit"><span class="cp-thumb"></span></div>
+                <div class="cp-area" tabindex="0" aria-label="${Lang.t('saturationAndBrightness')}"><span class="cp-thumb"></span></div>
                 <div class="cp-row">
-                    <button type="button" class="btn-ghost btn-icon btn-sm cp-eyedrop" title="Farbe vom Bildschirm aufnehmen" aria-label="Farbe vom Bildschirm aufnehmen">${Icon('pipette', 15)}</button>
+                    <button type="button" class="btn-ghost btn-icon btn-sm cp-eyedrop" title="${Lang.t('pickColorFromScreen')}" aria-label="${Lang.t('pickColorFromScreen')}">${Icon('pipette', 15)}</button>
                     <span class="cp-preview"></span>
-                    <input type="range" class="cp-hue" min="0" max="359" step="1" aria-label="Farbton">
+                    <input type="range" class="cp-hue" min="0" max="359" step="1" aria-label="${Lang.t('hue')}">
                 </div>
                 <div class="cp-inputs">
                     <label class="cp-input cp-hex"><input type="text" maxlength="7" spellcheck="false"><span>HEX</span></label>
@@ -687,26 +687,26 @@ export const UI = {
     dateTimePickerMarkup: (id) => `
         <div class="dtp-field" id="${id}">
             <button type="button" class="dtp-trigger">
-                <span class="dtp-value is-placeholder">Datum &amp; Uhrzeit wählen...</span>
+                <span class="dtp-value is-placeholder">${Lang.t('selectDateAndTime')}</span>
                 ${Icon('calendar', 15)}
             </button>
             <div class="dtp-popover">
                 <div class="dtp-header">
-                    <button type="button" class="dtp-nav dtp-prev" aria-label="Vorheriger Monat">${Icon('chevron-left', 16)}</button>
+                    <button type="button" class="dtp-nav dtp-prev" aria-label="${Lang.t('previousMonth')}">${Icon('chevron-left', 16)}</button>
                     <span class="dtp-month-label"></span>
-                    <button type="button" class="dtp-nav dtp-next" aria-label="Nächster Monat">${Icon('chevron-right', 16)}</button>
+                    <button type="button" class="dtp-nav dtp-next" aria-label="${Lang.t('nextMonth')}">${Icon('chevron-right', 16)}</button>
                 </div>
-                <div class="dtp-manual"><label>Datum<input type="text" class="dtp-manual-date" inputmode="numeric" placeholder="dd.mm.jjjj" aria-label="Datum manuell eingeben"></label><label>Uhrzeit<input type="text" class="dtp-manual-time" inputmode="numeric" placeholder="HH:mm" aria-label="Uhrzeit manuell eingeben"></label><button type="button" class="btn-secondary btn-icon dtp-manual-apply" title="Datum übernehmen" aria-label="Datum übernehmen">${Icon('check', 15)}</button></div>
-                <div class="dtp-weekdays"><span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span></div>
+                <div class="dtp-manual"><label>${Lang.t('date')}<input type="text" class="dtp-manual-date" inputmode="numeric" placeholder="dd.mm.jjjj" aria-label="${Lang.t('enterDateManually')}"></label><label>${Lang.t('timeLabel')}<input type="text" class="dtp-manual-time" inputmode="numeric" placeholder="HH:mm" aria-label="${Lang.t('enterTimeManually')}"></label><button type="button" class="btn-secondary btn-icon dtp-manual-apply" title="${Lang.t('applyDate')}" aria-label="${Lang.t('applyDate')}">${Icon('check', 15)}</button></div>
+                <div class="dtp-weekdays"><span>${Lang.t('weekdayMon')}</span><span>${Lang.t('weekdayTue')}</span><span>${Lang.t('weekdayWed')}</span><span>${Lang.t('weekdayThu')}</span><span>${Lang.t('weekdayFri')}</span><span>${Lang.t('weekdaySat')}</span><span>${Lang.t('weekdaySun')}</span></div>
                 <div class="dtp-grid"></div>
                 <div class="dtp-time-row">
-                    <div class="dtp-time-col dtp-hour" role="listbox" aria-label="Stunde"></div>
+                    <div class="dtp-time-col dtp-hour" role="listbox" aria-label="${Lang.t('hourLabel')}"></div>
                     <span class="dtp-time-sep">:</span>
-                    <div class="dtp-time-col dtp-minute" role="listbox" aria-label="Minute"></div>
+                    <div class="dtp-time-col dtp-minute" role="listbox" aria-label="${Lang.t('minuteLabel')}"></div>
                 </div>
                 <div class="dtp-actions">
-                    <button type="button" class="dtp-clear">Löschen</button>
-                    <button type="button" class="dtp-today">Heute</button>
+                    <button type="button" class="dtp-clear">${Lang.t('delete')}</button>
+                    <button type="button" class="dtp-today">${Lang.t('today')}</button>
                 </div>
             </div>
         </div>`,
@@ -722,12 +722,51 @@ export const UI = {
         const digits = String(value).replace(/\D/g, '').slice(0, 4);
         return digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits;
     },
+    // Zeigt beim Fokussieren eines Passwortfelds ein kleines Popover mit den serverseitig
+    // durchgesetzten Anforderungen (siehe apps/server/src/http/routes/users.ts, z.min(14)) und
+    // aktualisiert live, was noch fehlt, statt die Person erst nach dem Absenden scheitern zu
+    // lassen.
+    bindPasswordRequirements: (input) => {
+        if (!input || input.dataset.pwReqBound) return;
+        input.dataset.pwReqBound = '1';
+        const minLength = 14;
+        const pop = document.createElement('div');
+        pop.className = 'password-requirements-popover';
+        pop.innerHTML = `
+            <strong>${Lang.t('passwordRequirementsTitle')}</strong>
+            <div class="pwreq-row"><span class="pwreq-icon"></span><span class="pwreq-text">${Lang.t('passwordMinLengthRequirement')}</span></div>`;
+        document.body.appendChild(pop);
+        const row = pop.querySelector('.pwreq-row');
+        const icon = pop.querySelector('.pwreq-icon');
+        const text = pop.querySelector('.pwreq-text');
+        const update = () => {
+            const len = input.value.length;
+            const met = len >= minLength;
+            row.classList.toggle('is-met', met);
+            icon.innerHTML = Icon(met ? 'check' : 'x', 13);
+            text.textContent = met ? Lang.t('passwordMinLengthRequirement') : `${Lang.t('passwordMinLengthRequirement')} (${Lang.format('passwordCharsRemaining', { count: minLength - len })})`;
+            if (window.lucide) lucide.createIcons();
+        };
+        const place = () => {
+            const rect = input.getBoundingClientRect();
+            pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+            pop.style.top = `${rect.bottom + 6}px`;
+            pop.style.width = `${Math.max(220, rect.width)}px`;
+        };
+        const show = () => { update(); pop.classList.add('open'); place(); };
+        const hide = () => pop.classList.remove('open');
+        input.addEventListener('focus', show);
+        input.addEventListener('input', () => { if (pop.classList.contains('open')) { update(); place(); } });
+        input.addEventListener('blur', hide);
+        window.addEventListener('scroll', () => { if (pop.classList.contains('open')) place(); }, true);
+        window.addEventListener('resize', () => { if (pop.classList.contains('open')) place(); });
+    },
     bindDateInput: input => input.addEventListener('input', () => { input.value = UI.formatDateText(input.value); }),
     bindTimeInput: input => input.addEventListener('input', () => { input.value = UI.formatTimeText(input.value); }),
     dateFieldMarkup: (id, value = '', dtpId = `${id}-dtp`) => `
         <div class="date-input-row">
             <input id="${id}" type="text" inputmode="numeric" placeholder="dd.mm.jjjj" value="${Utils.esc(value)}">
-            <button type="button" class="btn-ghost btn-icon" id="${id}-cal" title="Kalender öffnen" aria-label="Kalender öffnen">${Icon('calendar', 16)}</button>
+            <button type="button" class="btn-ghost btn-icon" id="${id}-cal" title="${Lang.t('openCalendar')}" aria-label="${Lang.t('openCalendar')}">${Icon('calendar', 16)}</button>
         </div>
         <div id="${id}-host" hidden>${UI.dateTimePickerMarkup(dtpId)}</div>`,
     bindDateField: (id, { initialMs = null, onChange = null } = {}) => {
@@ -761,7 +800,7 @@ export const UI = {
         const manualDate = root.querySelector('.dtp-manual-date');
         const manualTime = root.querySelector('.dtp-manual-time');
         if (dateOnly) manualTime.parentElement.hidden = true;
-        const monthNames = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+        const monthNames = ['monthJanuary', 'monthFebruary', 'monthMarch', 'monthApril', 'monthMay', 'monthJune', 'monthJuly', 'monthAugust', 'monthSeptember', 'monthOctober', 'monthNovember', 'monthDecember'].map(k => Lang.t(k));
 
         let hourVal = 0;
         let minuteVal = 0;
@@ -792,7 +831,7 @@ export const UI = {
                 valueLabel.textContent = fmt(selected);
                 valueLabel.classList.remove('is-placeholder');
             } else {
-                valueLabel.textContent = 'Datum & Uhrzeit wählen...';
+                valueLabel.textContent = Lang.t('selectDateAndTime');
                 valueLabel.classList.add('is-placeholder');
             }
         };
@@ -840,7 +879,7 @@ export const UI = {
         };
         const applyManual = () => {
             const ms = Utils.parseGermanDateTime(manualDate.value, dateOnly ? '00:00' : (manualTime.value || '00:00'));
-            if (!Number.isFinite(ms)) { manualDate.setCustomValidity('Bitte Datum als dd.mm.jjjj und Uhrzeit als HH:mm eingeben.'); manualDate.reportValidity(); return; }
+            if (!Number.isFinite(ms)) { manualDate.setCustomValidity(Lang.t('enterDateAndTimeFormat')); manualDate.reportValidity(); return; }
             selected = new Date(ms); hourVal = selected.getHours(); minuteVal = selected.getMinutes();
             viewDate = new Date(selected.getFullYear(), selected.getMonth(), 1);
             renderTimeCols(); renderGrid(); renderLabel();
@@ -964,7 +1003,7 @@ export const UI = {
             <div class="field">
                 <label for="cf-${f.id}">${Utils.esc(f.label)}${f.required ? ' *' : ''}</label>
                 ${f.type === 'select'
-                ? `<select id="cf-${f.id}" data-field-id="${f.id}" data-field-label="${Utils.esc(f.label)}" data-field-required="${f.required ? '1' : ''}"><option value="">Bitte wählen...</option>${(f.options || []).map(o => `<option value="${Utils.esc(o)}" ${values[f.id] === o ? 'selected' : ''}>${Utils.esc(o)}</option>`).join('')}</select>`
+                ? `<select id="cf-${f.id}" data-field-id="${f.id}" data-field-label="${Utils.esc(f.label)}" data-field-required="${f.required ? '1' : ''}"><option value="">${Lang.t('pleaseChoose')}</option>${(f.options || []).map(o => `<option value="${Utils.esc(o)}" ${values[f.id] === o ? 'selected' : ''}>${Utils.esc(o)}</option>`).join('')}</select>`
                 : `<input id="cf-${f.id}" data-field-id="${f.id}" data-field-label="${Utils.esc(f.label)}" data-field-required="${f.required ? '1' : ''}" type="${f.type === 'number' ? 'number' : 'text'}" value="${Utils.esc(values[f.id] || '')}">`}
             </div>`).join('');
     },
@@ -997,7 +1036,7 @@ export const UI = {
         // Mehrfachauswahl im selben Look wie <select> (Stile in style.css, Abschnitt "Auswahllisten")
         // config.single: Einfachauswahl mit Suche statt eines nativen <select> (z.B. Vorgesetzte Person, Kategorien)
         const single = !!config.single;
-        const emptyLabel = config.emptyLabel || (single ? 'Keine' : 'Bitte wählen...');
+        const emptyLabel = config.emptyLabel || (single ? Lang.t('none') : Lang.t('pleaseChoose'));
         container.innerHTML = '';
         container.classList.add('multi-select-container');
         if (single) container.classList.add('single-select-container');
@@ -1023,7 +1062,7 @@ export const UI = {
             let text = emptyLabel;
             if (single) {
                 if (selected.length) text = selected[0].dataset.label || selected[0].value;
-            } else if (selected.length > 2) text = `${selected.length} ausgewählt`;
+            } else if (selected.length > 2) text = Lang.format('selectedCount', { count: selected.length });
             else if (selected.length) text = selected.map(i => i.dataset.label || i.value).join(', ');
             header.innerHTML = `<span class="ms-text${selected.length ? '' : ' is-placeholder'}">${Utils.esc(text)}</span><span class="ms-arrow" aria-hidden="true"></span>`;
         };
@@ -1066,8 +1105,8 @@ export const UI = {
             const search = document.createElement('input');
             search.type = 'search';
             search.className = 'ms-search';
-            search.placeholder = 'Suchen...';
-            search.setAttribute('aria-label', 'Auswahl durchsuchen');
+            search.placeholder = Lang.t('search');
+            search.setAttribute('aria-label', Lang.t('searchSelectionAriaLabel'));
             search.oninput = () => {
                 const term = search.value.trim().toLowerCase();
                 dropdown.querySelectorAll('.ms-row').forEach(row => {

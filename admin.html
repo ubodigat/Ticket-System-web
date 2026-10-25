@@ -134,7 +134,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
         <div class="modal modal-md">
             <div class="modal-header">
                 <h3 id="requests-modal-title"><i data-lucide="user-round-plus"></i>Konto-Anfragen</h3>
-                <button class="btn-ghost btn-icon" id="requests-modal-close" type="button" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                <button class="btn-ghost btn-icon" id="requests-modal-close" type="button" data-i18n-title="close" data-i18n-aria-label="close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body">
                 <div id="request-list" class="request-grid"></div>
@@ -150,10 +150,10 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                 <div class="modal-header">
                     <h3 id="m-title">Ticket</h3>
                     <div class="modal-actions">
-                        <button class="btn-ghost btn-icon" id="m-edit-ticket" title="Titel und Beschreibung bearbeiten" aria-label="Titel und Beschreibung bearbeiten"><i data-lucide="pencil"></i></button>
-                        <button class="btn-ghost btn-icon" id="m-logs" title="Protokoll anzeigen" aria-label="Protokoll anzeigen"><i data-lucide="scroll-text"></i></button>
-                        <button class="btn-ghost btn-icon" id="m-print" title="Ticket drucken" aria-label="Ticket drucken"><i data-lucide="printer"></i></button>
-                        <button class="btn-ghost btn-icon" id="m-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                        <button class="btn-ghost btn-icon" id="m-edit-ticket" data-i18n-title="editTitleAndDescription" data-i18n-aria-label="editTitleAndDescription" title="Titel und Beschreibung bearbeiten" aria-label="Titel und Beschreibung bearbeiten"><i data-lucide="pencil"></i></button>
+                        <button class="btn-ghost btn-icon" id="m-logs" data-i18n-title="viewLog" data-i18n-aria-label="viewLog" title="Protokoll anzeigen" aria-label="Protokoll anzeigen"><i data-lucide="scroll-text"></i></button>
+                        <button class="btn-ghost btn-icon" id="m-print" data-i18n-title="printTicketTitle" data-i18n-aria-label="printTicketTitle" title="Ticket drucken" aria-label="Ticket drucken"><i data-lucide="printer"></i></button>
+                        <button class="btn-ghost btn-icon" id="m-close" data-i18n-title="close" data-i18n-aria-label="close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
                     </div>
                 </div>
                 <div class="modal-body">
@@ -167,7 +167,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         <div class="meta-grid ticket-meta-grid">
                             <div class="meta-item"><strong>Von</strong><span id="m-author" class="meta-value">-</span></div>
                             <div class="meta-item"><strong>Datum</strong><span id="m-date" class="meta-value">-</span></div>
-                            <div class="meta-item" id="m-sla-item" hidden><strong>Frist</strong><span class="sla-item-row"><span id="m-sla-badge" class="sla-badge"></span><button type="button" id="m-sla-edit" class="btn-ghost btn-icon btn-xs" title="Eigene Frist setzen" aria-label="Eigene Frist setzen"><i data-lucide="pencil"></i></button><button type="button" id="m-calendar-event-btn" class="btn-ghost btn-icon btn-xs" title="Outlook-Termin erstellen" aria-label="Outlook-Termin erstellen"><i data-lucide="calendar-plus"></i></button></span></div>
+                            <div class="meta-item" id="m-sla-item" hidden><strong data-i18n="deadline">Frist</strong><span class="sla-item-row"><span id="m-sla-badge" class="sla-badge"></span><button type="button" id="m-sla-edit" class="btn-ghost btn-icon btn-xs" data-i18n-title="setCustomDeadline" data-i18n-aria-label="setCustomDeadline" title="Eigene Frist setzen" aria-label="Eigene Frist setzen"><i data-lucide="pencil"></i></button><button type="button" id="m-calendar-event-btn" class="btn-ghost btn-icon btn-xs" data-i18n-title="createOutlookEventTitle" data-i18n-aria-label="createOutlookEventTitle" title="Outlook-Termin erstellen" aria-label="Outlook-Termin erstellen"><i data-lucide="calendar-plus"></i></button></span></div>
                             <div class="meta-item">
                                 <strong>Status</strong>
                                 <select id="m-status-edit">
@@ -195,15 +195,15 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         </div>
 
                         <div id="m-approval-pending" class="waiting-request" hidden>
-                            <strong><i data-lucide="hourglass"></i> Wartet auf Genehmigung</strong>
+                            <strong><i data-lucide="hourglass"></i> <span data-i18n="awaitingApproval">Wartet auf Genehmigung</span></strong>
                             <p id="m-approval-pending-text"></p>
                             <div class="aa-actions" id="m-approval-actions" hidden>
-                                <button type="button" class="btn-primary btn-sm" id="m-approval-yes"><i data-lucide="check"></i>Freigeben</button>
-                                <button type="button" class="btn-secondary btn-sm btn-danger" id="m-approval-no"><i data-lucide="x"></i>Ablehnen</button>
+                                <button type="button" class="btn-primary btn-sm" id="m-approval-yes"><i data-lucide="check"></i><span data-i18n="approve">Freigeben</span></button>
+                                <button type="button" class="btn-secondary btn-sm btn-danger" id="m-approval-no"><i data-lucide="x"></i><span data-i18n="decline">Ablehnen</span></button>
                             </div>
                         </div>
                         <div id="m-approval-rejected" class="waiting-request is-danger" hidden>
-                            <strong><i data-lucide="circle-x"></i> Genehmigung abgelehnt</strong>
+                            <strong><i data-lucide="circle-x"></i> <span data-i18n="approvalRejectedStatic">Genehmigung abgelehnt</span></strong>
                             <p id="m-approval-rejected-text"></p>
                         </div>
 
@@ -215,36 +215,36 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 
                         <div class="comments-section">
                             <h4 class="section-title">Interne Kommunikation</h4>
-                            <div class="internal-stream-tabs" role="tablist" aria-label="Interne Kommunikationsbereiche">
+                            <div class="internal-stream-tabs" role="tablist" data-i18n-aria-label="internalCommAreasAriaLabel" aria-label="Interne Kommunikationsbereiche">
                                 <button class="internal-stream-tab active" id="internal-tab-admin-chat" type="button" role="tab" aria-selected="true" data-stream="admin-chat">
-                                    <span>Admin-Chat</span><span class="internal-stream-count" id="m-admin-note-count">0</span>
+                                    <span data-i18n="adminChatTabLabel">Admin-Chat</span><span class="internal-stream-count" id="m-admin-note-count">0</span>
                                 </button>
                                 <button class="internal-stream-tab" id="internal-tab-solution" type="button" role="tab" aria-selected="false" data-stream="solution">
-                                    <span>Lösungsweg</span><span class="internal-stream-count" id="m-solution-note-count">0</span>
+                                    <span data-i18n="solutionPathHeading">Lösungsweg</span><span class="internal-stream-count" id="m-solution-note-count">0</span>
                                 </button>
                             </div>
                             <div class="internal-stream-grid">
                                 <section class="internal-stream active" id="internal-stream-admin-chat" role="tabpanel" aria-labelledby="internal-tab-admin-chat" data-stream="admin-chat">
                                     <div class="internal-note-composer">
                                         <div class="note-toolbar">
-                                            <select id="m-admin-note-type" title="Art des Eintrags">
-                                                <option value="Abstimmung">Abstimmung</option>
-                                                <option value="Rückfrage">Rückfrage</option>
-                                                <option value="Entscheidung">Entscheidung</option>
+                                            <select id="m-admin-note-type" data-i18n-title="entryTypeTitle" title="Art des Eintrags">
+                                                <option value="Abstimmung" data-i18n="noteTypeVote">Abstimmung</option>
+                                                <option value="Rückfrage" data-i18n="noteTypeFollowUp">Rückfrage</option>
+                                                <option value="Entscheidung" data-i18n="noteTypeDecision">Entscheidung</option>
                                             </select>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
-                                            <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-admin-note-file-input" hidden multiple></label>
-                                            <label class="note-option"><input type="checkbox" id="m-admin-note-pin"> Anpinnen</label>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-bold" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-italic" data-i18n-title="italic" data-i18n-aria-label="italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-list" data-i18n-title="list" data-i18n-aria-label="list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
+                                            <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="addAttachment" data-i18n-aria-label="addAttachment" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-admin-note-file-input" hidden multiple></label>
+                                            <label class="note-option"><input type="checkbox" id="m-admin-note-pin"> <span data-i18n="pin">Anpinnen</span></label>
                                         </div>
-                                        <textarea id="m-admin-new-comment" rows="4" placeholder="Nachricht an andere Admins... @Benutzername"></textarea>
-                                        <div id="m-admin-mention-picker" class="mention-autocomplete" role="listbox" aria-label="Admins mit Ticketzugriff" hidden></div>
+                                        <textarea id="m-admin-new-comment" rows="4" data-i18n-placeholder="adminChatMessagePlaceholder" placeholder="Nachricht an andere Admins... @Benutzername"></textarea>
+                                        <div id="m-admin-mention-picker" class="mention-autocomplete" role="listbox" data-i18n-aria-label="adminsWithTicketAccessAriaLabel" aria-label="Admins mit Ticketzugriff" hidden></div>
                                         <div id="m-admin-note-file-preview" class="file-preview"></div>
-                                        <button class="btn-primary btn-block" id="btn-add-admin-comment"><i data-lucide="send"></i>Senden</button>
+                                        <button class="btn-primary btn-block" id="btn-add-admin-comment"><i data-lucide="send"></i><span data-i18n="send">Senden</span></button>
                                     </div>
                                     <div class="note-search-wrap" id="m-admin-note-search-wrap">
-                                        <input type="text" id="m-admin-note-search" placeholder="Admin-Chat durchsuchen...">
+                                        <input type="text" id="m-admin-note-search" data-i18n-placeholder="searchAdminChatPlaceholder" placeholder="Admin-Chat durchsuchen...">
                                         <span><i data-lucide="search"></i></span>
                                     </div>
                                     <div id="m-admin-comments" class="note-list"></div>
@@ -252,28 +252,28 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                                 <section class="internal-stream" id="internal-stream-solution" role="tabpanel" aria-labelledby="internal-tab-solution" data-stream="solution">
                                     <div class="internal-note-composer">
                                         <div class="note-toolbar">
-                                            <select id="m-note-type" title="Art des Eintrags">
-                                                <option value="Analyse">Analyse</option>
-                                                <option value="Lösungsschritt">Lösungsschritt</option>
-                                                <option value="Rückfrage">Rückfrage</option>
-                                                <option value="Entscheidung">Entscheidung</option>
-                                                <option value="Systemänderung">Systemänderung</option>
+                                            <select id="m-note-type" data-i18n-title="entryTypeTitle" title="Art des Eintrags">
+                                                <option value="Analyse" data-i18n="noteTypeAnalysis">Analyse</option>
+                                                <option value="Lösungsschritt" data-i18n="noteTypeSolutionStep">Lösungsschritt</option>
+                                                <option value="Rückfrage" data-i18n="noteTypeFollowUp">Rückfrage</option>
+                                                <option value="Entscheidung" data-i18n="noteTypeDecision">Entscheidung</option>
+                                                <option value="Systemänderung" data-i18n="noteTypeSystemChange">Systemänderung</option>
                                             </select>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-numbered" title="Nummerierte Liste" aria-label="Nummerierte Liste"><i data-lucide="list-ordered"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-table" title="Tabelle einfügen" aria-label="Tabelle einfügen"><i data-lucide="table"></i></button>
-                                            <label class="btn btn-ghost btn-icon btn-sm" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" hidden multiple></label>
-                                            <label class="note-option"><input type="checkbox" id="m-note-pin"> Anpinnen</label>
-                                            <label class="note-option"><input type="checkbox" id="m-note-resolution"> Endgültige Lösung</label>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-bold" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-italic" data-i18n-title="italic" data-i18n-aria-label="italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-list" data-i18n-title="list" data-i18n-aria-label="list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-numbered" data-i18n-title="numberedList" data-i18n-aria-label="numberedList" title="Nummerierte Liste" aria-label="Nummerierte Liste"><i data-lucide="list-ordered"></i></button>
+                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-table" data-i18n-title="insertTable" data-i18n-aria-label="insertTable" title="Tabelle einfügen" aria-label="Tabelle einfügen"><i data-lucide="table"></i></button>
+                                            <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="addAttachment" data-i18n-aria-label="addAttachment" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" hidden multiple></label>
+                                            <label class="note-option"><input type="checkbox" id="m-note-pin"> <span data-i18n="pin">Anpinnen</span></label>
+                                            <label class="note-option"><input type="checkbox" id="m-note-resolution"> <span data-i18n="finalSolution">Endgültige Lösung</span></label>
                                         </div>
-                                        <textarea id="m-new-comment" rows="4" placeholder="Analyse, Ursache, Lösungsweg, nächste Schritte..."></textarea>
+                                        <textarea id="m-new-comment" rows="4" data-i18n-placeholder="solutionComposerPlaceholder" placeholder="Analyse, Ursache, Lösungsweg, nächste Schritte..."></textarea>
                                         <div id="m-note-file-preview" class="file-preview"></div>
-                                        <button class="btn-primary btn-block" id="btn-add-comment"><i data-lucide="plus"></i>Eintrag speichern</button>
+                                        <button class="btn-primary btn-block" id="btn-add-comment"><i data-lucide="plus"></i><span data-i18n="saveEntryButton">Eintrag speichern</span></button>
                                     </div>
                                     <div class="note-search-wrap" id="m-note-search-wrap">
-                                        <input type="text" id="m-note-search" placeholder="Lösungsweg durchsuchen...">
+                                        <input type="text" id="m-note-search" data-i18n-placeholder="searchSolutionPlaceholder" placeholder="Lösungsweg durchsuchen...">
                                         <span><i data-lucide="search"></i></span>
                                     </div>
                                     <div id="m-comments" class="note-list"></div>
@@ -282,9 +282,9 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         </div>
 
                         <div class="actions-row">
-                            <button id="btn-mark-incident" class="btn-secondary"><i data-lucide="siren"></i>Als Großstörung markieren</button>
-                            <button id="btn-assign-incident" class="btn-secondary" hidden><i data-lucide="link"></i>Einer Störung zuordnen</button>
-                            <button id="btn-archive-ticket" class="btn-secondary" hidden><i data-lucide="archive"></i>Archivieren</button>
+                            <button id="btn-mark-incident" class="btn-secondary"><i data-lucide="siren"></i><span data-i18n="markAsMajorIncidentButton">Als Großstörung markieren</span></button>
+                            <button id="btn-assign-incident" class="btn-secondary" hidden><i data-lucide="link"></i><span data-i18n="assignToIncidentButton">Einer Störung zuordnen</span></button>
+                            <button id="btn-archive-ticket" class="btn-secondary" hidden><i data-lucide="archive"></i><span data-i18n="archiveAction">Archivieren</span></button>
                             <span id="m-extra-actions"></span>
                         </div>
                     </div>
@@ -296,18 +296,18 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                             <div id="m-chat-msgs" class="chat-messages"></div>
                             <div class="chat-input-area">
                                 <div class="toolbar">
-                                    <button class="btn-ghost btn-icon btn-sm" title="Fett" aria-label="Fett" id="m-chat-bold"><i data-lucide="bold"></i></button>
-                                    <button class="btn-ghost btn-icon btn-sm" title="Kursiv" aria-label="Kursiv" id="m-chat-italic"><i data-lucide="italic"></i></button>
-                                    <button class="btn-ghost btn-icon btn-sm" title="Link einfügen" aria-label="Link einfügen" id="m-chat-link"><i data-lucide="link"></i></button>
-                                    <label class="btn btn-ghost btn-icon btn-sm" title="Datei anhängen" aria-label="Datei anhängen">
+                                    <button class="btn-ghost btn-icon btn-sm" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett" id="m-chat-bold"><i data-lucide="bold"></i></button>
+                                    <button class="btn-ghost btn-icon btn-sm" data-i18n-title="italic" data-i18n-aria-label="italic" title="Kursiv" aria-label="Kursiv" id="m-chat-italic"><i data-lucide="italic"></i></button>
+                                    <button class="btn-ghost btn-icon btn-sm" data-i18n-title="insertLink" data-i18n-aria-label="insertLink" title="Link einfügen" aria-label="Link einfügen" id="m-chat-link"><i data-lucide="link"></i></button>
+                                    <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="attachFile" data-i18n-aria-label="attachFile" title="Datei anhängen" aria-label="Datei anhängen">
                                         <i data-lucide="paperclip"></i>
                                         <input type="file" id="m-chat-file-input" multiple>
                                     </label>
                                 </div>
                                 <div id="m-chat-file-preview" class="file-preview"></div>
                                 <div class="input-row">
-                                    <textarea id="m-chat-input" placeholder="Nachricht schreiben... Strg+Enter zum Senden"></textarea>
-                                    <button class="btn-primary btn-icon" id="btn-chat-send" title="Senden" aria-label="Senden"><i data-lucide="send"></i></button>
+                                    <textarea id="m-chat-input" data-i18n-placeholder="chatMessageWithShortcutHint" placeholder="Nachricht schreiben... Strg+Enter zum Senden"></textarea>
+                                    <button class="btn-primary btn-icon" id="btn-chat-send" data-i18n-title="send" data-i18n-aria-label="send" title="Senden" aria-label="Senden"><i data-lucide="send"></i></button>
                                 </div>
                             </div>
                         </div>
@@ -323,28 +323,28 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
             <div class="modal-header">
                 <h3><i data-lucide="user-plus"></i>Benutzer erstellen</h3>
                 <div class="modal-actions">
-                    <button class="btn-ghost btn-icon" id="a-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                    <button class="btn-ghost btn-icon" id="a-close" data-i18n-title="close" data-i18n-aria-label="close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
                 </div>
             </div>
             <div class="modal-body">
-                <p>Erstelle einen Account für <strong id="a-name-disp"></strong>.</p>
+                <p><span data-i18n="createAccountForPrefix">Erstelle einen Account für</span> <strong id="a-name-disp"></strong>.</p>
                 <div class="field">
-                    <label for="a-username">Benutzername</label>
-                    <input type="text" id="a-username" placeholder="z.B. maxm">
+                    <label for="a-username" data-i18n="username">Benutzername</label>
+                    <input type="text" id="a-username" data-i18n-placeholder="egUsername" placeholder="z.B. maxm">
                 </div>
                 <div class="field">
-                    <label for="a-password">Passwort</label>
-                    <input type="password" id="a-password" autocomplete="new-password" placeholder="Wird sicher generiert">
+                    <label for="a-password" data-i18n="passwordPlaceholder">Passwort</label>
+                    <input type="password" id="a-password" autocomplete="new-password" data-i18n-placeholder="autoGeneratedSecurelyPlaceholder" placeholder="Wird sicher generiert">
                 </div>
                 <div class="field">
-                    <label for="a-role">Rolle</label>
+                    <label for="a-role" data-i18n="role">Rolle</label>
                     <select id="a-role">
                         <option value="user">User</option>
                         <option value="admin">Admin</option>
                     </select>
                 </div>
                 <div class="field" id="a-dept-field" hidden>
-                    <label for="a-dept">Abteilung (nur für Admins)</label>
+                    <label for="a-dept" data-i18n="departmentAdminsOnly">Abteilung (nur für Admins)</label>
                     <select id="a-dept">
                         <option value="Allgemein">Allgemein</option>
                         <option value="Technik">Technik</option>
@@ -354,7 +354,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn-primary" id="a-confirm">Erstellen</button>
+                <button class="btn-primary" id="a-confirm" data-i18n="createButton">Erstellen</button>
             </div>
         </div>
     </div>
@@ -365,7 +365,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
             <div class="modal-header">
                 <h3><i data-lucide="users"></i>Benutzerverwaltung</h3>
                 <div class="modal-actions">
-                    <button class="btn-ghost btn-icon" id="um-close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
+                    <button class="btn-ghost btn-icon" id="um-close" data-i18n-title="close" data-i18n-aria-label="close" title="Schließen" aria-label="Schließen"><i data-lucide="x"></i></button>
                 </div>
             </div>
             <div class="modal-body">
