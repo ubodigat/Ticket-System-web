@@ -1,0 +1,51 @@
+name: Dependabot-Manifest automatisch aktualisieren
+
+# Dauerhafte Loesung fuer das wiederkehrende "Install manifest is stale"-Problem:
+# install-manifest.sha256 haengt vom Inhalt JEDER getrackten Datei ab (Lockfile
+# eingeschlossen). Dependabot aendert package.json/package-lock.json, regeneriert das
+# Manifest aber nie, also schlaegt der "Verify pinned installation manifest"-Schritt in
+# ci.yml auf jedem Dependabot-PR fehl, bis jemand das manuell nachzieht. Dieser Workflow
+# erzeugt das Manifest direkt auf dem PR-Branch neu, sobald Dependabot ihn aktualisiert,
+# noch bevor der eigentliche CI-Check laeuft.
+#
+# pull_request_target statt pull_request: Workflows, die durch Dependabot ausgeloest
+# werden, bekommen bei pull_request ein rein lesendes GITHUB_TOKEN (GitHub-Sicherheits-
+# massnahme) -- ein Push waere damit unmoeglich. pull_request_target laedt die Workflow-
+# Definition vom Basis-Branch (main), nicht vom PR, und bekommt die hier konfigurierten
+# Rechte. Es wird bewusst NICHT "npm ci"/"npm install" ausgefuehrt (kein Scripts-Risiko
+# durch ein von Dependabot vorgeschlagenes Lockfile) -- das Skript liest nur Dateien und
+# bildet Hashes.
+on:
+  pull_request_target:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-manifest:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Manifest bei Bedarf neu erzeugen und committen
+        run: |
+          set -e
+          if node ops/create-install-manifest.mjs --check; then
+            echo "Manifest ist bereits aktuell."
+            exit 0
+          fi
+          node ops/create-install-manifest.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md install-manifest.sha256
+          git commit -m "Install-Manifest nach Dependabot-Update automatisch neu erzeugen"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
