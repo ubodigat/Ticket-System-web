@@ -1,4 +1,4 @@
-FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f
+FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797
 
 # gnupg wird nur fuer die optionale UPDATE_REQUIRE_SIGNED_COMMITS-Haertung gebraucht
 # (git verify-commit, Security-Audit N3).
