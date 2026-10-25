@@ -9,7 +9,7 @@ export const migration_0047_audit_log_redact: Migration = {
   async up(db: Kysely<unknown>) {
     await sql`
       UPDATE ticket_audit_log
-      SET new_value = REGEXP_REPLACE(new_value, ', Grund: .*\\)$', ', mit Begründung)')
+      SET new_value = REGEXP_REPLACE(new_value, ', Grund: .*\\\\)$', ', mit Begründung)')
       WHERE action = 'approval_requested' AND new_value LIKE '%, Grund: %'
     `.execute(db);
     await sql`
