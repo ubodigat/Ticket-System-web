@@ -86,5 +86,20 @@ for WEB_MODE in missing html-fallback unreachable; do
   fi
 done
 unset -f curl sleep
+# Render the real summary with fake credentials; redirected logs must contain no ANSI codes.
+sed -n '/^print_installation_summary() {/,/^}/p' "$root/install.sh" > "$fixture/summary.sh"
+source "$fixture/summary.sh"
+PUBLIC_URL='https://192.0.2.1:8443'
+ENV_FILE="$fixture/repo/ops/docker/.env"
+printf 'SETUP_TOKEN=example-token%%with-equals==\n' >> "$ENV_FILE"
+NO_COLOR=1 print_installation_summary > "$fixture/summary.txt"
+grep -Fq '[OK] Installation abgeschlossen' "$fixture/summary.txt"
+grep -Fq 'https://192.0.2.1:8443/setup' "$fixture/summary.txt"
+grep -Fq 'example-token%with-equals==' "$fixture/summary.txt"
+grep -Fq "Konfiguration  $ENV_FILE" "$fixture/summary.txt"
+! grep -Fq '$PUBLIC_URL' "$fixture/summary.txt"
+! grep -q $'\033' "$fixture/summary.txt"
+TERM=xterm print_installation_summary > "$fixture/summary-default.txt"
+! grep -q $'\033' "$fixture/summary-default.txt"
 sh -n "$root/ops/docker/provision-db.sh"
 echo 'Installer credential preservation, root recovery, TLS verification and failure handling: OK'

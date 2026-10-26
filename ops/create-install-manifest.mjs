@@ -21,7 +21,8 @@ if (!process.argv.includes('--check')) {
   const installerHash = createHash('sha256').update(readFileSync('install.sh', 'utf8').replace(/\r\n/g, '\n')).digest('hex');
   const readme = readFileSync('README.md', 'utf8');
   const updated = readme.replace(/^bash -c 'set -e[^\r\n]*raw\.githubusercontent\.com\/ubodigat\/Ticket-System-web\/main\/install\.sh[^\r\n]*$/gm, line => {
-    const args = line.includes('--domain=') ? ' --domain=support.example.com --acme-email=admin@example.com' : line.includes('--dev') ? ' --dev' : '';
+    let args = line.includes('--domain=') ? ' --domain=support.example.com --acme-email=admin@example.com' : line.includes('--dev') ? ' --dev' : '';
+    if (line.includes('--enable-office-viewer')) args += ' --enable-office-viewer';
     return `bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \\"$f\\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\\n" "${installerHash}" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=${manifestHash} bash "$f"${args}'`;
   });
   writeFileSync('README.md', updated);

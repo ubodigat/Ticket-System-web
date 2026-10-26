@@ -38,14 +38,13 @@ function isHttpsRequest(req: FastifyRequest): boolean {
 }
 
 function redirectUriFor(req: FastifyRequest): string {
-  return `${req.protocol}://${req.hostname}/api/v2/outlook/callback`;
+  return `${req.protocol}://${req.host}/api/v2/outlook/callback`;
 }
 
 // Nur ein serverseitig bekannter, relativer Pfad wird als Rücksprungziel akzeptiert -- verhindert
 // einen Open Redirect über einen manipulierten returnTo-Wert.
 function sanitizeReturnTo(value: unknown): string {
-  if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//') || value.includes('://')) return '/dashboard.html';
-  return value;
+  return value === '/admin.html' || value === '/dashboard.html' ? value : '/dashboard.html';
 }
 
 async function refreshDek(app: FastifyInstance, keyProvider: KeyProvider) {
@@ -83,7 +82,8 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
     try {
       const session = requireSession(req);
       const row = await app.db.selectFrom('users').select(['outlook_account_email', 'outlook_connected_at']).where('id', '=', session.uid).executeTakeFirst();
-      return reply.send({ connected: !!row?.outlook_connected_at, accountEmail: row?.outlook_account_email ?? null });
+      const configured = !!await loadOutlookAppCredentials(app.db, deps.env, deps.keyProvider);
+      return reply.send({ configured, connected: !!row?.outlook_connected_at, accountEmail: row?.outlook_account_email ?? null });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -184,6 +184,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
   const createEventSchema = z.object({
     subject: z.string().trim().min(1).max(512),
     notes: z.string().trim().max(5000).optional(),
+    attendee_emails: z.array(z.string().trim().email().max(255)).max(20).optional(),
     start_at: z.string().min(1),
     end_at: z.string().min(1)
   });
@@ -209,6 +210,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
         const created = await createMyCalendarEvent(accessToken, {
           subject: parsed.data.subject,
           bodyText: parsed.data.notes || '',
+          attendeeEmails: parsed.data.attendee_emails,
           startAt, endAt
         });
         return reply.code(201).send({ id: created.graphEventId, webLink: created.webLink });

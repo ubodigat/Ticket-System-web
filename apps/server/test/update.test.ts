@@ -68,7 +68,8 @@ describe('update routes', () => {
     // /run ohne konfigurierten Updater: Step-up muss trotzdem zuerst durchlaufen (Passwort
     // stimmt), erst der eigentliche Aufruf scheitert an der fehlenden Konfiguration.
     const runResponse = await requestUpdate({}, 'superadmin', 'POST', 'run', { ...stepUp, expected_commit: commit });
-    expect(runResponse.statusCode).toBe(409); // status meldet remoteCommit: null -> commit_mismatch vor dem eigentlichen Aufruf
+    expect(runResponse.statusCode).toBe(503);
+    expect(runResponse.json().error).toBe('update_service_not_configured');
   });
 
   it('rejects ordinary users before contacting the privileged updater', async () => {

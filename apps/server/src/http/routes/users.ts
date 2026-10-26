@@ -21,6 +21,7 @@ import { mysqlTimestamp } from '../../db/date.js';
 import { isAccountExpired, isValidAccountDate } from '../../domain/accountValidity.js';
 import { loadSecurityPolicy } from '../../domain/securityPolicy.js';
 import { isSourceLocked, recordSourceFailure, clearSourceFailures } from '../../domain/loginThrottle.js';
+import { loadPasswordPolicy, passwordFailures, generatePolicyPassword } from '../../domain/passwordPolicy.js';
 
 export interface UsersRouteDeps {
   env: Env;
@@ -536,6 +537,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const parsed = createUserSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
       if (parsed.data.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
+      const failures = passwordFailures(parsed.data.password, await loadPasswordPolicy(app.db));
+      if (failures.length) return reply.code(400).send({ error: 'password_policy_failed', requirements: failures });
 
       // Doppelten Benutzernamen verhindern
       const existing = await app.db.selectFrom('users').select('id').where('username', '=', parsed.data.username).executeTakeFirst();
@@ -780,6 +783,9 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const parsed = deleteUserQuerySchema.safeParse(req.query);
       const ticketDisposition = parsed.success ? parsed.data.tickets : 'archive';
       if (ticketDisposition === 'delete') {
+        const activeTimer = await app.db.selectFrom('ticket_work_timers').innerJoin('tickets', 'tickets.id', 'ticket_work_timers.ticket_id')
+          .select('ticket_work_timers.id').where('tickets.created_by_user_id', '=', id).executeTakeFirst();
+        if (activeTimer) return reply.code(409).send({ error: 'finish_ticket_work_timers_before_deleting_tickets' });
         await app.db.deleteFrom('tickets').where('created_by_user_id', '=', id).execute();
       } else {
         await app.db.updateTable('tickets').set({ archived_at: mysqlTimestamp() })
@@ -814,7 +820,14 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (target && (target.role === 'admin' || target.role === 'superadmin') && session.role !== 'superadmin') {
         return reply.code(403).send({ error: 'forbidden' });
       }
-      await app.db.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null }).where('id', '=', id).execute();
+      await app.db.transaction().execute(async trx => {
+        await trx.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null, totp_last_step: null }).where('id', '=', id).execute();
+        await trx.deleteFrom('user_passkeys').where('user_id', '=', id).execute();
+        await trx.deleteFrom('mfa_recovery_codes').where('user_id', '=', id).execute();
+        await trx.deleteFrom('mfa_devices').where('user_id', '=', id).execute();
+        await trx.deleteFrom('mfa_flows').where('user_id', '=', id).execute();
+        await trx.updateTable('sessions').set({ revoked_at: new Date() }).where('user_id', '=', id).execute();
+      });
       await app.db.insertInto('global_audit_log').values({
         id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
         action: 'user.mfa_reset', target_type: 'user', target_id: id, detail_json: null
@@ -866,11 +879,15 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         await clearSourceFailures(app.db, session.uid);
       }
 
+      const failures = passwordFailures(parsed.data.new_password, await loadPasswordPolicy(app.db));
+      if (failures.length) return reply.code(400).send({ error: 'password_policy_failed', requirements: failures });
       const password_hash = await argon2.hash(parsed.data.new_password, { type: argon2.argon2id });
       await app.db.updateTable('users').set({ password_hash, updated_at: mysqlTimestamp() }).where('id', '=', id).execute();
 
       // Alle Sessions des Users invalidieren (Sicherheit)
       await app.db.updateTable('sessions').set({ revoked_at: mysqlTimestamp() }).where('user_id', '=', id).execute();
+      await app.db.deleteFrom('mfa_devices').where('user_id', '=', id).execute();
+      await app.db.deleteFrom('mfa_flows').where('user_id', '=', id).execute();
 
       // Unzureichendes Security Logging: eine Passwortänderung ist sicherheitsrelevant,
       // unabhängig davon ob sie selbst oder durch einen Admin ausgelöst wurde -- bisher blieb
@@ -1179,7 +1196,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         }
 
         const newId = randomUUID();
-        const tempPassword = randomUUID() + randomUUID();
+        const tempPassword = generatePolicyPassword(await loadPasswordPolicy(app.db));
         const password_hash = await argon2.hash(tempPassword, { type: argon2.argon2id });
         const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
         const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');

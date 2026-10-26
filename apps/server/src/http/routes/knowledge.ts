@@ -182,8 +182,9 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.data');
       const filename = fieldCipher.decryptField(row.filename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'filename', filenameDek.keyVersion));
-      const data_b64 = fieldCipher.decryptField(row.data_b64, dataDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'data', dataDek.keyVersion));
-      return reply.send({ attachment: { ...row, filename, data_b64 } });
+      const chunked = !!await app.db.selectFrom('file_uploads').select('id').where('id', '=', row.id).where('completed', '=', true).executeTakeFirst();
+      const data_b64 = chunked ? null : fieldCipher.decryptField(row.data_b64, dataDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'data', dataDek.keyVersion));
+      return reply.send({ attachment: { ...row, filename, data_b64, chunked } });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -236,6 +237,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
       const { attachmentId } = req.params as { attachmentId: string };
       await app.db.deleteFrom('kb_article_attachments').where('id', '=', attachmentId).execute();
+      await app.db.deleteFrom('file_uploads').where('id', '=', attachmentId).execute();
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);

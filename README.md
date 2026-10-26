@@ -7,10 +7,12 @@ Benachrichtigungen und Dokumentenvorschau. Daten werden serverseitig in MariaDB 
 
 Auf einem Debian-/Ubuntu-Server **als root** ausführen. Docker, Docker Compose und die
 benötigten Pakete werden automatisch installiert. Empfohlen: mindestens 3 GB RAM;
-für den optionalen Virenscanner zusätzlich 1-2 GB.
+für den optionalen Virenscanner zusätzlich 1-2 GB, für die Office-Oberfläche zusätzlich
+4 GB. Die Grundinstallation verwendet die PDF-Vorschau; die Office-Oberfläche wird mit
+`--enable-office-viewer` aktiviert (Anleitung unten).
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d507bee161626d58fe19d22180dce7bffd5184a094a924a8bacb6c3138c3e853" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=7f738b270c7a11aaa3a256f9bf1ccf69f460ca39e47ad0d3620c7520054e9625 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "821522da4cb9785b4ccaaab08e501809ab93cd9222bb45ccf53bb17134693524" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=fd68afb133dbc9b3548551c4bd7f4a14d0136ace7ec2668eb29c32ecbf00603d bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -37,7 +39,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "d507bee161626d58fe19d22180dce7bffd5184a094a924a8bacb6c3138c3e853" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=7f738b270c7a11aaa3a256f9bf1ccf69f460ca39e47ad0d3620c7520054e9625 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "821522da4cb9785b4ccaaab08e501809ab93cd9222bb45ccf53bb17134693524" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=fd68afb133dbc9b3548551c4bd7f4a14d0136ace7ec2668eb29c32ecbf00603d bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist
@@ -45,9 +47,144 @@ bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update
 - Benutzerkontoanfragen, optionale Kontogültigkeit, Rollen und serverseitige Berechtigungsprüfung.
 - Ticket-Board und Listenansicht, Prioritäten, Fristen, Geschäftszeiten, Archiv und Störungen.
 - Nachrichten, Anhänge, Teilaufgaben, eigene/geteilte/wiederkehrende Aufgaben und Genehmigungen.
-- Office-/PDF-Vorschau über einen isolierten LibreOffice-Dienst.
+- PDF-Vorschau und optionale, schreibgeschützte Office-Oberfläche über isolierte Dokumentendienste.
 - SMTP mit verschlüsselter, dauerhafter Versandqueue; LDAP und Outlook nach Einrichtung.
-- Argon2id, widerrufbare Sitzungen, optionale 2FA-Pflicht, CSRF-Schutz und Feldverschlüsselung.
+- Argon2id, widerrufbare Sitzungen, MFA mit TOTP/Passkeys, CSRF-Schutz und Feldverschlüsselung.
+- Benutzerbezogenes Design über mehrere Geräte und Ticket-Timer mit verpflichtender Tätigkeitsdokumentation.
+
+<details>
+<summary>Office-Oberfläche aktivieren (nur lesen)</summary>
+
+Die Office-Ansicht nutzt einen zusätzlichen ONLYOFFICE-Dienst: Tabellen mit Arbeitsblättern,
+Word-Dokumente und Präsentationen werden in dessen Office-Oberfläche geöffnet. Die Ansicht
+ist schreibgeschützt; Änderungen am Original sind gesperrt. Fehlende Schriftarten oder
+besondere Office-Funktionen können weiterhin zu Abweichungen von Microsoft Office führen.
+Neue Office-Uploads sind für DOCX, XLSX, PPTX und ODT/ODS/ODP freigegeben; die zusätzlichen
+Formate müssen zur erkannten Dateistruktur passen. Makroformate bleiben gesperrt.
+
+Bei der Erstinstallation diesen verifizierten Befehl verwenden; mit einer eigenen Domain
+zusätzlich `--domain=… --acme-email=…` hinter `--enable-office-viewer` ergänzen:
+
+```bash
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "821522da4cb9785b4ccaaab08e501809ab93cd9222bb45ccf53bb17134693524" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=fd68afb133dbc9b3548551c4bd7f4a14d0136ace7ec2668eb29c32ecbf00603d bash "$f" --enable-office-viewer'
+```
+
+Bei einem bereits aktualisierten Checkout auf dem Server:
+
+```bash
+cd /opt/ticket-system
+bash install.sh --enable-office-viewer
+```
+
+Der Installer aktiviert das Compose-Profil `office-viewer`, erstellt ein dauerhaftes
+JWT-Geheimnis und startet den Dienst ohne öffentliche Zusatzports. Beim ersten Start
+braucht ONLYOFFICE einige Minuten. Bis er bereit ist, bleibt die PDF-Vorschau verfügbar.
+Mindestens etwa **7 GB RAM für den gesamten Stack** vorsehen, mit Virenscanner entsprechend
+mehr. Dateien über 15 MiB bleiben auf den Download beschränkt. Die Dokumentendienste halten
+entschlüsselte Arbeitskopien im Container; Zugriff auf Docker/Server bleibt deshalb privilegiert.
+
+Technische Grundlage: [ONLYOFFICE Docker-Installation](https://helpcenter.onlyoffice.com/docs/installation/docs-community-install-docker.aspx)
+und [JWT-Absicherung](https://api.onlyoffice.com/docs/docs-api/get-started/how-it-works/security/).
+
+</details>
+
+<details>
+<summary>MFA, Gerätefreigabe und Wiederherstellung</summary>
+
+Unter **Systemeinstellungen → Sicherheit → MFA-Methoden** stehen nach dem Passwort
+TOTP, Passkey, TOTP oder Passkey sowie TOTP + Passkey zur Auswahl. Die Pflicht kann für
+alle Konten, Admins inklusive Superadmins oder Benutzer gelten. Bei TOTP + Passkey beträgt
+die zusätzliche Gerätefreigabe standardmäßig **14 Tage**; `0` verlangt den Passkey bei jeder
+Anmeldung. Das Gerät wird über ein HttpOnly-Cookie und einen benutzergebundenen
+Datenbanknachweis erkannt. Ein neues Gerät benötigt einen neuen Nachweis. Eine reine
+Passkey-Regel verlangt den Passkey weiterhin bei jeder Anmeldung.
+
+Passkeys benötigen einen **Domainnamen mit vertrauenswürdigem HTTPS**, nicht nur eine
+LAN-IP. `PUBLIC_URL` wird vom Installer inklusive HTTPS-Port gesetzt und als
+`WEBAUTHN_ORIGIN` an die App übergeben. Nach einer Domainänderung Installer erneut ausführen;
+Passkeys sind an ihre bisherige Domain gebunden und müssen bei einer anderen Domain neu
+registriert werden. Die Pflicht zu Passkeys kann nur über die passend konfigurierte
+HTTPS-Domain aktiviert werden. Bestehende Sitzungen behalten ihre normale Laufzeit;
+die neue Anmelderegel greift bei der nächsten Anmeldung.
+
+Eigene Verfahren unter **Persönliche Einstellungen → Sicherheit → MFA / Passkeys verwalten**
+einrichten. Zuerst TOTP aktivieren. Neue Passkeys sowie das Entfernen von Schlüsseln oder
+Erzeugen neuer Wiederherstellungscodes verlangen das aktuelle Passwort und einen frischen
+TOTP-Code. Handy-Passkeys, Computer und FIDO2-Sicherheitsschlüssel werden über den Browser
+ausgewählt; SMS/Push sind ohne zusätzlichen Anbieter nicht enthalten. Für Passkeys wird
+Benutzerverifikation verlangt (z. B. Geräte-PIN oder Biometrie).
+
+Die zehn Wiederherstellungscodes werden **nur einmal angezeigt** und gehasht gespeichert.
+Offline aufbewahren. Passwort + ein unbenutzter Code setzen bisherige MFA-Verfahren und
+Sitzungen zurück; vor dem Login müssen die vorgeschriebenen Verfahren neu eingerichtet
+werden. Neue Codes ersetzen alle alten. Ohne Code kann ein entsprechend berechtigter
+Superadmin zurücksetzen. Als letzter Rettungsweg auf dem Server:
+
+```bash
+cd /opt/ticket-system
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env exec app node dist/cli/unlock.js admin --reset-mfa
+```
+
+Dieser explizite Serverbefehl widerruft die bisherigen Verfahren/Sitzungen des genannten
+Kontos und wird protokolliert. Er ersetzt kein Passwort und deaktiviert keine globale MFA-Regel.
+Protokollimplementierung: [SimpleWebAuthn](https://simplewebauthn.dev/docs/packages/server).
+
+</details>
+
+<details>
+<summary>Persönliches Design, einklappbare Einstellungen und Ticket-Timer</summary>
+
+Design, Akzentfarbe, Sprache und eigenes Hintergrundbild liegen für angemeldete Personen
+verschlüsselt in MariaDB. Ein anderer Browser desselben Kontos übernimmt diese Werte.
+Änderungen werden einzeln zusammengeführt, damit eine neue Akzentfarbe kein Bild überschreibt.
+Vor der Anmeldung bleiben die Einstellungen browserbezogen. Vorhandene, nicht eindeutig
+einem Konto zuordenbare Browserbilder werden nicht automatisch in ein fremdes Konto importiert;
+das gewünschte Bild nach dem Update einmal im eigenen Konto auswählen.
+
+Unterüberschriften der Systemeinstellungen lassen sich auf-/zuklappen. Ihr Zustand wird
+sofort für das jeweilige Konto gespeichert und beim nächsten Öffnen vom Server geladen.
+
+Admins starten die Zeiterfassung über das Play-Icon im Ticketkopf. Das Stop-Icon hält die
+Zeit an und öffnet die Tätigkeitsdokumentation. Ohne eine nicht leere Beschreibung lässt
+sich die Erfassung nicht abschließen. Optionale Lösungsschritte werden als interne
+Lösungsnotiz gespeichert. Zeit und Notiz werden gemeinsam in einer Transaktion geschrieben;
+angefangene Minuten zählen als volle Minuten. Pro Admin kann ein Timer aktiv oder noch
+undokumentiert sein. Laufende und angehaltene Timer bleiben nach Neuladen erhalten.
+Ein Browser/Tab selbst kann geschlossen werden; beim nächsten Besuch erscheint die noch
+ausstehende Dokumentation erneut.
+
+Die Schema-Erweiterungen sind Migrationen **0050 und 0051**. Der Installer führt sie vor
+dem App-Start aus; eine reine Ersetzung von Frontend-Dateien reicht für dieses Update nicht.
+
+</details>
+
+<details>
+<summary>Passwortregeln und große Anhänge</summary>
+
+**Passwortregeln:** Unter Systemeinstellungen → Sicherheit lassen sich Mindestlänge
+(14–128 Zeichen) und Mindestanzahl an Klein-/Großbuchstaben, Ziffern und Sonderzeichen
+festlegen. Sie gelten beim Anlegen und Ändern von Passwörtern; bestehende Passwörter
+werden nicht rückwirkend ungültig. Für das erste Setup gelten mindestens 14 Zeichen.
+
+**Anhänge:** Bis zu 500 MiB pro Datei in der Ticket-Anhangsliste und Wissensdatenbank.
+Große Dateien werden blockweise übertragen und verschlüsselt in MariaDB gespeichert
+(Migration 0049); die Freigabe erfolgt erst nach vollständiger Prüfung. Pro Konto sind
+für diesen Uploadweg 2 GiB innerhalb von 24 Stunden reservierbar. Dateien über 15 MiB
+werden heruntergeladen statt vorgerendert. Große Dateien direkt an das Ticket anhängen,
+nicht an private Notizen oder Chat-Nachrichten. Für 500-MiB-Dateien entsprechend RAM,
+Datenbank-/Backup-Speicher und Uploadzeit einplanen; empfohlen sind mindestens 6 GB RAM.
+Die endgültige Inhaltsprüfung verarbeitet pro App-Instanz nur eine große Datei gleichzeitig.
+
+Optionaler vollständiger 500-MiB-Test (isolierte Datenbank-Nachbildung, ca. 1–2 GB RAM):
+
+```bash
+RUN_LARGE_UPLOAD_TEST=1 npm run test --workspace=apps/server -- test/uploads.test.ts
+```
+
+Der reguläre Testlauf überspringt diesen großen Test. Der MariaDB-CI-Test prüft separat
+das Schema-Upgrade und einen echten verschlüsselten 8-MiB-Datenblock.
+
+</details>
 
 **Browser-Benachrichtigungen:** In den persönlichen Einstellungen unter
 Benachrichtigungen einschalten und die Browser-Abfrage erlauben. Die Freigabe gilt pro
@@ -60,7 +197,27 @@ es keinen Web-Push. Alte Meldungen werden beim Aktivieren nicht nachträglich ei
 
 SMTP, LDAP und Microsoft Graph benötigen eigene Zugangsdaten. Für Graph muss die
 Anwendungsberechtigung im Tenant auf das vorgesehene Postfach begrenzt werden.
-Kalendereinladungen sind nur für Admins an bekannte aktive Konten erlaubt.
+Tickettermine dürfen nur Admins erstellen, auch mit externen E-Mail-Adressen
+(maximal 20 Teilnehmende und 20 Terminerstellungen pro Stunde). Im persönlich verbundenen
+Outlook-Kalender gelten dieselben Empfänger-/Ratenlimits für das eigene Konto.
+
+<details>
+<summary>Outlook einrichten und E-Mail-Vorlagen</summary>
+
+Unter Systemeinstellungen → Outlook Tenant-ID, Client-ID und das gültige Client-Secret
+der eigenen Microsoft-Entra-App speichern. Auch der zentrale Speichern-Button übernimmt
+das neu eingegebene Secret. Für persönliche Kalender muss die Redirect-URI
+`https://DEIN-HOST/api/v2/outlook/callback` einschließlich eines abweichenden Ports exakt
+registriert sein; delegierte Berechtigungen: `Calendars.ReadWrite`, `offline_access`, `User.Read`.
+Für Tickettermine zusätzlich App-only-Kalenderberechtigungen und ein begrenztes Supportpostfach
+einrichten. Ohne diese externen Zugangsdaten ist keine echte Microsoft-Verbindung möglich.
+
+E-Mail-Vorlagen unterstützen `{{subject}}`, `{{message}}` und `{{recipient}}`.
+Die Signatur wird anschließend ergänzt. Externe Einladungen benötigen kein Portal-Konto.
+Die optionalen ClamAV-Einstellungen für große Dateien liegen in
+`ops/docker/clamav/clamd.conf` ([offizielle Konfigurationsdokumentation](https://docs.clamav.net/manual/Installing/Docker.html)).
+
+</details>
 
 ## Aktualisieren
 

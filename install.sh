@@ -18,6 +18,7 @@ DEV_MODE=false
 ASSUME_YES=true
 ENABLE_UPDATES=false
 ENABLE_ANTIVIRUS=false
+ENABLE_OFFICE_VIEWER=false
 PUBLIC_DOMAIN_ARG=""
 ACME_EMAIL_ARG=""
 
@@ -27,6 +28,7 @@ for arg in "$@"; do
     --no-assume-yes) ASSUME_YES=false ;;
     --enable-updates) ENABLE_UPDATES=true ;;
     --enable-antivirus) ENABLE_ANTIVIRUS=true ;;
+    --enable-office-viewer) ENABLE_OFFICE_VIEWER=true ;;
     --domain=*) PUBLIC_DOMAIN_ARG="${arg#--domain=}" ;;
     --acme-email=*) ACME_EMAIL_ARG="${arg#--acme-email=}" ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
@@ -45,6 +47,50 @@ log() {
 
 warn() {
   printf '\nWARN: %s\n' "$1" >&2
+}
+
+print_installation_summary() {
+  local reset='' bold='' green='' cyan='' dim='' setup_token
+  if [[ -t 1 && "${TERM:-dumb}" != 'dumb' && -z "${NO_COLOR+x}" ]]; then
+    reset=$'\033[0m'
+    bold=$'\033[1m'
+    green=$'\033[32m'
+    cyan=$'\033[36m'
+    dim=$'\033[2m'
+  fi
+  setup_token=$(grep '^SETUP_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
+  printf '\n%s%s%s\n' "$dim" '------------------------------------------------------------------------' "$reset"
+  printf '  %s%sTICKET-SYSTEM%s\n' "$bold" "$cyan" "$reset"
+  printf '  %s[OK] Installation abgeschlossen%s\n' "$green" "$reset"
+  printf '  Container und lokale Webdateien erfolgreich geprüft.\n'
+  printf '%s%s%s\n' "$dim" '------------------------------------------------------------------------' "$reset"
+
+  printf '\n  %sZUGANG%s\n' "$bold" "$reset"
+  printf '  Portal    %s%s%s\n' "$cyan" "$PUBLIC_URL" "$reset"
+  printf '  Setup     %s%s/setup%s\n' "$cyan" "$PUBLIC_URL" "$reset"
+
+  printf '\n  %sERSTE EINRICHTUNG%s\n' "$bold" "$reset"
+  printf '  1. Setup-Adresse im Browser öffnen.\n'
+  printf '  2. Setup-Token eingeben und das erste Superadmin-Konto anlegen.\n'
+  printf '\n  Setup-Token (vertraulich):\n'
+  printf '  %s%s%s\n' "$bold" "$setup_token" "$reset"
+  printf '  Bis zum Abschluss der Einrichtung geheim halten.\n'
+
+  printf '\n  %sBEI VERBINDUNGSPROBLEMEN%s\n' "$bold" "$reset"
+  printf '  Die vollständige HTTPS-Adresse verwenden, nicht nur die IP.\n'
+  printf '  Firewall auf Server, Proxmox/VM und Router prüfen (Ports 80/443\n'
+  printf '  bzw. die in der Konfiguration festgelegten Ports).\n'
+  printf '\n  Auf Server und Arbeitsplatz testen:\n'
+  printf '    curl -k -I %s/index.html\n' "$PUBLIC_URL"
+  printf '\n  Bei internen Zertifikaten die Caddy-CA auf den Endgeräten\n'
+  printf '  als vertrauenswürdig installieren. -k überspringt nur im\n'
+  printf '  Diagnosebefehl die Zertifikatsprüfung.\n'
+  printf '  /health ist öffentlich absichtlich gesperrt (404).\n'
+
+  printf '\n  %sINSTALLATIONSPFADE%s\n' "$bold" "$reset"
+  printf '  Verzeichnis    %s\n' "$SCRIPT_DIR"
+  printf '  Konfiguration  %s\n' "$ENV_FILE"
+  printf '%s%s%s\n\n' "$dim" '------------------------------------------------------------------------' "$reset"
 }
 
 probe_public_asset() {
@@ -430,7 +476,22 @@ fi
 
 ensure_public_env_defaults
 
+# Fixed relying-party origin for WebAuthn, including a custom HTTPS port.
+MFA_DOMAIN="$(grep '^PUBLIC_DOMAIN=' "$ENV_FILE" | cut -d= -f2-)"
+MFA_PORT="$(grep '^HTTPS_PORT=' "$ENV_FILE" | cut -d= -f2-)"
+MFA_PUBLIC_URL="https://${MFA_DOMAIN}"
+if [[ "$MFA_PORT" != "443" ]]; then MFA_PUBLIC_URL="${MFA_PUBLIC_URL}:${MFA_PORT}"; fi
+set_env_var "PUBLIC_URL" "$MFA_PUBLIC_URL" "$ENV_FILE"
+
 COMPOSE_PROFILES_LIST=""
+if [[ "$ENABLE_OFFICE_VIEWER" == "true" ]] || grep -q '^ONLYOFFICE_ENABLED=true$' "$ENV_FILE"; then
+  log "Enabling read-only ONLYOFFICE view (reserve an additional 4 GB RAM)"
+  COMPOSE_PROFILES_LIST="office-viewer"
+  set_env_var "ONLYOFFICE_ENABLED" "true" "$ENV_FILE"
+  if ! grep -q '^ONLYOFFICE_JWT_SECRET=.' "$ENV_FILE"; then
+    set_env_var "ONLYOFFICE_JWT_SECRET" "$(openssl rand -hex 32)" "$ENV_FILE"
+  fi
+fi
 if [[ "$ENABLE_UPDATES" == "true" ]]; then
   log "Enabling in-app updates (the updater requires Docker host privileges)"
   COMPOSE_PROFILES_LIST="${COMPOSE_PROFILES_LIST:+$COMPOSE_PROFILES_LIST,}dangerous-updater"
@@ -527,6 +588,9 @@ printf '%s\n%s\n' "$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2-)" \
     app sh -c 'set -eu; IFS= read -r DB_USER; IFS= read -r DB_PASSWORD; export DB_USER DB_PASSWORD; exec node dist/db/migrate.js'
 
 log "Starting application stack"
+if grep -q '^ONLYOFFICE_ENABLED=true$' "$ENV_FILE"; then
+  run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile office-viewer up -d --force-recreate documentserver
+fi
 if grep -q '^UPDATE_ALLOW_MAIN_DEPLOY=true$' "$ENV_FILE"; then
   run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile dangerous-updater up -d --build --force-recreate updater
 fi
@@ -566,29 +630,4 @@ if ! verify_public_web "$PUBLIC_URL"; then
   exit 1
 fi
 
-cat <<EOF
-
-================================================================================
-  Installation completed.
-  Ticket system URL: $PUBLIC_URL
-  Setup URL:         ${PUBLIC_URL}/setup
-  Setup token:       $(grep '^SETUP_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
-  Open the URL in your browser and complete the setup assistant. The setup
-  assistant will ask for the setup token above before creating the first
-  (superadmin) account -- keep it secret until setup is complete.
-
-  If the browser on another device shows ERR_CONNECTION_REFUSED:
-    1. Check that you open the HTTPS URL above, not only the bare IP address.
-    2. Check host/provider/VM/router firewall rules for TCP ports 80 and 443.
-    3. Test from the server:
-       curl -k -I ${PUBLIC_URL}/index.html
-    4. Test from the client:
-       curl -k -I ${PUBLIC_URL}/index.html
-
-  The public /health path intentionally returns 404. Internal container health
-  is checked separately. Trust the Caddy CA on client devices when using internal TLS.
-
-  Install directory: $SCRIPT_DIR
-  Docker env file:   $ENV_FILE
-================================================================================
-EOF
+print_installation_summary

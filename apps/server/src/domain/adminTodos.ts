@@ -46,10 +46,10 @@ export async function insertAdminTodo(db: Kysely<Database>, deps: TodoDeps,
   return id;
 }
 
-export function advanceTodoDate(date: Date, unit: 'day' | 'week' | 'month', count: number): Date {
+export function advanceTodoDate(date: Date, unit: 'day' | 'week' | 'month' | 'year', count: number): Date {
   const next = new Date(date);
-  if (unit === 'month') {
-    const day = next.getUTCDate(); next.setUTCDate(1); next.setUTCMonth(next.getUTCMonth() + count);
+  if (unit === 'month' || unit === 'year') {
+    const day = next.getUTCDate(); next.setUTCDate(1); next.setUTCMonth(next.getUTCMonth() + count * (unit === 'year' ? 12 : 1));
     const lastDay = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
     next.setUTCDate(Math.min(day, lastDay));
   } else next.setUTCDate(next.getUTCDate() + count * (unit === 'week' ? 7 : 1));

@@ -16,6 +16,7 @@ import { UserDash } from './js/user-dash.js';
 import { AdminBoard } from './js/admin-board.js';
 import { TodoList } from './js/todos.js';
 import { OutlookCalendar } from './js/outlook-calendar.js';
+import { WorkTimer } from './js/work-timer.js';
 import './js/context-menu.js';
 // --- Main Init ---
 // --- Main Init ---
@@ -29,6 +30,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         q('#user-display').textContent = `${Lang.t('loggedInAs')}: ${currentUser.name || currentUser.username}`;
     }
     await Settings.init(); // Initialize Settings with Theme logic
+    await WorkTimer.init().catch(error => UI.toast(error.message));
     await Notifications.init();
     await TodoList.init();
     if (currentUser) await OutlookCalendar.init();

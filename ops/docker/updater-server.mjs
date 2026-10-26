@@ -13,8 +13,10 @@ const allowMainDeploy = process.env.UPDATE_ALLOW_MAIN_DEPLOY === 'true';
 // Push-Zugang) beliebigen Code einschleusen, den der Updater unbesehen auf jede aktualisierende
 // Installation ausrollt. Kein importierter Schluessel sperrt Deployments ohne Fallback.
 // Only operator-installed keys may authorize a deployment. No flag disables verification.
-const keyCheck = await run('gpg', ['--list-keys', '--with-colons'], { timeoutMs: 10000 });
-const signatureConfigured = keyCheck.code === 0 && keyCheck.out.split('\n').some(line => line.startsWith('pub:'));
+async function hasTrustedSigningKeys() {
+  const keyCheck = await run('gpg', ['--list-keys', '--with-colons'], { timeoutMs: 10000 });
+  return keyCheck.code === 0 && keyCheck.out.split('\n').some(line => line.startsWith('pub:'));
+}
 const composeFile = `${repoDir}/ops/docker/docker-compose.yml`;
 const envFile = `${repoDir}/ops/docker/.env`;
 
@@ -179,7 +181,7 @@ function run(command, args, options = {}) {
 }
 
 async function collectStatus() {
-  if (allowMainDeploy && !signatureConfigured) return { enabled: false, error: 'update_signature_not_configured', job };
+  if (allowMainDeploy && !await hasTrustedSigningKeys()) return { enabled: false, error: 'update_signature_not_configured', job };
   if (job?.running) return { ...lastStatus, enabled: allowMainDeploy, job };
   const fetchResult = await run('git', ['fetch', 'origin', branch, '--quiet'], { timeoutMs: 15000 });
   if (fetchResult.code !== 0) {
@@ -369,7 +371,7 @@ createServer(async (req, res) => {
       return json(res, 200, await statusRequest);
     }
     if (req.method === 'POST' && req.url === '/run') {
-      if (!signatureConfigured) return json(res, 409, { error: 'update_signature_not_configured' });
+      if (!await hasTrustedSigningKeys()) return json(res, 409, { error: 'update_signature_not_configured' });
       if (!/^[a-f0-9]{40}$/.test(body.expected_commit || '')) return json(res, 400, { error: 'expected_commit_required' });
       if (!allowMainDeploy) return json(res, 403, { error: 'update_runner_disabled', message: 'Automatische Deployments von main sind deaktiviert. Aktiviere UPDATE_ALLOW_MAIN_DEPLOY=true nur bewusst und zeitlich begrenzt.' });
       if (job?.running) return json(res, 409, { error: 'update_already_running', job });

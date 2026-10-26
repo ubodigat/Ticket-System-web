@@ -16,6 +16,30 @@ import { LogDiff } from './log-diff.js';
 import { BrowserNotifications } from './browser-notifications.js';
 
 export const Store = {
+    personalSnapshots: new WeakMap(),
+    preferenceCache: null,
+    personalKeys: ['theme', 'accentColor', 'lang', 'bgType', 'bgValue', 'reportingConfig'],
+    getPersonalPreferences: async (force = false) => {
+        const user = await Store.currentUser();
+        if (!user) return {};
+        if (!force && Store.preferenceCache?.uid === user.id && Date.now() - Store.preferenceCache.at < 10000) return Store.preferenceCache.value;
+        const response = await fetch('/api/v2/users/me/preferences', { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) throw new Error('Persönliche Einstellungen konnten nicht geladen werden.');
+        const value = (await response.json()).preferences || {};
+        Store.preferenceCache = { uid: user.id, at: Date.now(), value };
+        return value;
+    },
+    patchPersonalPreferences: async (patch) => {
+        const user = await Store.currentUser();
+        if (!user) throw new Error('Bitte erneut anmelden.');
+        const response = await fetch('/api/v2/users/me/preferences', { method: 'PATCH', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
+        if (!response.ok) throw new Error('Persönliche Einstellungen konnten nicht gespeichert werden.');
+        const previous = Store.preferenceCache?.uid === user.id ? Store.preferenceCache.value : {};
+        Store.preferenceCache = { uid: user.id, at: Date.now(), value: { ...previous, ...patch,
+            ...(patch.collapsedSections ? { collapsedSections: { ...previous.collapsedSections, ...patch.collapsedSections } } : {}) } };
+        return Store.preferenceCache.value;
+    },
     openDataDb: () => new Promise((resolve, reject) => {
         const req = indexedDB.open('ticket_system_data', 1);
         req.onupgradeneeded = () => req.result.createObjectStore('records', {
@@ -178,6 +202,17 @@ export const Store = {
         if (!res || !res.ok) return { exact: false, similar: [] };
         return res.json();
     },
+    generatePassword: async () => {
+        const policy = { minLength: 14, minLowercase: 0, minUppercase: 0, minDigits: 0, minSpecial: 0, ...((await Store.getSettings()).securityConfig?.passwordPolicy || {}) };
+        const pick = max => { const values = new Uint32Array(1); const limit = Math.floor(4294967296 / max) * max; do { crypto.getRandomValues(values); } while (values[0] >= limit); return values[0] % max; };
+        const groups = { minLowercase: 'abcdefghijkmnopqrstuvwxyz', minUppercase: 'ABCDEFGHJKLMNPQRSTUVWXYZ', minDigits: '23456789', minSpecial: '!@#$%&*+-=?' };
+        const chars = [];
+        for (const [key, alphabet] of Object.entries(groups)) for (let i = 0; i < policy[key]; i++) chars.push(alphabet[pick(alphabet.length)]);
+        const alphabet = Object.values(groups).join('');
+        while (chars.length < Math.max(24, policy.minLength)) chars.push(alphabet[pick(alphabet.length)]);
+        for (let i = chars.length - 1; i > 0; i--) { const j = pick(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+        return chars.join('');
+    },
     saveUsers: async (users) => {
         const before = Store._usersSnapshot || Store.cloneUserList(await Store.getUsers());
         const beforeById = new Map(before.map(u => [u.id, u]));
@@ -192,7 +227,7 @@ export const Store = {
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({
                         username: u.username,
-                        password: u.password || Utils.secureToken(),
+                        password: u.password || await Store.generatePassword(),
                         name: u.name || u.username,
                         email: u.email || '',
                         role: u.role === 'superadmin' ? 'superadmin' : (u.role === 'admin' ? 'admin' : 'user'),
@@ -793,16 +828,28 @@ export const Store = {
                 ...(cfg.companyBrandingConfig || {})
             };
         }
+        const personalUser = await Store.currentUser();
+        if (personalUser) {
+            // Never seed another account with this browser's previous user's appearance.
+            Store.personalKeys.forEach(key => { settings[key] = Settings.defaults[key]; });
+            const preferences = await Store.getPersonalPreferences();
+            Store.personalKeys.forEach(key => { if (preferences[key] !== undefined) settings[key] = preferences[key]; });
+        }
+        Store.personalSnapshots.set(settings, Object.fromEntries(Store.personalKeys.map(key => [key, settings[key]])));
         return settings;
     },
-    // Nur fuer reine Geraete-/Oberflaechen-Einstellungen (Theme/Akzentfarbe/Sprache/Hintergrund)
-    // und sonstige, noch nicht ans Backend angebundene Kleinigkeiten (z.B. reportingConfig).
+    // Personal appearance/report choices are scoped to the authenticated user in MariaDB.
     // Fachliche Einstellungen mit echter DB-Spalte (SLA, Geschaeftszeiten, Ticketnummern,
     // Firmenname, Kategorien, ...) laufen ausschliesslich ueber Store.updateServerSettings bzw.
     // die Kategorien-API und werden bei jedem getSettings() ueberschrieben -- was hier fuer diese
     // Schluessel geschrieben wird, ist also folgenlos.
     saveSettings: async (settings) => {
-        await Store.writePersistent('app_settings', settings);
+        if (await Store.currentUser()) {
+            const before = Store.personalSnapshots.get(settings) || {};
+            const patch = Object.fromEntries(Store.personalKeys.filter(key => settings[key] !== before[key]).map(key => [key, settings[key]]));
+            if (Object.keys(patch).length) await Store.patchPersonalPreferences(patch);
+            Store.personalSnapshots.set(settings, Object.fromEntries(Store.personalKeys.map(key => [key, settings[key]])));
+        } else await Store.writePersistent('app_settings', settings);
     },
     // Schreibt gezielt gegen PATCH /api/v2/settings (nur Superadmin). patch: { companyName?,
     // portalName?, config?: {...} } -- config wird serverseitig mit dem bestehenden Stand gemerged.
@@ -1012,9 +1059,10 @@ export const Store = {
         }));
     },
     saveKbAttachment: async (articleId, fileLike) => {
-        if (fileLike.size && fileLike.size > 15 * 1024 * 1024) {
+        if (fileLike.size && fileLike.size > 500 * 1024 * 1024) {
             throw new Error('ATTACHMENT_TOO_LARGE');
         }
+        if (fileLike.size > 15 * 1024 * 1024 && fileLike instanceof Blob) return Store.saveChunkedAttachment(fileLike, { article_id: articleId });
         const dataUrl = fileLike.data || await Store.readFile(fileLike);
         const data_b64 = String(dataUrl).split(',').pop();
         const name = fileLike.name || 'Anhang';
@@ -1034,6 +1082,7 @@ export const Store = {
         if (!res || !res.ok) return null;
         const a = (await res.json()).attachment;
         if (!a) return null;
+        if (a.chunked) return Store.readChunkedAttachment(a);
         return { id: a.id, name: a.filename, type: a.mime_type, size: a.size_bytes, data: `data:${a.mime_type};base64,${a.data_b64}` };
     },
     deleteKbAttachment: async (id) => {
@@ -1503,11 +1552,34 @@ export const Store = {
     // unbemerkt immer im lokalen IndexedDB-Fallback (pro Browser, nicht in der Datenbank).
     // ticketId ist Pflicht (Backend-Schema), messageId/noteId optional -- Chat-/Notiz-Anhänge sind
     // in der Oberfläche noch nicht angebunden, siehe README.
+    saveChunkedAttachment: async (file, parent) => {
+        if (!(file instanceof Blob) || file.size > 500 * 1024 * 1024) throw new Error('ATTACHMENT_TOO_LARGE');
+        const request = async (path, options) => {
+            for (let attempt = 0; attempt < 105; attempt++) {
+                const response = await fetch(`/api/v2/uploads${path}`, { credentials: 'same-origin', ...options });
+                if (response.ok) return response.json();
+                const error = (await response.json().catch(() => ({}))).error || 'ATTACHMENT_UPLOAD_FAILED';
+                if (response.status !== 429 || error !== 'upload_validation_busy') throw new Error(error);
+                await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+            throw new Error('upload_validation_busy');
+        };
+        const upload = await request('', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...parent, filename: file.name || 'Anhang', mime_type: file.type || 'application/octet-stream', size_bytes: file.size }) });
+        try {
+            for (let offset = 0, index = 0; offset < file.size; offset += upload.chunk_bytes, index++) {
+                await request(`/${upload.id}/chunks/${index}`, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: file.slice(offset, offset + upload.chunk_bytes) });
+            }
+            const saved = await request(`/${upload.id}/complete`, { method: 'POST' });
+            return { id: saved.id, attachmentId: saved.id, name: saved.filename, type: saved.mime_type, size: saved.size_bytes };
+        } catch (error) { await fetch(`/api/v2/uploads/${upload.id}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {}); throw error; }
+    },
     saveAttachment: async (fileLike, { ticketId, messageId, noteId } = {}) => {
-        if (fileLike.size && fileLike.size > 15 * 1024 * 1024) {
+        if (fileLike.size && fileLike.size > 500 * 1024 * 1024) {
             throw new Error('ATTACHMENT_TOO_LARGE');
         }
         if (!ticketId) throw new Error('ATTACHMENT_NEEDS_TICKET');
+        if (fileLike.size > 15 * 1024 * 1024 && (messageId || noteId)) throw new Error('Large files must be uploaded to the ticket attachment list.');
+        if (fileLike.size > 15 * 1024 * 1024 && fileLike instanceof Blob) return Store.saveChunkedAttachment(fileLike, { ticket_id: ticketId });
         const dataUrl = fileLike.data || await Store.readFile(fileLike);
         const data_b64 = String(dataUrl).split(',').pop();
         const name = fileLike.name || 'Anhang';
@@ -1525,10 +1597,19 @@ export const Store = {
         const saved = await res.json();
         return { id: saved.id, attachmentId: saved.id, name: saved.filename, type: saved.mime_type, size: saved.size_bytes };
     },
+    readChunkedAttachment: async (attachment) => {
+        const url = `/api/v2/uploads/${encodeURIComponent(attachment.id)}/content`;
+        const result = { id: attachment.id, name: attachment.filename, type: attachment.mime_type, size: attachment.size_bytes };
+        if (attachment.size_bytes > 15 * 1024 * 1024) return { ...result, data: url };
+        const content = await fetch(url, { credentials: 'same-origin' });
+        if (!content.ok) return null;
+        return { ...result, data: await Store.readFile(await content.blob()) };
+    },
     getAttachment: async (id) => {
         const res = await fetch(`/api/v2/attachments/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
         if (!res.ok) return null;
         const { attachment } = await res.json();
+        if (attachment.chunked) return Store.readChunkedAttachment(attachment);
         return {
             id: attachment.id, name: attachment.filename, type: attachment.mime_type, size: attachment.size_bytes,
             data: `data:${attachment.mime_type};base64,${attachment.data_b64}`

@@ -89,7 +89,7 @@ export const UserDash = {
                 return;
             }
 
-            if (UserDash.createFiles.some(file => file.size > 15 * 1024 * 1024)) {
+            if (UserDash.createFiles.some(file => file.size > 500 * 1024 * 1024)) {
                 UI.toast(Lang.t('attachmentsTooLarge'));
                 return;
             }
@@ -108,7 +108,7 @@ export const UserDash = {
             }
             if (UserDash.createFiles.length) {
                 try {
-                    await Promise.all(UserDash.createFiles.map(file => Store.saveAttachment(file, { ticketId: newTicket.id })));
+                    for (const file of UserDash.createFiles) await Store.saveAttachment(file, { ticketId: newTicket.id });
                 } catch (error) {
                     console.error(error);
                     UI.toast(Lang.t('ticketCreatedAttachmentsFailed'));
@@ -329,6 +329,7 @@ export const UserDash = {
             chip.title = Lang.t('showPreview');
             chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Lang.format('removeFileAriaLabel', { name: file.name })}">${Icon('x', 13)}</button>`;
             chip.querySelector('span').onclick = async () => {
+                if (file.size > 15 * 1024 * 1024) return AdminBoard.openAttachmentPreview(file);
                 const data = await Store.readFile(file);
                 AdminBoard.openAttachmentPreview({ name: file.name, type: file.type, data });
             };

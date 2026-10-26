@@ -227,7 +227,17 @@ export interface TicketTimeEntriesTable {
   username: string;
   minutes: number;
   note: Nullable<string>;
+  note_enc: Nullable<Buffer>;
   created_at: CreatedAt;
+}
+
+export interface UserPreferencesTable { user_id: string; value_enc: Buffer; }
+export interface TicketWorkTimersTable {
+  user_id: string;
+  id: string;
+  ticket_id: string;
+  started_at: ColumnType<Date, Date, never>;
+  stopped_at: ColumnType<Date | null, Date | null, Date | null>;
 }
 
 export interface TextBlocksTable {
@@ -445,13 +455,19 @@ export interface GlobalAuditLogTable {
 }
 
 export interface Database {
+  file_uploads: {
+    id: string; owner_user_id: string | null; ticket_id: string | null; article_id: string | null;
+    filename: Buffer; mime_type: string; size_bytes: number; received_bytes: Generated<number>;
+    completed: Generated<boolean>; created_at: CreatedAt;
+  };
+  file_upload_chunks: { upload_id: string; part: number; data_enc: Buffer };
   encryption_checkpoints: { purpose: string };
   recurring_admin_todos: {
     id: string;
     content: Buffer;
     created_by_user_id: string;
     recipient_ids_json: string;
-    interval_unit: 'day' | 'week' | 'month';
+    interval_unit: 'day' | 'week' | 'month' | 'year';
     interval_count: number;
     due_after_hours: Nullable<number>;
     next_run_at: ColumnType<Date, string | Date, string | Date>;
@@ -493,6 +509,12 @@ export interface Database {
   ticket_participants: TicketParticipantsTable;
   ticket_relations: TicketRelationsTable;
   ticket_time_entries: TicketTimeEntriesTable;
+  user_preferences: UserPreferencesTable;
+  user_passkeys: { id: string; user_id: string; public_key: Buffer; counter: number; label: string; transports_json: string; created_at: CreatedAt };
+  mfa_flows: { token_hash: string; user_id: string; purpose: string; state_json: string; expires_at: ColumnType<Date, Date, never> };
+  mfa_devices: { token_hash: string; user_id: string; verified_at: ColumnType<Date, Date, Date> };
+  mfa_recovery_codes: { user_id: string; code_hash: string };
+  ticket_work_timers: TicketWorkTimersTable;
   ticket_calendar_events: TicketCalendarEventsTable;
   attachments: AttachmentsTable;
   kb_article_attachments: KbArticleAttachmentsTable;

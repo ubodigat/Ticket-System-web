@@ -22,7 +22,8 @@ export const TodoList = {
         button.id = 'btn-todos'; button.className = 'btn-ghost btn-icon notification-button';
         button.title = Lang.t('todoList'); button.setAttribute('aria-label', Lang.t('todoList'));
         button.innerHTML = `${Icon('list-todo', 18)}<span class="notification-count" hidden>0</span>`;
-        button.onclick = () => TodoList.open();
+        button.type = 'button';
+        button.onclick = () => TodoList.open().catch(error => UI.toast(error.message));
         q('.topbar-right').insertBefore(button, q('#btn-notifications') || q('.topbar-right').firstChild);
         document.addEventListener('open-todos', () => TodoList.open());
         await TodoList.refresh(true);
@@ -49,7 +50,7 @@ export const TodoList = {
                     <div class="todo-form-grid"><div class="field"><label id="todo-date-label">${Lang.t('dueDateOptional')}</label>${UI.dateTimePickerMarkup('todo-date')}</div>
                     <div class="field" id="todo-recipient-field"><label>${Lang.t('alsoAssignTo')}</label><div id="todo-recipients"></div></div></div>
                     <div id="todo-recurrence-fields" hidden><div class="todo-form-grid">
-                        <div class="field"><label for="todo-interval">${Lang.t('interval')}</label><div class="todo-interval"><input type="number" id="todo-interval" min="1" max="365" value="1" aria-label="Intervallanzahl"><select id="todo-unit"><option value="day">${Lang.t('days')}</option><option value="week">${Lang.t('weeks')}</option><option value="month">${Lang.t('months')}</option></select></div></div>
+                        <div class="field"><label for="todo-interval">${Lang.t('interval')}</label><div class="todo-interval"><input type="number" id="todo-interval" min="1" max="365" value="1" aria-label="Intervallanzahl"><select id="todo-unit"><option value="day">${Lang.t('days')}</option><option value="week">${Lang.t('weeks')}</option><option value="month">${Lang.t('months')}</option><option value="year">${Lang.t('years')}</option></select></div></div>
                         <div class="field"><label for="todo-due-hours">${Lang.t('dueAfterCreationHours')}</label><input type="number" id="todo-due-hours" min="1" max="87600"></div></div></div>
                     <div class="todo-form-actions"><button class="btn-secondary" type="button" data-cancel>${Lang.t('cancel')}</button><button class="btn-primary" type="submit" id="todo-save">${Lang.t('save')}</button></div>
                 </form><div id="todo-items" aria-live="polite"></div></div></div>`;
@@ -64,8 +65,9 @@ export const TodoList = {
                 TodoList.showDone = !TodoList.showDone; e.currentTarget.setAttribute('aria-pressed', String(TodoList.showDone));
                 e.currentTarget.title = TodoList.showDone ? Lang.t('hideDone') : Lang.t('showDone'); e.currentTarget.setAttribute('aria-label', e.currentTarget.title); TodoList.render();
             };
-            q('#todo-add').onclick = () => TodoList.openForm();
-            q('#todo-new-recurring').onclick = () => TodoList.openForm(null, 'recurring');
+            modal.querySelectorAll('button:not([type])').forEach(button => { button.type = 'button'; });
+            q('#todo-add').onclick = () => TodoList.openForm().catch(error => UI.toast(error.message));
+            q('#todo-new-recurring').onclick = () => TodoList.openForm(null, 'recurring').catch(error => UI.toast(error.message));
             modal.querySelector('[data-cancel]').onclick = () => { q('#todo-form').hidden = true; TodoList.picker.close(); };
             q('#todo-form').onsubmit = e => TodoList.saveForm(e);
         }
@@ -126,7 +128,7 @@ export const TodoList = {
         if (TodoList.tab === 'recurring') {
             for (const rule of TodoList.rules.filter(r => Utils.matchesSearch(query, r))) {
                 const row = document.createElement('div'); row.className = 'todo-row';
-                row.innerHTML = `<div class="todo-copy"><div class="todo-title">${Utils.esc(rule.content)}</div><small>${Lang.format('everyInterval', { count: rule.interval_count, unit: Lang.t({ day: 'days', week: 'weeks', month: 'months' }[rule.interval_unit]) })} · ${rule.active ? Lang.t('active') : Lang.t('paused')}</small><time>${Lang.format('nextRun', { date: Utils.esc(Utils.fmtDate(rule.next_run_at)) })}</time></div>
+                row.innerHTML = `<div class="todo-copy"><div class="todo-title">${Utils.esc(rule.content)}</div><small>${Lang.format('everyInterval', { count: rule.interval_count, unit: Lang.t({ day: 'days', week: 'weeks', month: 'months', year: 'years' }[rule.interval_unit]) })} · ${rule.active ? Lang.t('active') : Lang.t('paused')}</small><time>${Lang.format('nextRun', { date: Utils.esc(Utils.fmtDate(rule.next_run_at)) })}</time></div>
                     <button class="btn-ghost btn-icon" data-toggle title="${rule.active ? Lang.t('pause') : Lang.t('activate')}" aria-label="${rule.active ? Lang.t('pause') : Lang.t('activate')}">${Icon(rule.active ? 'pause' : 'play', 16)}</button>
                     <button class="btn-ghost btn-icon" data-delete title="${Lang.t('removeRecurrence')}" aria-label="${Lang.t('removeRecurrence')}">${Icon('trash-2', 16)}</button>`;
                 row.querySelector('[data-toggle]').onclick = async () => { try { await TodoList.request(`/recurring/${rule.id}`, 'PATCH', { active: !rule.active }); await TodoList.refresh(); } catch (error) { UI.toast(error.message); } };

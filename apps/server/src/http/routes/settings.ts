@@ -106,6 +106,16 @@ const settingsConfigSchema = z.object({
   // abweichendes Feldset) -- 0 bei sessionTimeout/maxLoginAttempts bedeutet bewusst "kein
   // Limit", siehe apps/server/src/domain/securityPolicy.ts fuer die serverseitige Auswertung.
   securityConfig: z.object({
+    mfaMode: z.enum(['disabled', 'totp', 'passkey', 'either', 'both']).optional(),
+    mfaRoles: z.enum(['all', 'admin', 'user']).optional(),
+    passkeyEveryDays: z.number().int().min(0).max(365).optional(),
+    passwordPolicy: z.object({
+      minLength: z.number().int().min(14).max(128),
+      minLowercase: z.number().int().min(0).max(16),
+      minUppercase: z.number().int().min(0).max(16),
+      minDigits: z.number().int().min(0).max(16),
+      minSpecial: z.number().int().min(0).max(16)
+    }).optional(),
     force2FA: z.enum(['none', 'all', 'admin', 'user']).optional(),
     sessionTimeout: z.number().int().min(5).max(10080).optional(),
     idleTimeoutMinutes: z.number().int().min(1).max(10080).optional(),
@@ -203,7 +213,7 @@ function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any>
   const clone = JSON.parse(JSON.stringify(config || {}));
   delete clone.emailAdvancedConfig;
   delete clone.outlookConfig;
-  delete clone.securityConfig;
+  clone.securityConfig = { passwordPolicy: clone.securityConfig?.passwordPolicy };
   return clone;
 }
 
@@ -217,8 +227,9 @@ function removeWriteOnlyMailSecrets(config: Record<string, any>): Record<string,
   return clone;
 }
 
-function mergeSettingsConfig(existing: Record<string, any>, incoming: Record<string, any>): Record<string, any> {
+export function mergeSettingsConfig(existing: Record<string, any>, incoming: Record<string, any>): Record<string, any> {
   const merged = { ...existing, ...incoming };
+  if (incoming.securityConfig) merged.securityConfig = { ...(existing.securityConfig || {}), ...incoming.securityConfig };
   if (incoming.emailAdvancedConfig) {
     const currentEmail = existing.emailAdvancedConfig || {};
     const nextEmail = { ...currentEmail, ...incoming.emailAdvancedConfig };
@@ -265,6 +276,12 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       if (body.config !== undefined) {
         const parsed = settingsConfigSchema.safeParse(body.config);
         if (!parsed.success) return reply.code(400).send({ error: 'invalid_config', details: parsed.error.flatten() });
+        if (['passkey', 'both'].includes(parsed.data.securityConfig?.mfaMode || '')) {
+          const origin = deps.env.WEBAUTHN_ORIGIN;
+          if (!origin || new URL(origin).protocol !== 'https:' || /^\d+\.\d+\.\d+\.\d+$/.test(new URL(origin).hostname) || new URL(origin).host !== req.host) {
+            return reply.code(400).send({ error: 'passkey_policy_requires_configured_https_domain' });
+          }
+        }
 
         // Die Stellenzahl darf nicht unter die Ziffernzahl der bereits höchsten vergebenen
         // Ticketnummer sinken -- technisch würde das wegen padStart() keine Kollision erzeugen

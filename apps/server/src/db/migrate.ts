@@ -61,7 +61,13 @@ import { migration_0040_encrypt_ticket_custom_fields } from './migrations/0040_e
 
 // Programmatischer MigrationProvider statt dateisystembasiertem Scan -- Reihenfolge ist
 // explizit und versioniert, nicht abhängig von Dateinamens-Sortierung zur Laufzeit.
+import { migration_0049_chunked_uploads } from './migrations/0049_chunked_uploads.js';
+import { migration_0050_personal_workspace } from './migrations/0050_personal_workspace.js';
+import { migration_0051_passkeys } from './migrations/0051_passkeys.js';
 const migrations: Record<string, Migration> = {
+  '0051_passkeys': migration_0051_passkeys,
+  '0050_personal_workspace': migration_0050_personal_workspace,
+  '0049_chunked_uploads': migration_0049_chunked_uploads,
   '0001_installations': migration_0001_installations,
   '0002_key_management': migration_0002_key_management,
   '0003_users_and_groups': migration_0003_users_and_groups,

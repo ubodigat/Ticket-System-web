@@ -67,12 +67,12 @@ describe('audit authorization regressions', () => {
     expect(result.response.statusCode).toBe(403);
     expect(result.operations).toHaveLength(0);
   });
-  it.each(['admin', 'superadmin'] as const)('rejects unknown invitation recipients for %s', async role => {
+  it.each(['admin', 'superadmin'] as const)('allows external recipients past validation but still requires Outlook configuration for %s', async role => {
     const result = await request(role, 'POST', '/api/v2/tickets/source/calendar-event', {
       subject: 'Spam', start_at: '2026-11-01T10:00:00Z', end_at: '2026-11-01T11:00:00Z', attendee_emails: ['outsider@example.org']
     });
-    expect(result.response.statusCode).toBe(403);
-    expect(result.response.json().error).toBe('attendee_not_allowed');
+    expect(result.response.statusCode).toBe(409);
+    expect(result.response.json().error).toBe('outlook_not_configured');
     expect(result.operations.some(op => op.values)).toBe(false);
   });
   it.each([['GET', '/api/v2/notifications'], ['POST', '/api/v2/notifications/read-all'],

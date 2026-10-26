@@ -58,7 +58,9 @@ export const OutlookCalendar = {
         return OutlookCalendar.status;
     },
 
-    connect: () => {
+    connect: async () => {
+        await OutlookCalendar.refreshStatus();
+        if (!OutlookCalendar.status.configured) { UI.toast(Lang.t('outlookConfigurationRequired')); return; }
         const returnTo = encodeURIComponent(window.location.pathname);
         window.location.href = `/api/v2/outlook/connect?returnTo=${returnTo}`;
     },
@@ -103,8 +105,8 @@ export const OutlookCalendar = {
         if (!OutlookCalendar.status.connected) {
             body.innerHTML = `
                 <div class="outlook-connect-prompt">
-                    <p>${Lang.t('outlookPersonalConnectIntro')}</p>
-                    <button class="btn-primary" id="oc-connect">${Icon('plug', 16)}${Lang.t('connectOutlookButton')}</button>
+                    <p>${Lang.t(OutlookCalendar.status.configured ? 'outlookPersonalConnectIntro' : 'outlookConfigurationRequired')}</p>
+                    <button class="btn-primary" id="oc-connect" ${OutlookCalendar.status.configured ? '' : 'disabled'}>${Icon('plug', 16)}${Lang.t('connectOutlookButton')}</button>
                 </div>`;
             body.querySelector('#oc-connect').onclick = () => OutlookCalendar.connect();
             return;
@@ -231,6 +233,7 @@ export const OutlookCalendar = {
                         </div>
                     </div>
                     <div class="field"><label>${Lang.t('calendarNoteLabel')}</label><textarea id="oce-notes" rows="3" maxlength="5000"></textarea></div>
+                    <div class="field"><label for="oce-attendees">${Lang.t('externalAttendees')}</label><textarea id="oce-attendees" rows="2" placeholder="person@example.org; partner@example.com"></textarea></div>
                 </div>
                 <div class="modal-footer modal-footer-visible">
                     <button class="btn-secondary" id="oce-cancel">${Lang.t('cancel')}</button>
@@ -249,12 +252,15 @@ export const OutlookCalendar = {
             const startMs = Utils.parseGermanDateTime(q('#oce-start-date').value, q('#oce-start-time').value);
             const endMs = Utils.parseGermanDateTime(q('#oce-end-date').value, q('#oce-end-time').value);
             if (!startMs || !endMs || endMs <= startMs) { UI.toast(Lang.t('selectValidStartEnd')); return; }
+            const attendees = [...new Set(q('#oce-attendees').value.split(/[;,\s]+/).filter(Boolean).map(email => email.toLowerCase()))];
+            if (attendees.length > 20 || attendees.some(email => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) { UI.toast(Lang.t('invalidAttendees')); return; }
             const res = await fetch('/api/v2/outlook/events', {
                 method: 'POST', credentials: 'same-origin',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({
                     subject,
                     notes: q('#oce-notes').value.trim() || undefined,
+                    attendee_emails: attendees,
                     start_at: new Date(startMs).toISOString(),
                     end_at: new Date(endMs).toISOString()
                 })

@@ -62,6 +62,7 @@ export async function isSmtpConfigured(deps: MailDeps): Promise<boolean> {
 }
 
 interface EmailAdvancedConfig {
+  template?: string;
   replyTo?: string | null;
   bccArchive?: string | null;
   signature?: string;
@@ -93,10 +94,15 @@ async function loadEmailAdvancedConfig(deps: MailDeps): Promise<EmailAdvancedCon
 }
 
 // Immediate transport for the queue worker and explicit SMTP connection tests only.
+export function renderMailTemplate(template: string, values: { subject: string; message: string; recipient: string }): string {
+  return template.replace(/\{\{(subject|message|recipient)\}\}/g, (_match, key: keyof typeof values) => values[key]);
+}
+
 export async function sendMail(deps: MailDeps, to: string, subject: string, text: string): Promise<void> {
   const loaded = await loadSmtpConfig(deps);
   if (!loaded) throw new Error('smtp_not_configured');
   const emailConfig = await loadEmailAdvancedConfig(deps);
+  if (emailConfig.template?.trim()) text = renderMailTemplate(emailConfig.template, { subject, message: text, recipient: to });
 
   // Security-Audit N-2: "opportunistic" ist die einzige Stufe, die ein STARTTLS-Scheitern
   // bewusst toleriert (explizite Entscheidung der Administration in den Systemeinstellungen) --

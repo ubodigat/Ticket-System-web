@@ -6399,6 +6399,29 @@ button:disabled {
 .cpal-origin strong { color: #b9d0ff; }
 .cpal-origin a { display: block; margin-top: 5px; color: #9ddcff; overflow-wrap: anywhere; text-decoration: underline; }
 .cpal-origin__copyright { color: #c2cbdc; font-size: 11px; margin-top: 6px; }
+.confirm-detail { margin-top: 12px; padding: 12px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; font-weight: 600; }
+.notif-role-section { padding-block: 16px; border-top: 1px solid var(--border); }
+.notif-role-section h4 { margin: 0 0 14px; font-size: 14px; }
+.email-template-variables { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 14px; }
+.email-template-variables code { user-select: all; }
+#sys-update .callout { margin-bottom: 20px; }
+#sys-update .callout p { margin: 12px 0 0; }
+#sys-update .setting-row { justify-content: flex-end; padding-block: 14px; gap: 14px; }
+#sys-update .button-row { display: flex; flex-wrap: wrap; gap: 12px; }
+#sys-update-status > * + * { margin-top: 16px; }
 @media (max-width: 500px) {
   .cpal-origin { right: 8px; bottom: 8px; width: calc(100vw - 16px); padding: 10px 12px; }
 }
+/* Personal, keyboard-accessible settings sections. */
+.settings-section { margin: 0 0 18px; border: 1px solid var(--border); border-radius: 10px; padding: 0 14px 14px; }
+.settings-section > summary { cursor: pointer; font-weight: 700; padding: 14px 0; }
+.settings-section:not([open]) { padding-bottom: 0; }
+.settings-section > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.work-timer-dialog { z-index: 10050; }
+.work-timer-dialog label { display: block; margin: 16px 0 6px; }
+.work-timer-dialog textarea { width: 100%; min-height: 100px; }
+.work-timer-dialog .modal-footer { margin-top: 18px; }
+.work-timer-dialog [role="alert"] { color: var(--danger, #ef4444); }
+.mfa-methods { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.office-document-frame { width: 100%; height: min(76vh, 1000px); min-height: 400px; border: 0; background: white; }
+.mfa-recovery-codes { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }

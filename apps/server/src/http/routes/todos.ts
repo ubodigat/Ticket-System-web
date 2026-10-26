@@ -16,7 +16,7 @@ export const createAdminTodoSchema = z.object({
 }).strict();
 
 export const recurringAdminTodoSchema = createAdminTodoSchema.omit({ due_at: true }).extend({
-  interval_unit: z.enum(['day', 'week', 'month']), interval_count: z.number().int().min(1).max(365),
+  interval_unit: z.enum(['day', 'week', 'month', 'year']), interval_count: z.number().int().min(1).max(365),
   next_run_at: z.string().datetime(), due_after_hours: z.number().int().min(1).max(87600).nullable().default(null)
 });
 

@@ -23,6 +23,16 @@
 	@health path /health
 	respond @health 404
 
+	# Source capabilities are usable only on the private app<->Office network.
+	@officeSource path /api/v2/office/source/*
+	respond @officeSource 404
+	handle_path /office/* {
+		reverse_proxy documentserver:80 {
+			header_up X-Forwarded-Host {hostport}/office
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
 	reverse_proxy app:3000
 
 	header {

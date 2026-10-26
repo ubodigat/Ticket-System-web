@@ -40,6 +40,10 @@ const ASSETS: Record<string, Asset> = {
   '/js/context-menu.js': { file: 'js/context-menu.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/todos.js': { file: 'js/todos.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/outlook-calendar.js': { file: 'js/outlook-calendar.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/work-timer.js': { file: 'js/work-timer.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/mfa.js': { file: 'js/mfa.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/office-view.js': { file: 'js/office-view.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/office-view.css': { file: 'js/office-view.css', contentType: 'text/css; charset=utf-8', root: 'app' },
   '/js/excel-preview.js': { file: 'js/excel-preview.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/pdf-preview.js': { file: 'js/pdf-preview.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/vendor/pdfjs/pdf.mjs': { file: 'build/pdf.mjs', contentType: 'application/javascript; charset=utf-8', root: 'pdfjs' },
@@ -47,6 +51,7 @@ const ASSETS: Record<string, Asset> = {
   '/style.css': { file: 'style.css', contentType: 'text/css; charset=utf-8', root: 'app' },
   '/favicon.ico': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
   '/picture/favicon.png': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
+  '/picture/setup-background.png': { file: 'picture/setup-background.png', contentType: 'image/png', root: 'app' },
   // Self-hosted statt CDN (Anforderung "Bibliotheken lokal statt per CDN") -- feste Versionen,
   // heruntergeladen und einmalig ins Repository gelegt, kein Build-Schritt zur Laufzeit nötig.
   '/vendor/lucide.min.js': { file: 'lucide.min.js', contentType: 'application/javascript; charset=utf-8', root: 'vendor' },
@@ -87,6 +92,12 @@ async function sendAsset(app: FastifyInstance, reply: FastifyReply, asset: Asset
 }
 
 export function registerStaticAssetRoutes(app: FastifyInstance): void {
+  app.get('/vendor/webauthn.js', async (_req, reply) => {
+    const roots = [join(process.cwd(), 'node_modules'), join(process.cwd(), '..', '..', 'node_modules')];
+    const root = roots.find(dir => existsSync(join(dir, '@simplewebauthn/browser/dist/bundle/index.umd.min.js')));
+    if (!root) return reply.code(503).send('Passkey browser library unavailable');
+    return reply.type('application/javascript; charset=utf-8').send(await readFile(join(root, '@simplewebauthn/browser/dist/bundle/index.umd.min.js')));
+  });
   for (const [path, asset] of Object.entries(ASSETS)) {
     app.get(path, async (_req, reply) => sendAsset(app, reply, asset));
   }

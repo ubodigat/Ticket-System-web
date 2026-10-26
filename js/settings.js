@@ -8,6 +8,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
 import { q, qa, Icon, Utils } from './utils.js';
 import { Lang } from './lang.js';
+import { MFA } from './mfa.js';
 import { Store } from './store.js';
 import { UI } from './ui.js';
 import { Auth } from './auth.js';
@@ -419,6 +420,9 @@ export const Settings = {
                     </button>
                 </div>
             `;
+            const passkeyButton = document.createElement('button'); passkeyButton.type = 'button'; passkeyButton.className = 'btn-secondary';
+            passkeyButton.textContent = Lang.current === 'en' ? 'Manage MFA / passkeys' : 'MFA / Passkeys verwalten';
+            passkeyButton.onclick = () => MFA.manage().catch(error => UI.toast(error.message)); secArea.appendChild(passkeyButton);
             q('#btn-toggle-2fa').onclick = async () => {
                 if (isEnabled) {
                     // Deaktivieren erfordert das aktuelle Passwort UND einen gültigen TOTP-Code
@@ -606,6 +610,10 @@ export const Settings = {
         q('#s-bg-file').onchange = async (e) => {
             const file = e.target.files[0];
             if (!file) return;
+            if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
+                UI.toast(Lang.current === 'en' ? 'Please choose PNG, JPEG, WebP or GIF.' : 'Bitte PNG, JPEG, WebP oder GIF auswählen.');
+                return;
+            }
             if (file.size > 4 * 1024 * 1024) {
                 UI.toast(Lang.t('imageTooLarge4MB'));
                 return;

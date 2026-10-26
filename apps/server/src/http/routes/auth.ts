@@ -19,6 +19,7 @@ import { APP_JS, AUTH_CSS, LOGIN_JS } from '../assets/authPage.js';
 import { authenticateLdap } from '../../auth/ldap.js';
 import { loadSecurityPolicy, force2faAppliesToRole, type SecurityPolicy } from '../../domain/securityPolicy.js';
 import { isAccountExpired } from '../../domain/accountValidity.js';
+import { beginAdvancedMfa, registerPasskeyRoutes } from './passkeys.js';
 import { isSourceLocked, recordSourceFailure, clearSourceFailures, accountBackoffSecondsRemaining } from '../../domain/loginThrottle.js';
 
 const PROD_SESSION_COOKIE = '__Host-ticket_session';
@@ -241,12 +242,12 @@ async function recordFailedLogin(app: FastifyInstance, userId: string, ip: strin
     .where('id', '=', userId).execute();
 }
 
-async function resetFailedLogins(app: FastifyInstance, userId: string): Promise<void> {
+async function resetFailedLogins(app: Pick<FastifyInstance, 'db'>, userId: string): Promise<void> {
   await clearSourceFailures(app.db, userId);
   await app.db.updateTable('users').set({ failed_login_count: 0, failed_login_last_at: null }).where('id', '=', userId).execute();
 }
 
-async function issueSession(app: FastifyInstance, req: FastifyRequest, reply: FastifyReply, user: { id: string; username: string; role: string }, policy: SecurityPolicy): Promise<void> {
+async function issueSession(app: Pick<FastifyInstance, 'db'>, req: FastifyRequest, reply: FastifyReply, user: { id: string; username: string; role: string }, policy: SecurityPolicy): Promise<void> {
   const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
   const sid = randomUUID();
   const expiresAt = new Date(Date.now() + policy.sessionTimeoutMinutes * 60 * 1000);
@@ -306,6 +307,11 @@ function loginFailure(reply: FastifyReply) {
 }
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): void {
+  registerPasskeyRoutes(app, deps, async (req, reply, user, db) => {
+    await resetFailedLogins({ db }, user.id);
+    await issueSession({ db }, req, reply, user, await loadSecurityPolicy(db));
+    return { success: true, user: await decryptUser(app, deps, user) };
+  });
   app.get('/auth/auth.css', async (_req, reply) => reply.type('text/css; charset=utf-8').send(AUTH_CSS));
   app.get('/auth/login.js', async (_req, reply) => reply.type('application/javascript; charset=utf-8').send(LOGIN_JS));
   app.get('/auth/app.js', async (_req, reply) => reply.type('application/javascript; charset=utf-8').send(APP_JS));
@@ -383,6 +389,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       return loginFailure(reply);
     }
     const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
+    const advancedMfa = await beginAdvancedMfa(app, user);
+    if (advancedMfa) return reply.send(advancedMfa);
     if (!user.totp_enabled && force2faAppliesToRole(policy, role)) {
       await logSecurityEvent(app, 'login.rejected_mfa_required', input.username);
       return authProblem(reply, 403, '2FA erforderlich', 'Für dieses Konto ist 2FA verpflichtend. Bitte lasse 2FA durch einen Superadmin einrichten oder zurücksetzen.');
@@ -449,6 +457,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       }
       await resetFailedLogins(app, user.id);
 
+      const advancedMfa = await beginAdvancedMfa(app, user, true);
+      if (advancedMfa) return reply.send(advancedMfa);
       await issueSession(app, req, reply, user, policy);
       return reply.send({ success: true, user: await decryptUser(app, deps, user) });
     }

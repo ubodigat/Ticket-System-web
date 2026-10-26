@@ -189,7 +189,7 @@ export const UI = {
             });
         }, 0);
     },
-    confirm: (msg, onYes) => {
+    confirm: (msg, onYes, detail = '') => {
         let modal = q('#confirm-modal');
         if (!modal) {
             modal = document.createElement('div');
@@ -214,6 +214,13 @@ export const UI = {
             document.body.appendChild(modal);
         }
         q('#cm-msg').textContent = msg;
+        let detailNode = modal.querySelector('.confirm-detail');
+        if (!detailNode) {
+            detailNode = document.createElement('p'); detailNode.className = 'confirm-detail';
+            q('#cm-msg').after(detailNode);
+        }
+        detailNode.textContent = detail;
+        detailNode.hidden = !detail;
 
         const close = () => modal.classList.remove('open');
         const yesBtn = q('#cm-yes');
@@ -346,7 +353,7 @@ export const UI = {
         if (window.lucide) lucide.createIcons();
     }),
 
-    promptText: ({ title, label, value = '', placeholder = '', multiline = false, saveLabel = null } = {}) => new Promise(resolve => {
+    promptText: ({ title, label, value = '', placeholder = '', multiline = false, saveLabel = null, type = 'text' } = {}) => new Promise(resolve => {
         let modal = q('#prompt-modal');
         if (!modal) {
             modal = document.createElement('div');
@@ -376,6 +383,7 @@ export const UI = {
                 ? `<textarea id="${inputId}" rows="4" placeholder="${Utils.esc(placeholder)}">${Utils.esc(value)}</textarea>`
                 : `<input id="${inputId}" type="text" value="${Utils.esc(value)}" placeholder="${Utils.esc(placeholder)}">`}
             </div>`;
+        if (!multiline && type === 'password') modal.querySelector(`#${inputId}`).type = 'password';
         const close = (result) => {
             modal.classList.remove('open');
             resolve(result);
@@ -729,24 +737,32 @@ export const UI = {
     bindPasswordRequirements: (input) => {
         if (!input || input.dataset.pwReqBound) return;
         input.dataset.pwReqBound = '1';
-        const minLength = 14;
+        let policy = { minLength: 14, minLowercase: 0, minUppercase: 0, minDigits: 0, minSpecial: 0 };
         const pop = document.createElement('div');
         pop.className = 'password-requirements-popover';
         pop.innerHTML = `
             <strong>${Lang.t('passwordRequirementsTitle')}</strong>
             <div class="pwreq-row"><span class="pwreq-icon"></span><span class="pwreq-text">${Lang.t('passwordMinLengthRequirement')}</span></div>`;
         document.body.appendChild(pop);
-        const row = pop.querySelector('.pwreq-row');
-        const icon = pop.querySelector('.pwreq-icon');
-        const text = pop.querySelector('.pwreq-text');
         const update = () => {
-            const len = input.value.length;
-            const met = len >= minLength;
-            row.classList.toggle('is-met', met);
-            icon.innerHTML = Icon(met ? 'check' : 'x', 13);
-            text.textContent = met ? Lang.t('passwordMinLengthRequirement') : `${Lang.t('passwordMinLengthRequirement')} (${Lang.format('passwordCharsRemaining', { count: minLength - len })})`;
+            const counts = { minLength: input.value.length, minLowercase: (input.value.match(/\p{Ll}/gu) || []).length,
+                minUppercase: (input.value.match(/\p{Lu}/gu) || []).length, minDigits: (input.value.match(/\p{N}/gu) || []).length,
+                minSpecial: (input.value.match(/[^\p{L}\p{N}\s]/gu) || []).length };
+            const labels = { minLength: Lang.t('passwordLength'), minLowercase: Lang.t('passwordLowercase'),
+                minUppercase: Lang.t('passwordUppercase'), minDigits: Lang.t('passwordDigits'), minSpecial: Lang.t('passwordSpecial') };
+            pop.querySelectorAll('.pwreq-row').forEach(element => element.remove());
+            let valid = true;
+            for (const [key, required] of Object.entries(policy)) {
+                if (!required) continue;
+                const met = counts[key] >= required; valid = valid && met;
+                const line = document.createElement('div'); line.className = `pwreq-row${met ? ' is-met' : ''}`;
+                line.textContent = `${met ? '\u2713' : '\u2022'} ${labels[key]}: ${required} (${counts[key]}/${required})`; pop.appendChild(line);
+            }
+            input.minLength = policy.minLength;
+            input.setCustomValidity(input.value && !valid ? Lang.t('passwordRequirementsTitle') : '');
             if (window.lucide) lucide.createIcons();
         };
+        Store.getSettings().then(settings => { policy = { ...policy, ...(settings.securityConfig?.passwordPolicy || {}) }; update(); }).catch(() => {});
         const place = () => {
             const rect = input.getBoundingClientRect();
             pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - pop.offsetWidth - 8))}px`;
@@ -799,6 +815,9 @@ export const UI = {
         const minuteSel = root.querySelector('.dtp-minute');
         const manualDate = root.querySelector('.dtp-manual-date');
         const manualTime = root.querySelector('.dtp-manual-time');
+        UI.bindDateInput(manualDate);
+        UI.bindTimeInput(manualTime);
+        manualDate.maxLength = 10; manualTime.maxLength = 5;
         if (dateOnly) manualTime.parentElement.hidden = true;
         const monthNames = ['monthJanuary', 'monthFebruary', 'monthMarch', 'monthApril', 'monthMay', 'monthJune', 'monthJuly', 'monthAugust', 'monthSeptember', 'monthOctober', 'monthNovember', 'monthDecember'].map(k => Lang.t(k));
 
@@ -888,7 +907,7 @@ export const UI = {
         };
         root.querySelector('.dtp-manual-apply').onclick = () => { if (applyManual()) close(); };
         [manualDate, manualTime].forEach(input => {
-            input.oninput = () => manualDate.setCustomValidity('');
+            input.oninput = () => { manualDate.setCustomValidity(''); manualTime.setCustomValidity(''); };
             input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); if (applyManual()) close(); } };
         });
         if (selected) {
@@ -970,7 +989,12 @@ export const UI = {
         renderLabel();
 
         return {
-            getValue: () => selected ? selected.getTime() : null,
+            getValue: () => {
+                if (manualDate.value && (!selected || manualDate.value !== fmt(selected).slice(0, 10) || (!dateOnly && manualTime.value !== fmt(selected).slice(11)))) {
+                    if (!applyManual()) throw new Error(Lang.t('enterDateAndTimeFormat'));
+                }
+                return selected ? selected.getTime() : null;
+            },
             setValue: (ms) => {
                 selected = ms ? new Date(ms) : null;
                 viewDate = selected ? new Date(selected.getFullYear(), selected.getMonth(), 1) : new Date();

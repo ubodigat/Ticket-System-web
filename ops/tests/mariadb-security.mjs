@@ -61,11 +61,46 @@ try {
     smimePrivateKeyPem: 'PRIVATE KEY', smimePassphrase: 'Passphrase', dkimPrivateKeyPem: 'DKIM KEY'
   } }) }).where('id', '=', 1).execute();
   await migrate();
+  // Exercise the actual MariaDB types/constraints introduced for personal workspace/MFA.
+  const pref = await encrypt('user_preferences', uid, 'value', JSON.stringify({ bgType: 'image', bgValue: 'private image', collapsedSections: { 'sys-security:0': true } }), 'users.preferences');
+  await db.insertInto('user_preferences').values({ user_id: uid, value_enc: pref }).execute();
+  assert.ok(Buffer.isBuffer((await db.selectFrom('user_preferences').selectAll().where('user_id', '=', uid).executeTakeFirstOrThrow()).value_enc));
+  const timerId = '33333333-3333-4333-8333-333333333333';
+  await db.insertInto('ticket_work_timers').values({ id: timerId, user_id: uid, ticket_id: ticketId, started_at: new Date(), stopped_at: null }).execute();
+  await assert.rejects(db.insertInto('ticket_work_timers').values({ id: 'duplicate', user_id: uid, ticket_id: ticketId, started_at: new Date(), stopped_at: null }).execute());
+  await db.updateTable('ticket_work_timers').set({ stopped_at: new Date() }).where('id', '=', timerId).execute();
+  assert.ok((await db.selectFrom('ticket_work_timers').selectAll().where('id', '=', timerId).executeTakeFirstOrThrow()).stopped_at instanceof Date);
+  await db.deleteFrom('ticket_work_timers').where('id', '=', timerId).execute();
+  await db.insertInto('user_passkeys').values({ id: 'case-Sensitive-Key', user_id: uid, public_key: Buffer.from('test'), counter: 0, label: 'CI key', transports_json: '[]' }).execute();
+  assert.equal(await db.selectFrom('user_passkeys').select('id').where('id', '=', 'case-sensitive-key').executeTakeFirst(), undefined);
+  await db.deleteFrom('user_passkeys').where('user_id', '=', uid).execute();
   await db.updateTable('users').set({ account_valid_until: '2026-10-22' }).where('id', '=', uid).execute();
   const limitedUser = await db.selectFrom('users').select('account_valid_until').where('id', '=', uid).executeTakeFirstOrThrow();
   assert.equal(isAccountExpired(limitedUser.account_valid_until, new Date('2026-10-22T21:59:59Z')), false);
   assert.equal(isAccountExpired(limitedUser.account_valid_until, new Date('2026-10-22T22:00:00Z')), true);
   await db.updateTable('users').set({ account_valid_until: null }).where('id', '=', uid).execute();
+  // Verify the chunk schema on a real upgraded MariaDB, including retention after
+  // deletion of an uploader and cleanup of blocks when an upload is removed.
+  const uploadOwner = '44444444-4444-4444-8444-444444444444';
+  const uploadId = '77777777-7777-4777-8777-777777777777';
+  await db.insertInto('users').values({ id: uploadOwner, username: 'upload-owner',
+    name_enc: await encrypt('users', uploadOwner, 'name', 'Upload Owner'),
+    email_enc: await encrypt('users', uploadOwner, 'email', 'upload-owner@example.org'),
+    email_blind_idx: 'b'.repeat(64), password_hash: 'unused', role: 'user', installation_id: env.INSTALLATION_ID }).execute();
+  const uploadBytes = Buffer.alloc(8 * 1024 * 1024, 65);
+  uploadBytes.write('Private chunked attachment');
+  await db.insertInto('file_uploads').values({ id: uploadId, owner_user_id: uploadOwner, ticket_id: ticketId, article_id: null,
+    filename: await encrypt('file_uploads', uploadId, 'filename', 'private.txt'), mime_type: 'text/plain',
+    size_bytes: uploadBytes.length, received_bytes: uploadBytes.length, completed: true }).execute();
+  await db.insertInto('file_upload_chunks').values({ upload_id: uploadId, part: 0,
+    data_enc: await encrypt('file_uploads', uploadId + ':0', 'data', uploadBytes.toString('base64')) }).execute();
+  await db.deleteFrom('users').where('id', '=', uploadOwner).execute();
+  assert.equal((await db.selectFrom('file_uploads').select('owner_user_id').where('id', '=', uploadId).executeTakeFirstOrThrow()).owner_user_id, null);
+  const uploadChunk = await db.selectFrom('file_upload_chunks').select('data_enc').where('upload_id', '=', uploadId).executeTakeFirstOrThrow();
+  assert.ok(Buffer.isBuffer(uploadChunk.data_enc));
+  assert.deepEqual(Buffer.from(await decrypt('file_uploads', uploadId + ':0', 'data', uploadChunk.data_enc), 'base64'), uploadBytes);
+  await db.deleteFrom('file_uploads').where('id', '=', uploadId).execute();
+  assert.equal((await db.selectFrom('file_upload_chunks').select('part').where('upload_id', '=', uploadId).execute()).length, 0);
   await migrateMailSecrets(deps);
   const first = await reencryptLegacyPlaintext(db, env, keyProvider);
   assert.ok(first.reencrypted >= 6);

@@ -46,8 +46,15 @@ export const SETUP_HTML = `<!doctype html>
       <input id="adminEmail" name="adminEmail" type="email" required maxlength="255" autocomplete="email">
       <label for="adminName">Vollständiger Name</label>
       <input id="adminName" name="adminName" type="text" required maxlength="255" autocomplete="name">
+      <div class="setup-password-field">
       <label for="adminPassword">Passwort (mindestens 14 Zeichen)</label>
       <input id="adminPassword" name="adminPassword" type="password" required minlength="14" autocomplete="new-password">
+      <div id="setup-password-requirements" class="password-requirements" role="status" hidden>
+        <strong>Passwortanforderungen</strong>
+        <span id="setup-password-length">Mindestens 14 Zeichen</span>
+        <span>Maximal 256 Zeichen. Verwende ein einmaliges, langes Passwort.</span>
+      </div>
+      </div>
       <label for="adminPasswordConfirm">Passwort wiederholen</label>
       <input id="adminPasswordConfirm" name="adminPasswordConfirm" type="password" required minlength="14" autocomplete="new-password">
     </fieldset>
@@ -80,17 +87,20 @@ body {
   margin: 0;
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
+  gap: 20px;
   align-items: center;
-  justify-content: center;
-  background: var(--bg);
+  justify-content: flex-start;
+  background: linear-gradient(rgba(10,14,22,.5), rgba(10,14,22,.65)), url('/picture/setup-background.png') center / cover fixed;
   color: var(--text);
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   padding: 24px;
 }
 .setup-card {
+  backdrop-filter: blur(16px);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 32px;
   max-width: 480px;
   width: 100%;
@@ -128,8 +138,13 @@ button:disabled { opacity: 0.6; cursor: default; }
 }
 
 /* CPAL-1.0: sichtbare Herkunftskennzeichnung */
+.setup-password-field { position: relative; }
+.password-requirements { position: absolute; z-index: 20; top: 100%; left: 0; right: 0; margin: 6px 0 0; padding: 12px; background: #202c36; border: 1px solid #64748b; border-radius: 6px; font-size: .85rem; box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+.password-requirements[hidden] { display: none; }
+.password-requirements span { display: block; margin-top: 6px; }
+.password-requirements .is-met { color: #6ee7b7; }
 .cpal-origin {
-  position: fixed; right: 16px; bottom: 16px; z-index: 10000;
+  position: relative;
   box-sizing: border-box; width: min(350px, calc(100vw - 32px));
   padding: 12px 15px; border: 1px solid rgba(169,198,255,.45);
   border-radius: 14px; background: rgba(24,33,52,.97); color: #f8fafc;
@@ -141,11 +156,23 @@ button:disabled { opacity: 0.6; cursor: default; }
 .cpal-origin a { display: block; margin-top: 5px; color: #9ddcff; overflow-wrap: anywhere; text-decoration: underline; }
 .cpal-origin__copyright { color: #c2cbdc; font-size: 11px; margin-top: 6px; }
 @media (max-width: 500px) {
-  .cpal-origin { right: 8px; bottom: 8px; width: calc(100vw - 16px); padding: 10px 12px; }
+  .cpal-origin { right: auto; bottom: auto; width: 100%; padding: 10px 12px; }
 }
 `;
 
 export const SETUP_JS = `
+const password = document.getElementById('adminPassword');
+const passwordRequirements = document.getElementById('setup-password-requirements');
+password.setAttribute('aria-describedby', 'setup-password-requirements');
+const updatePasswordRequirements = () => {
+  const met = password.value.length >= 14;
+  const line = document.getElementById('setup-password-length');
+  line.textContent = (met ? 'Erfüllt: ' : 'Noch erforderlich: ') + 'mindestens 14 Zeichen (' + password.value.length + '/14)';
+  line.classList.toggle('is-met', met);
+};
+password.addEventListener('focus', () => { passwordRequirements.hidden = false; updatePasswordRequirements(); });
+password.addEventListener('input', updatePasswordRequirements);
+password.addEventListener('blur', () => { passwordRequirements.hidden = true; });
 const form = document.getElementById('setup-form');
 const errorBox = document.getElementById('setup-error');
 const submitBtn = document.getElementById('setup-submit');

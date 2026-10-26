@@ -48,7 +48,7 @@ function totpCtx(deps: MfaRouteDeps, userId: string, keyVersion: number) {
 // Pro-Quellnetz-Sperre über denselben Mechanismus wie recordFailedLogin.
 const stepUpRateLimit = { config: { rateLimit: { max: 5, timeWindow: '15 minutes', keyGenerator: (req: any) => req.ticketSession?.uid ?? req.ip } } };
 
-async function verifyStepUpPassword(app: FastifyInstance, userId: string, ip: string, passwordHash: string, password: string): Promise<'ok' | 'locked' | 'wrong'> {
+export async function verifyStepUpPassword(app: FastifyInstance, userId: string, ip: string, passwordHash: string, password: string): Promise<'ok' | 'locked' | 'wrong'> {
   if (await isSourceLocked(app.db, userId, ip)) return 'locked';
   const ok = await argon2.verify(passwordHash, password);
   if (!ok) {
@@ -146,6 +146,13 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
       const session = requireSession(req);
       const parsed = z.object({ password: z.string().min(1), code: z.string().trim().length(6) }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+
+      const passkey = await app.db.selectFrom('user_passkeys').select('id').where('user_id', '=', session.uid).executeTakeFirst();
+      if (passkey) return reply.code(409).send({ error: 'remove_passkeys_before_disabling_totp' });
+      const config = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+      const sec = JSON.parse(config?.config_json || '{}').securityConfig || {};
+      const applies = !sec.mfaRoles || sec.mfaRoles === 'all' || (sec.mfaRoles === 'admin' ? session.role !== 'user' : session.role === 'user');
+      if (applies && ['totp', 'both'].includes(sec.mfaMode)) return reply.code(409).send({ error: 'totp_required_by_policy' });
 
       const user = await app.db.selectFrom('users').select(['password_hash', 'totp_secret_enc']).where('id', '=', session.uid).executeTakeFirstOrThrow();
       const result = await verifyStepUpPassword(app, session.uid, req.ip, user.password_hash, parsed.data.password);

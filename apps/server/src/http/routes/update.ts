@@ -142,6 +142,9 @@ export function registerUpdateRoutes(app: FastifyInstance, deps: UpdateRouteDeps
       if (!parsed.success) return reply.code(400).send({ error: 'expected_commit_required' });
 
       const status = await callUpdater(deps.env, '/status', 'GET');
+      if (!status.ok || (status.payload as { error?: string }).error) {
+        return reply.code(status.status >= 400 ? status.status : 503).send(status.payload);
+      }
       const remoteCommit = (status.payload as { remoteCommit?: string } | undefined)?.remoteCommit;
       if (!remoteCommit || remoteCommit !== parsed.data.expected_commit) {
         await logUpdateAction(app, session, 'update.run_rejected_commit_mismatch', { expected: parsed.data.expected_commit, actual: remoteCommit ?? null });

@@ -423,9 +423,10 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'attachments.data');
       const filename = fieldCipher.decryptField(attachment.filename, filenameDek.rawDek, attachmentCtx('filename', attachment.id, filenameDek.keyVersion));
-      const data_b64 = fieldCipher.decryptField(attachment.data_b64, dataDek.rawDek, attachmentCtx('data', attachment.id, dataDek.keyVersion));
+      const chunked = !!await app.db.selectFrom('file_uploads').select('id').where('id', '=', id).where('completed', '=', true).executeTakeFirst();
+      const data_b64 = chunked ? null : fieldCipher.decryptField(attachment.data_b64, dataDek.rawDek, attachmentCtx('data', attachment.id, dataDek.keyVersion));
 
-      return reply.send({ attachment: { ...attachment, filename, data_b64 } });
+      return reply.send({ attachment: { ...attachment, filename, data_b64, chunked } });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -440,6 +441,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       if (!attachment) return reply.code(404).send({ error: 'not_found' });
       if (attachment.uploaded_by_user_id !== actor.uid) return reply.code(403).send({ error: 'forbidden' });
       await app.db.deleteFrom('attachments').where('id', '=', id).where('uploaded_by_user_id', '=', actor.uid).execute();
+      await app.db.deleteFrom('file_uploads').where('id', '=', id).execute();
       discardOfficePreview(id);
       return reply.send({ success: true });
     } catch (error) { return routeError(app, reply, error); }
@@ -454,6 +456,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const ticket = await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
       if (!['admin', 'superadmin'].includes(actor.role) && ticket.created_by_user_id !== actor.uid) return reply.code(403).send({ error: 'forbidden' });
+      if (attachment.size_bytes > 15 * 1024 * 1024) return reply.code(413).send({ error: 'preview_too_large' });
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'attachments.data');
       const filename = fieldCipher.decryptField(attachment.filename, filenameDek.rawDek, attachmentCtx('filename', id, filenameDek.keyVersion));

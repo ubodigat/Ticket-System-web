@@ -36,6 +36,10 @@ export const Auth = {
         const payload = await res.json().catch(() => ({}));
         if (res.ok && payload.mfaRequired) {
             Auth.pendingMfaToken = payload.mfaToken;
+            if (payload.advancedMfa) {
+                const { MFA } = await import('./mfa.js');
+                return MFA.login(payload.mfaToken);
+            }
             return { mfaRequired: true };
         }
         if (res.ok && payload.user) {
@@ -68,6 +72,10 @@ export const Auth = {
             Store._usersCache = null;
             Store._meCache = null;
             return payload.user;
+        }
+        if (res.ok && payload.advancedMfa) {
+            const { MFA } = await import('./mfa.js');
+            return MFA.login(payload.mfaToken);
         }
         Auth.lastError = 'invalidCode';
         return null;

@@ -14,6 +14,7 @@ import { Settings } from './settings.js';
 import { renderWorkbook } from './excel-preview.js';
 import { renderPdfPreview } from './pdf-preview.js';
 import { UserDash } from './user-dash.js';
+import { WorkTimer } from './work-timer.js';
 import { getStatusColorClass, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
 
 // Fragezeichen-Icon neben einem Einstellungs-Label: nutzt UI.initTooltips() (title-Attribut
@@ -32,7 +33,7 @@ export const AdminBoard = {
     orderTopbar: () => {
         const nav = q('.topbar-right');
         if (!nav) return;
-        ['btn-to-dash', 'btn-archive', 'btn-global-logs', 'btn-manage-users', 'btn-sys-settings', 'btn-todos', 'btn-notifications', 'theme-toggle', 'btn-settings', 'logout'].forEach(id => {
+        ['btn-to-dash', 'btn-archive', 'btn-global-logs', 'btn-manage-users', 'btn-sys-settings', 'btn-outlook-calendar', 'btn-todos', 'btn-notifications', 'theme-toggle', 'btn-settings', 'logout'].forEach(id => {
             const el = q(`#${id}`);
             if (el && el.parentElement === nav) nav.appendChild(el);
         });
@@ -84,6 +85,15 @@ export const AdminBoard = {
             });
         });
         container.innerHTML = rows.join('');
+        const originalRows = [...container.querySelectorAll('.notif-matrix-row')];
+        container.replaceChildren();
+        for (const role of ['user', 'admin']) {
+            const group = document.createElement('section'); group.className = 'notif-role-section';
+            const heading = document.createElement('h4'); heading.textContent = role === 'user' ? Lang.t('users') : Lang.t('admins');
+            group.appendChild(heading);
+            originalRows.filter(row => row.dataset.notifRole === role).forEach(row => group.appendChild(row));
+            container.appendChild(group);
+        }
     },
     readNotifMatrix: (container) => {
         const policy = {};
@@ -310,7 +320,7 @@ export const AdminBoard = {
                     const response = await fetch(`/api/v2/attachments/${encodeURIComponent(file.id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
                     if (!response?.ok) return UI.toast(Lang.t('attachmentRemoveFailed'));
                     await AdminBoard.renderTicketAttachments(ticket, container, { manage });
-                });
+                }, file.name || Lang.t('attachment'));
                 item.appendChild(remove);
             }
             list.appendChild(item);
@@ -334,6 +344,10 @@ export const AdminBoard = {
 
     init: async () => {
         if (!q('.kanban-board')) return;
+        if (q('#m-calendar-event-btn') && q('#m-print')) {
+            q('#m-calendar-event-btn').classList.remove('btn-xs');
+            q('#m-print').before(q('#m-calendar-event-btn'));
+        }
 
         const internalPane = q('#tab-internal');
         const internalSection = q('#tab-details .comments-section');
@@ -2088,7 +2102,7 @@ export const AdminBoard = {
                             <i data-lucide="bell"></i><span>Benachrichtigungen</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-email">
-                            <i data-lucide="mail"></i><span>E-Mail Einstellungen / Benachrichtigungen</span>
+                            <i data-lucide="mail"></i><span>${Lang.t('emailSettings')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-ldap">
                             <i data-lucide="server"></i><span>LDAP</span>
@@ -2109,7 +2123,13 @@ export const AdminBoard = {
                             (Benutzerverwaltung → Kategorien → „Automatische Zuweisung an Gruppe").</div>
                         <!-- Sicherheit -->
                         <div id="sys-security" class="tab-content">
-                            <div class="field">
+                            <div class="settings-section-title">${Lang.current === 'en' ? 'MFA methods' : 'MFA-Methoden'}</div>
+                            <div class="field"><label for="sys-mfa-mode">${Lang.current === 'en' ? 'Required combination (after password)' : 'Erforderliche Kombination (nach Passwort)'}</label>
+                                <select id="sys-mfa-mode"><option value="disabled">${Lang.current === 'en' ? 'Existing individual settings' : 'Bisherige individuelle Einstellungen'}</option><option value="totp">TOTP</option><option value="passkey">Passkey</option><option value="either">TOTP / Passkey</option><option value="both">TOTP + Passkey</option></select></div>
+                            <div class="field"><label for="sys-mfa-roles">${Lang.current === 'en' ? 'Applies to' : 'Gilt für'}</label><select id="sys-mfa-roles"><option value="all">${Lang.current === 'en' ? 'All accounts' : 'Alle Konten'}</option><option value="admin">Admins / Superadmins</option><option value="user">${Lang.current === 'en' ? 'Users' : 'Benutzer'}</option></select></div>
+                            <div class="field"><label for="sys-passkey-days">${Lang.current === 'en' ? 'TOTP + passkey: verify passkey again after days (0 = every login)' : 'TOTP + Passkey: erneuter Passkey-Nachweis nach Tagen (0 = jede Anmeldung)'}</label><input id="sys-passkey-days" type="number" min="0" max="365"><p class="hint">${Lang.current === 'en' ? 'Passkeys need a trusted HTTPS domain. Phones and security keys are supported by the browser. First enroll an authenticator as a recovery method. SMS / push require an external provider.' : 'Passkeys benötigen einen vertrauenswürdigen HTTPS-Domainnamen. Handy und Sicherheitsschlüssel werden über den Browser unterstützt. Zuerst einen Authenticator als Wiederherstellungsweg einrichten. SMS / Push benötigen einen externen Anbieter.'}</p></div>
+                            <div class="settings-section-title">${Lang.current === 'en' ? 'Login and sessions' : 'Anmeldung und Sitzungen'}</div>
+                            <div class="field" hidden>
                                 <label>${Lang.t('enforce2FA')}</label>
                                 <select id="sys-2fa-enforce">
                                     <option value="none">${Lang.t('enforceNone')}</option>
@@ -2146,6 +2166,8 @@ export const AdminBoard = {
                                 <label>${Lang.t('lockoutDurationMinutes')}</label>
                                 <input id="sys-lockout-minutes" type="number" placeholder="15" min="1">
                             </div>
+                            <div class="settings-section-title">${Lang.t('passwordRequirementsTitle')}</div>
+                            <div class="form-grid">${Object.entries({ minLength: 'passwordLength', minLowercase: 'passwordLowercase', minUppercase: 'passwordUppercase', minDigits: 'passwordDigits', minSpecial: 'passwordSpecial' }).map(([key, label]) => `<div class="field"><label for="sys-pw-${key}">${Lang.t(label)}</label><input id="sys-pw-${key}" type="number" min="${key === 'minLength' ? 14 : 0}" max="${key === 'minLength' ? 128 : 16}" required></div>`).join('')}</div>
                             <div class="settings-section-title">${Lang.t('accountSelfManagement')}</div>
                             <div class="hint">${Lang.t('accountSelfManagementHint')}</div>
                             <label class="check-row"><input type="checkbox" id="sys-acc-name"><span>${Lang.t('name')}</span></label>
@@ -2253,7 +2275,7 @@ export const AdminBoard = {
                                 <div class="field"><label>${Lang.t('bccArchiveAddress')} ${FieldHelp(Lang.t('bccArchiveAddressHelp'))}</label><input id="sys-email-bcc" type="email" placeholder="archiv@example.com"></div>
                             </div>
                             <div class="settings-section-title">${Icon('mail-check', 15)}${Lang.t('templateAndSignature')}</div>
-                            <div class="field field-wide"><label>${Lang.t('emailTemplate')} ${FieldHelp(Lang.t('emailTemplateHelp'))}</label><textarea id="sys-email-template" rows="4" placeholder="{{ticketTitle}}, {{status}}, {{message}}"></textarea></div>
+                            <div class="field field-wide"><label>${Lang.t('emailTemplate')} ${FieldHelp(Lang.t('emailTemplateHelp'))}</label><div class="email-template-variables"><code>{{subject}}</code><code>{{message}}</code><code>{{recipient}}</code></div><textarea id="sys-email-template" rows="4" placeholder="{{subject}}\n\n{{message}}"></textarea></div>
                             <div class="field field-wide"><label>${Lang.t('signatureText')} ${FieldHelp(Lang.t('signatureTextHelp'))}</label><textarea id="sys-email-text-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
                             <div class="field">
                                 <label class="check-row">
@@ -2405,6 +2427,47 @@ export const AdminBoard = {
                 </div>`;
             document.body.appendChild(modal);
             modal.querySelector('#sys-save-head').onclick = () => q('#sys-save')?.click();
+            const company = modal.querySelector('#sys-company');
+            const headings = [...company.querySelectorAll('.settings-section-title')];
+            const numbering = headings.find(heading => heading.textContent === Lang.t('ticketNumbersForNewTickets'));
+            const approval = headings.find(heading => heading.textContent === Lang.t('supervisorApprovals'));
+            if (numbering && approval) {
+                const nodes = []; for (let node = approval; node; node = node.nextSibling) nodes.push(node);
+                nodes.forEach(node => company.insertBefore(node, numbering));
+            }
+            const updatePanel = modal.querySelector('#sys-update');
+            const preferences = await Store.getPersonalPreferences(true);
+            modal.querySelectorAll('.tab-content').forEach(panel => {
+                if (!panel.firstElementChild?.classList.contains('settings-section-title')) {
+                    const heading = document.createElement('div'); heading.className = 'settings-section-title';
+                    heading.textContent = modal.querySelector(`[data-tab="${panel.id}"]`)?.textContent.trim() || panel.id;
+                    panel.prepend(heading);
+                }
+                [...panel.querySelectorAll('.settings-section-title')].forEach((heading, index) => {
+                    const key = `${panel.id}:${index}`;
+                    const details = document.createElement('details');
+                    details.className = 'settings-section';
+                    details.dataset.preferenceKey = key;
+                    details.open = !preferences.collapsedSections?.[key];
+                    const summary = document.createElement('summary');
+                    while (heading.firstChild) summary.appendChild(heading.firstChild);
+                    const nodes = [];
+                    for (let node = heading.nextSibling; node && !(node.nodeType === 1 && node.classList.contains('settings-section-title')); node = node.nextSibling) nodes.push(node);
+                    heading.replaceWith(details); details.appendChild(summary);
+                    nodes.forEach(node => details.appendChild(node));
+                    details._preferenceOpen = details.open;
+                    details.addEventListener('toggle', () => {
+                        if (details.open === details._preferenceOpen) return;
+                        details._preferenceOpen = details.open;
+                        Store.patchPersonalPreferences({ collapsedSections: { [key]: !details.open } })
+                            .catch(error => UI.toast(error.message));
+                    });
+                });
+            });
+            const updateInfo = updatePanel.querySelector('.callout');
+            const migrationInfo = updatePanel.querySelector('#sys-update-migrate').closest('.setting-row').querySelector('.hint');
+            const rolesInfo = updatePanel.querySelector('#sys-update-run').closest('.setting-row').querySelector('.hint');
+            for (const info of [rolesInfo, migrationInfo]) { const p = document.createElement('p'); p.textContent = info.textContent; updateInfo.appendChild(p); info.remove(); }
 
             // Tab Logic
             modal.querySelectorAll('.tab-btn').forEach(btn => {
@@ -2547,6 +2610,10 @@ export const AdminBoard = {
         }
 
         q('#sys-2fa-enforce').value = security.force2FA || 'none';
+        q('#sys-mfa-mode').value = security.mfaMode || (security.force2FA && security.force2FA !== 'none' ? 'totp' : 'disabled');
+        q('#sys-mfa-roles').value = security.mfaRoles || (security.force2FA !== 'none' ? security.force2FA : 'all') || 'all';
+        q('#sys-passkey-days').value = security.passkeyEveryDays ?? 14;
+        Object.entries({ minLength: 14, minLowercase: 0, minUppercase: 0, minDigits: 0, minSpecial: 0 }).forEach(([key, fallback]) => { q(`#sys-pw-${key}`).value = security.passwordPolicy?.[key] ?? fallback; });
         q('#sys-session-timeout').value = security.sessionTimeout ?? 480;
         q('#sys-idle-timeout').value = security.idleTimeoutMinutes ?? 60;
         q('#sys-max-login-attempts').value = security.maxLoginAttempts ?? 5;
@@ -2698,6 +2765,11 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
         if (q('#sys-update')?.classList.contains('active')) AdminBoard.renderUpdateStatus();
 
+        const personalPreferences = await Store.getPersonalPreferences(true);
+        modal.querySelectorAll('details[data-preference-key]').forEach(details => {
+            const open = !personalPreferences.collapsedSections?.[details.dataset.preferenceKey];
+            details._preferenceOpen = open; details.open = open;
+        });
         q('#sys-save').onclick = async () => {
             const padding = Math.max(1, Math.min(12, parseInt(q('#sys-ticket-number-padding').value, 10) || 5));
             const accFieldIdMap = { department: 'dept' };
@@ -2741,7 +2813,11 @@ export const AdminBoard = {
                         }).filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value))
                     },
                     securityConfig: {
-                        force2FA: q('#sys-2fa-enforce').value,
+                        mfaMode: q('#sys-mfa-mode').value,
+                        mfaRoles: q('#sys-mfa-roles').value,
+                        passkeyEveryDays: Number(q('#sys-passkey-days').value),
+                        passwordPolicy: Object.fromEntries(['minLength', 'minLowercase', 'minUppercase', 'minDigits', 'minSpecial'].map(key => [key, Number(q(`#sys-pw-${key}`).value)])),
+                        force2FA: 'none',
                         sessionTimeout: Math.max(5, parseInt(q('#sys-session-timeout').value, 10) || 480),
                         idleTimeoutMinutes: Math.max(1, parseInt(q('#sys-idle-timeout').value, 10) || 60),
                         maxLoginAttempts: Math.max(1, parseInt(q('#sys-max-login-attempts').value, 10) || 5),
@@ -2809,6 +2885,9 @@ export const AdminBoard = {
                 console.error('Systemeinstellungen speichern fehlgeschlagen:', Store.lastError);
                 return UI.toast(Lang.t('systemSettingsSaveFailed'));
             }
+            const outlookSecret = q('#sys-outlook-secret').value;
+            if (outlookSecret && !await Store.updateOutlookSecret(outlookSecret)) return UI.toast(Lang.t('saveFailed'));
+            q('#sys-outlook-secret').value = '';
             if (q('.kanban-board')) await AdminBoard.render();
             if (q('#user-tickets')) await UserDash.renderList();
             modal.classList.remove('open');
@@ -3566,6 +3645,7 @@ export const AdminBoard = {
     // Zeiterfassung: aufgewendete Zeit pro Ticket, für interne Verrechnung oder Dienstleister-Abrechnung.
     // Lädt/speichert über /api/v2/tickets/:id/time-entries -- t.timeEntries existiert nicht mehr lokal.
     renderTimeEntries: async (t, users, tickets) => {
+        WorkTimer.renderButton(t.id);
         const list = q('#time-entry-list');
         const addBtn = q('#time-add');
         if (!list || !addBtn) return;
@@ -5138,7 +5218,7 @@ export const AdminBoard = {
             if (missingFields.length) return UI.toast(Lang.format('requiredFieldsMissing', { fields: missingFields.join(', ') }));
             const onBehalfUser = users.find(u => u.username === selectedBehalfUsername);
             if (!onBehalfUser) return UI.toast(Lang.t('selectAPerson'));
-            if (AdminBoard.createTicketFiles.some(file => file.size > 15 * 1024 * 1024)) {
+            if (AdminBoard.createTicketFiles.some(file => file.size > 500 * 1024 * 1024)) {
                 UI.toast(Lang.t('attachmentsTooLarge'));
                 return;
             }
@@ -5154,7 +5234,7 @@ export const AdminBoard = {
             }
             if (AdminBoard.createTicketFiles.length) {
                 try {
-                    await Promise.all(AdminBoard.createTicketFiles.map(file => Store.saveAttachment(file, { ticketId: newTicket.id })));
+                    for (const file of AdminBoard.createTicketFiles) await Store.saveAttachment(file, { ticketId: newTicket.id });
                 } catch (error) {
                     console.error(error);
                     UI.toast(Lang.t('ticketCreatedAttachmentsFailed'));
@@ -5415,6 +5495,7 @@ export const AdminBoard = {
             <div id="cal-event-start-dtp-host" hidden>${UI.dateTimePickerMarkup('cal-event-start-dtp')}</div>
             <div id="cal-event-end-dtp-host" hidden>${UI.dateTimePickerMarkup('cal-event-end-dtp')}</div>
             <div class="field"><label>${Lang.t('attendeesLabel')}</label><div id="cal-event-attendees"></div></div>
+            <div class="field"><label for="cal-event-external">${Lang.t('externalAttendees')}</label><textarea id="cal-event-external" rows="2" placeholder="person@example.com; partner@example.org"></textarea></div>
             <div class="field"><label>${Lang.t('calendarNoteLabel')}</label><textarea id="cal-event-notes" rows="3" maxlength="5000"></textarea></div>
             <p class="hint">${Lang.t('calendarEventHint')}</p>
         `;
@@ -5457,7 +5538,9 @@ export const AdminBoard = {
             if (!startPickedMs || !endPickedMs || endPickedMs <= startPickedMs) { UI.toast(Lang.t('selectValidStartEnd')); return; }
 
             const attendeeIds = attendeePicker.getValue();
-            const attendeeEmails = attendeeUsers.filter(u => attendeeIds.includes(u.id)).map(u => u.email);
+            const external = q('#cal-event-external').value.split(/[;,\s]+/).filter(Boolean);
+            const attendeeEmails = [...new Set([...attendeeUsers.filter(u => attendeeIds.includes(u.id)).map(u => u.email), ...external].map(email => email.toLowerCase()))];
+            if (attendeeEmails.length > 20 || attendeeEmails.some(email => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) { UI.toast(Lang.t('invalidAttendees')); return; }
             const result = await Store.createTicketCalendarEvent(id, {
                 subject,
                 notes: q('#cal-event-notes').value.trim() || undefined,
@@ -6321,6 +6404,14 @@ export const AdminBoard = {
     },
 
     openAttachmentPreview: async (file) => {
+        if (file?.size > 15 * 1024 * 1024) {
+            UI.confirm(Lang.t('largeAttachmentDownload'), () => {
+                const link = document.createElement('a'); link.href = file instanceof Blob ? URL.createObjectURL(file) : `/api/v2/uploads/${encodeURIComponent(file.attachmentId || file.id)}/content`;
+                link.download = file.name || 'Anhang'; document.body.appendChild(link); link.click(); link.remove();
+                if (file instanceof Blob) setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+            }, file.name || Lang.t('attachment'));
+            return;
+        }
         let attachment = file;
         if (!attachment?.data && (attachment?.attachmentId || attachment?.id)) {
             attachment = await Store.getAttachment(attachment.attachmentId || attachment.id);
@@ -6382,6 +6473,16 @@ export const AdminBoard = {
         body.replaceChildren();
         modal.classList.add('open');
         const savedId = attachment.attachmentId || attachment.id;
+        if (savedId && /\.(docx|doc|odt|xlsx|xls|ods|pptx|ppt|odp)$/.test(name)) {
+            const officeResponse = await fetch(`/api/v2/attachments/${encodeURIComponent(savedId)}/office-config`, { credentials: 'same-origin' }).catch(() => null);
+            const office = officeResponse?.ok ? await officeResponse.json() : null;
+            if (office?.enabled) {
+                const frame = document.createElement('iframe'); frame.className = 'office-document-frame'; frame.title = attachment.name || 'Office';
+                frame.src = `/api/v2/attachments/${encodeURIComponent(savedId)}/office-view`; body.appendChild(frame);
+                topOpen.href = frame.src;
+                return;
+            }
+        }
         if (savedId && /\.(pdf|docx|doc|odt|xlsx|xls|ods|pptx|ppt|odp)$/.test(name)) {
             const documentUrl = `/api/v2/attachments/${encodeURIComponent(savedId)}/preview`;
             body.textContent = Lang.t('documentPreviewGenerating');
@@ -6574,7 +6675,7 @@ export const AdminBoard = {
         AdminBoard.currentReq = req;
         q('#a-name-disp').textContent = req.name;
         q('#a-username').value = req.name.toLowerCase().replace(/\s+/g, '');
-        q('#a-password').value = Utils.secureToken(18);
+        q('#a-password').value = await Store.generatePassword();
         UI.bindPasswordRequirements(q('#a-password'));
         q('#approve-modal').classList.add('open');
 
@@ -6719,7 +6820,7 @@ export const AdminBoard = {
                 email,
                 role: ['user', 'admin', 'superadmin'].includes(role) ? role : 'user',
                 dept: deptStr ? deptStr.split(';') : undefined,
-                password: Utils.secureToken(18)
+                password: await Store.generatePassword()
             };
 
             users.push(newUser);

@@ -12,13 +12,14 @@ import { createDb } from '../db/connection.js';
 
 async function main(): Promise<void> {
   const username = process.argv[2];
+  const resetMfa = process.argv.includes('--reset-mfa');
   if (!username) {
     console.error('Verwendung: node dist/cli/unlock.js <benutzername>');
     process.exit(1);
   }
 
   const env = loadEnv();
-  const db = createDb(env, 'migrate');
+  const db = createDb(env, env.DB_RUNTIME_USER ? 'runtime' : 'migrate');
   try {
     const user = await db.selectFrom('users').select(['id', 'username']).where('username', '=', username).executeTakeFirst();
     if (!user) {
@@ -31,9 +32,20 @@ async function main(): Promise<void> {
       .where('id', '=', user.id)
       .execute();
     await db.deleteFrom('login_failure_sources').where('user_id', '=', user.id).execute();
+    if (resetMfa) {
+      await db.transaction().execute(async trx => {
+        await trx.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null, totp_last_step: null }).where('id', '=', user.id).execute();
+        await trx.deleteFrom('user_passkeys').where('user_id', '=', user.id).execute();
+        await trx.deleteFrom('mfa_flows').where('user_id', '=', user.id).execute();
+        await trx.deleteFrom('mfa_devices').where('user_id', '=', user.id).execute();
+        await trx.deleteFrom('mfa_recovery_codes').where('user_id', '=', user.id).execute();
+        await trx.updateTable('sessions').set({ revoked_at: new Date() }).where('user_id', '=', user.id).execute();
+      });
+      console.log('MFA-Methoden und Sitzungen zurückgesetzt. Bei der nächsten Anmeldung erneut einrichten.');
+    }
     await db.insertInto('global_audit_log').values({
       id: randomUUID(), actor_user_id: null, actor_username: `cli:${process.env.USER || process.env.USERNAME || 'unknown'}`,
-      action: 'account.unlocked_via_cli', target_type: 'user', target_id: user.id, detail_json: null
+      action: resetMfa ? 'account.mfa_reset_via_cli' : 'account.unlocked_via_cli', target_type: 'user', target_id: user.id, detail_json: null
     }).execute();
 
     console.log(`Konto "${username}" entsperrt (manuelle Sperre, Backoff und alle Pro-Quellnetz-Sperren zurückgesetzt).`);

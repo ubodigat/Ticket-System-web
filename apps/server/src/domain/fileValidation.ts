@@ -59,7 +59,8 @@ const BLOCKED_MIME_PREFIXES = [
 export async function validateUploadedFile(params: {
   filename: string;
   declaredMimeType: string;
-  dataB64: string;
+  dataB64?: string;
+  data?: Buffer;
   maxSizeBytes?: number;
 }): Promise<ValidatedFile> {
   const maxBytes = params.maxSizeBytes ?? 15 * 1024 * 1024;
@@ -88,7 +89,7 @@ export async function validateUploadedFile(params: {
   // 2. Base64 dekodieren und Größenprüfung
   let buffer: Buffer;
   try {
-    buffer = Buffer.from(params.dataB64, 'base64');
+    buffer = params.data ?? Buffer.from(params.dataB64 || '', 'base64');
   } catch {
     throw { statusCode: 400, message: 'invalid_base64' };
   }
@@ -153,6 +154,10 @@ export async function validateUploadedFile(params: {
     ['.jpeg', 'image/jpeg'],
     ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
     ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    ['.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    ['.odt', 'application/vnd.oasis.opendocument.text'],
+    ['.ods', 'application/vnd.oasis.opendocument.spreadsheet'],
+    ['.odp', 'application/vnd.oasis.opendocument.presentation'],
     ['.txt', 'text/plain'],
     ['.csv', 'text/csv'],
     ['.log', 'text/plain']
@@ -163,6 +168,9 @@ export async function validateUploadedFile(params: {
   }
 
   const expectedMime = ALLOWED_EXTENSIONS.get(ext)!;
+  if (['.pptx', '.odt', '.ods', '.odp'].includes(ext) && detected?.mime !== expectedMime) {
+    throw { statusCode: 400, message: 'content_mismatch' };
+  }
   const isTextual = ['.txt', '.csv', '.log'].includes(ext);
 
   if (detected) {

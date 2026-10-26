@@ -9,7 +9,7 @@ import { Socket } from 'node:net';
 // Abhaengigkeit mit eigenem CVE-Risiko einzufuehren. Nur aktiv, wenn CLAMAV_HOST gesetzt ist
 // (env.ts) -- ohne das optionale "antivirus"-Compose-Profil bleibt das Verhalten unveraendert.
 const CHUNK_SIZE = 64 * 1024;
-const SCAN_TIMEOUT_MS = 60_000;
+const SCAN_TIMEOUT_MS = 300_000;
 
 export interface AntivirusResult {
   clean: boolean;
@@ -47,7 +47,8 @@ export async function scanBuffer(host: string, port: number, buffer: Buffer): Pr
       });
     });
 
-    socket.connect(port, host, () => {
+    socket.connect(port, host, async () => {
+      try {
       socket.write('zINSTREAM\0');
       let offset = 0;
       while (offset < buffer.length) {
@@ -56,13 +57,14 @@ export async function scanBuffer(host: string, port: number, buffer: Buffer): Pr
         const sizeHeader = Buffer.alloc(4);
         sizeHeader.writeUInt32BE(chunk.length, 0);
         socket.write(sizeHeader);
-        socket.write(chunk);
+        await new Promise<void>((resolve, reject) => socket.write(chunk, error => error ? reject(error) : resolve()));
         offset = end;
       }
       // Null-Laenge-Chunk signalisiert clamd das Ende des Streams.
       const endHeader = Buffer.alloc(4);
       endHeader.writeUInt32BE(0, 0);
       socket.write(endHeader);
+      } catch (error) { finish(() => reject(error)); }
     });
   });
 }

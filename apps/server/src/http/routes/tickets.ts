@@ -1249,7 +1249,16 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
 
       const entries = await app.db.selectFrom('ticket_time_entries').selectAll().where('ticket_id', '=', id).orderBy('created_at', 'asc').execute();
-      return reply.send({ entries });
+      if (entries.some(entry => entry.note_enc)) {
+        const dek = await ensureDek(app.db, deps.keyProvider, 'ticket_time_entries.note');
+        for (const entry of entries) if (entry.note_enc) {
+          entry.note = fieldCipher.decryptField(entry.note_enc, dek.rawDek, {
+            installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+            tableName: 'ticket_time_entries', recordId: entry.id, fieldName: 'note', keyVersion: dek.keyVersion
+          });
+        }
+      }
+      return reply.send({ entries: entries.map(({ note_enc, ...entry }) => entry) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -1544,13 +1553,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const parsed = createCalendarEventSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
 
-      const emailIndex = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
-      for (const email of parsed.data.attendee_emails ?? []) {
-        const known = await app.db.selectFrom('users').select('id')
-          .where('email_blind_idx', '=', computeBlindIndex(emailIndex.rawDek, email.toLowerCase()))
-          .where('account_archived', '=', false).where('locked_permanent', '=', false).executeTakeFirst();
-        if (!known) return reply.code(403).send({ error: 'attendee_not_allowed' });
-      }
+      // Explicit, rate-limited admin invitations may include validated external addresses.
 
       const ticket = await app.db.selectFrom('tickets').select(['id', 'created_by_user_id']).where('id', '=', id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
@@ -1641,6 +1644,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         await trx.updateTable('ticket_notes').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
         await trx.updateTable('ticket_todos').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
         await trx.updateTable('ticket_time_entries').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
+        await trx.updateTable('ticket_work_timers').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
         await trx.updateTable('attachments').set({ ticket_id: target.id }).where('ticket_id', '=', source.id).execute();
         // Beteiligte: direktes Umhängen könnte den Unique-Index (ticket_id, user_id) verletzen,
         // falls dieselbe Person bei beiden Tickets beteiligt ist -- deshalb per IGNORE kopieren statt verschieben.

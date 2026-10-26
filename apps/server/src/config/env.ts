@@ -50,6 +50,9 @@ const envSchema = z.object({
   // des direkten Gegenübers. Leer/nicht gesetzt = kein Proxy vertrauen (sicherer Default).
   TRUSTED_PROXY_CIDR: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
   OFFICE_PREVIEW_URL: z.string().url().optional(),
+  WEBAUTHN_ORIGIN: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
+  ONLYOFFICE_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  ONLYOFFICE_JWT_SECRET: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
   UPDATE_SERVICE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   UPDATE_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
   SETUP_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(16).optional()),
