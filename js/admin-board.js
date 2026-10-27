@@ -6406,7 +6406,17 @@ export const AdminBoard = {
     openAttachmentPreview: async (file) => {
         if (file?.size > 15 * 1024 * 1024) {
             UI.confirm(Lang.t('largeAttachmentDownload'), () => {
-                const link = document.createElement('a'); link.href = file instanceof Blob ? URL.createObjectURL(file) : `/api/v2/uploads/${encodeURIComponent(file.attachmentId || file.id)}/content`;
+                const link = document.createElement('a');
+                if (file instanceof Blob) {
+                    link.href = URL.createObjectURL(file);
+                } else {
+                    const rawId = String(file?.attachmentId || file?.id || '');
+                    if (!/^[A-Za-z0-9_-]+$/.test(rawId)) {
+                        UI.toast('Ungültige Anhang-ID.');
+                        return;
+                    }
+                    link.href = `/api/v2/uploads/${encodeURIComponent(rawId)}/content`;
+                }
                 link.download = file.name || 'Anhang'; document.body.appendChild(link); link.click(); link.remove();
                 if (file instanceof Blob) setTimeout(() => URL.revokeObjectURL(link.href), 60000);
             }, file.name || Lang.t('attachment'));
