@@ -152,11 +152,17 @@ export const Utils = {
     },
     sanitizeRichHtml: (html = '') => {
         if (window.DOMPurify?.sanitize) {
-            return window.DOMPurify.sanitize(html, {
+            const fragment = window.DOMPurify.sanitize(html, {
                 ALLOWED_TAGS: ['a', 'b', 'br', 'code', 'div', 'em', 'i', 'li', 'ol', 'p', 'pre', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'],
-                ALLOWED_ATTR: ['class', 'href', 'rel', 'target'],
-                ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^A-Za-z]|[A-Za-z+.\-]+(?:[^A-Za-z+.:\-]|$))/
-            }).trim();
+                ALLOWED_ATTR: ['href'],
+                ALLOWED_URI_REGEXP: /^(?:https?|mailto):/i,
+                RETURN_DOM_FRAGMENT: true
+            });
+            // target/rel werden immer selbst gesetzt (kein Reverse-Tabnabbing ueber target ohne noopener).
+            fragment.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+            const container = document.createElement('div');
+            container.appendChild(fragment);
+            return container.innerHTML.trim();
         }
         // Ohne DOMPurify (Skript nicht geladen) nur noch reinen Text ausgeben: eine eigene
         // Blockliste liess u.a. "java&#9;script:"-Links, data:-URLs und SVG-Elemente durch.

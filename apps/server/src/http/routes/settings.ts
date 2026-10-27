@@ -144,11 +144,9 @@ const settingsConfigSchema = z.object({
     // Mails ohne HTML, "htmlSignature" wird nur angehängt, wenn htmlEnabled aktiv ist.
     signature: z.string().max(5000).optional(),
     htmlSignature: z.string().max(10000).optional(),
-    // Werte wie in der lokalen Version vom 07.10.2026 -- "opportunistic" gehoert zur
-    // Transportverschluesselung (nicht zur Zertifikatspruefung wie zuvor hier abweichend
-    // modelliert), Zertifikatspruefung hat dort drei eigene Stufen.
-    transportSecurity: z.enum(['starttls', 'tls', 'opportunistic']).optional(),
-    certificateValidation: z.enum(['strict', 'allow-self-signed', 'disabled']).optional(),
+    // Nur noch erzwungene Verschluesselung mit strikter Zertifikatspruefung (siehe mailer.ts).
+    transportSecurity: z.enum(['starttls', 'tls']).optional(),
+    certificateValidation: z.literal('strict').optional(),
     smimeCertificatePem: z.string().max(20000).optional(),
     smimePrivateKeyPem: z.string().max(20000).optional(),
     smimePassphrase: z.string().max(512).optional(),
@@ -197,7 +195,8 @@ const smtpConfigSchema = z.object({
 
 const ldapConfigSchema = z.object({
   enabled: z.boolean().default(false),
-  url: z.string().trim().min(1).max(255), // z.B. ldap://dc.example.com:389 oder ldaps://...
+  // Nur ldaps://: bei ldap:// gingen Bind-Passwort und jedes Nutzerpasswort im Klartext uebers Netz.
+  url: z.string().trim().min(1).max(255).regex(/^ldaps:\/\/[^\s/]+/i, 'ldaps_required'),
   bindDn: z.string().trim().min(1).max(255),
   bindPassword: z.string().max(512).optional(), // leer/weggelassen = unverändert lassen
   baseDn: z.string().trim().min(1).max(255),
@@ -209,11 +208,18 @@ const ldapConfigSchema = z.object({
 // Sicherheitsrichtlinie (Sperrschwelle, Sitzungsdauer, 2FA-Pflicht) an JEDES angemeldete Konto
 // heraus. Diese Blöcke sind reine Admin-Konfiguration ohne Nutzen für normale Benutzeroberflächen
 // (SLA/Geschäftszeiten/Ticketnummern/Benachrichtigungsregeln/Branding bleiben erhalten).
+// Allowlist: nur ausdruecklich fuer Benutzeroberflaechen gedachte Schluessel. Neue oder alte
+// (Legacy-)Schluessel in config_json gelangen so nie versehentlich an normale Konten.
+const USER_VISIBLE_CONFIG_KEYS = ['slaHoursByPriority', 'showSlaToUsers', 'defaultPrio', 'businessHours', 'ticketNumberFormat',
+  'ticketNumberCategoryFormats', 'accountSelfServiceFields', 'autoArchiveClosedAfterDays', 'waitingReminderDays',
+  'waitingAutoCloseDays', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig'] as const;
 function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any> {
-  const clone = JSON.parse(JSON.stringify(config || {}));
-  delete clone.emailAdvancedConfig;
-  delete clone.outlookConfig;
-  clone.securityConfig = { passwordPolicy: clone.securityConfig?.passwordPolicy };
+  const source = config || {};
+  const clone: Record<string, any> = {};
+  for (const key of USER_VISIBLE_CONFIG_KEYS) {
+    if (source[key] !== undefined) clone[key] = JSON.parse(JSON.stringify(source[key]));
+  }
+  clone.securityConfig = { passwordPolicy: source.securityConfig?.passwordPolicy };
   return clone;
 }
 

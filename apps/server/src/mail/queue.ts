@@ -47,7 +47,10 @@ export async function queueUserMail(deps: MailDeps, userId: string, subject: str
   const rule = config.notifPolicy?.[type]?.[role] ?? {};
   const enabled = rule.emailLocked ? rule.defaultEmail
     : prefs[type]?.email ?? rule.defaultEmail ?? defaults[type]?.[role] ?? true;
-  if (!enabled) return;
+  // Sicherheitshinweise (2FA-Geraetewechsel, E-Mail-Aenderung, ...) duerfen weder per eigener
+  // Einstellung noch per Richtlinie abschaltbar sein -- sonst koennte eine uebernommene Sitzung sie
+  // zuerst deaktivieren und danach unbemerkt Faktoren austauschen.
+  if (!enabled && type !== 'security') return;
   const dek = await ensureDek(deps.db, deps.keyProvider, 'users.email');
   const email = fieldCipher.decryptField(user.email_enc, dek.rawDek, {
     installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,

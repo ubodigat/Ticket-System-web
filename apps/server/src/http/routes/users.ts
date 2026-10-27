@@ -16,6 +16,7 @@ import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
+import { queueMailIfConfigured } from '../../mail/queue.js';
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { isAccountExpired, isValidAccountDate } from '../../domain/accountValidity.js';
@@ -415,11 +416,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       // Erwaehnungen, Zuweisungsanzeige und Auswahlfelder, siehe js/todos.js/user-dash.js) --
       // Kontaktdaten nur noch fuer Admin-/Superadmin-Konten.
       if (!isAdmin) {
+        // Ohne Rolle: normale Konten muessen nicht wissen, wer Admin ist (lohnende Phishing-Ziele).
         const users = rows.map(row => ({
           id: row.id,
           username: row.username,
           name: safeUserProfileFields(app, deps, row, nameDek, emailDek).name,
-          role: row.role,
           account_archived: row.account_archived
         }));
         return reply.send({ users });
@@ -659,6 +660,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       }
 
       const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
+      let previousEmail: string | null = null;
       if (parsed.data.name !== undefined) {
         const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
         updates.name_enc = fieldCipher.encryptField(parsed.data.name, nameDek.rawDek, {
@@ -685,6 +687,18 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         const emailTaken = await app.db.selectFrom('users').select('id')
           .where('email_blind_idx', '=', updates.email_blind_idx as string).where('id', '!=', id).executeTakeFirst();
         if (emailTaken) return reply.code(409).send({ error: 'email_taken' });
+        const current = await app.db.selectFrom('users').select('email_enc').where('id', '=', id).executeTakeFirst();
+        if (current?.email_enc) {
+          try {
+            const previous = fieldCipher.decryptField(current.email_enc, emailDek.rawDek, {
+              installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+              tableName: 'users', recordId: id, fieldName: 'email', keyVersion: emailDek.keyVersion
+            });
+            if (previous.trim().toLowerCase() !== parsed.data.email.trim().toLowerCase()) previousEmail = previous;
+          } catch (err) {
+            app.log.error({ err, userId: id }, 'Bisherige E-Mail-Adresse nicht lesbar');
+          }
+        }
       }
       // department ist Klartext (kein personenbezogenes Pflichtfeld wie Name/E-Mail, keine
       // Verschlüsselung dafür vorgesehen) -- gleiche Selbst-/Admin-Berechtigung wie Name/E-Mail.
@@ -760,6 +774,18 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       }
 
       await app.db.updateTable('users').set(updates).where('id', '=', id).execute();
+
+      if (previousEmail) {
+        await app.db.insertInto('global_audit_log').values({
+          id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
+          action: 'user.email_changed', target_type: 'user', target_id: id, detail_json: null
+        }).execute();
+        // An die BISHERIGE Adresse: eine uebernommene Sitzung soll die Adresse nicht unbemerkt umleiten koennen.
+        await queueMailIfConfigured({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, previousEmail,
+          'E-Mail-Adresse geaendert',
+          'Die E-Mail-Adresse deines Kontos wurde geaendert. Warst du das nicht, melde dich sofort beim Support.')
+          .catch(err => app.log.error({ err }, 'Hinweis-Mail (email_changed) nicht eingereiht'));
+      }
 
       if (canManageUsers && (parsed.data.role !== undefined || parsed.data.account_archived !== undefined || parsed.data.locked_permanent !== undefined || parsed.data.account_valid_until !== undefined)) {
         await app.db.insertInto('global_audit_log').values({
@@ -1001,6 +1027,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   // "speicherte" es über Store.saveUsers, das das absence-Feld gar nicht kennt -- Abwesenheiten
   // für andere Personen wurden dadurch nie tatsächlich in der Datenbank gespeichert.
   async function applyUserAbsence(targetUserId: string, actor: { uid: string; username: string }, data: z.infer<typeof setAbsenceSchema>) {
+    if (data.active && data.substitute_user_id) {
+      const substitute = await app.db.selectFrom('users').select(['id', 'account_archived']).where('id', '=', data.substitute_user_id).executeTakeFirst();
+      if (!substitute || substitute.account_archived || substitute.id === targetUserId) throw { statusCode: 400, message: 'invalid_substitute' };
+    }
     // Laufende Abwesenheit derselben Person beenden, bevor eine neue beginnt -- nie zwei
     // gleichzeitig aktive Zeilen für dieselbe Person.
     await app.db.updateTable('user_absences')
@@ -1196,7 +1226,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
       for (const line of rawLines.slice(1)) {
         const cells = parseCsvLine(line);
-        const record: Record<string, string> = {};
+        const record = Object.create(null) as Record<string, string>;
         header.forEach((key, idx) => { record[key] = cells[idx] ?? ''; });
 
         const rowParsed = importRowSchema.safeParse(record);
@@ -1216,6 +1246,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
         const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
         const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
+        const emailBlindIdx = computeBlindIndex(blindIndexDek.rawDek, rowParsed.data.email.trim().toLowerCase());
+        if (await app.db.selectFrom('users').select('id').where('email_blind_idx', '=', emailBlindIdx).executeTakeFirst()) {
+          results.push({ username: rowParsed.data.username, status: 'skipped_email_exists' });
+          continue;
+        }
         const contactDeks = await loadContactDeks(app, deps.keyProvider);
         const ctx = (fieldName: string, keyVersion: number) => ({
           installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
@@ -1226,7 +1261,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           username: rowParsed.data.username,
           name_enc: fieldCipher.encryptField(rowParsed.data.name, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
           email_enc: fieldCipher.encryptField(rowParsed.data.email, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
-          email_blind_idx: computeBlindIndex(blindIndexDek.rawDek, rowParsed.data.email.trim().toLowerCase()),
+          email_blind_idx: emailBlindIdx,
           password_hash,
           role: rowParsed.data.role,
           department_group_id: null,

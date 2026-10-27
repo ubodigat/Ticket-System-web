@@ -13,6 +13,7 @@ import { verifyStepUpPassword } from './mfa.js';
 import { requireSession } from './session.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
+import { queueUserMail } from '../../mail/queue.js';
 import { verifyAndConsumeTotp } from '../../domain/totp.js';
 import { loadSecurityPolicy, force2faAppliesToRole } from '../../domain/securityPolicy.js';
 import { isSourceLocked, recordSourceFailure, clearSourceFailures } from '../../domain/loginThrottle.js';
@@ -94,6 +95,10 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
       return work(trx, user);
     });
   }
+  async function securityMail(uid: string, subject: string, text: string) {
+    await queueUserMail({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, uid, subject, text, 'security')
+      .catch(err => app.log.error({ err }, 'Sicherheits-Mail nicht eingereiht'));
+  }
   async function secretFor(uid: string, encrypted: Buffer) {
     const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
     return { dek, context: { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
@@ -131,6 +136,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
     try {
       const { user, state, flow } = await flowFor(req.body); const code = z.string().regex(/^\d{6}$/).parse((req.body as any).code);
       if (await isSourceLocked(app.db, user.id, req.ip)) return reply.code(429).send({ error: 'too_many_attempts' });
+      let enrolledNow = false;
       const verified = await withLiveFlow(flow, state, async (trx, currentUser) => {
         const encrypted = currentUser.totp_enabled ? currentUser.totp_secret_enc : state.pendingSecret ? Buffer.from(state.pendingSecret, 'base64') : null;
         if (!encrypted) throw { statusCode: 409, message: 'totp_not_configured' };
@@ -138,13 +144,20 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
         if (!await verifyAndConsumeTotp(trx, user.id, fieldCipher.decryptField(encrypted, dek.rawDek, context), code)) return false;
         state.totp = true; delete state.pendingSecret;
         await trx.updateTable('mfa_flows').set({ state_json: JSON.stringify(state) }).where('token_hash', '=', flow.token_hash).execute();
-        if (!currentUser.totp_enabled) await trx.updateTable('users').set({ totp_secret_enc: encrypted, totp_enabled: true }).where('id', '=', user.id).execute();
+        if (!currentUser.totp_enabled) {
+          await trx.updateTable('users').set({ totp_secret_enc: encrypted, totp_enabled: true }).where('id', '=', user.id).execute();
+          await trx.insertInto('global_audit_log').values({ id: randomUUID(), actor_user_id: user.id, actor_username: user.username,
+            action: 'mfa.totp_enrolled', target_type: 'user', target_id: user.id, detail_json: null }).execute();
+          enrolledNow = true;
+        }
         return true;
       });
       if (!verified) {
         await recordSourceFailure(app.db, user.id, req.ip, await loadSecurityPolicy(app.db));
         return reply.code(401).send({ error: 'invalid_code' });
       }
+      if (enrolledNow) await securityMail(user.id, 'Zwei-Faktor-Anmeldung eingerichtet',
+        'Fuer dein Konto wurde eine Authenticator-App fuer die Zwei-Faktor-Anmeldung eingerichtet. Warst du das nicht, melde dich sofort beim Support.');
       return { success: true };
     } catch (error) { return fail(reply, error); }
   });
@@ -186,7 +199,11 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
               counter: credential.counter, transports_json: JSON.stringify(credential.transports || []), label: z.string().trim().min(1).max(100).parse((req.body as any).label || 'Passkey') }).execute();
             state.passkey = true;
             await trx.updateTable('mfa_flows').set({ state_json: JSON.stringify(state) }).where('token_hash', '=', flow.token_hash).execute();
+            await trx.insertInto('global_audit_log').values({ id: randomUUID(), actor_user_id: user.id, actor_username: user.username,
+              action: 'mfa.passkey_added', target_type: 'user', target_id: user.id, detail_json: null }).execute();
           });
+          await securityMail(user.id, 'Passkey hinzugefuegt',
+            'Fuer dein Konto wurde ein neuer Passkey registriert. Warst du das nicht, melde dich sofort beim Support.');
         } else {
           const credential = await app.db.selectFrom('user_passkeys').selectAll().where('user_id', '=', user.id).where('id', '=', String(response?.id)).executeTakeFirstOrThrow();
           const result = await verifyAuthenticationResponse({ response: response as AuthenticationResponseJSON, expectedChallenge,

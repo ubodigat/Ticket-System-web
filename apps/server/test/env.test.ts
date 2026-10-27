@@ -28,11 +28,24 @@ describe('loadEnv', () => {
     ).toThrow();
   });
 
+  // Vor dem Erfolgsfall unten, da loadEnv ein erfolgreiches Ergebnis modulweit zwischenspeichert.
+  const base = {
+    DB_HOST: 'localhost', DB_NAME: 'ticketsystem', DB_USER: 'app', DB_PASSWORD: 'secret',
+    KEK_FILE_PATH: '/run/secrets/kek', COOKIE_SECRET: 'x'.repeat(32),
+    INSTALLATION_ID: '123e4567-e89b-12d3-a456-426614174000'
+  };
+  it.each(['false', '0', 'no'])('verweigert DB_SSL_REJECT_UNAUTHORIZED=%s (Zertifikatspruefung nicht abschaltbar)', value => {
+    expect(() => freshLoadEnv({ ...base, NODE_ENV: 'test', DB_SSL_REJECT_UNAUTHORIZED: value })).toThrow(/DB_SSL_REJECT_UNAUTHORIZED/);
+  });
+  it('verweigert in Produktion eine Datenbankverbindung ohne TLS (DB_SSL_CA_PATH fehlt)', () => {
+    expect(() => freshLoadEnv({ ...base, NODE_ENV: 'production' })).toThrow(/DB_SSL_CA_PATH/);
+  });
+
   it('accepts empty optional updater variables from Docker Compose', () => {
     const env = freshLoadEnv({
       DB_HOST: 'localhost', DB_NAME: 'ticketsystem', DB_USER: 'app', DB_PASSWORD: 'secret',
       KEK_FILE_PATH: '/run/secrets/kek', COOKIE_SECRET: 'x'.repeat(32),
-      INSTALLATION_ID: '123e4567-e89b-12d3-a456-426614174000',
+      INSTALLATION_ID: '123e4567-e89b-12d3-a456-426614174000', DB_SSL_CA_PATH: '/run/secrets/mariadb-ca.pem',
       UPDATE_SERVICE_URL: '', UPDATE_TOKEN: ''
     });
     expect(env.UPDATE_SERVICE_URL).toBeUndefined();

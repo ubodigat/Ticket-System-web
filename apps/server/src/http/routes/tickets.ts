@@ -923,13 +923,18 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   app.patch('/api/v2/tickets/:id/messages/:messageId', async (req, reply) => {
     try {
       const session = requireSession(req);
-      const { messageId } = req.params as { id: string; messageId: string };
+      const { id, messageId } = req.params as { id: string; messageId: string };
       const parsed = z.object({ content: z.string().trim().min(1).max(50000) }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const existing = await app.db.selectFrom('ticket_messages').select(['id', 'sender_user_id']).where('id', '=', messageId).executeTakeFirst();
+      const existing = await app.db.selectFrom('ticket_messages').select(['id', 'sender_user_id'])
+        .where('id', '=', messageId).where('ticket_id', '=', id).executeTakeFirst();
       if (!existing) return reply.code(404).send({ error: 'not_found' });
       if (existing.sender_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
+      // Wer das Ticket nicht (mehr) sehen darf, oder ein archiviertes Ticket: keine Aenderung mehr.
+      const ticket = await app.db.selectFrom('tickets').select(['created_by_user_id', 'archived_at']).where('id', '=', id).executeTakeFirst();
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      if (!ticket || ticket.archived_at || (!isAdmin && ticket.created_by_user_id !== session.uid)) return reply.code(403).send({ error: 'forbidden' });
 
       const msgDeks = await loadMessageDeks(app, deps.keyProvider);
       const ctxBase = {
@@ -937,7 +942,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         tableName: 'ticket_messages', recordId: messageId
       };
       await app.db.updateTable('ticket_messages')
-        .set({ content: fieldCipher.encryptField(parsed.data.content, msgDeks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: msgDeks.content.keyVersion }) })
+        .set({ content: fieldCipher.encryptField(parsed.data.content, msgDeks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: msgDeks.content.keyVersion }), content_html: null })
         .where('id', '=', messageId)
         .execute();
 

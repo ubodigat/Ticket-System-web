@@ -2237,7 +2237,7 @@ export const AdminBoard = {
                         <div id="sys-ldap" class="tab-content">
                             <div class="callout">${Lang.t('ldapSupplementCallout')}</div>
                             <label class="check-row"><input type="checkbox" id="sys-ldap-enabled"><span><strong>${Lang.t('enableLdapLogin')}</strong></span></label>
-                            <div class="field"><label>${Lang.t('serverUrl')}</label><input id="sys-ldap-url" type="text" placeholder="ldap://dc.example.com:389 oder ldaps://..."></div>
+                            <div class="field"><label>${Lang.t('serverUrl')}</label><input id="sys-ldap-url" type="text" placeholder="ldaps://dc.example.com:636"></div>
                             <div class="field"><label>${Lang.t('searchBaseDn')}</label><input id="sys-ldap-base-dn" type="text" placeholder="dc=example,dc=com"></div>
                             <div class="field"><label>${Lang.t('userFilter')}</label><input id="sys-ldap-filter" type="text" placeholder="(uid={username})"></div>
                             <div class="settings-section-title">${Lang.t('serviceAccountForPersonSearch')}</div>
@@ -2287,8 +2287,8 @@ export const AdminBoard = {
                             <div class="settings-section-title">${Icon('shield-check', 15)}${Lang.t('securityAndCertificates')}</div>
                             <div class="callout">${Lang.t('emailSecurityCallout')}</div>
                             <div class="form-grid">
-                                <div class="field"><label>${Lang.t('transportSecurity')} ${FieldHelp(Lang.t('transportSecurityHelp'))}</label><select id="sys-email-transport"><option value="starttls">${Lang.t('forceStarttls')}</option><option value="tls">${Lang.t('forceTls')}</option><option value="opportunistic">${Lang.t('opportunistic')}</option></select></div>
-                                <div class="field"><label>${Lang.t('certificateCheck')} ${FieldHelp(Lang.t('certificateCheckHelp'))}</label><select id="sys-email-cert-mode"><option value="strict">${Lang.t('checkStrict')}</option><option value="allow-self-signed">${Lang.t('allowSelfSigned')}</option><option value="disabled">${Lang.t('disabled')}</option></select></div>
+                                <div class="field"><label>${Lang.t('transportSecurity')} ${FieldHelp(Lang.t('transportSecurityHelp'))}</label><select id="sys-email-transport"><option value="starttls">${Lang.t('forceStarttls')}</option><option value="tls">${Lang.t('forceTls')}</option></select></div>
+                                <div class="field"><label>${Lang.t('certificateCheck')} ${FieldHelp(Lang.t('certificateCheckHelp'))}</label><select id="sys-email-cert-mode" disabled><option value="strict">${Lang.t('checkStrict')}</option></select></div>
                             </div>
                             <div class="field field-wide"><label>${Lang.t('smimeCert')} ${FieldHelp(Lang.t('smimeCertHelp'))}</label><textarea id="sys-email-smime-cert" rows="4" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
                             <div class="field field-wide"><label>${Lang.t('smimeKey')} ${FieldHelp(Lang.t('smimeKeyHelp'))}</label><textarea id="sys-email-smime-key" rows="4" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
@@ -2632,8 +2632,8 @@ export const AdminBoard = {
         q('#sys-email-text-signature').value = emailAdvanced.signature || '';
         q('#sys-email-html-enabled').checked = !!emailAdvanced.htmlEnabled;
         q('#sys-email-signature').value = emailAdvanced.htmlSignature || '';
-        q('#sys-email-transport').value = emailAdvanced.transportSecurity || 'starttls';
-        q('#sys-email-cert-mode').value = emailAdvanced.certificateValidation || 'strict';
+        q('#sys-email-transport').value = emailAdvanced.transportSecurity === 'tls' ? 'tls' : 'starttls';
+        q('#sys-email-cert-mode').value = 'strict';
         q('#sys-email-smime-cert').value = emailAdvanced.smimeCertificatePem || '';
         q('#sys-email-smime-key').value = emailAdvanced.smimePrivateKeyPem || '';
         q('#sys-email-smime-pass').value = emailAdvanced.smimePassphrase || '';
@@ -2741,6 +2741,7 @@ export const AdminBoard = {
             const baseDn = q('#sys-ldap-base-dn').value.trim();
             const bindDn = q('#sys-ldap-bind-dn').value.trim();
             if (!url || !baseDn || !bindDn) return UI.toast(Lang.t('enterServerUrlBaseDnBindDn'));
+            if (!/^ldaps:\/\/[^\s/]+/i.test(url)) return UI.toast(Lang.t('ldapsRequired'));
             const ok = await Store.updateLdapConfig({
                 enabled: q('#sys-ldap-enabled').checked,
                 url, baseDn, bindDn,
@@ -2836,7 +2837,7 @@ export const AdminBoard = {
                         htmlEnabled: q('#sys-email-html-enabled').checked,
                         htmlSignature: q('#sys-email-signature').value,
                         transportSecurity: q('#sys-email-transport').value,
-                        certificateValidation: q('#sys-email-cert-mode').value,
+                        certificateValidation: 'strict',
                         smimeCertificatePem: q('#sys-email-smime-cert').value,
                         smimePrivateKeyPem: q('#sys-email-smime-key').value,
                         smimePassphrase: q('#sys-email-smime-pass').value,

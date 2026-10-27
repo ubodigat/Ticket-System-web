@@ -28,7 +28,10 @@ const envSchema = z.object({
   DB_USER: z.string().min(1).optional(),
   DB_PASSWORD: z.string().min(1).optional(),
   DB_SSL_CA_PATH: z.string().min(1).optional(),
-  DB_SSL_REJECT_UNAUTHORIZED: z.coerce.boolean().default(true),
+  // Nicht abschaltbar: z.coerce.boolean() machte aus einem leeren Wert "false" (keine
+  // Zertifikatspruefung). Jeder andere Wert als "true" verhindert jetzt den Start.
+  DB_SSL_REJECT_UNAUTHORIZED: z.preprocess(value => value === undefined || value === '' || value === true ? 'true' : value,
+    z.literal('true', { message: 'DB_SSL_REJECT_UNAUTHORIZED darf nur "true" sein' })).transform(() => true),
   // Eingeschränktes DB-Konto für den Laufzeitbetrieb (nur SELECT/INSERT/UPDATE/DELETE, kein
   // ALTER/CREATE/DROP) -- für den normalen App-Betrieb jetzt die einzigen DB-Zugangsdaten, die
   // der App-Container überhaupt zu sehen bekommt.
@@ -68,6 +71,9 @@ const envSchema = z.object({
 }).refine(
   env => (env.DB_USER && env.DB_PASSWORD) || (env.DB_RUNTIME_USER && env.DB_RUNTIME_PASSWORD),
   { message: 'Weder DB_USER/DB_PASSWORD noch DB_RUNTIME_USER/DB_RUNTIME_PASSWORD gesetzt -- mindestens eines der beiden Kontopaare wird gebraucht.' }
+).refine(
+  env => env.NODE_ENV !== 'production' || !!env.DB_SSL_CA_PATH,
+  { message: 'In Produktion ist DB_SSL_CA_PATH Pflicht -- die Datenbankverbindung muss TLS-verschluesselt sein.' }
 );
 
 export type Env = z.infer<typeof envSchema>;

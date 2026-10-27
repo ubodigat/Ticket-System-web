@@ -30,6 +30,8 @@ export interface LdapDeps {
   keyProvider: KeyProvider;
 }
 
+const LDAP_TLS_OPTIONS = { minVersion: 'TLSv1.2', rejectUnauthorized: true } as const;
+
 interface LdapConfig {
   url: string;
   bindDn: string;
@@ -49,6 +51,8 @@ async function loadLdapConfig(deps: LdapDeps): Promise<LdapConfig | null> {
     .select(['ldap_enabled', 'ldap_url', 'ldap_bind_dn', 'ldap_bind_password_enc', 'ldap_base_dn', 'ldap_user_filter'])
     .where('id', '=', 1).executeTakeFirst();
   if (!row?.ldap_enabled || !row.ldap_url || !row.ldap_bind_dn || !row.ldap_bind_password_enc || !row.ldap_base_dn) return null;
+  // Fail-closed fuer gespeicherte Altkonfigurationen mit ldap:// (Klartext-Passwoerter).
+  if (!/^ldaps:\/\//i.test(row.ldap_url)) return null;
 
   const dek = await ensureDek(deps.db, deps.keyProvider, 'app_settings.ldap_bind_password');
   const bindPassword = fieldCipher.decryptField(row.ldap_bind_password_enc, dek.rawDek, {
@@ -73,7 +77,7 @@ export async function authenticateLdap(deps: LdapDeps, username: string, passwor
   const config = await loadLdapConfig(deps);
   if (!config) return false;
 
-  const client = new Client({ url: config.url, connectTimeout: 5000 });
+  const client = new Client({ url: config.url, connectTimeout: 5000, tlsOptions: LDAP_TLS_OPTIONS });
   try {
     await client.bind(config.bindDn, config.bindPassword);
 
@@ -86,7 +90,7 @@ export async function authenticateLdap(deps: LdapDeps, username: string, passwor
 
     // Neuer Client für den Bind als die Zielperson -- ein fehlgeschlagener Bind darf die
     // Service-Account-Verbindung nicht in einen unklaren Zustand bringen.
-    const userClient = new Client({ url: config.url, connectTimeout: 5000 });
+    const userClient = new Client({ url: config.url, connectTimeout: 5000, tlsOptions: LDAP_TLS_OPTIONS });
     try {
       await userClient.bind(userDn, password);
       return true;

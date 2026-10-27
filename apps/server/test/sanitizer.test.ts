@@ -20,6 +20,12 @@ describe('server-side HTML sanitization (Zero-Trust Browser Principle)', () => {
     expect(cleaned).toContain('rel="noopener noreferrer"');
   });
 
+  it('strips class attributes so app CSS cannot be abused for fake UI overlays', () => {
+    const cleaned = sanitizeServerHtml('<div class="modal-overlay open"><p class="x">Text</p><a class="btn" href="https://example.com">L</a></div>');
+    expect(cleaned).not.toContain('class=');
+    expect(cleaned).toContain('<p>Text</p>');
+  });
+
   it('neutralizes javascript: URIs', () => {
     const malicious = '<a href="javascript:alert(document.cookie)">Klick mich</a>';
     const cleaned = sanitizeServerHtml(malicious);

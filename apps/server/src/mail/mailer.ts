@@ -70,8 +70,8 @@ interface EmailAdvancedConfig {
   htmlSignature?: string;
   // Security-Audit N-2: standen bisher ungenutzt in app_settings -- werden jetzt tatsächlich
   // angewendet (siehe sendMail unten).
-  transportSecurity?: 'starttls' | 'tls' | 'opportunistic';
-  certificateValidation?: 'strict' | 'allow-self-signed' | 'disabled';
+  transportSecurity?: 'starttls' | 'tls';
+  certificateValidation?: 'strict';
   smimeCertificatePem?: string;
   smimePrivateKeyPem?: string;
   smimePassphrase?: string;
@@ -104,16 +104,12 @@ export async function sendMail(deps: MailDeps, to: string, subject: string, text
   const emailConfig = await loadEmailAdvancedConfig(deps);
   if (emailConfig.template?.trim()) text = renderMailTemplate(emailConfig.template, { subject, message: text, recipient: to });
 
-  // Security-Audit N-2: "opportunistic" ist die einzige Stufe, die ein STARTTLS-Scheitern
-  // bewusst toleriert (explizite Entscheidung der Administration in den Systemeinstellungen) --
-  // in jedem anderen Fall MUSS die Verbindung verschlüsselt sein, sonst würde nodemailer bei
-  // einer nicht-"secure" Verbindung klaglos auf Klartext zurückfallen, falls der SMTP-Server
-  // STARTTLS nicht anbietet.
-  const requireTLS = !loaded.config.secure && emailConfig.transportSecurity !== 'opportunistic';
-  // "strict" (Standard, wenn nichts gesetzt ist) prüft die Zertifikatskette wie jeder Browser;
-  // "allow-self-signed"/"disabled" sind eine bewusste, von einer superadmin-Person getroffene
-  // Lockerung (z.B. interner Mailserver mit selbstsigniertem Zertifikat).
-  const rejectUnauthorized = emailConfig.certificateValidation === undefined || emailConfig.certificateValidation === 'strict';
+  // Verschluesselung und Zertifikatspruefung sind nicht abschaltbar: ohne requireTLS faellt
+  // nodemailer still auf Klartext zurueck, ohne Zertifikatspruefung sind SMTP-Passwort und
+  // Mailinhalte per Man-in-the-Middle mitlesbar. Gespeicherte Altwerte ("opportunistic",
+  // "allow-self-signed", "disabled") werden ignoriert.
+  const requireTLS = !loaded.config.secure;
+  const rejectUnauthorized = true;
 
   const dkim = emailConfig.dkimDomain && emailConfig.dkimSelector && emailConfig.dkimPrivateKeyPem
     ? { domainName: emailConfig.dkimDomain, keySelector: emailConfig.dkimSelector, privateKey: emailConfig.dkimPrivateKeyPem }
@@ -127,7 +123,7 @@ export async function sendMail(deps: MailDeps, to: string, subject: string, text
     greetingTimeout: 15000,
     socketTimeout: 30000,
     requireTLS,
-    tls: { rejectUnauthorized },
+    tls: { rejectUnauthorized, minVersion: 'TLSv1.2' },
     auth: loaded.config.user ? { user: loaded.config.user, pass: loaded.password ?? undefined } : undefined,
     ...(dkim ? { dkim } : {})
   });

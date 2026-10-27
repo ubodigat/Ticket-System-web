@@ -730,7 +730,13 @@ export const Store = {
     // siehe updateServerSettings). Nur Erscheinungsbild (theme/accentColor/lang/bgType/bgValue)
     // bleibt ein reines Browser-/Geräte-Setting ohne DB-Bezug.
     getSettings: async () => {
-        const loadedSettings = await Store.readPersistent('app_settings', Settings.defaults);
+        const stored = await Store.readPersistent('app_settings', {});
+        // Im Serverbetrieb nur Darstellungseinstellungen aus dem Browser-Speicher uebernehmen --
+        // aeltere Versionen legten dort ggf. komplette Admin-Konfiguration ab.
+        const localOnly = location.protocol.startsWith('http')
+            ? Object.fromEntries(Object.entries(stored || {}).filter(([key]) => Store.personalKeys.includes(key)))
+            : (stored || {});
+        const loadedSettings = { ...Settings.defaults, ...localOnly };
         const settings = typeof structuredClone === 'function' ? structuredClone(loadedSettings) : JSON.parse(JSON.stringify(loadedSettings));
         const categories = await Store.getCategories();
         settings.categories = categories.filter(c => !c.archived).map(c => c.name);
@@ -849,7 +855,9 @@ export const Store = {
             const patch = Object.fromEntries(Store.personalKeys.filter(key => settings[key] !== before[key]).map(key => [key, settings[key]]));
             if (Object.keys(patch).length) await Store.patchPersonalPreferences(patch);
             Store.personalSnapshots.set(settings, Object.fromEntries(Store.personalKeys.map(key => [key, settings[key]])));
-        } else await Store.writePersistent('app_settings', settings);
+        } else await Store.writePersistent('app_settings', location.protocol.startsWith('http')
+            ? Object.fromEntries(Store.personalKeys.map(key => [key, settings[key]]))
+            : settings);
     },
     // Schreibt gezielt gegen PATCH /api/v2/settings (nur Superadmin). patch: { companyName?,
     // portalName?, config?: {...} } -- config wird serverseitig mit dem bestehenden Stand gemerged.
