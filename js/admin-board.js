@@ -1502,7 +1502,7 @@ export const AdminBoard = {
                 <div class="checkbox-list">
                     ${users.map(u => `
                         <label class="check-row">
-                            <input type="checkbox" value="${u.username}" ${members.includes(u.username) ? 'checked' : ''}>
+                            <input type="checkbox" value="${Utils.esc(u.username)}" ${members.includes(u.username) ? 'checked' : ''}>
                             <span>${Utils.esc(u.name || u.username)} <small>(${Utils.esc(u.username)})</small></span>
                         </label>
                     `).join('')}
@@ -3070,7 +3070,7 @@ export const AdminBoard = {
         const curTeam = teamSel.value;
         teamSel.innerHTML = `<option value="">${Lang.t('allTeams')}</option>` + groups.map(g => `<option value="${Utils.esc(g.id)}" ${g.id === curTeam ? 'selected' : ''}>${Utils.esc(g.name)}</option>`).join('');
         const viewsSel = q('#lv-saved-views');
-        viewsSel.innerHTML = `<option value="">${Lang.t('savedViewPlaceholder')}</option>` + views.filter(v => v.ownerUserId === actor?.id || v.isShared).map(v => `<option value="${v.id}">${Utils.esc(v.name)}${v.isShared ? ` (${Lang.t('shared')})` : ''}</option>`).join('');
+        viewsSel.innerHTML = `<option value="">${Lang.t('savedViewPlaceholder')}</option>` + views.filter(v => v.ownerUserId === actor?.id || v.isShared).map(v => `<option value="${Utils.esc(v.id)}">${Utils.esc(v.name)}${v.isShared ? ` (${Lang.t('shared')})` : ''}</option>`).join('');
     },
 
     updateListViewBulkBar: () => {
@@ -4493,7 +4493,7 @@ export const AdminBoard = {
             AdminBoard.kbFiles.forEach((file, index) => {
                 const chip = document.createElement('div');
                 chip.className = 'file-chip';
-                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Lang.format('removeFileAriaLabel', { name: file.name })}">${Icon('x', 13)}</button>`;
+                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Utils.esc(Lang.format('removeFileAriaLabel', { name: file.name }))}">${Icon('x', 13)}</button>`;
                 chip.querySelector('button').onclick = () => {
                     AdminBoard.kbFiles.splice(index, 1);
                     renderKbFilePreview();
@@ -5172,7 +5172,7 @@ export const AdminBoard = {
             AdminBoard.createTicketFiles.forEach((file, index) => {
                 const chip = document.createElement('div');
                 chip.className = 'file-chip';
-                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Lang.format('removeFileAriaLabel', { name: file.name })}">${Icon('x', 13)}</button>`;
+                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Utils.esc(Lang.format('removeFileAriaLabel', { name: file.name }))}">${Icon('x', 13)}</button>`;
                 chip.querySelector('button').onclick = () => {
                     AdminBoard.createTicketFiles.splice(index, 1);
                     renderActFilePreview();
@@ -5467,7 +5467,7 @@ export const AdminBoard = {
         const existingEvents = await Store.getTicketCalendarEvents(id);
         const eventsListHtml = existingEvents.length
             ? `<div class="field"><label>${Lang.t('alreadyCreatedEvents')}</label><ul class="calendar-event-list">${existingEvents.map(e =>
-                `<li>${Icon('calendar-check', 13)}${Utils.esc(e.subject)} -- ${Utils.esc(Utils.fmtDate(e.startAt))}${e.webLink ? ` <a href="${Utils.esc(e.webLink)}" target="_blank" rel="noopener">${Icon('external-link', 11)}</a>` : ''}</li>`
+                `<li>${Icon('calendar-check', 13)}${Utils.esc(e.subject)} -- ${Utils.esc(Utils.fmtDate(e.startAt))}${/^https:\/\//i.test(e.webLink || '') ? ` <a href="${Utils.esc(e.webLink)}" target="_blank" rel="noopener noreferrer">${Icon('external-link', 11)}</a>` : ''}</li>`
             ).join('')}</ul></div>`
             : '';
 
@@ -6406,25 +6406,14 @@ export const AdminBoard = {
     openAttachmentPreview: async (file) => {
         if (file?.size > 15 * 1024 * 1024) {
             UI.confirm(Lang.t('largeAttachmentDownload'), () => {
+                // CodeQL js/xss-through-dom #15-#17: nur serverseitige Anhaenge (validierte ID) landen
+                // im href -- lokal ausgewaehlte Dateien (File/Blob) fliessen nie in eine URL.
+                if (file instanceof Blob) return UI.toast(Lang.t('largeLocalFileNoPreview'));
+                const rawId = String(file?.attachmentId || file?.id || '');
+                if (!/^[A-Za-z0-9_-]+$/.test(rawId)) return UI.toast('Ungültige Anhang-ID.');
                 const link = document.createElement('a');
-                if (file instanceof Blob) {
-                    // Security-Audit (CodeQL js/xss-through-dom #16): URL.createObjectURL() liefert
-                    // immer ein "blob:"-Schema, nie "javascript:" -- diese Pruefung macht das fuer
-                    // CodeQL explizit nachvollziehbar, statt dass das href implizit als unsicher
-                    // markiert bleibt, nur weil "file" letztlich von einer Dateiauswahl stammt.
-                    const blobUrl = URL.createObjectURL(file);
-                    if (!/^blob:/.test(blobUrl)) { UI.toast('Ungültiger Anhang.'); return; }
-                    link.href = blobUrl;
-                } else {
-                    const rawId = String(file?.attachmentId || file?.id || '');
-                    if (!/^[A-Za-z0-9_-]+$/.test(rawId)) {
-                        UI.toast('Ungültige Anhang-ID.');
-                        return;
-                    }
-                    link.href = `/api/v2/uploads/${encodeURIComponent(rawId)}/content`;
-                }
+                link.href = `/api/v2/uploads/${encodeURIComponent(rawId)}/content`;
                 link.download = file.name || 'Anhang'; document.body.appendChild(link); link.click(); link.remove();
-                if (file instanceof Blob) setTimeout(() => URL.revokeObjectURL(link.href), 60000);
             }, file.name || Lang.t('attachment'));
             return;
         }
@@ -6762,7 +6751,11 @@ export const AdminBoard = {
                 u.email || '',
                 u.role,
                 dept
-            ].map(f => `"${String(f).replace(/"/g, '""')}"`).join(',');
+            ].map(f => {
+                const cell = String(f);
+                const neutralized = /^[=+\-@\t\r]/.test(cell) ? `'${cell}` : cell;
+                return `"${neutralized.replace(/"/g, '""')}"`;
+            }).join(',');
             csv += row + '\n';
         });
 

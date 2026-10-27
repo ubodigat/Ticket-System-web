@@ -94,6 +94,20 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.decorate('db', deps.db);
   app.decorateRequest('ticketSession', null);
 
+  // Routen ohne eigenes try/catch (z.B. mfa-verify, account-requests) landeten bisher im
+  // Fastify-Standardhandler, der bei 500ern die rohe Fehlermeldung (MariaDB-Texte mit Tabellen-/
+  // Spaltennamen) an den Client zurueckgibt. 4xx (Validierung, Rate-Limit, Body zu gross) bleiben
+  // unveraendert.
+  app.setErrorHandler((err, req, reply) => {
+    const code = (err as { statusCode?: unknown } | null)?.statusCode;
+    const status = typeof code === 'number' && code >= 400 && code < 500 ? code : 500;
+    if (status === 500) {
+      req.log.error({ err }, 'Unbehandelter Fehler');
+      return reply.code(500).send({ error: 'internal_error' });
+    }
+    return reply.code(status).send(err);
+  });
+
   await app.register(helmet, {
     contentSecurityPolicy: { directives: CSP_DIRECTIVES },
     crossOriginEmbedderPolicy: true,

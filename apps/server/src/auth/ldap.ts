@@ -77,7 +77,8 @@ export async function authenticateLdap(deps: LdapDeps, username: string, passwor
   try {
     await client.bind(config.bindDn, config.bindPassword);
 
-    const filter = config.userFilter.replace('{username}', escapeLdapFilterValue(username));
+    const escapedUsername = escapeLdapFilterValue(username);
+    const filter = config.userFilter.replaceAll('{username}', () => escapedUsername);
     const { searchEntries } = await client.search(config.baseDn, { scope: 'sub', filter, sizeLimit: 1 });
     const entry = searchEntries[0];
     if (!entry) return false;

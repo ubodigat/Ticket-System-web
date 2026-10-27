@@ -682,6 +682,9 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           keyVersion: emailDek.keyVersion
         });
         updates.email_blind_idx = computeBlindIndex(blindIndexDek.rawDek, parsed.data.email.trim().toLowerCase());
+        const emailTaken = await app.db.selectFrom('users').select('id')
+          .where('email_blind_idx', '=', updates.email_blind_idx as string).where('id', '!=', id).executeTakeFirst();
+        if (emailTaken) return reply.code(409).send({ error: 'email_taken' });
       }
       // department ist Klartext (kein personenbezogenes Pflichtfeld wie Name/E-Mail, keine
       // Verschlüsselung dafür vorgesehen) -- gleiche Selbst-/Admin-Berechtigung wie Name/E-Mail.

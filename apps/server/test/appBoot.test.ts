@@ -97,4 +97,17 @@ describe('buildApp – Boot- und Verdrahtungs-Smoke-Test', () => {
     const res = await app.inject({ method: 'GET', url: '/api/v2/does-not-exist' });
     expect(res.statusCode).toBe(404);
   });
+
+  it('unbehandelte 500er geben keine internen Fehlertexte an den Client weiter', async () => {
+    const probe = await buildApp({ env: fakeEnv(), db: fakeDb(), keyProvider: fakeKeyProvider() });
+    probe.get('/__test/boom', async () => { throw new Error("ER_NO_SUCH_TABLE: Table 'secret_schema.users' doesn't exist"); });
+    try {
+      const res = await probe.inject({ method: 'GET', url: '/__test/boom' });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: 'internal_error' });
+      expect(res.body).not.toContain('secret_schema');
+    } finally {
+      await probe.close();
+    }
+  });
 });

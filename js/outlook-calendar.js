@@ -193,7 +193,7 @@ export const OutlookCalendar = {
                     ${Icon('calendar-clock', 13)}
                     <span>${Utils.esc(Utils.fmtTimeOnly(new Date(e.startAt)))} - ${Utils.esc(Utils.fmtTimeOnly(new Date(e.endAt)))}</span>
                     <strong>${Utils.esc(e.subject)}</strong>
-                    ${e.webLink ? `<a href="${Utils.esc(e.webLink)}" target="_blank" rel="noopener">${Icon('external-link', 12)}</a>` : ''}
+                    ${/^https:\/\//i.test(e.webLink || '') ? `<a href="${Utils.esc(e.webLink)}" target="_blank" rel="noopener noreferrer">${Icon('external-link', 12)}</a>` : ''}
                 </div>`).join('')
             : `<p class="hint">${Lang.t('noAppointmentsOnThisDay')}</p>`);
         if (window.lucide) lucide.createIcons();

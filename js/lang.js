@@ -234,6 +234,7 @@ export const Lang = {
 
 Object.assign(Lang.translations.de, {
     largeAttachmentDownload: 'Große Dateien werden nicht im Browser vorgerendert. Datei herunterladen?',
+    largeLocalFileNoPreview: 'Große Dateien können erst nach dem Hochladen angezeigt werden.',
     passwordLength: 'Mindestlänge', passwordLowercase: 'Kleinbuchstaben', passwordUppercase: 'Großbuchstaben', passwordDigits: 'Ziffern', passwordSpecial: 'Sonderzeichen',
     years: 'Jahre', externalAttendees: 'Externe Teilnehmende (E-Mail-Adressen)', invalidAttendees: 'Bitte maximal 20 gültige E-Mail-Adressen angeben.',
     outlookConfigurationRequired: 'Outlook ist noch nicht eingerichtet. Eine Superadmin-Person muss unter Systemeinstellungen → Outlook die Tenant-ID, Client-ID und ein gültiges Client-Secret speichern. Die Redirect-URI muss in Microsoft Entra registriert sein.',
@@ -1346,6 +1347,7 @@ Object.assign(Lang.translations.de, {
 
 Object.assign(Lang.translations.en, {
     largeAttachmentDownload: 'Large files are not prerendered in the browser. Download the file?',
+    largeLocalFileNoPreview: 'Large files can only be viewed after they have been uploaded.',
     passwordLength: 'Minimum length', passwordLowercase: 'Lowercase letters', passwordUppercase: 'Uppercase letters', passwordDigits: 'Digits', passwordSpecial: 'Special characters',
     years: 'Years', externalAttendees: 'External attendees (email addresses)', invalidAttendees: 'Enter at most 20 valid email addresses.',
     outlookConfigurationRequired: 'Outlook is not configured. A superadmin must save the tenant ID, client ID and a valid client secret in System settings → Outlook. Register the redirect URI in Microsoft Entra.',

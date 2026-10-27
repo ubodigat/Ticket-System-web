@@ -327,9 +327,9 @@ export const UserDash = {
             const chip = document.createElement('div');
             chip.className = 'file-chip file-chip-clickable';
             chip.title = Lang.t('showPreview');
-            chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Lang.format('removeFileAriaLabel', { name: file.name })}">${Icon('x', 13)}</button>`;
+            chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Utils.esc(Lang.format('removeFileAriaLabel', { name: file.name }))}">${Icon('x', 13)}</button>`;
             chip.querySelector('span').onclick = async () => {
-                if (file.size > 15 * 1024 * 1024) return AdminBoard.openAttachmentPreview(file);
+                if (file.size > 15 * 1024 * 1024) return UI.toast(Lang.t('largeLocalFileNoPreview'));
                 const data = await Store.readFile(file);
                 AdminBoard.openAttachmentPreview({ name: file.name, type: file.type, data });
             };

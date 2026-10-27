@@ -158,18 +158,10 @@ export const Utils = {
                 ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^A-Za-z]|[A-Za-z+.\-]+(?:[^A-Za-z+.:\-]|$))/
             }).trim();
         }
+        // Ohne DOMPurify (Skript nicht geladen) nur noch reinen Text ausgeben: eine eigene
+        // Blockliste liess u.a. "java&#9;script:"-Links, data:-URLs und SVG-Elemente durch.
         const doc = new DOMParser().parseFromString(html, 'text/html');
-        doc.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach(el => el.remove());
-        doc.body.querySelectorAll('*').forEach(el => {
-            [...el.attributes].forEach(attr => {
-                const name = attr.name.toLowerCase();
-                if (name.startsWith('on') || ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(attr.value))) {
-                    el.removeAttribute(attr.name);
-                }
-            });
-            if (el.tagName === 'A') { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
-        });
-        return doc.body.innerHTML.trim();
+        return Utils.esc(doc.body.textContent || '').trim();
     },
     // Rendert den in den Notiz-/Textfeldern verwendeten Markdown-Dialekt (fett, kursiv, Code, Links,
     // Listen, Tabellen) als HTML. Wird von internen Notizen und der Wissensdatenbank gemeinsam genutzt.

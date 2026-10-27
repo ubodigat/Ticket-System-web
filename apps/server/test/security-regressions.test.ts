@@ -83,6 +83,17 @@ describe('audit authorization regressions', () => {
       expect(result.operations).toContainEqual({ table: 'notifications', where: ['recipient_user_id', '=', 'caller-id'] });
       expect(result.operations.some(op => op.where?.[0] === 'recipient_username')).toBe(false);
     });
+  it('denies ordinary users an attachment that has no owning ticket (fail-closed)', async () => {
+    const result = await request('user', 'GET', '/api/v2/attachments/orphan');
+    expect(result.response.statusCode).toBe(403);
+  });
+  it('does not let ordinary users attach files to internal notes', async () => {
+    const result = await request('user', 'POST', '/api/v2/attachments', {
+      ticket_id: 'source', note_id: 'internal-note', filename: 'a.txt', mime_type: 'text/plain', size_bytes: 1, data_b64: 'YQ=='
+    }, 'caller-id');
+    expect(result.response.statusCode).toBe(403);
+    expect(result.operations.some(op => op.table === 'attachments' && op.values)).toBe(false);
+  });
 });
 
 describe('encrypted data boundaries', () => {

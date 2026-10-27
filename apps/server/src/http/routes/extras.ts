@@ -27,6 +27,8 @@ export interface ExtrasRouteDeps {
   keyProvider: KeyProvider;
 }
 
+const MAX_PENDING_ACCOUNT_REQUESTS = 500;
+
 const accountRequestSchema = z.object({
   name: z.string().trim().min(1).max(255),
   email: z.string().email().max(255),
@@ -279,8 +281,14 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
   // POST /api/v2/account-requests - Neue Anfrage (ohne Login). Eigenes, engeres Limit, da
   // öffentlich und unauthentifiziert erreichbar (Spam/Enumeration-Eindämmung).
   app.post('/api/v2/account-requests', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (req, reply) => {
+    try {
     const parsed = accountRequestSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+    // Unauthentifiziert erreichbar: das Rate-Limit allein begrenzt nur pro Quelle, nicht die
+    // Gesamtmenge -- ohne Obergrenze liesse sich die Tabelle aus vielen Netzen beliebig fuellen.
+    const pending = await app.db.selectFrom('account_requests')
+      .select(eb => eb.fn.countAll<number>().as('n')).where('status', '=', 'pending').executeTakeFirst();
+    if (Number(pending?.n) >= MAX_PENDING_ACCOUNT_REQUESTS) return reply.code(429).send({ error: 'too_many_pending_requests' });
     const id = randomUUID();
     const nameDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.name');
     const emailDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.email');
@@ -306,6 +314,9 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       installation_id: deps.env.INSTALLATION_ID
     }).execute();
     return reply.code(201).send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
   });
 
   // GET /api/v2/account-requests - Alle Anfragen (nur Admin)
@@ -411,13 +422,16 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const attachment = await app.db.selectFrom('attachments').selectAll().where('id', '=', id).executeTakeFirst();
       if (!attachment) return reply.code(404).send({ error: 'not_found' });
 
-      // IDOR: Wenn Ticket-Anhang, prüfen ob User Zugang zum Ticket hat
-      if (attachment.ticket_id) {
-        const ticket = await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst();
-        const isAdmin = session.role === 'admin' || session.role === 'superadmin';
-        if (ticket && !isAdmin && ticket.created_by_user_id !== session.uid) {
-          return reply.code(403).send({ error: 'forbidden' });
-        }
+      // IDOR, fail-closed: ohne zugehoeriges Ticket (ticket_id NULL oder Ticket geloescht) darf nur
+      // die hochladende Person den Anhang lesen -- vorher war er dann fuer jede angemeldete Person
+      // abrufbar.
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      if (!isAdmin) {
+        const ticket = attachment.ticket_id
+          ? await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst()
+          : undefined;
+        const allowed = ticket ? ticket.created_by_user_id === session.uid : attachment.uploaded_by_user_id === session.uid;
+        if (!allowed) return reply.code(403).send({ error: 'forbidden' });
       }
 
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
@@ -491,6 +505,18 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       if (!ticket) return reply.code(404).send({ error: 'ticket_not_found' });
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
       if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
+      // message_id/note_id muessen zum selben Ticket gehoeren; interne Notizen sind Admins vorbehalten.
+      if (parsed.data.note_id && !isAdmin) return reply.code(403).send({ error: 'forbidden' });
+      if (parsed.data.message_id) {
+        const message = await app.db.selectFrom('ticket_messages').select('id')
+          .where('id', '=', parsed.data.message_id).where('ticket_id', '=', ticket.id).executeTakeFirst();
+        if (!message) return reply.code(400).send({ error: 'invalid_message_id' });
+      }
+      if (parsed.data.note_id) {
+        const note = await app.db.selectFrom('ticket_notes').select('id')
+          .where('id', '=', parsed.data.note_id).where('ticket_id', '=', ticket.id).executeTakeFirst();
+        if (!note) return reply.code(400).send({ error: 'invalid_note_id' });
+      }
 
       // Zero-Trust-Validierung: Dateiname, Erweiterung, Magic Bytes, Skript-Inhalte und echter MIME-Typ
       const validated = await validateUploadedFile({
