@@ -6408,7 +6408,13 @@ export const AdminBoard = {
             UI.confirm(Lang.t('largeAttachmentDownload'), () => {
                 const link = document.createElement('a');
                 if (file instanceof Blob) {
-                    link.href = URL.createObjectURL(file);
+                    // Security-Audit (CodeQL js/xss-through-dom #16): URL.createObjectURL() liefert
+                    // immer ein "blob:"-Schema, nie "javascript:" -- diese Pruefung macht das fuer
+                    // CodeQL explizit nachvollziehbar, statt dass das href implizit als unsicher
+                    // markiert bleibt, nur weil "file" letztlich von einer Dateiauswahl stammt.
+                    const blobUrl = URL.createObjectURL(file);
+                    if (!/^blob:/.test(blobUrl)) { UI.toast('Ungültiger Anhang.'); return; }
+                    link.href = blobUrl;
                 } else {
                     const rawId = String(file?.attachmentId || file?.id || '');
                     if (!/^[A-Za-z0-9_-]+$/.test(rawId)) {
