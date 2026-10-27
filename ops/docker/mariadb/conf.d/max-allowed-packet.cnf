@@ -1,0 +1,8 @@
+# Chunk-Uploads (apps/server/src/http/routes/uploads.ts, UPLOAD_CHUNK_BYTES) werden base64-
+# kodiert und anschliessend verschluesselt (~10,9 MB je 8-MB-Chunk) in file_upload_chunks
+# gespeichert. Kysely/mysql2 schickt Buffer-Parameter als Hex-Literal (X'...') statt binaer,
+# was die Groesse im gesendeten INSERT-Statement nochmal verdoppelt (~21,8 MB) -- mit dem
+# MariaDB-Standardwert (16 MB) schlagen nahezu volle Chunks mit "packet bigger than
+# max_allowed_packet" fehl. 128M laesst grosszuegigen Spielraum.
+[mariadb]
+max_allowed_packet = 128M

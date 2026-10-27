@@ -53,6 +53,13 @@ jobs:
       - name: Build
         run: npm run build --workspace=apps/server
 
+      # Der CI-Dienstcontainer startet, bevor das Repo ausgecheckt ist -- die produktive
+      # Konfiguration ops/docker/mariadb/conf.d/max-allowed-packet.cnf kann hier also nicht per
+      # Volume gemountet werden. Stattdessen denselben Wert zur Laufzeit per SET GLOBAL setzen
+      # (wirkt ab der naechsten neuen Verbindung, die der folgende Testlauf oeffnet).
+      - name: Match production max_allowed_packet for the chunked-upload integration test
+        run: mysql -h127.0.0.1 -uroot -pci-root-password -e "SET GLOBAL max_allowed_packet = 134217728;"
+
       - name: MariaDB upgrade and encryption integration
         run: node ops/tests/mariadb-security.mjs
         env:
