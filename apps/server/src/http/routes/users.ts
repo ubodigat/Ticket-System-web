@@ -731,6 +731,18 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
             await app.db.updateTable('sessions').set({ revoked_at: mysqlTimestamp() }).where('user_id', '=', id).execute();
           }
         }
+        // Security-Audit R-21: persoenliche Outlook-Kalender-Tokens (Calendars.ReadWrite) beim
+        // Beenden des Kontos loeschen -- sonst bliebe ein gueltiger, verschluesselter Zugriff auf
+        // den Kalender einer archivierten/gesperrten/ausgeschiedenen Person bestehen. Lokales
+        // Loeschen allein widerruft die Freigabe nicht bei Microsoft, entfernt aber den eigenen
+        // Zugriffsweg.
+        const endsAccount = parsed.data.account_archived === true || parsed.data.locked_permanent === true ||
+          (parsed.data.account_valid_until !== undefined && isAccountExpired(parsed.data.account_valid_until));
+        if (endsAccount) {
+          updates.outlook_refresh_token_enc = null;
+          updates.outlook_account_email = null;
+          updates.outlook_connected_at = null;
+        }
         // Zusatzrechte für andere Admin-Konten zu vergeben ist selbst ein privilegierter Vorgang
         // -- nur Superadmin darf das (gleiche Einschränkung wie im Editor, "ue-man-box" war dort
         // immer nur für isSuper sichtbar).

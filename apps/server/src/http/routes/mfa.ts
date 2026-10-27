@@ -127,6 +127,20 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
 
       if (pendingEnc) {
         await app.db.updateTable('users').set({ totp_secret_enc: pendingEnc, totp_pending_secret_enc: null, totp_enabled: true }).where('id', '=', session.uid).execute();
+        // Security-Audit R-12 (Rest): ein Geraetewechsel (Neueinrichtung bei bereits aktiver 2FA)
+        // hatte bisher weder Audit-Eintrag noch Mail -- wer Session und Passwort hat, konnte den
+        // zweiten Faktor still auf ein eigenes Geraet umziehen, ohne jede Spur. Gleiche Meldung wie
+        // bei /disable, damit die betroffene Person es in beiden Faellen bemerkt.
+        await app.db.insertInto('global_audit_log').values({
+          id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
+          action: 'mfa.rotated', target_type: 'user', target_id: session.uid, detail_json: null
+        }).execute();
+        await queueUserMail(
+          { db: app.db, env: deps.env, keyProvider: deps.keyProvider }, session.uid,
+          'Zwei-Faktor-Geraet geaendert',
+          'Fuer dein Konto wurde ein neues Geraet fuer die Zwei-Faktor-Anmeldung eingerichtet. Warst du das nicht, melde dich sofort beim Support.',
+          'security'
+        ).catch(err => app.log.error({ err }, 'Warn-Mail (mfa.rotated) nicht eingereiht'));
       } else {
         await app.db.updateTable('users').set({ totp_enabled: true }).where('id', '=', session.uid).execute();
       }

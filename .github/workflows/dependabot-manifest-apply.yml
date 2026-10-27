@@ -21,9 +21,19 @@ permissions:
 
 jobs:
   apply-fix:
+    # Security-Audit R-19: Drei Herkunftspruefungen, bevor der privilegierte Schritt ausgefuehrt wird:
+    # 1. head_repository muss das eigene Repo sein (kein Fork-PR).
+    # 2. Ausfuehrender Akteur muss dependabot[bot] sein.
+    # 3. Branch-Name muss mit dependabot/ beginnen (verhindert, dass ein umbenannter Branch
+    #    den privilegierten Commit auf einen beliebigen Branch schreibt).
+    # Fehlt eine dieser Pruefungen, koennte ein Angreifer ueber eine oeffentlich beschriebene
+    # Technik (Dependabot in einem Fork) PR-Code in den Hauptast einschleusen.
     if: >
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'pull_request'
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
     runs-on: ubuntu-latest
     steps:
       - name: Artefakt herunterladen
@@ -42,6 +52,25 @@ jobs:
             const status = fs.readFileSync('manifest-fix/status', 'utf8').trim();
             if (status !== 'stale') {
               core.info('Manifest war bereits aktuell, nichts zu tun.');
+              return;
+            }
+
+            // Security-Audit R-19: grober Format-Sanity-Check am Artefakt, bevor es committet
+            // wird -- schuetzt nicht vor einem gezielt boesartigen, aber formal gueltigen
+            // Artefakt (das waere nur durch vollstaendiges Neuberechnen aus dem Commit-Baum
+            // ausschliessbar, siehe Audit-Empfehlung), faengt aber einen kaputten/unerwarteten
+            // Artefakt-Inhalt ab, bevor er mit einem "verified"-API-Commit auf den Branch
+            // geschrieben wird.
+            const manifestText = fs.readFileSync('manifest-fix/install-manifest.sha256', 'utf8');
+            const readmeText = fs.readFileSync('manifest-fix/README.md', 'utf8');
+            const manifestLineRe = /^[0-9a-f]{64}  \S+$/;
+            const manifestLines = manifestText.split('\n').filter(l => l.length > 0);
+            if (manifestLines.length === 0 || !manifestLines.every(l => manifestLineRe.test(l))) {
+              core.setFailed('install-manifest.sha256 im Artefakt hat nicht das erwartete Format -- Abbruch ohne Commit.');
+              return;
+            }
+            if (!readmeText.includes('INSTALL_MANIFEST_SHA256=')) {
+              core.setFailed('README.md im Artefakt enthaelt keinen INSTALL_MANIFEST_SHA256-Marker -- Abbruch ohne Commit.');
               return;
             }
 

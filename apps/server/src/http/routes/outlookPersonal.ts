@@ -31,20 +31,31 @@ export interface OutlookPersonalRouteDeps {
   keyProvider: KeyProvider;
 }
 
-const STATE_COOKIE = 'ticket_outlook_oauth_state';
+// Security-Audit R-21: __Host--Präfix bindet das Cookie an die eigene Origin (kein Domain-
+// Attribut, kein Pfad außer /, nur über HTTPS). Das setzt voraus, dass der Server immer über
+// HTTPS erreichbar ist, was in der Produktionsumgebung über Caddy gewährleistet ist.
+const STATE_COOKIE = '__Host-ticket_outlook_oauth_state';
 
-function isHttpsRequest(req: FastifyRequest): boolean {
-  return req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https';
+// Security-Audit R-21: redirect_uri wird aus PUBLIC_BASE_URL (fester Konfigurationswert) gebaut,
+// nicht aus req.protocol/req.hostname (beeinflussbar über X-Forwarded-Host / Host-Header).
+// Microsoft prüft die redirect_uri gegen die in Entra ID registrierte Adresse; ein abweichender
+// Wert würde den OAuth-Flow stoppen -- trotzdem ist eine feste Basis robuster und verhindert,
+// dass ein Angreifer durch Manipulation des Host-Headers einen anderen Callback-Endpunkt erzwingt.
+function redirectUriFor(deps: OutlookPersonalRouteDeps): string {
+  if (!deps.env.PUBLIC_BASE_URL) {
+    throw new Error('PUBLIC_BASE_URL muss gesetzt sein, wenn die Outlook-Integration aktiv ist.');
+  }
+  return new URL('/api/v2/outlook/callback', deps.env.PUBLIC_BASE_URL).toString();
 }
 
-function redirectUriFor(req: FastifyRequest): string {
-  return `${req.protocol}://${req.host}/api/v2/outlook/callback`;
-}
+// Security-Audit R-18: Allowlist statt Freitext-Pfad-Prüfung -- verhindert Open Redirect über
+// Browser-normalisierte Pfade wie "/\evil.example" (Backslash → Slash) oder "/%09/evil.example"
+// (Tabulatorsonderbehandlung im WHATWG-URL-Parser). Jeder nicht gelistete Wert fällt auf den
+// sicheren Default zurück.
+const ALLOWED_RETURN_TARGETS = new Set(['/dashboard.html', '/admin.html']);
 
-// Nur ein serverseitig bekannter, relativer Pfad wird als Rücksprungziel akzeptiert -- verhindert
-// einen Open Redirect über einen manipulierten returnTo-Wert.
 function sanitizeReturnTo(value: unknown): string {
-  return value === '/admin.html' || value === '/dashboard.html' ? value : '/dashboard.html';
+  return typeof value === 'string' && ALLOWED_RETURN_TARGETS.has(value) ? value : '/dashboard.html';
 }
 
 async function refreshDek(app: FastifyInstance, keyProvider: KeyProvider) {
@@ -99,10 +110,12 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
 
       const nonce = randomBytes(24).toString('hex');
       const returnTo = sanitizeReturnTo((req.query as { returnTo?: string })?.returnTo);
+      // __Host--Cookie: secure muss immer true sein (Präfix-Anforderung), sameSite=lax reicht
+      // für den OAuth-Redirect-Flow (GET-Redirect von Microsoft zurück zur Anwendung).
       reply.setCookie(STATE_COOKIE, `${nonce}:${returnTo}`, {
-        path: '/', httpOnly: true, sameSite: 'lax', secure: isHttpsRequest(req), signed: true, maxAge: 600
+        path: '/', httpOnly: true, sameSite: 'lax', secure: true, signed: true, maxAge: 600
       });
-      const url = getAuthorizationUrl(creds.tenantId, creds.clientId, redirectUriFor(req), `${nonce}:${session.uid}`);
+      const url = getAuthorizationUrl(creds.tenantId, creds.clientId, redirectUriFor(deps), `${nonce}:${session.uid}`);
       return reply.redirect(url);
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -128,7 +141,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
       const creds = await loadOutlookAppCredentials(app.db, deps.env, deps.keyProvider);
       if (!creds) return reply.redirect(`${safeReturnTo}?outlook=failed`);
 
-      const tokens = await exchangeAuthCodeForTokens(creds.tenantId, creds.clientId, creds.clientSecret, redirectUriFor(req), query.code);
+      const tokens = await exchangeAuthCodeForTokens(creds.tenantId, creds.clientId, creds.clientSecret, redirectUriFor(deps), query.code);
       if (!tokens.refreshToken) return reply.redirect(`${safeReturnTo}?outlook=failed`);
       const profile = await getMyProfile(tokens.accessToken).catch(() => ({ email: null }));
 

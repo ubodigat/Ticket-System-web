@@ -12,7 +12,11 @@ async function request(path: string) {
   const q: any = { select: () => q, where: () => q, executeTakeFirst: async () => ({ outlook_connected_at: null, outlook_account_email: null }) };
   app.decorate('db', { selectFrom: () => q } as any);
   app.addHook('onRequest', async req => { req.ticketSession = { uid: 'person', username: 'person', role: 'user' }; });
-  registerOutlookPersonalRoutes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+  // Security-Audit R-21: redirect_uri kommt seit der Behebung ausschliesslich aus der festen
+  // PUBLIC_BASE_URL-Konfiguration, nicht mehr aus Host/X-Forwarded-Host der Anfrage -- ein
+  // manipulierter Host-Header kann die redirect_uri daher nicht mehr beeinflussen (vorher testete
+  // dieser Request-Header "localhost:8443" ueberhaupt erst die alte, verwundbare Ableitung).
+  registerOutlookPersonalRoutes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1, PUBLIC_BASE_URL: 'https://support.example.com' } as any, keyProvider: {} as any });
   try { return await app.inject({ method: 'GET', url: path, headers: { host: 'localhost:8443', 'x-forwarded-proto': 'https' } }); }
   finally { await app.close(); }
 }
@@ -22,16 +26,30 @@ describe('personal Outlook setup and external invitations', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ configured: false, connected: false, accountEmail: null });
   });
-  it('preserves custom HTTPS ports and constrains OAuth return paths', async () => {
+  it('derives redirect_uri from PUBLIC_BASE_URL (not the request host) and constrains OAuth return paths', async () => {
     state.credentials = { tenantId: 'tenant', clientId: 'client', clientSecret: 'private-secret' };
     const status = await request('/api/v2/outlook/status');
     expect(status.json().configured).toBe(true); expect(status.body).not.toContain('private-secret');
     const response = await request('/api/v2/outlook/connect?returnTo=' + encodeURIComponent('/\\evil.example'));
     expect(response.statusCode).toBe(302);
-    expect(new URL(response.headers.location!).searchParams.get('redirect_uri')).toBe('https://localhost:8443/api/v2/outlook/callback');
+    // Der per Host-Header mitgeschickte Port/Hostname ("localhost:8443") darf die redirect_uri
+    // nicht beeinflussen -- sie muss immer aus PUBLIC_BASE_URL kommen (R-21).
+    expect(new URL(response.headers.location!).searchParams.get('redirect_uri')).toBe('https://support.example.com/api/v2/outlook/callback');
     const cookies = decodeURIComponent(String(response.headers['set-cookie']));
     expect(cookies).toContain('/dashboard.html'); expect(cookies).not.toContain('evil.example');
   });
+  // Security-Audit R-18: Browser-Normalisierung (Backslash -> Slash, Tabulator-Sonderbehandlung
+  // im WHATWG-URL-Parser) macht aus scheinbar harmlosen Pfaden eine fremde Domain -- die Allowlist
+  // muss beide Varianten auf den sicheren Default abbilden.
+  it.each(['/\\evil.example', '/%09/evil.example', '//evil.example', 'https://evil.example'])(
+    'rejects %j as an OAuth return path', async (value) => {
+      state.credentials = { tenantId: 'tenant', clientId: 'client', clientSecret: 'private-secret' };
+      const response = await request('/api/v2/outlook/connect?returnTo=' + encodeURIComponent(value));
+      const cookies = decodeURIComponent(String(response.headers['set-cookie']));
+      expect(cookies).toContain('/dashboard.html');
+      expect(cookies).not.toContain('evil.example');
+    }
+  );
   it('passes validated external recipients to the delegated Graph event', async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ id: 'event' }), { status: 201 })); vi.stubGlobal('fetch', fetch);
     await createMyCalendarEvent('token', { subject: 'Appointment', bodyText: 'Details', startAt: new Date('2026-10-26T09:00:00Z'),

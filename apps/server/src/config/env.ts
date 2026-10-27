@@ -56,6 +56,11 @@ const envSchema = z.object({
   UPDATE_SERVICE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   UPDATE_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
   SETUP_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(16).optional()),
+  // Security-Audit R-21: Feste Basis-URL der Anwendung fuer den Outlook-OAuth-Callback -- verhindert,
+  // dass ein manipulierter Host-Header eine abweichende redirect_uri erzeugt. Leer/fehlend = OAuth-
+  // Callback nicht verfuegbar (Outlook-Integration gibt 409 zurueck, da creds fehlen); in der
+  // Produktion sollte dies immer gesetzt sein, wenn die Outlook-Integration konfiguriert ist.
+  PUBLIC_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   // Security-Audit B7: optionaler ClamAV-Virenscan für Anhänge (siehe domain/antivirus.ts).
   // Leer/fehlend = Scan deaktiviert.
   CLAMAV_HOST: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),

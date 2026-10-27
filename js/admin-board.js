@@ -1495,7 +1495,7 @@ export const AdminBoard = {
 
         title.textContent = group ? Lang.format('editGroupName', { name: group.name }) : Lang.t('newGroup');
         content.innerHTML = `
-            <div class="field"><label>${Lang.t('name')}</label><input id="ge-name" type="text" value="${group?.name || ''}" placeholder="${Lang.t('egVerwaltung')}"></div>
+            <div class="field"><label>${Lang.t('name')}</label><input id="ge-name" type="text" value="${Utils.esc(group?.name || '')}" placeholder="${Lang.t('egVerwaltung')}"></div>
             <div class="field">
                 <label>${Lang.t('members')}</label>
                 <p class="hint">${Lang.t('onePersonOneGroupHint')}</p>
@@ -3558,7 +3558,7 @@ export const AdminBoard = {
                     <label>${Lang.t('mainResponsible')}</label>
                     <select id="m-owner-select">
                         <option value="">${Lang.t('notAssigned')}</option>
-                        ${staff.map(u => `<option value="${u.username}">${u.name || u.username}</option>`).join('')}
+                        ${staff.map(u => `<option value="${Utils.esc(u.username)}">${Utils.esc(u.name || u.username)}</option>`).join('')}
                     </select>
                 </div>
                 <div class="field">

@@ -6,7 +6,7 @@ The Original Developer is the Initial Developer: U:Bodigat.
 The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
 Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as argon2 from 'argon2';
 import { verifyAndConsumeTotp } from '../../domain/totp.js';
 import { z } from 'zod';
@@ -26,6 +26,14 @@ const PROD_SESSION_COOKIE = '__Host-ticket_session';
 const DEV_SESSION_COOKIE = 'ticket_session';
 const PROD_CSRF_COOKIE = '__Host-csrf_token';
 const DEV_CSRF_COOKIE = 'csrf_token';
+// Security-Audit R-11 (Rest): markiert einen Browser, der sich bereits einmal erfolgreich
+// angemeldet hat -- nur BEKANNTE Geraete werden vom kontoweiten Backoff ausgenommen, die
+// Pro-Quellnetz-Sperre (isSourceLocked) gilt unveraendert fuer alle. Ohne diese Ausnahme sperrt
+// der kontoweite Backoff auch die echte Person aus, sobald irgendjemand (auch unangemeldet,
+// verteilt ueber mehrere Netze) genug Fehlversuche fuer das Konto erzeugt hat.
+const PROD_DEVICE_COOKIE = '__Host-ticket_device';
+const DEV_DEVICE_COOKIE = 'ticket_device';
+const DEVICE_COOKIE_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
 const loginSchema = z.object({
   username: z.string().trim().min(1).max(64),
   password: z.string().min(1).max(512)
@@ -109,6 +117,20 @@ function sessionCookieName(req: FastifyRequest): string {
 
 export function csrfCookieName(req: FastifyRequest): string {
   return isHttpsRequest(req) ? PROD_CSRF_COOKIE : DEV_CSRF_COOKIE;
+}
+
+function deviceCookieName(req: FastifyRequest): string {
+  return isHttpsRequest(req) ? PROD_DEVICE_COOKIE : DEV_DEVICE_COOKIE;
+}
+
+// Security-Audit R-11 (Rest): prueft, ob DIESER Browser bereits erfolgreich fuer DIESES Konto
+// angemeldet war. Signiert (faelschungssicher) und httpOnly; ein Angreifer ohne gueltige Session
+// kann sich damit nicht selbst von der Sperre ausnehmen.
+function isKnownDevice(req: FastifyRequest, userId: string): boolean {
+  const raw = req.cookies[deviceCookieName(req)] ?? req.cookies[PROD_DEVICE_COOKIE] ?? req.cookies[DEV_DEVICE_COOKIE];
+  if (!raw) return false;
+  const unsigned = req.unsignCookie(raw);
+  return !!unsigned.valid && typeof unsigned.value === 'string' && unsigned.value.startsWith(`${userId}.`);
 }
 
 function timestampMillis(value: Date | string | null | undefined): number {
@@ -277,6 +299,18 @@ async function issueSession(app: Pick<FastifyInstance, 'db'>, req: FastifyReques
     secure: isHttpsRequest(req),
     maxAge: cookieOptions(req, policy.sessionTimeoutMinutes).maxAge
   });
+  // Security-Audit R-11 (Rest): langlebiges Geraete-Cookie, unabhaengig vom Session-Timeout --
+  // markiert diesen Browser fuer diese Person als "bereits erfolgreich angemeldet" (siehe
+  // isKnownDevice), damit der kontoweite Backoff sie nach einem verteilten Angriff auf den
+  // Benutzernamen nicht mit aussperrt.
+  reply.setCookie(deviceCookieName(req), `${user.id}.${randomBytes(16).toString('hex')}`, {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isHttpsRequest(req),
+    signed: true,
+    maxAge: DEVICE_COOKIE_MAX_AGE_SECONDS
+  });
 }
 
 // Unzureichendes Security Logging (Anforderungsliste: Mittel) -- fehlgeschlagene Logins landen
@@ -360,7 +394,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     // Security-Audit R-11: kontoweiter Backoff (quellenunabhängig) -- verhindert, dass verteilte
     // Fehlversuche aus vielen Netzen die Pro-Quelle-Sperre umgehen, ohne selbst wieder zu einer
     // durch Dritte auslösbaren harten Sperre zu werden (nur eine wachsende Wartezeit, max. 5 min).
-    const backoffSeconds = accountBackoffSecondsRemaining(user.failed_login_count, user.failed_login_last_at);
+    const backoffSeconds = isKnownDevice(req, user.id) ? 0
+      : accountBackoffSecondsRemaining(user.failed_login_count, user.failed_login_last_at);
     if (backoffSeconds > 0) {
       reply.header('retry-after', String(backoffSeconds));
       return authProblem(reply, 429, 'Zu viele Fehlversuche', `Bitte in ${backoffSeconds} Sekunden erneut versuchen.`);

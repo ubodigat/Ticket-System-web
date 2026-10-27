@@ -2450,8 +2450,12 @@ Object.assign(Lang.translations.en, {
     outlookPersonalCalendarHint: 'Everyone\'s personal calendar (the "My Calendar" button in the header) uses the same app registration. In Azure AD you need to add the redirect URI {redirectUri} once and grant admin consent for the delegated permissions Calendars.ReadWrite, offline_access and User.Read.'
 });
 
+// Security-Audit (Frontend-Abschnitt): String.replace() behandelt Sonderfolgen wie "$&" im
+// Ersetzungstext als Verweis auf den Treffer -- wuerde ein eingesetzter Wert (z.B. ein Namensfeld)
+// zufaellig "$&" enthalten, verfaelschte das bisher die Ausgabe. replace(key, () => v) umgeht das,
+// da eine Ersetzungsfunktion den Rueckgabewert immer woertlich einsetzt.
 Lang.format = (key, values = {}) =>
-    Object.entries(values).reduce((txt, [k, v]) => txt.replace(`{${k}}`, v), Lang.t(key));
+    Object.entries(values).reduce((txt, [k, v]) => txt.replace(`{${k}}`, () => v), Lang.t(key));
 
 Lang.status = (status) => ({
     'Neu': Lang.t('statusNew'),

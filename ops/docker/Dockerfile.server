@@ -1,4 +1,5 @@
-# Multi-stage Build -- Node 24 LTS gemäß docs/SPEC.md §3. Läuft als dedizierte, nicht-root
+# Multi-stage Build -- Node 26 (per Dependabot gehoben, Security-Audit R-22: CI testet dieselbe
+# Version, siehe .github/workflows/ci.yml). Läuft als dedizierte, nicht-root
 # UID/GID gemäß docs/adr/0002-key-storage-container-uids.md.
 FROM node:26-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS build
 WORKDIR /build

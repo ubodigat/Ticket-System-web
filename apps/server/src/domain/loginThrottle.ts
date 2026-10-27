@@ -19,10 +19,12 @@ import type { SecurityPolicy } from './securityPolicy.js';
 // vielen verschiedenen Netzen (z.B. über ein Botnet) den gleichen Effekt wie eine gezielte Sperre
 // erzielen, ohne selbst wieder zu einem Konto-weiten DoS-Hebel für Dritte zu werden.
 
-// IPv6: gleiche /64-Gruppierung wie beim Rate-Limit (R-10, app.ts ipv6Subnet) -- ein Anschluss
-// verfügt meist über ein ganzes /64-Netz, eine feinere Aufteilung wäre genauso umgehbar wie das
-// ursprüngliche Rate-Limit-Problem. IPv4: volle Adresse (kein NAT-Netz pauschal mitgesperrt).
+// Security-Audit R-11: IPv4-mapped-Adressen (::ffff:a.b.c.d) werden vor der Gruppenbildung auf
+// einfaches IPv4 zurueckgefuehrt -- ohne das wuerden alle IPv4-Nutzer hinter Caddy in dasselbe
+// Quellnetz \"0:0:0:0\" fallen und sich gegenseitig ihre Login-Sperren teilen.
 export function sourcePrefix(ip: string): string {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return mapped[1]!;
   if (isIPv6(ip)) {
     return ipv6FirstFourGroups(ip).join(':');
   }
