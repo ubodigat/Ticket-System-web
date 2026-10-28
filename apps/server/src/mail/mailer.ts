@@ -94,15 +94,25 @@ async function loadEmailAdvancedConfig(deps: MailDeps): Promise<EmailAdvancedCon
 }
 
 // Immediate transport for the queue worker and explicit SMTP connection tests only.
-export function renderMailTemplate(template: string, values: { subject: string; message: string; recipient: string }): string {
-  return template.replace(/\{\{(subject|message|recipient)\}\}/g, (_match, key: keyof typeof values) => values[key]);
+export function renderMailTemplate(template: string, values: Record<string, string>): string {
+  return template.replace(/\{\{([a-zA-Z][a-zA-Z0-9]*)\}\}/g, (original, key: string) => Object.hasOwn(values, key) ? values[key]! : original);
 }
 
-export async function sendMail(deps: MailDeps, to: string, subject: string, text: string): Promise<void> {
+export async function sendMail(deps: MailDeps, to: string, subject: string, text: string, personal: Record<string, string> = {}): Promise<void> {
   const loaded = await loadSmtpConfig(deps);
   if (!loaded) throw new Error('smtp_not_configured');
   const emailConfig = await loadEmailAdvancedConfig(deps);
-  if (emailConfig.template?.trim()) text = renderMailTemplate(emailConfig.template, { subject, message: text, recipient: to });
+  if (emailConfig.template?.trim()) {
+    const row = await deps.db.selectFrom('app_settings').select(['company_name', 'portal_name', 'config_json']).where('id', '=', 1).executeTakeFirst();
+    const config = JSON.parse(row?.config_json || '{}'); const branding = config.companyBrandingConfig || {};
+    const now = new Date(); let timezone = branding.timezone || 'Europe/Berlin';
+    try { new Intl.DateTimeFormat('de-DE', { timeZone: timezone }); } catch { timezone = 'Europe/Berlin'; }
+    text = renderMailTemplate(emailConfig.template, { recipientName: to, username: '', ...personal,
+      subject, message: text, recipient: to, company: row?.company_name || '', portalName: row?.portal_name || 'Support Portal',
+      portalUrl: deps.env.WEBAUTHN_ORIGIN || '', supportEmail: branding.supportEmail || loaded.config.from,
+      date: now.toLocaleDateString('de-DE', { timeZone: timezone }), time: now.toLocaleTimeString('de-DE', { timeZone: timezone, hour: '2-digit', minute: '2-digit' }),
+      year: new Intl.DateTimeFormat('en', { timeZone: timezone, year: 'numeric' }).format(now) });
+  }
 
   // Verschluesselung und Zertifikatspruefung sind nicht abschaltbar: ohne requireTLS faellt
   // nodemailer still auf Klartext zurueck, ohne Zertifikatspruefung sind SMTP-Passwort und

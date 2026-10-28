@@ -17,6 +17,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/ticket-system}"
 DEV_MODE=false
 ASSUME_YES=true
 ENABLE_UPDATES=false
+DISABLE_UPDATES=false
 ENABLE_ANTIVIRUS=false
 ENABLE_OFFICE_VIEWER=false
 PUBLIC_DOMAIN_ARG=""
@@ -27,6 +28,7 @@ for arg in "$@"; do
     --dev) DEV_MODE=true ;;
     --no-assume-yes) ASSUME_YES=false ;;
     --enable-updates) ENABLE_UPDATES=true ;;
+    --disable-updates) DISABLE_UPDATES=true ;;
     --enable-antivirus) ENABLE_ANTIVIRUS=true ;;
     --enable-office-viewer) ENABLE_OFFICE_VIEWER=true ;;
     --domain=*) PUBLIC_DOMAIN_ARG="${arg#--domain=}" ;;
@@ -34,6 +36,10 @@ for arg in "$@"; do
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
+if [[ "$ENABLE_UPDATES" == "true" && "$DISABLE_UPDATES" == "true" ]]; then
+  echo "--enable-updates and --disable-updates cannot be combined." >&2
+  exit 1
+fi
 
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -498,6 +504,20 @@ if [[ "$ENABLE_UPDATES" == "true" ]]; then
   set_env_var "UPDATE_SERVICE_URL" "http://updater:3099" "$ENV_FILE"
   set_env_var "UPDATE_ALLOW_MAIN_DEPLOY" "true" "$ENV_FILE"
   set_env_var "UPDATE_REPO_DIR" "$SCRIPT_DIR" "$ENV_FILE"
+  # Ohne geprueften Schluessel lehnt der Updater jedes Update ab -- frueh und deutlich warnen.
+  UPDATE_KEYS="$( { command -v gpg >/dev/null 2>&1 && gpg --homedir "$COMPOSE_DIR/update-keys" --list-keys --with-colons 2>/dev/null; } || true)"
+  if ! grep -q '^pub:' <<<"$UPDATE_KEYS"; then
+    echo "WARNING: no trusted signing key found in ops/docker/update-keys -- every update will be rejected until a verified key is imported (README: 'Online-Updater bewusst aktivieren')." >&2
+  fi
+fi
+if [[ "$DISABLE_UPDATES" == "true" ]]; then
+  log "Disabling in-app updates (removing the updater and its Docker host access)"
+  set_env_var "UPDATE_SERVICE_URL" "" "$ENV_FILE"
+  set_env_var "UPDATE_ALLOW_MAIN_DEPLOY" "false" "$ENV_FILE"
+  # Gemeinsames Geheimnis App<->Updater erneuern: ein frueher ausgelesener Wert gilt nirgends mehr.
+  set_env_var "UPDATE_TOKEN" "$(openssl rand -base64 48)" "$ENV_FILE"
+  REMAINING_PROFILES="$({ grep '^COMPOSE_PROFILES=' "$ENV_FILE" || true; } | cut -d= -f2- | tr ',' '\n' | { grep -vx 'dangerous-updater' || true; } | paste -sd, -)"
+  set_env_var "COMPOSE_PROFILES" "$REMAINING_PROFILES" "$ENV_FILE"
 fi
 if [[ "$ENABLE_ANTIVIRUS" == "true" ]]; then
   # Security-Audit B7: ClamAV-Virenscan fuer Anhaenge, optional (deutlicher Ressourcenbedarf --
@@ -552,6 +572,8 @@ fi
 open_firewall_ports
 
 log "Building and starting Docker stack"
+set_env_var "APP_COMMIT" "$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)" "$ENV_FILE"
+set_env_var "APP_BUILT_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ENV_FILE"
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" build --no-cache app
 if [[ -f "$ENV_FILE" ]] && ! grep -q '^DB_ROOT_PASSWORD=.' "$ENV_FILE"; then
   log "Recovering existing database root credential before container replacement"
@@ -586,6 +608,15 @@ printf '%s\n%s\n' "$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2-)" \
   "$(grep '^DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)" \
   | run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps -T \
     app sh -c 'set -eu; IFS= read -r DB_USER; IFS= read -r DB_PASSWORD; export DB_USER DB_PASSWORD; exec node dist/db/migrate.js'
+
+if [[ "$DISABLE_UPDATES" == "true" ]]; then
+  log "Removing the updater container"
+  run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile dangerous-updater rm --stop --force updater
+  if [[ -n "$(run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile dangerous-updater ps --all --quiet updater)" ]]; then
+    echo "The updater container is still present -- in-app updates were NOT fully disabled." >&2
+    exit 1
+  fi
+fi
 
 log "Starting application stack"
 if grep -q '^ONLYOFFICE_ENABLED=true$' "$ENV_FILE"; then

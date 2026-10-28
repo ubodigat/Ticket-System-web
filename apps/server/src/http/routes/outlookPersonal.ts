@@ -93,8 +93,11 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
     try {
       const session = requireSession(req);
       const row = await app.db.selectFrom('users').select(['outlook_account_email', 'outlook_connected_at']).where('id', '=', session.uid).executeTakeFirst();
-      const configured = !!await loadOutlookAppCredentials(app.db, deps.env, deps.keyProvider);
-      return reply.send({ configured, connected: !!row?.outlook_connected_at, accountEmail: row?.outlook_account_email ?? null });
+      const hasCredentials = !!await loadOutlookAppCredentials(app.db, deps.env, deps.keyProvider);
+      // Konkreter Grund statt eines stumm gesperrten Buttons: fehlende App-Registrierung in den
+      // Systemeinstellungen oder fehlende feste Basis-URL (PUBLIC_BASE_URL, Security-Audit R-21).
+      const reason = !hasCredentials ? 'app_not_configured' : !deps.env.PUBLIC_BASE_URL ? 'base_url_missing' : null;
+      return reply.send({ configured: reason === null, reason, connected: !!row?.outlook_connected_at, accountEmail: row?.outlook_account_email ?? null });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -107,6 +110,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
       const session = requireSession(req);
       const creds = await loadOutlookAppCredentials(app.db, deps.env, deps.keyProvider);
       if (!creds) return reply.code(409).send({ error: 'outlook_not_configured' });
+      if (!deps.env.PUBLIC_BASE_URL) return reply.code(409).send({ error: 'outlook_base_url_missing' });
 
       const nonce = randomBytes(24).toString('hex');
       const returnTo = sanitizeReturnTo((req.query as { returnTo?: string })?.returnTo);

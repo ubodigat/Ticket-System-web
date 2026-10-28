@@ -311,19 +311,23 @@ async function issueSession(app: Pick<FastifyInstance, 'db'>, req: FastifyReques
     signed: true,
     maxAge: DEVICE_COOKIE_MAX_AGE_SECONDS
   });
+  await app.db.insertInto('global_audit_log').values({
+    id: randomUUID(), actor_user_id: user.id, actor_username: user.username.slice(0, 64),
+    action: 'login.success', target_type: 'auth', target_id: null, detail_json: JSON.stringify({ ip: req.ip })
+  }).execute();
 }
 
 // Unzureichendes Security Logging (Anforderungsliste: Mittel) -- fehlgeschlagene Logins landen
 // im selben globalen Audit-Log wie alle anderen sicherheitsrelevanten Aktionen.
-async function logSecurityEvent(app: FastifyInstance, action: string, username: string, detail?: string): Promise<void> {
+async function logSecurityEvent(app: FastifyInstance, action: string, username: string, ip?: string): Promise<void> {
   await app.db.insertInto('global_audit_log').values({
     id: randomUUID(),
     actor_user_id: null,
-    actor_username: username,
+    actor_username: username.slice(0, 64),
     action,
     target_type: 'auth',
     target_id: null,
-    detail_json: detail ?? null
+    detail_json: ip ? JSON.stringify({ ip }) : null
   }).execute();
 }
 
@@ -380,12 +384,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       // Absichtlich dieselbe Fehlermeldung wie bei falschem Passwort (kein Account-Enumeration
       // über unterschiedliche Fehlertexte, siehe Anforderungsliste "Account Enumeration").
       if (user) {
-        await logSecurityEvent(app, 'login.rejected_locked_or_archived', input.username);
+        await logSecurityEvent(app, 'login.rejected_locked_or_archived', input.username, req.ip);
         // Security-Audit M-4: ohne diesen Vergleich läuft für gesperrte/archivierte Konten KEIN
         // argon2.verify() -- die Antwort kommt dadurch messbar schneller als bei "falsches
         // Passwort" und verrät per Zeitmessung, dass das Konto existiert und gesperrt ist.
         await argon2.verify(user.password_hash, input.password).catch(() => false);
       } else {
+        // Gleicher Schreibaufwand wie beim gesperrten Konto oben (kein Timing-Unterschied).
+        await logSecurityEvent(app, 'login.unknown_user', input.username, req.ip);
         // Dummy-Verify gegen Timing-basierte Enumeration unbekannter Benutzernamen (siehe oben).
         await argon2.verify(await getDummyPasswordHash(), input.password).catch(() => false);
       }
@@ -405,7 +411,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       ok = await argon2.verify(user.password_hash, input.password);
     } catch (err) {
       app.log.warn({ err, username: input.username }, 'Passwort-Hash konnte nicht geprueft werden');
-      await logSecurityEvent(app, 'login.invalid_password_hash', input.username);
+      await logSecurityEvent(app, 'login.invalid_password_hash', input.username, req.ip);
       return loginFailure(reply);
     }
     // LDAP ist eine ERGÄNZUNG zum lokalen Passwort, kein Ersatz: nur versucht, wenn das lokale
@@ -416,18 +422,18 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     // niemals ausreichen, um die höchste Berechtigungsstufe der Anwendung zu erlangen.
     if (!ok && user.role !== 'superadmin' && user.ldap_login_enabled) {
       ok = await authenticateLdap({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, input.username, input.password);
-      if (ok) await logSecurityEvent(app, 'login.ldap_success', input.username);
+      if (ok) await logSecurityEvent(app, 'login.ldap_success', input.username, req.ip);
     }
     if (!ok) {
       await recordFailedLogin(app, user.id, req.ip, policy);
-      await logSecurityEvent(app, 'login.wrong_password', input.username);
+      await logSecurityEvent(app, 'login.wrong_password', input.username, req.ip);
       return loginFailure(reply);
     }
     const role = user.role === 'superadmin' ? 'superadmin' : user.role === 'admin' ? 'admin' : 'user';
     const advancedMfa = await beginAdvancedMfa(app, user);
     if (advancedMfa) return reply.send(advancedMfa);
     if (!user.totp_enabled && force2faAppliesToRole(policy, role)) {
-      await logSecurityEvent(app, 'login.rejected_mfa_required', input.username);
+      await logSecurityEvent(app, 'login.rejected_mfa_required', input.username, req.ip);
       return authProblem(reply, 403, '2FA erforderlich', 'Für dieses Konto ist 2FA verpflichtend. Bitte lasse 2FA durch einen Superadmin einrichten oder zurücksetzen.');
     }
     if (user.totp_enabled) {
@@ -487,7 +493,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
 
       if (!(await verifyAndConsumeTotp(app.db, user.id, secret, parsed.data.code))) {
         await recordFailedLogin(app, user.id, req.ip, policy);
-        await logSecurityEvent(app, 'login.wrong_totp_code', user.username);
+        await logSecurityEvent(app, 'login.wrong_totp_code', user.username, req.ip);
         return authProblem(reply, 401, 'Code ungültig', 'Der eingegebene Code ist falsch, abgelaufen oder wurde bereits verwendet.');
       }
       await resetFailedLogins(app, user.id);

@@ -154,7 +154,12 @@ export const TodoList = {
                         await TodoList.refresh();
                     } catch (error) { e.target.checked = item.done; e.target.disabled = false; UI.toast(error.message); }
                 };
-                if (item.ticket_id) row.querySelector('.todo-ticket').onclick = async () => { TodoList.close(); await AdminBoard.openTicketForCurrentPage(item.ticket_id); };
+                if (item.ticket_id) {
+                    const open = async () => { TodoList.close(); await AdminBoard.openTicketForCurrentPage(item.ticket_id); };
+                    row.querySelector('.todo-ticket').onclick = open;
+                    const title = row.querySelector('.todo-title'); title.setAttribute('role', 'button'); title.tabIndex = 0; title.classList.add('todo-ticket-title');
+                    title.onclick = open; title.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } };
+                }
                 if (row.querySelector('[data-edit]')) row.querySelector('[data-edit]').onclick = () => TodoList.openForm(item);
                 if (item.kind === 'personal') row.querySelector('[data-remove]').onclick = async () => { try { await TodoList.request(`/${item.id}`, 'DELETE'); await TodoList.refresh(); } catch (error) { UI.toast(error.message); } };
                 list.appendChild(row);

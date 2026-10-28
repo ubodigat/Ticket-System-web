@@ -1,7 +1,9 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, cp, mkdtemp, rm, chmod } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const port = Number(process.env.PORT || 3099);
 const token = process.env.UPDATE_TOKEN || '';
@@ -13,9 +15,39 @@ const allowMainDeploy = process.env.UPDATE_ALLOW_MAIN_DEPLOY === 'true';
 // Push-Zugang) beliebigen Code einschleusen, den der Updater unbesehen auf jede aktualisierende
 // Installation ausrollt. Kein importierter Schluessel sperrt Deployments ohne Fallback.
 // Only operator-installed keys may authorize a deployment. No flag disables verification.
+//
+// Der Schluesselbund ist schreibgeschuetzt gemountet (der Updater darf vertrauenswuerdige Schluessel
+// nie selbst veraendern). GnuPG braucht aber ein beschreibbares Home fuer Sperrdateien, trustdb und
+// ggf. den keyboxd-Socket -- direkt auf dem Read-only-Mount konnte die Pruefung deshalb trotz
+// korrektem Schluessel scheitern. Daher pro Pruefung eine frische, private Kopie; Aenderungen am
+// Schluesselbund greifen so auch ohne Neustart des Updaters.
+const keySource = process.env.GNUPGHOME || '/run/update-keys';
+async function withKeyring(work) {
+  const home = await mkdtemp(join(tmpdir(), 'update-gnupg-'));
+  try {
+    await cp(keySource, home, { recursive: true, filter: source => !/(^|\/)(S\.[^/]*|\.#lk[^/]*|[^/]*\.lock)$/.test(source) });
+    await chmod(home, 0o700);
+    return await work({ ...process.env, GNUPGHOME: home });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+}
 async function hasTrustedSigningKeys() {
-  const keyCheck = await run('gpg', ['--list-keys', '--with-colons'], { timeoutMs: 10000 });
-  return keyCheck.code === 0 && keyCheck.out.split('\n').some(line => line.startsWith('pub:'));
+  try {
+    return await withKeyring(async env => {
+      const keyCheck = await run('gpg', ['--batch', '--list-keys', '--with-colons'], { timeoutMs: 10000, env });
+      return keyCheck.code === 0 && keyCheck.out.split('\n').some(line => line.startsWith('pub:'));
+    });
+  } catch {
+    return false;
+  }
+}
+async function verifyCommit(commit) {
+  try {
+    return await withKeyring(env => run('git', ['verify-commit', commit], { timeoutMs: 15000, env }));
+  } catch (error) {
+    return { code: 1, out: '', err: `Schluesselbund nicht lesbar: ${String(error?.message || error)}` };
+  }
 }
 const composeFile = `${repoDir}/ops/docker/docker-compose.yml`;
 const envFile = `${repoDir}/ops/docker/.env`;
@@ -258,18 +290,35 @@ async function runUpdate(expectedCommit) {
     {
       job.step = 'verify';
       job.log.push(`$ git verify-commit ${target.out}`);
-      const verify = await run('git', ['verify-commit', target.out], { timeoutMs: 15000 });
+      const verify = await verifyCommit(target.out);
       if (verify.out) job.log.push(verify.out);
       if (verify.err) job.log.push(verify.err);
       if (verify.code !== 0) throw new Error('Ziel-Commit hat keine gueltige, bekannte GPG-Signatur (UPDATE_REQUIRE_SIGNED_COMMITS=true) -- Update abgebrochen.');
     }
     const previousCommit = (await run('git', ['rev-parse', 'HEAD'])).out;
     await step('reset', 'git', ['merge', '--ff-only', target.out]);
-    await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'build', '--no-cache', 'app']);
+    // Bisher wurde nur der App-Container erneuert -- Aenderungen an MariaDB-Konfiguration oder
+    // Caddyfile kamen nie an. Jetzt gezielt uebernommen; was nur der Installer kann, wird gemeldet.
+    const diff = await run('git', ['diff', '--name-only', previousCommit, target.out]);
+    const changedFiles = diff.code === 0 ? diff.out.split('\n').filter(Boolean) : [];
+    const touches = prefix => changedFiles.some(file => file === prefix || file.startsWith(prefix));
+    await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'build', '--no-cache',
+      '--build-arg', `APP_COMMIT=${target.out}`, '--build-arg', `APP_BUILT_AT=${new Date().toISOString()}`, 'app']);
     await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', 'office']);
+    // Ohne --force-recreate nur bei geaenderter Dienstdefinition; geaenderte Konfigurationsdateien
+    // (bind mounts) erkennt Compose nicht selbst und brauchen einen erzwungenen Neustart.
+    await step('migrate', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d',
+      ...(touches('ops/docker/mariadb/') ? ['--force-recreate'] : []), '--wait', '--wait-timeout', '180', 'mariadb']);
     job.log.push('$ docker compose run --rm --no-deps app node dist/db/migrate.js (Zugangsdaten per stdin)');
     await stepResult('migrate', runMigrate({ stopApp: true }));
     await step('restart', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', '--no-deps', '--force-recreate', '--wait', '--wait-timeout', '180', 'app']);
+    await step('restart', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', '--no-deps',
+      ...(touches('ops/docker/Caddyfile') ? ['--force-recreate'] : []), 'caddy']);
+    // Der Updater kann sich nicht selbst und nicht den Installer ausfuehren (er laeuft ja gerade).
+    if (['install.sh', 'ops/docker/Dockerfile.updater', 'ops/docker/updater-server.mjs', 'ops/docker/clamav/', 'ops/docker/docker-compose.yml'].some(touches)) {
+      job.needsInstaller = true;
+      job.log.push('HINWEIS: Diese Version aendert Installer, Updater oder optionale Dienste. Bitte zusaetzlich auf dem Server "bash install.sh" ausfuehren, damit diese Aenderungen wirksam werden.');
+    }
     job.ok = true;
     job.step = 'done';
     // Fuer /rollback: nur nach einem ERFOLGREICHEN Update ueberschreiben, damit ein
@@ -313,7 +362,12 @@ async function runRollback(expectedCommit) {
     }
     const dirty = await run('git', ['status', '--porcelain']);
     if (dirty.code !== 0 || dirty.out) throw new Error('Lokale Aenderungen vorhanden. Rollback abgebrochen; Dateien bleiben erhalten.');
-    await step('verify', 'git', ['verify-commit', history.previousCommit]);
+    job.step = 'verify';
+    job.log.push(`$ git verify-commit ${history.previousCommit}`);
+    const verified = await verifyCommit(history.previousCommit);
+    if (verified.out) job.log.push(verified.out);
+    if (verified.err) job.log.push(verified.err);
+    if (verified.code !== 0) throw new Error('verify failed');
     const schemaDiff = await run('git', ['diff', '--name-only', history.previousCommit, 'HEAD', '--', 'apps/server/src/db/migrations']);
     if (schemaDiff.code !== 0 || schemaDiff.out) throw new Error('Rollback ueber Schemaaenderungen gesperrt. Wiederherstellung nur mit passendem Datenbank-Backup.');
     job.step = 'reset';
@@ -331,7 +385,8 @@ async function runRollback(expectedCommit) {
     // dem urspruenglichen Update sauber aufloesen (siehe ops/docker/restore.sh), nicht durch den
     // In-App-Updater. Der Hinweis dazu steht im Log unten.
     job.log.push('HINWEIS: Nur der Code wurde zurueckgesetzt, NICHT das Datenbank-Schema. Falls das rueckgaengig gemachte Update Migrationen enthielt, kann das zu Inkompatibilitaeten fuehren -- im Zweifel zusaetzlich ein Datenbank-Backup von vor dem Update wiederherstellen (ops/docker/restore.sh).');
-    await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'build', '--no-cache', 'app']);
+    await step('build', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'build', '--no-cache',
+      '--build-arg', `APP_COMMIT=${history.previousCommit}`, '--build-arg', `APP_BUILT_AT=${new Date().toISOString()}`, 'app']);
     await step('restart', 'docker', ['compose', '-f', composeFile, '--env-file', envFile, 'up', '-d', '--no-deps', '--force-recreate', '--wait', '--wait-timeout', '180', 'app']);
     job.ok = true;
     job.step = 'done';

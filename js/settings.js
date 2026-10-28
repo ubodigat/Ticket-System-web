@@ -195,40 +195,54 @@ export const Settings = {
     },
 
     renderAbsenceArea: async (user) => {
-        const field = q('#s-absence-field');
-        const area = q('#s-absence-area');
+        const field = q('#s-absence-field'), area = q('#s-absence-area');
         if (!field || !area) return;
-        const isAdmin = !!user && (user.role === 'admin' || user.role === 'superadmin');
-        field.hidden = !isAdmin;
-        if (!isAdmin) return;
-        const users = await Store.getUsers();
-        const me = users.find(u => u.id === user.id);
-        const absence = me?.absence || {};
-        const substitutes = users.filter(u => u.username !== user.username && (u.role === 'admin' || u.role === 'superadmin') && !u.accountArchived);
-        area.innerHTML = `
-            <label class="check-row"><input type="checkbox" id="s-abs-active" ${absence.active || absence.pending ? 'checked' : ''}><span>${Lang.t('iAmAbsent')}</span></label>
-            ${Settings.absencePeriodMarkup(absence, 's-abs')}
-            <div class="field">
-                <label for="s-abs-sub">${Lang.t('substitute')}</label>
-                <select id="s-abs-sub">
-                    <option value="">${Lang.t('noneTicketsBackToTeam')}</option>
-                    ${substitutes.map(u => `<option value="${Utils.esc(u.username)}" ${absence.substitute === u.username ? 'selected' : ''}>${Utils.esc(u.name || u.username)}</option>`).join('')}
-                </select>
-            </div>
-            <label class="check-row"><input type="checkbox" id="s-abs-visible" ${absence.visible ? 'checked' : ''}><span>${Lang.t('showOtherAdminsAbsent')}</span></label>
-            <div class="setting-row"><span class="hint">${absence.pending ? Lang.format('plannedFrom', { date: new Date(absence.fromMs).toLocaleDateString(Lang.current === 'en' ? 'en-US' : 'de-DE') }) : Lang.t('absenceStartHint')}</span>
-                <button class="btn-primary btn-sm" id="btn-save-absence">${Icon('save', 15)}${Lang.t('saveAbsenceButton')}</button>
-            </div>`;
-        Settings.bindAbsencePeriod('s-abs', absence);
-        q('#btn-save-absence').onclick = async () => {
-            let period;
-            try { period = Settings.readAbsencePeriod('s-abs'); } catch (error) { return UI.toast(error.message); }
-            const stillActive = q('#s-abs-active').checked;
-            await AdminBoard.setAbsence(user.username, stillActive, q('#s-abs-sub').value || null, q('#s-abs-visible').checked, period.fromMs, period.untilMs);
-            UI.toast(Lang.t('absenceSavedToast'));
-            Settings.renderAbsenceArea(user);
-            if (!stillActive) await AdminBoard.openAbsenceReturnPopup(user);
-        };
+        field.hidden = !['admin', 'superadmin'].includes(user?.role);
+        if (field.hidden) return;
+        const tr = (de, en) => Lang.current === 'en' ? en : de;
+        try {
+            const users = await Store.getUserDirectory();
+            const response = await fetch('/api/v2/users/me/absences', { credentials: 'same-origin' });
+            if (!response.ok) throw new Error(tr('Abwesenheiten konnten nicht geladen werden.', 'Could not load absences.'));
+            const periods = (await response.json()).absences || [];
+            area.innerHTML = `
+                <p class="hint">${tr('Mehrere Zeiträume im Voraus planen. Überschneidungen sind nicht erlaubt. Die Vertretung übernimmt offene Tickets erst ab Beginn des jeweiligen Zeitraums.', 'Plan several periods ahead. Periods may not overlap. The substitute receives open tickets when each period starts.')}</p>
+                ${Settings.absencePeriodMarkup({}, 's-abs')}
+                <div class="field"><label for="s-abs-sub">${Lang.t('substitute')}</label><select id="s-abs-sub"><option value="">${Lang.t('noneTicketsBackToTeam')}</option>${users.filter(u => u.id !== user.id && ['admin', 'superadmin'].includes(u.role) && !u.accountArchived).map(u => `<option value="${Utils.esc(u.id)}">${Utils.esc(u.name || u.username)}</option>`).join('')}</select></div>
+                <label class="check-row"><input type="checkbox" id="s-abs-visible" checked><span>${Lang.t('showOtherAdminsAbsent')}</span></label>
+                <button type="button" class="btn-primary btn-sm" id="btn-save-absence">${Icon('plus', 15)}${tr('Zeitraum hinzufügen', 'Add period')}</button>
+                <div id="s-absence-periods" class="managed-list"></div>`;
+            Settings.bindAbsencePeriod('s-abs', {});
+            const list = q('#s-absence-periods');
+            for (const period of periods) {
+                const row = document.createElement('div'); row.className = 'absence-overview-row';
+                const substitute = users.find(candidate => candidate.id === period.substitute_user_id);
+                const label = document.createElement('span');
+                label.textContent = `${period.from_at ? Utils.fmtDateOnly(new Date(period.from_at)) : tr('Ab sofort', 'From now')} – ${period.until_at ? Utils.fmtDateOnly(new Date(period.until_at)) : tr('Offen', 'Open ended')} · ${substitute?.name || substitute?.username || Lang.t('none')}`;
+                const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-secondary btn-sm'; remove.textContent = Lang.t('delete');
+                remove.onclick = () => UI.confirm(tr('Diesen Abwesenheitszeitraum entfernen?', 'Remove this absence period?'), async () => {
+                    const result = await fetch('/api/v2/users/me/absences/' + encodeURIComponent(period.id), { method: 'DELETE', credentials: 'same-origin' });
+                    if (!result.ok) return UI.toast(Lang.t('saveFailed'));
+                    Store._meCache = null; Store._usersCache = null;
+                    await Settings.renderAbsenceArea(user);
+                    if ((!period.from_at || new Date(period.from_at) <= new Date()) && (!period.until_at || new Date(period.until_at) >= new Date())) await AdminBoard.openAbsenceReturnPopup(user);
+                });
+                row.append(label, remove); list.appendChild(row);
+            }
+            if (!periods.length) list.textContent = tr('Keine Abwesenheiten geplant.', 'No absences planned.');
+            q('#btn-save-absence').onclick = async event => {
+                const button = event.currentTarget; button.disabled = true;
+                try {
+                    const period = Settings.readAbsencePeriod('s-abs');
+                    const result = await fetch('/api/v2/users/me/absence', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ active: true, append: true, from_at: period.fromMs ? new Date(period.fromMs).toISOString() : null,
+                            until_at: period.untilMs ? new Date(period.untilMs).toISOString() : null, substitute_user_id: q('#s-abs-sub').value || null, visible: q('#s-abs-visible').checked }) });
+                    if (!result.ok) { const problem = await result.json(); throw new Error(problem.error === 'absence_periods_overlap' ? tr('Der Zeitraum überschneidet sich mit einer vorhandenen Abwesenheit.', 'This period overlaps an existing absence.') : tr('Zeitraum konnte nicht gespeichert werden.', 'Could not save the period.')); }
+                    Store._meCache = null; Store._usersCache = null;
+                    UI.toast(Lang.t('absenceSavedToast')); await Settings.renderAbsenceArea(user);
+                } catch (error) { UI.toast(error.message); } finally { button.disabled = false; }
+            };
+        } catch (error) { area.textContent = error.message; }
     },
 
     renderAccountArea: (user, settings) => {
@@ -420,7 +434,7 @@ export const Settings = {
                     </button>
                 </div>
             `;
-            const passkeyButton = document.createElement('button'); passkeyButton.type = 'button'; passkeyButton.className = 'btn-secondary';
+            const passkeyButton = document.createElement('button'); passkeyButton.type = 'button'; passkeyButton.className = 'btn-secondary mt-3';
             passkeyButton.textContent = Lang.current === 'en' ? 'Manage MFA / passkeys' : 'MFA / Passkeys verwalten';
             passkeyButton.onclick = () => MFA.manage().catch(error => UI.toast(error.message)); secArea.appendChild(passkeyButton);
             q('#btn-toggle-2fa').onclick = async () => {

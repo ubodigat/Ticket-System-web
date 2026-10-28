@@ -64,10 +64,8 @@ export const SETUP_HTML = `<!doctype html>
 </main>
 <script src="/setup/setup.js"></script>
 <aside class="cpal-origin" role="note" aria-label="Ursprung des Ticket-Systems">
-  <div class="cpal-origin__tag">ORIGINALPROJEKT</div>
-  <div>Originalprojekt Ticket-System-web von <strong>U:Bodigat</strong></div>
-  <a href="https://github.com/ubodigat/Ticket-System-web" target="_blank" rel="noopener noreferrer">github.com/ubodigat/Ticket-System-web</a>
-  <div class="cpal-origin__copyright">Copyright © 2026 U:Bodigat · CPAL-1.0</div>
+  <span class="cpal-origin__phrase">Originalprojekt Ticket-System-web von <strong>U:Bodigat</strong></span>
+  <span class="cpal-origin__meta"><a href="https://github.com/ubodigat/Ticket-System-web" target="_blank" rel="noopener noreferrer">github.com/ubodigat/Ticket-System-web</a> · Copyright © 2026 U:Bodigat · CPAL-1.0</span>
 </aside>
 </body>
 </html>`;
@@ -144,20 +142,16 @@ button:disabled { opacity: 0.6; cursor: default; }
 .password-requirements span { display: block; margin-top: 6px; }
 .password-requirements .is-met { color: #6ee7b7; }
 .cpal-origin {
-  position: relative;
-  box-sizing: border-box; width: min(350px, calc(100vw - 32px));
-  padding: 12px 15px; border: 1px solid rgba(169,198,255,.45);
-  border-radius: 14px; background: rgba(24,33,52,.97); color: #f8fafc;
-  box-shadow: 0 12px 30px rgba(0,0,0,.3);
-  font: 13px/1.45 system-ui, sans-serif; text-align: left;
+  position: relative; display: flex; flex-direction: column; gap: 1px;
+  box-sizing: border-box; max-width: calc(100vw - 32px); margin: 16px auto 0;
+  padding: 5px 10px; border: 1px solid rgba(148,163,184,.25); border-radius: 10px;
+  background: rgba(15,23,42,.55); color: #a7b0c4;
+  font: 11px/1.45 system-ui, sans-serif; text-align: center; opacity: .8;
 }
-.cpal-origin__tag { color: #a9c6ff; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
-.cpal-origin strong { color: #b9d0ff; }
-.cpal-origin a { display: block; margin-top: 5px; color: #9ddcff; overflow-wrap: anywhere; text-decoration: underline; }
-.cpal-origin__copyright { color: #c2cbdc; font-size: 11px; margin-top: 6px; }
-@media (max-width: 500px) {
-  .cpal-origin { right: auto; bottom: auto; width: 100%; padding: 10px 12px; }
-}
+.cpal-origin:hover, .cpal-origin:focus-within { opacity: 1; }
+.cpal-origin strong { color: #e8ecf1; font-weight: 600; }
+.cpal-origin__meta { font-size: 10.5px; }
+.cpal-origin a { color: inherit; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
 `;
 
 export const SETUP_JS = `

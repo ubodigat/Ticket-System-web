@@ -11,6 +11,7 @@ import { Lang } from './lang.js';
 import { Store, Notifications } from './store.js';
 import { UI } from './ui.js';
 import { AdminBoard } from './admin-board.js';
+import { KbSearch } from './kb-search.js';
 import { getStatusColorClass, isPendingApprover, insertMarkdownText, insertMarkdownLink } from './ticket-helpers.js';
 
 // --- User Dashboard Logic ---
@@ -122,17 +123,8 @@ export const UserDash = {
                 }).catch(() => {});
             }
             Store._ticketsCache = null;
-            const admins = (await Store.getUsers()).filter(person => person.role === 'admin' || person.role === 'superadmin');
+            // Hinweise an die zustaendigen Admins (App und E-Mail) erzeugt der Server beim Anlegen.
             await Notifications.refresh();
-
-            // Admins per E-Mail benachrichtigen, je nach persönlicher/administrativer Einstellung
-            if (settings.emailConfig && settings.emailConfig.host) {
-                for (const admin of admins) {
-                    if (!admin.email) continue;
-                    const pref = await Store.resolveNotifPref(admin, 'newTicket');
-                    if (pref.email) Store.sendEmail(admin.email, Lang.format('newTicketEmailSubject', { title }), Lang.format('newTicketEmailBody', { id: newTicket.id, name: user.name || user.username }));
-                }
-            }
 
             UI.toast(Lang.t('ticketCreated'));
             q('#t-title').value = '';
@@ -197,6 +189,7 @@ export const UserDash = {
 
         // Modal Events
         if (q('#u-m-close')) q('#u-m-close').onclick = UserDash.closeModal;
+        if (q('#u-m-kb-search')) q('#u-m-kb-search').onclick = () => KbSearch.open();
         if (q('#u-ticket-modal')) q('#u-ticket-modal').onclick = (e) => {
             if (e.target.id === 'u-ticket-modal') UserDash.closeModal();
         };

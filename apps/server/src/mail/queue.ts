@@ -13,11 +13,11 @@ const context = (deps: MailDeps, id: string, keyVersion: number) => ({
   tableName: 'jobs', recordId: id, fieldName: 'mail_payload', keyVersion
 });
 
-export async function queueMail(deps: MailDeps, to: string, subject: string, text: string): Promise<void> {
+export async function queueMail(deps: MailDeps, to: string, subject: string, text: string, variables?: Record<string, string>): Promise<void> {
   if (!await isSmtpConfigured(deps)) throw new Error('smtp_not_configured');
   const id = randomUUID();
   const dek = await ensureDek(deps.db, deps.keyProvider, 'jobs.mail_payload');
-  const encrypted = fieldCipher.encryptField(JSON.stringify({ to, subject, text }), dek.rawDek, context(deps, id, dek.keyVersion));
+  const encrypted = fieldCipher.encryptField(JSON.stringify({ to, subject, text, ...(variables ? { variables } : {}) }), dek.rawDek, context(deps, id, dek.keyVersion));
   await deps.db.insertInto('jobs').values({
     type: MAIL_TYPE, idempotency_key: id, payload_json: JSON.stringify({ ciphertext: encrypted.toString('base64') }),
     status: 'queued', max_attempts: MAX_ATTEMPTS, locked_by: null, locked_at: null
@@ -28,25 +28,54 @@ export async function queueMailIfConfigured(deps: MailDeps, to: string, subject:
   if (await isSmtpConfigured(deps)) await queueMail(deps, to, subject, text);
 }
 
+// Spiegelt Store.defaultNotifPolicy() im Frontend: wer welchen Kanal selbst abschalten darf und
+// was gilt, solange weder Richtlinie noch persoenliche Einstellung etwas festlegen.
+type NotifRule = { appLocked?: boolean; emailLocked?: boolean; defaultApp?: boolean; defaultEmail?: boolean };
+const DEFAULT_NOTIF_POLICY: Record<string, Partial<Record<'user' | 'admin', NotifRule>>> = {
+  newTicket: { admin: { appLocked: true, emailLocked: false, defaultApp: true, defaultEmail: true } },
+  ticketAssigned: { admin: { appLocked: true, emailLocked: false, defaultApp: true, defaultEmail: true } },
+  mention: { admin: { appLocked: true, emailLocked: false, defaultApp: true, defaultEmail: false } },
+  statusChange: { user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: true } },
+  newMessage: {
+    user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: true },
+    admin: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: false }
+  },
+  ticketClosed: { user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: true } },
+  ticketEdited: { user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: false } }
+};
+
+export async function resolveNotificationPrefs(db: MailDeps['db'], user: { role: string; notif_prefs_json: string | null },
+  type: string): Promise<{ app: boolean; email: boolean }> {
+  let prefs: Record<string, { app?: unknown; email?: unknown }> = {};
+  try { prefs = user.notif_prefs_json ? JSON.parse(user.notif_prefs_json) : {}; } catch { prefs = {}; }
+  const settings = await db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+  let config: { notifPolicy?: Record<string, Record<string, NotifRule>> } = {};
+  try { config = settings?.config_json ? JSON.parse(settings.config_json) : {}; } catch { config = {}; }
+  const role = user.role === 'user' ? 'user' : 'admin';
+  const base = DEFAULT_NOTIF_POLICY[type]?.[role];
+  const saved = config.notifPolicy?.[type]?.[role];
+  // Nicht personalisierbare Ereignisse (Genehmigungen, Aufgaben, Abwesenheit, ...) immer zustellen.
+  if (!base && !saved) return { app: true, email: true };
+  const rule: NotifRule = { ...base, ...saved };
+  const pick = (channel: 'app' | 'email') => {
+    const locked = channel === 'app' ? rule.appLocked : rule.emailLocked;
+    const fallback = (channel === 'app' ? rule.defaultApp : rule.defaultEmail) ?? true;
+    if (locked) return fallback;
+    const personal = prefs[type]?.[channel];
+    return typeof personal === 'boolean' ? personal : fallback;
+  };
+  return { app: pick('app'), email: pick('email') };
+}
+
 export async function queueUserMail(deps: MailDeps, userId: string, subject: string, text: string, type = 'statusChange'): Promise<void> {
   if (!await isSmtpConfigured(deps)) return;
-  const user = await deps.db.selectFrom('users').select(['email_enc', 'account_archived', 'locked_permanent', 'account_valid_until', 'notif_prefs_json', 'role'])
+  const user = await deps.db.selectFrom('users').select(['email_enc', 'name_enc', 'username', 'account_archived', 'locked_permanent', 'account_valid_until', 'notif_prefs_json', 'role'])
     .where('id', '=', userId).executeTakeFirst();
   // Security-Audit R-15: bisher ging eine Benachrichtigung mit Ticketinhalten auch an dauerhaft
   // gesperrte oder per Ablaufdatum beendete Konten (z.B. ausgeschiedene Mitarbeiter, deren
   // private Adresse hinterlegt war) -- archiviert war bisher der einzige geprüfte Zustand.
   if (!user?.email_enc || user.account_archived || user.locked_permanent || isAccountExpired(user.account_valid_until)) return;
-  const prefs = user.notif_prefs_json ? JSON.parse(user.notif_prefs_json) : {};
-  const settings = await deps.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
-  const config = settings?.config_json ? JSON.parse(settings.config_json) : {};
-  const role = user.role === 'user' ? 'user' : 'admin';
-  const defaults: Record<string, Partial<Record<'user' | 'admin', boolean>>> = {
-    newTicket: { admin: true }, mention: { admin: false }, statusChange: { user: true },
-    newMessage: { user: true, admin: false }, ticketClosed: { user: true }, ticketEdited: { user: false }
-  };
-  const rule = config.notifPolicy?.[type]?.[role] ?? {};
-  const enabled = rule.emailLocked ? rule.defaultEmail
-    : prefs[type]?.email ?? rule.defaultEmail ?? defaults[type]?.[role] ?? true;
+  const enabled = (await resolveNotificationPrefs(deps.db, user, type)).email;
   // Sicherheitshinweise (2FA-Geraetewechsel, E-Mail-Aenderung, ...) duerfen weder per eigener
   // Einstellung noch per Richtlinie abschaltbar sein -- sonst koennte eine uebernommene Sitzung sie
   // zuerst deaktivieren und danach unbemerkt Faktoren austauschen.
@@ -56,7 +85,13 @@ export async function queueUserMail(deps: MailDeps, userId: string, subject: str
     installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'users', recordId: userId, fieldName: 'email', keyVersion: dek.keyVersion
   });
-  await queueMail(deps, email, subject, text);
+  let name = user.username || email;
+  if (user.name_enc) {
+    const nameDek = await ensureDek(deps.db, deps.keyProvider, 'users.name');
+    name = fieldCipher.decryptField(user.name_enc, nameDek.rawDek, { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+      tableName: 'users', recordId: userId, fieldName: 'name', keyVersion: nameDek.keyVersion });
+  }
+  await queueMail(deps, email, subject, text, { recipientName: name, username: user.username || '' });
 }
 
 // A crashed worker's lease is reclaimed. SMTP is at-least-once: a crash after SMTP acceptance
@@ -84,7 +119,8 @@ export async function drainMailQueue(deps: MailDeps, now = new Date()): Promise<
       const envelope = JSON.parse(job.payload_json);
       const payload = JSON.parse(fieldCipher.decryptField(Buffer.from(envelope.ciphertext, 'base64'), dek.rawDek,
         context(deps, job.idempotency_key, dek.keyVersion)));
-      await sendMail(deps, payload.to, payload.subject, payload.text);
+      if (payload.variables) await sendMail(deps, payload.to, payload.subject, payload.text, payload.variables);
+      else await sendMail(deps, payload.to, payload.subject, payload.text);
       await deps.db.updateTable('jobs').set({ status: 'done', payload_json: '{}', locked_at: null, locked_by: null,
         updated_at: mysqlTimestamp() }).where('id', '=', job.id).where('locked_by', '=', owner).execute();
     } catch {

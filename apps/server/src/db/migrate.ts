@@ -21,6 +21,8 @@ import { migration_0046_login_failure_sources } from './migrations/0046_login_fa
 import { migration_0047_audit_log_redact } from './migrations/0047_audit_log_redact.js';
 import { migration_0048_outlook_personal_calendar } from './migrations/0048_outlook_personal_calendar.js';
 import { migration_0052_audit_log_redact_multiline } from './migrations/0052_audit_log_redact_multiline.js';
+import { migration_0053_global_audit_log_index } from './migrations/0053_global_audit_log_index.js';
+import { migration_0054_kb_categories } from './migrations/0054_kb_categories.js';
 import { migration_0001_installations } from './migrations/0001_installations.js';
 import { migration_0002_key_management } from './migrations/0002_key_management.js';
 import { migration_0003_users_and_groups } from './migrations/0003_users_and_groups.js';
@@ -115,7 +117,9 @@ const migrations: Record<string, Migration> = {
   '0046_login_failure_sources': migration_0046_login_failure_sources,
   '0047_audit_log_redact': migration_0047_audit_log_redact,
   '0048_outlook_personal_calendar': migration_0048_outlook_personal_calendar,
-  '0052_audit_log_redact_multiline': migration_0052_audit_log_redact_multiline
+  '0052_audit_log_redact_multiline': migration_0052_audit_log_redact_multiline,
+  '0053_global_audit_log_index': migration_0053_global_audit_log_index,
+  '0054_kb_categories': migration_0054_kb_categories
 };
 
 const provider: MigrationProvider = {

@@ -12,7 +12,7 @@ für den optionalen Virenscanner zusätzlich 1-2 GB, für die Office-Oberfläche
 `--enable-office-viewer` aktiviert (Anleitung unten).
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "821522da4cb9785b4ccaaab08e501809ab93cd9222bb45ccf53bb17134693524" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=b01a3107c2962d9e91c8ce2073fd879581cce32bbf1ac11fdf3c3946f005d859 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=089207a0fc8b10924912766e2c4dabcb1233fdb0596235721df8f1ea96af9065 bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -39,7 +39,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "821522da4cb9785b4ccaaab08e501809ab93cd9222bb45ccf53bb17134693524" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=b01a3107c2962d9e91c8ce2073fd879581cce32bbf1ac11fdf3c3946f005d859 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=089207a0fc8b10924912766e2c4dabcb1233fdb0596235721df8f1ea96af9065 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist
@@ -66,7 +66,7 @@ Bei der Erstinstallation diesen verifizierten Befehl verwenden; mit einer eigene
 zusätzlich `--domain=… --acme-email=…` hinter `--enable-office-viewer` ergänzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "821522da4cb9785b4ccaaab08e501809ab93cd9222bb45ccf53bb17134693524" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=b01a3107c2962d9e91c8ce2073fd879581cce32bbf1ac11fdf3c3946f005d859 bash "$f" --enable-office-viewer'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=089207a0fc8b10924912766e2c4dabcb1233fdb0596235721df8f1ea96af9065 bash "$f" --enable-office-viewer'
 ```
 
 Bei einem bereits aktualisierten Checkout auf dem Server:
@@ -212,10 +212,39 @@ registriert sein; delegierte Berechtigungen: `Calendars.ReadWrite`, `offline_acc
 Für Tickettermine zusätzlich App-only-Kalenderberechtigungen und ein begrenztes Supportpostfach
 einrichten. Ohne diese externen Zugangsdaten ist keine echte Microsoft-Verbindung möglich.
 
-E-Mail-Vorlagen unterstützen `{{subject}}`, `{{message}}` und `{{recipient}}`.
+E-Mail-Vorlagen unterstützen `{{subject}}`, `{{message}}`, `{{recipient}}`,
+`{{recipientName}}`, `{{username}}`, `{{company}}`, `{{portalName}}`, `{{portalUrl}}`,
+`{{supportEmail}}`, `{{date}}`, `{{time}}` und `{{year}}`. Die Schaltflächen über der
+Vorlage fügen Variablen an der Cursorposition ein. Name und Benutzername stehen bei
+Kontobenachrichtigungen zur Verfügung; sonst dient die Empfängeradresse als Name.
+Datum und Uhrzeit verwenden die ausgewählte Unternehmenszeitzone.
 Die Signatur wird anschließend ergänzt. Externe Einladungen benötigen kein Portal-Konto.
 Die optionalen ClamAV-Einstellungen für große Dateien liegen in
 `ops/docker/clamav/clamd.conf` ([offizielle Konfigurationsdokumentation](https://docs.clamav.net/manual/Installing/Docker.html)).
+
+</details>
+
+<details>
+<summary>Verwaltung, Wartefristen und geplante Abwesenheiten</summary>
+
+Bei „Warten auf Benutzer“ beginnen beide Fristen mit dem Beginn der Wartephase.
+Eine optionale Erinnerung erfolgt einmal nach der ersten Frist. Für die zweite Frist
+ist wählbar, ob automatisch geschlossen und benachrichtigt wird oder das Ticket offen
+bleibt. Standard bleibt das bisherige Verhalten: Erinnerung nach 2, Schließen nach 7 Tagen.
+Eine Antwort beendet die Wartephase.
+
+Textbausteine lassen sich bearbeiten und durchsuchen. Neuanlage steht bei Textbausteinen,
+Wissensartikeln und wiederkehrenden Tickets vor der jeweiligen Liste. „Wissensdatenbank
+ansehen“ öffnet eine eigene Leseansicht mit Suche und Filtern. Teilaufgaben in der Todo-Liste
+öffnen ihr Ticket durch Anklicken des Titels oder über die Tastatur.
+
+Admins können in den persönlichen Einstellungen mehrere Abwesenheitszeiträume im Voraus
+anlegen und einzeln entfernen. Überschneidungen werden abgelehnt. Geplante Zeiträume
+übertragen keine Tickets vor ihrem Beginn. Die Wartung aktiviert Vertretungen und beendet
+abgelaufene Zeiträume beim nächsten Lauf (standardmäßig alle 5 Minuten und beim Serverstart).
+Ist die hinterlegte Vertretung dann gesperrt, archiviert oder abgelaufen, gehen die offenen
+Tickets ohne persönliche Zuweisung zurück an das Team. Bereits übertragene Tickets können
+über die vorhandene Rückkehrfunktion zurückgenommen werden.
 
 </details>
 
@@ -312,8 +341,27 @@ starten. Unsignierte Commits und unbekannte Signaturen werden abgelehnt; der Ent
 muss Release-Commits entsprechend signieren. Rollbacks mit Schemaänderungen sind gesperrt
 und erfordern eine Wiederherstellung mit passendem Datenbank-Backup.
 
+Den Fingerprint vor dem Import mit `gpg --show-keys --with-fingerprint /root/release-signing-key.asc`
+anzeigen und über einen zweiten, unabhängigen Kanal vergleichen. Commits, die direkt auf GitHub
+entstehen (Copilot Autofix, Merge-Button), sind mit GitHubs eigenem Schlüssel signiert und werden
+vom Updater abgelehnt; solche Änderungen lokal übernehmen und signiert erneut pushen.
+
+### Online-Updater wieder deaktivieren
+
+Empfohlen direkt nach jedem Update. Entfernt den Updater-Container samt Docker-Zugriff, leert
+`UPDATE_SERVICE_URL`, setzt `UPDATE_ALLOW_MAIN_DEPLOY=false`, nimmt `dangerous-updater` aus
+`COMPOSE_PROFILES` und erneuert `UPDATE_TOKEN`. Daten und Einstellungen bleiben erhalten:
+
+```bash
+cd /opt/ticket-system
+bash install.sh --disable-updates
+```
+
+Ein Lauf von `install.sh` ohne diese Optionen behält den jeweiligen Zustand bei.
+
 ### Weitere Optionen
 
+- `--enable-updates` / `--disable-updates`: Online-Updater (Docker-Hostrechte) ein- bzw. vollständig wieder ausschalten, siehe oben.
 - `--enable-antivirus`: ClamAV aktivieren; ohne funktionierenden Scanner schlagen Uploads bei aktivierter Prüfung fehl.
 - `--dev`: lokale Testkonfiguration, nicht für öffentliche Produktionsinstallationen.
 - `--domain=... --acme-email=...`: öffentlich vertrauenswürdiges HTTPS über ACME.

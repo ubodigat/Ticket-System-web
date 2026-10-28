@@ -54,13 +54,18 @@ export const OutlookCalendar = {
 
     refreshStatus: async () => {
         const res = await fetch('/api/v2/outlook/status', { credentials: 'same-origin' }).catch(() => null);
-        if (res && res.ok) OutlookCalendar.status = await res.json();
+        OutlookCalendar.status = res && res.ok ? await res.json()
+            : { configured: false, reason: 'unavailable', connected: false, accountEmail: null };
         return OutlookCalendar.status;
     },
 
+    // Warum "Verbinden" nicht moeglich ist: App-Registrierung fehlt, Portal-Adresse fehlt oder Status nicht ladbar.
+    unavailableMessage: () => Lang.t({ base_url_missing: 'outlookBaseUrlMissing', unavailable: 'outlookStatusUnavailable' }[OutlookCalendar.status.reason]
+        || 'outlookConfigurationRequired'),
+
     connect: async () => {
         await OutlookCalendar.refreshStatus();
-        if (!OutlookCalendar.status.configured) { UI.toast(Lang.t('outlookConfigurationRequired')); return; }
+        if (!OutlookCalendar.status.configured) { UI.toast(OutlookCalendar.unavailableMessage()); return; }
         const returnTo = encodeURIComponent(window.location.pathname);
         window.location.href = `/api/v2/outlook/connect?returnTo=${returnTo}`;
     },
@@ -105,7 +110,7 @@ export const OutlookCalendar = {
         if (!OutlookCalendar.status.connected) {
             body.innerHTML = `
                 <div class="outlook-connect-prompt">
-                    <p>${Lang.t(OutlookCalendar.status.configured ? 'outlookPersonalConnectIntro' : 'outlookConfigurationRequired')}</p>
+                    <p>${Utils.esc(OutlookCalendar.status.configured ? Lang.t('outlookPersonalConnectIntro') : OutlookCalendar.unavailableMessage())}</p>
                     <button class="btn-primary" id="oc-connect" ${OutlookCalendar.status.configured ? '' : 'disabled'}>${Icon('plug', 16)}${Lang.t('connectOutlookButton')}</button>
                 </div>`;
             body.querySelector('#oc-connect').onclick = () => OutlookCalendar.connect();

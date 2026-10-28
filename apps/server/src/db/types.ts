@@ -253,10 +253,19 @@ export interface KbArticlesTable {
   id: string;
   title: Buffer;
   content: Buffer;
+  category: Nullable<string>;
   source_ticket_id: Nullable<string>;
   created_by_user_id: Nullable<string>;
   created_at: CreatedAt;
   updated_at: UpdatedAt;
+}
+
+// Zusaetzliche, nur fuer die Wissensdatenbank gedachte Kategorien (neben den Ticket-Kategorien).
+export interface KbCategoriesTable {
+  id: string;
+  name: string;
+  created_by_user_id: Nullable<string>;
+  created_at: CreatedAt;
 }
 
 export interface RecurringTicketRulesTable {
@@ -526,5 +535,6 @@ export interface Database {
   user_absences: UserAbsencesTable;
   text_blocks: TextBlocksTable;
   kb_articles: KbArticlesTable;
+  kb_categories: KbCategoriesTable;
   recurring_ticket_rules: RecurringTicketRulesTable;
 }

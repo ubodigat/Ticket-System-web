@@ -32,8 +32,10 @@ import { registerPreferenceRoutes } from './routes/preferences.js';
 import { registerWorkTimerRoutes } from './routes/workTimers.js';
 import { registerOfficeViewerRoutes } from './routes/officeViewer.js';
 import { registerStaticAssetRoutes } from './routes/staticAssets.js';
+import { registerSystemInfoRoutes } from './routes/systemInfo.js';
 import { loadSecurityPolicy } from '../domain/securityPolicy.js';
 import { isAccountExpired } from '../domain/accountValidity.js';
+import { recordActivity } from '../domain/activityLog.js';
 
 function timestampMillis(value: Date | string | null | undefined): number {
   if (!value) return 0;
@@ -93,6 +95,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   app.decorate('db', deps.db);
   app.decorateRequest('ticketSession', null);
+  app.decorateRequest('auditDetail', null);
 
   // Routen ohne eigenes try/catch (z.B. mfa-verify, account-requests) landeten bisher im
   // Fastify-Standardhandler, der bei 500ern die rohe Fehlermeldung (MariaDB-Texte mit Tabellen-/
@@ -216,6 +219,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     ipv6Subnet: 64
   });
 
+  // Lueckenloses Systemprotokoll: jede veraendernde Aktion und jeder Zugriff auf besonders
+  // schuetzenswerte Daten, inklusive abgelehnter Versuche. Laeuft nach dem Senden der Antwort, ein
+  // Protokollfehler beeinflusst die Anfrage also nie.
+  app.addHook('onResponse', async (req, reply) => {
+    try { await recordActivity(deps.db, req, reply); }
+    catch (err) { req.log.error({ err }, 'Aktivitaet konnte nicht protokolliert werden'); }
+  });
+
   registerHealthRoutes(app);
   registerSetupRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerAuthRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
@@ -235,6 +246,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerOfficeViewerRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerMfaRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerUpdateRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerSystemInfoRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerStaticAssetRoutes(app);
 
   return app;
@@ -246,5 +258,7 @@ declare module 'fastify' {
   }
   interface FastifyRequest {
     ticketSession: { uid: string; username: string; role: 'user' | 'admin' | 'superadmin' } | null;
+    // Optionale Zusatzangaben fuer das Systemprotokoll (z.B. Ticketnummer eines neu angelegten Tickets).
+    auditDetail: Record<string, unknown> | null;
   }
 }

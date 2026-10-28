@@ -30,6 +30,10 @@ COPY --from=build /build/node_modules ./node_modules
 COPY --from=build /build/public ./public
 COPY --from=build /build/vendor ./vendor
 RUN mkdir -p /run/secrets && chown -R ticketapp:ticketapp /app /run/secrets
+# Fuer Systemeinstellungen > Info & Updates (Commit + Build-Zeitpunkt der laufenden Version).
+ARG APP_COMMIT=unknown
+ARG APP_BUILT_AT=unknown
+ENV APP_COMMIT=$APP_COMMIT APP_BUILT_AT=$APP_BUILT_AT
 USER ticketapp:ticketapp
 ENV NODE_ENV=production
 EXPOSE 3000

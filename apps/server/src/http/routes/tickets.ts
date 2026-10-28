@@ -328,6 +328,53 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   }
 
   // GET /api/v2/tickets - Alle Tickets (RBAC: Admins sehen alle, Users nur eigene)
+  // Empfaenger fuer Ticket-Ereignisse: nur aktive Admin-/Superadmin-Konten. Normale Konten derselben
+  // Abteilung/Gruppe duerfen von fremden Tickets nichts erfahren. Hat die Gruppe keine Admins, gehen
+  // Hinweise an alle Admins, damit nichts unbemerkt bleibt.
+  async function staffRecipients(groupId: string | null): Promise<string[]> {
+    const base = () => app.db.selectFrom('users').select('id').where('role', 'in', ['admin', 'superadmin']).where('account_archived', '=', false);
+    if (groupId) {
+      const members = await base().where('department_group_id', '=', groupId).execute();
+      if (members.length) return members.map(r => r.id);
+    }
+    return (await base().execute()).map(r => r.id);
+  }
+  async function participantIds(ticketId: string): Promise<string[]> {
+    return (await app.db.selectFrom('ticket_participants').select('user_id').where('ticket_id', '=', ticketId).execute()).map(r => r.user_id);
+  }
+  async function notifyMany(ids: Array<string | null | undefined>, params: { type: string; ticketId: string; ticketNumber: string | null;
+    message: string; actorUserId: string }) {
+    for (const recipientUserId of new Set(ids.filter((value): value is string => !!value))) {
+      await createNotification(app, deps, { recipientUserId, ...params });
+    }
+  }
+  // @-Erwaehnungen wie im Frontend ("@Vollstaendiger Name" oder "@benutzername"); laengster Treffer
+  // gewinnt, damit "@Max Mustermann" nicht zusaetzlich eine Person namens "Max" erwaehnt.
+  async function mentionedStaff(content: string): Promise<string[]> {
+    if (!content.includes('@')) return [];
+    const staff = await app.db.selectFrom('users').select(['id', 'username', 'name_enc'])
+      .where('role', 'in', ['admin', 'superadmin']).where('account_archived', '=', false).execute();
+    const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
+    const handles: Array<{ handle: string; id: string }> = [];
+    for (const person of staff) {
+      let name = '';
+      try {
+        name = fieldCipher.decryptField(person.name_enc, nameDek.rawDek, { installationId: deps.env.INSTALLATION_ID,
+          schemaVersion: deps.env.SCHEMA_VERSION, tableName: 'users', recordId: person.id, fieldName: 'name', keyVersion: nameDek.keyVersion });
+      } catch { name = ''; }
+      for (const handle of [person.username, name]) if (handle) handles.push({ handle: handle.toLocaleLowerCase('de-DE'), id: person.id });
+    }
+    handles.sort((a, b) => b.handle.length - a.handle.length);
+    const text = content.toLocaleLowerCase('de-DE');
+    const found = new Set<string>();
+    for (let index = text.indexOf('@'); index >= 0; index = text.indexOf('@', index + 1)) {
+      const rest = text.slice(index + 1);
+      const match = handles.find(h => rest.startsWith(h.handle) && !/[\p{L}\p{N}_]/u.test(rest.charAt(h.handle.length)));
+      if (match) found.add(match.id);
+    }
+    return [...found];
+  }
+
   app.get('/api/v2/tickets', async (req, reply) => {
     try {
       const session = requireSession(req);
@@ -621,21 +668,16 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       // Admin/Superadmin-Konten -- außer wenn die erstellende Person selbst admin ist oder das
       // Ticket erst noch eine Genehmigung braucht.
       if (!isCreatorAdmin && !approvalRequested) {
-        const recipients = assignedGroupId
-          ? await app.db.selectFrom('users').select(['id', 'username']).where('department_group_id', '=', assignedGroupId).execute()
-          : await app.db.selectFrom('users').select(['id', 'username']).where('role', 'in', ['admin', 'superadmin']).execute();
-        for (const r of recipients) {
-          await createNotification(app, deps, {
-            recipientUserId: r.id,
-            recipientUsername: r.username,
-            type: 'newTicket',
-            ticketId: newId,
-            ticketNumber: ticketRow.ticket_number,
-            message: `Neues Ticket von ${session.username} erstellt.`
-          });
-        }
+        await notifyMany(await staffRecipients(assignedGroupId), { type: 'newTicket', ticketId: newId,
+          ticketNumber: ticketRow.ticket_number, message: `Neues Ticket von ${session.username} erstellt.`, actorUserId: session.uid });
+      }
+      // Im Auftrag angelegt: die Person, fuer die das Ticket gilt, erfaehrt davon.
+      if (filedByUserId) {
+        await notifyMany([authorUserId], { type: 'statusChange', ticketId: newId, ticketNumber: ticketRow.ticket_number,
+          message: `Für dich wurde das Ticket ${ticketRow.ticket_number} angelegt.`, actorUserId: session.uid });
       }
 
+      req.auditDetail = { ticket: ticketRow.ticket_number };
       return reply.code(201).send({ ticket: decryptTicketRow(ticketRow, deks, deps) });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -689,6 +731,26 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         && parsed.data.status === 'Geschlossen'
         && patchKeys.every(key => key === 'status');
       if (!isAdmin && !isSelfClose) return reply.code(403).send({ error: 'forbidden' });
+
+      // Benutzername kommt aus der Datenbank, nie ungeprueft vom Client -- sonst koennten ID und
+      // angezeigter Name auf verschiedene Personen zeigen (und Hinweise an die falsche gehen).
+      if (parsed.data.assigned_to_user_id !== undefined || parsed.data.assigned_to_username !== undefined) {
+        const wantedId = parsed.data.assigned_to_user_id ?? null;
+        const wantedName = parsed.data.assigned_to_username ?? null;
+        if (!wantedId && !wantedName) {
+          parsed.data.assigned_to_user_id = null;
+          parsed.data.assigned_to_username = null;
+        } else {
+          const lookup = app.db.selectFrom('users').select(['id', 'username'])
+            .where('role', 'in', ['admin', 'superadmin']).where('account_archived', '=', false);
+          const assignee = wantedId
+            ? await lookup.where('id', '=', wantedId).executeTakeFirst()
+            : await lookup.where('username', '=', wantedName as string).executeTakeFirst();
+          if (!assignee) return reply.code(400).send({ error: 'invalid_assignee' });
+          parsed.data.assigned_to_user_id = assignee.id;
+          parsed.data.assigned_to_username = assignee.username;
+        }
+      }
 
       const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
       const auditChanges: Array<{ field: string; old: unknown; new: unknown }> = [];
@@ -797,16 +859,24 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           }).execute();
         }
 
-        // Statusänderung dem Ersteller melden (sofern nicht er selbst der Akteur ist).
-        if (parsed.data.status !== undefined && ticket.created_by_user_id && ticket.created_by_user_id !== session.uid) {
-          await createNotification(app, deps, {
-            recipientUserId: ticket.created_by_user_id,
-            recipientUsername: ticket.created_by_username,
-            type: 'statusChange',
-            ticketId: id,
-            ticketNumber: ticket.ticket_number,
-            message: `Status von Ticket ${ticket.ticket_number} geändert zu "${parsed.data.status}"`
+        const event = { ticketId: id, ticketNumber: ticket.ticket_number, actorUserId: session.uid };
+        if (parsed.data.status !== undefined && parsed.data.status !== ticket.status) {
+          const waitingInfo = parsed.data.status.startsWith('Warten auf') && parsed.data.waiting_message ? parsed.data.waiting_message : null;
+          await notifyMany([ticket.created_by_user_id, ...await participantIds(id)], {
+            ...event,
+            type: parsed.data.status === 'Geschlossen' ? 'ticketClosed' : 'statusChange',
+            message: waitingInfo
+              ? `Ticket ${ticket.ticket_number}: Es werden Informationen benötigt – ${waitingInfo}`
+              : `Status von Ticket ${ticket.ticket_number} geändert zu "${parsed.data.status}"`
           });
+        }
+        if (typeof updates.assigned_to_user_id === 'string') {
+          await notifyMany([updates.assigned_to_user_id], { ...event, type: 'ticketAssigned',
+            message: `Ticket ${ticket.ticket_number} wurde dir zugewiesen.` });
+        }
+        if (isAdmin && ['title', 'description', 'priority', 'category', 'custom_due_at'].some(field => field in updates)) {
+          await notifyMany([ticket.created_by_user_id], { ...event, type: 'ticketEdited',
+            message: `Ticket ${ticket.ticket_number} wurde vom Support bearbeitet.` });
         }
       }
 
@@ -856,7 +926,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       // IDOR-Schutz
       const ticket = await app.db.selectFrom('tickets')
-        .select(['id', 'ticket_number', 'created_by_user_id', 'created_by_username', 'assigned_to_user_id', 'assigned_to_username', 'status', 'archived_at'])
+        .select(['id', 'ticket_number', 'created_by_user_id', 'created_by_username', 'assigned_to_user_id', 'assigned_to_username', 'assigned_group_id', 'status', 'archived_at'])
         .where('id', '=', id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
@@ -890,26 +960,14 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         }).execute();
       });
 
-      // Benachrichtigung an die jeweils andere Seite (Ersteller <-> zuständige Person).
-      if (isAdmin && ticket.created_by_user_id && ticket.created_by_user_id !== session.uid) {
-        await createNotification(app, deps, {
-          recipientUserId: ticket.created_by_user_id,
-          recipientUsername: ticket.created_by_username,
-          type: 'newMessage',
-          ticketId: id,
-          ticketNumber: ticket.ticket_number,
-          message: `Neue Nachricht zu Ticket ${ticket.ticket_number}`
-        });
-      } else if (!isAdmin && ticket.assigned_to_user_id && ticket.assigned_to_username) {
-        await createNotification(app, deps, {
-          recipientUserId: ticket.assigned_to_user_id,
-          recipientUsername: ticket.assigned_to_username,
-          type: 'newMessage',
-          ticketId: id,
-          ticketNumber: ticket.ticket_number,
-          message: `Neue Nachricht zu Ticket ${ticket.ticket_number}`
-        });
-      }
+      // Schreibt der Support: Ersteller, Zustaendige und Beteiligte. Schreibt die anfragende Person:
+      // Zustaendige und Beteiligte -- ist niemand zugewiesen, die Gruppe bzw. alle Admins (vorher
+      // blieb eine Antwort auf ein nicht zugewiesenes Ticket fuer alle unbemerkt).
+      const messageEvent = { type: 'newMessage', ticketId: id, ticketNumber: ticket.ticket_number,
+        message: `Neue Nachricht zu Ticket ${ticket.ticket_number}`, actorUserId: session.uid };
+      const involved = [ticket.assigned_to_user_id, ...await participantIds(id)].filter((value): value is string => !!value);
+      if (isAdmin) await notifyMany([ticket.created_by_user_id, ...involved], messageEvent);
+      else await notifyMany(involved.length ? involved : await staffRecipients(ticket.assigned_group_id), messageEvent);
 
       const msgRow = await app.db.selectFrom('ticket_messages').selectAll().where('id', '=', msgId).executeTakeFirstOrThrow();
       return reply.code(201).send({ message: decryptMessage(msgRow, msgDeks, deps) });
@@ -994,6 +1052,13 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         has_attachments: false
       }).execute();
 
+      const mentioned = await mentionedStaff(parsed.data.content);
+      if (mentioned.length) {
+        const info = await app.db.selectFrom('tickets').select('ticket_number').where('id', '=', id).executeTakeFirst();
+        await notifyMany(mentioned, { type: 'mention', ticketId: id, ticketNumber: info?.ticket_number ?? null, actorUserId: session.uid,
+          message: `${session.username} hat dich in einer internen Notiz zu Ticket ${info?.ticket_number ?? ''} erwähnt.` });
+      }
+
       const noteRow = await app.db.selectFrom('ticket_notes').selectAll().where('id', '=', noteId).executeTakeFirstOrThrow();
       return reply.code(201).send({ note: decryptNote(noteRow, noteDek, deps) });
     } catch (e: any) {
@@ -1004,14 +1069,14 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   // PATCH /api/v2/tickets/:id/notes/:noteId - nur Admin
   app.patch('/api/v2/tickets/:id/notes/:noteId', async (req, reply) => {
     try {
-      requireAdmin(req);
+      const session = requireAdmin(req);
       const { id, noteId } = req.params as { id: string; noteId: string };
       const parsed = addNoteSchema.partial().safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
       // Notiz muss tatsächlich zum Ticket aus dem Pfad gehören -- verhindert, dass eine
       // über die URL vertauschte noteId versehentlich eine Notiz eines anderen Tickets trifft.
-      const existingNote = await app.db.selectFrom('ticket_notes').select('id').where('id', '=', noteId).where('ticket_id', '=', id).executeTakeFirst();
+      const existingNote = await app.db.selectFrom('ticket_notes').selectAll().where('id', '=', noteId).where('ticket_id', '=', id).executeTakeFirst();
       if (!existingNote) return reply.code(404).send({ error: 'note_not_found' });
 
       const noteDek = await loadNoteDek(app, deps.keyProvider);
@@ -1023,6 +1088,17 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       if (Object.keys(updates).length > 0) {
         await app.db.updateTable('ticket_notes').set(updates).where('id', '=', noteId).where('ticket_id', '=', id).execute();
+      }
+      // Nur neu hinzugekommene Erwaehnungen melden, nicht bei jeder Bearbeitung erneut alle.
+      if (parsed.data.content !== undefined) {
+        let previous = new Set<string>();
+        try { previous = new Set(await mentionedStaff(decryptNote(existingNote, noteDek, deps).content)); } catch { previous = new Set(); }
+        const added = (await mentionedStaff(parsed.data.content)).filter(uid => !previous.has(uid));
+        if (added.length) {
+          const info = await app.db.selectFrom('tickets').select('ticket_number').where('id', '=', id).executeTakeFirst();
+          await notifyMany(added, { type: 'mention', ticketId: id, ticketNumber: info?.ticket_number ?? null, actorUserId: session.uid,
+            message: `${session.username} hat dich in einer internen Notiz zu Ticket ${info?.ticket_number ?? ''} erwähnt.` });
+        }
       }
       const noteRow = await app.db.selectFrom('ticket_notes').selectAll().where('id', '=', noteId).executeTakeFirstOrThrow();
       return reply.send({ note: decryptNote(noteRow, noteDek, deps) });
@@ -1438,8 +1514,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const parsed = setParticipantsSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const ticket = await app.db.selectFrom('tickets').select('id').where('id', '=', id).executeTakeFirst();
+      const ticket = await app.db.selectFrom('tickets').select(['id', 'ticket_number']).where('id', '=', id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
+      const previousParticipants = new Set(await participantIds(id));
 
       const users = parsed.data.user_ids.length
         ? await app.db.selectFrom('users').select(['id', 'username']).where('id', 'in', parsed.data.user_ids).execute()
@@ -1456,6 +1533,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         action: 'participants_updated', field: 'participants', old_value: null,
         new_value: users.map(u => u.username).join(', ') || null
       }).execute();
+      await notifyMany(users.map(u => u.id).filter(uid => !previousParticipants.has(uid)), { type: 'ticketAssigned', ticketId: id,
+        ticketNumber: ticket.ticket_number, actorUserId: session.uid,
+        message: `Du wurdest als beteiligte Person zu Ticket ${ticket.ticket_number} hinzugefügt.` });
       return reply.send({ success: true, participants: users });
     } catch (e: any) {
       return routeError(app, reply, e);

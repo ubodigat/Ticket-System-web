@@ -23,9 +23,10 @@ import { ensureDek } from '../crypto/dekService.js';
 import { fieldCipher, decryptFieldTolerant } from '../crypto/fieldCrypto.js';
 import { randomUUID } from 'node:crypto';
 import { mysqlTimestamp } from '../db/date.js';
+import { isAccountExpired } from '../domain/accountValidity.js';
 import { buildTicketNumber } from '../domain/ticketNumber.js';
 import { runRecurringAdminTodos } from './adminTodos.js';
-import { queueUserMail } from '../mail/queue.js';
+import { notifyUser } from '../domain/notifications.js';
 
 const DEFAULT_AUTO_ARCHIVE_DAYS = 3;
 
@@ -149,23 +150,38 @@ const DEFAULT_WAITING_REMINDER_DAYS = 2;
 const DEFAULT_WAITING_AUTO_CLOSE_DAYS = 7;
 
 async function notifyTicketAuthor(deps: MaintenanceDeps, ticket: { id: string; created_by_user_id: string | null; created_by_username: string; ticket_number: string }, message: string): Promise<void> {
-  if (!ticket.created_by_user_id) return;
-  const id = randomUUID();
-  const dek = await ensureDek(deps.db, deps.keyProvider, 'notifications.message');
-  const encrypted = fieldCipher.encryptField(message, dek.rawDek, {
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'notifications', recordId: id, fieldName: 'message', keyVersion: dek.keyVersion
-  });
-  await deps.db.insertInto('notifications').values({
-    id, recipient_user_id: ticket.created_by_user_id, recipient_username: ticket.created_by_username,
-    type: 'statusChange', ticket_id: ticket.id, ticket_number: ticket.ticket_number, message: encrypted, is_read: false
-  }).execute();
-  await queueUserMail(deps, ticket.created_by_user_id, `Ticket ${ticket.ticket_number}`, message);
+  // Ueber die zentrale Zustellung: beachtet persoenliche Einstellungen und gesperrte/archivierte Konten.
+  await notifyUser(deps, { recipientUserId: ticket.created_by_user_id, type: 'statusChange', ticketId: ticket.id,
+    ticketNumber: ticket.ticket_number, message });
 }
 
 // Erinnert die anfragende Person nach X Tagen, schließt das Ticket nach Y Tagen automatisch,
 // wenn "Warten auf ..." (siehe waiting_since/waiting_message, PATCH /api/v2/tickets/:id) zu
 // lange unbeantwortet bleibt. Konfigurierbar über app_settings.config_json, wie autoArchive.
+export async function runAbsenceSchedules(deps: MaintenanceDeps): Promise<{ reassigned: number; ended: number }> {
+  const now = new Date();
+  const expired = await deps.db.updateTable('user_absences').set({ active: false, ended_at: mysqlTimestamp(now) }).where('active', '=', true).where('until_at', '<', now).executeTakeFirst();
+  const periods = await deps.db.selectFrom('user_absences').selectAll().where('active', '=', true)
+    .where(eb => eb.or([eb('from_at', 'is', null), eb('from_at', '<=', now)]))
+    .where(eb => eb.or([eb('until_at', 'is', null), eb('until_at', '>=', now)])).execute();
+  let reassigned = 0;
+  for (const period of periods) await deps.db.transaction().execute(async trx => {
+    await trx.selectFrom('users').select('id').where('id', '=', period.user_id).forUpdate().executeTakeFirst();
+    const current = await trx.selectFrom('user_absences').select('active').where('id', '=', period.id).forUpdate().executeTakeFirst();
+    if (!current?.active) return;
+    const candidate = period.substitute_user_id ? await trx.selectFrom('users').select(['id', 'username', 'role', 'account_archived', 'locked_permanent', 'account_valid_until']).where('id', '=', period.substitute_user_id).executeTakeFirst() : null;
+    const substitute = candidate && !candidate.account_archived && !candidate.locked_permanent && !isAccountExpired(candidate.account_valid_until) && candidate.role !== 'user' ? candidate : null;
+    const tickets = await trx.selectFrom('tickets').select('id').where('assigned_to_user_id', '=', period.user_id).where('archived_at', 'is', null).where('status', '!=', 'Geschlossen').execute();
+    for (const ticket of tickets) {
+      const changed = await trx.updateTable('tickets').set({ assigned_to_user_id: substitute?.id || null, assigned_to_username: substitute?.username || null, updated_at: mysqlTimestamp(now) }).where('id', '=', ticket.id).where('assigned_to_user_id', '=', period.user_id).executeTakeFirst();
+      if (!Number(changed.numUpdatedRows)) continue;
+      await trx.insertInto('ticket_audit_log').values({ id: randomUUID(), ticket_id: ticket.id, actor_user_id: null, actor_username: 'system', action: 'reassigned_absence', field: 'assigned_to_user_id', old_value: period.user_id, new_value: substitute?.id || null }).execute();
+      reassigned++;
+    }
+  });
+  return { reassigned, ended: Number(expired.numUpdatedRows) };
+}
+
 export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ reminded: number; closed: number }> {
   const settingsRow = await deps.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
   const config = settingsRow?.config_json ? JSON.parse(settingsRow.config_json) : {};
@@ -184,7 +200,7 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
   for (const t of waiting) {
     const since = new Date(t.waiting_since as unknown as string).getTime();
     const daysWaiting = (now - since) / (24 * 60 * 60 * 1000);
-    if (daysWaiting >= autoCloseDays) {
+    if (config.waitingAfterAction !== 'keep_open' && daysWaiting >= autoCloseDays) {
       await deps.db.updateTable('tickets').set({
         status: 'Geschlossen', closed_at: mysqlTimestamp(), updated_at: mysqlTimestamp(),
         waiting_since: null, waiting_message: null, waiting_reminder_sent: false
@@ -195,7 +211,7 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
       }).execute();
       await notifyTicketAuthor(deps, t, 'Dein Ticket wurde automatisch geschlossen, weil wir keine Antwort erhalten haben. Du kannst jederzeit wieder antworten.');
       closed++;
-    } else if (daysWaiting >= reminderDays && !t.waiting_reminder_sent) {
+    } else if (config.waitingReminderEnabled !== false && daysWaiting >= reminderDays && !t.waiting_reminder_sent) {
       await deps.db.updateTable('tickets').set({ waiting_reminder_sent: true }).where('id', '=', t.id).execute();
       await deps.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: t.id, actor_user_id: null, actor_username: 'system',
@@ -218,19 +234,31 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
   return { reminded, closed };
 }
 
+async function logSystemAction(deps: MaintenanceDeps, action: string, detail: Record<string, unknown>): Promise<void> {
+  await deps.db.insertInto('global_audit_log').values({
+    id: randomUUID(), actor_user_id: null, actor_username: 'System', action, target_type: 'system', target_id: null,
+    detail_json: JSON.stringify(detail)
+  }).execute();
+}
+
 export function startMaintenanceScheduler(deps: MaintenanceDeps, intervalMs = 5 * 60 * 1000): NodeJS.Timeout {
   const tick = async () => {
-    const jobs = [
-      ['Auto-Archivierung', () => runAutoArchive(deps)],
-      ['Wiederkehrende Tickets', () => runRecurringTickets(deps)],
-      ['Wiederkehrende Aufgaben', () => runRecurringAdminTodos(deps)],
-      ['Warten-auf-Benutzer', () => runWaitingTickets(deps)]
-    ] as const;
-    for (const [name, job] of jobs) {
+    // Automatische Aktionen erscheinen im Systemprotokoll (nur wenn tatsaechlich etwas passiert ist),
+    // ebenso jeder Fehlschlag eines Jobs.
+    const jobs: Array<[string, string, () => Promise<Record<string, number>>]> = [
+      ['Abwesenheitsplanung', 'system.absences_processed', async () => runAbsenceSchedules(deps)],
+      ['Auto-Archivierung', 'system.auto_archived', async () => ({ count: await runAutoArchive(deps) })],
+      ['Wiederkehrende Tickets', 'system.recurring_tickets_created', async () => ({ count: await runRecurringTickets(deps) })],
+      ['Wiederkehrende Aufgaben', 'system.recurring_todos_created', async () => ({ count: Number(await runRecurringAdminTodos(deps)) || 0 })],
+      ['Warten-auf-Benutzer', 'system.waiting_processed', async () => await runWaitingTickets(deps)]
+    ];
+    for (const [name, action, job] of jobs) {
       try {
-        await job();
+        const result = await job();
+        if (Object.values(result).some(value => Number(value) > 0)) await logSystemAction(deps, action, result);
       } catch (err) {
         console.error(`Wartungsjob fehlgeschlagen: ${name}`, err);
+        await logSystemAction(deps, 'system.job_failed', { job: name }).catch(() => {});
       }
     }
   };

@@ -66,6 +66,7 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
       const result = await app.db.transaction().execute(async trx => {
         const timer = await trx.selectFrom('ticket_work_timers').selectAll().where('user_id', '=', session.uid).where('id', '=', id).forUpdate().executeTakeFirst();
         if (!timer?.stopped_at) return null;
+        req.auditDetail = { ticketId: timer.ticket_id };
         const entryId = randomUUID(); const minutes = timerMinutes(new Date(timer.started_at), new Date(timer.stopped_at));
         await trx.insertInto('ticket_time_entries').values({ id: entryId, ticket_id: timer.ticket_id, user_id: session.uid,
           username: session.username, minutes,

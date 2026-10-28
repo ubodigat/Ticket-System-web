@@ -41,6 +41,7 @@ const ASSETS: Record<string, Asset> = {
   '/js/todos.js': { file: 'js/todos.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/outlook-calendar.js': { file: 'js/outlook-calendar.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/work-timer.js': { file: 'js/work-timer.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
+  '/js/kb-search.js': { file: 'js/kb-search.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/mfa.js': { file: 'js/mfa.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/office-view.js': { file: 'js/office-view.js', contentType: 'application/javascript; charset=utf-8', root: 'app' },
   '/js/office-view.css': { file: 'js/office-view.css', contentType: 'text/css; charset=utf-8', root: 'app' },

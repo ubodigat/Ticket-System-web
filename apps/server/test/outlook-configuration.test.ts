@@ -24,7 +24,7 @@ describe('personal Outlook setup and external invitations', () => {
   it('reports missing app configuration without requiring a failed navigation', async () => {
     const response = await request('/api/v2/outlook/status');
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ configured: false, connected: false, accountEmail: null });
+    expect(response.json()).toEqual({ configured: false, reason: 'app_not_configured', connected: false, accountEmail: null });
   });
   it('derives redirect_uri from PUBLIC_BASE_URL (not the request host) and constrains OAuth return paths', async () => {
     state.credentials = { tenantId: 'tenant', clientId: 'client', clientSecret: 'private-secret' };

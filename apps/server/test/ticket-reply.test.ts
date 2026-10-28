@@ -14,7 +14,8 @@ async function sendReply(status: string, role: 'user' | 'admin' = 'user', foreig
   const db: any = {
     selectFrom: (table: string) => {
       const chain: any = { select: () => chain, selectAll: () => chain, where: () => chain, forUpdate: () => chain,
-        executeTakeFirst: async () => ticket, executeTakeFirstOrThrow: async () => table === 'ticket_messages' ? message : ticket };
+        executeTakeFirst: async () => ticket, executeTakeFirstOrThrow: async () => table === 'ticket_messages' ? message : ticket,
+        execute: async () => [] };
       return chain;
     },
     insertInto: (table: string) => ({ values: (value: any) => ({ execute: async () => {

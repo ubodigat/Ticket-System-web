@@ -1,5 +1,15 @@
 # Änderungen
 
+## 29.10.2026 – Verwaltungsdialoge und Planung
+
+- Erklärte Wartefristen mit abschaltbarer Erinnerung und wählbarer automatischer Schließung.
+- Zwölf E-Mail-Vorlagenvariablen mit Einfügeschaltflächen und validierte Zeitzonenauswahl.
+- Bearbeitbare, durchsuchbare Textbausteine; Neuanlage vor den Verwaltungslisten.
+- Separate Wissensdatenbank-Leseansicht und durchsuchbare wiederkehrende Tickets.
+- Mehrere Abwesenheitszeiträume mit Überschneidungsprüfung und zeitgerechter Vertretung.
+- Personenauswahl innerhalb des sichtbaren Fensters und direkt anklickbare Ticket-Teilaufgaben.
+- Neu gegliederte interne Kommunikation; vorhandene Bedienelemente und Funktionen bleiben erhalten.
+
 ## 26.10.2026 – persönlicher Arbeitsbereich und MFA
 
 - Optionale, schreibgeschützte ONLYOFFICE-Oberfläche mit signierter Dokumentenkonfiguration,

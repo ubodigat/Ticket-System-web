@@ -5,6 +5,8 @@ export function memoryDb(tables: Record<string, any[]>) {
     if (op === '<') return row[key] < value;
     if (op === '>') return row[key] > value;
     if (op === '>=') return row[key] >= value;
+    if (op === '<=') return row[key] <= value;
+    if (op === 'is not') return row[key] !== value;
     if (op === '!=') return row[key] !== value;
     throw new Error('Unsupported test operator ' + op);
   };

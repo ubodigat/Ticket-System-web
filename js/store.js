@@ -504,17 +504,30 @@ export const Store = {
     },
     // Echtes, serverseitig geschriebenes Protokoll je Ticket (ticket_audit_log) -- ersetzt die
     // alte ticket.logs-Liste, die es in der v2-API nicht gibt (immer [] via mapApiTicketToLegacy).
+    // [Deutsch, Englisch]
     ticketAuditFieldLabels: {
-        title: 'Titel', description: 'Beschreibung', status: 'Status', priority: 'Priorität',
-        category: 'Kategorie', assigned_to_user_id: 'Zuständige Person', assigned_to_username: 'Zuständige Person',
-        sla_due_at: 'SLA-Frist', custom_due_at: 'Individuelle Frist', approval_status: 'Genehmigungsstatus',
-        type: 'Typ', incident_notice: 'Störungs-Hinweis', archived: 'Archiviert'
+        title: ['Titel', 'Title'], description: ['Beschreibung', 'Description'], status: ['Status', 'Status'],
+        priority: ['Priorität', 'Priority'], category: ['Kategorie', 'Category'],
+        assigned_to_username: ['Zuständige Person', 'Assignee'], sla_due_at: ['SLA-Frist', 'SLA deadline'],
+        custom_due_at: ['Individuelle Frist', 'Custom deadline'], approval_status: ['Genehmigungsstatus', 'Approval status'],
+        type: ['Typ', 'Type'], incident_notice: ['Störungs-Hinweis', 'Incident notice'], archived: ['Archiviert', 'Archived'],
+        archived_author_ack: ['Archivierung bestätigt', 'Archiving acknowledged'], participants: ['Beteiligte', 'Participants'],
+        incident_id: ['Großstörung', 'Major incident'], assigned_to_user_id: ['Zuständige Person (ID)', 'Assignee (ID)']
     },
     ticketAuditActionLabels: {
-        created: 'Ticket erstellt', updated: 'Ticket geändert', auto_archived: 'Automatisch archiviert',
-        created_recurring: 'Automatisch angelegt (wiederkehrend)', linked_incident: 'Mit Störung verknüpft',
-        approval_requested: 'Genehmigung angefordert', approval_decided: 'Genehmigung entschieden',
-        created_on_behalf: 'Im Auftrag angelegt', participants_updated: 'Beteiligte geändert'
+        created: ['Ticket erstellt', 'Ticket created'], updated: ['Ticket geändert', 'Ticket changed'],
+        auto_archived: ['Automatisch archiviert', 'Archived automatically'],
+        created_recurring: ['Automatisch angelegt (wiederkehrend)', 'Created automatically (recurring)'],
+        linked_incident: ['Mit Störung verknüpft', 'Linked to incident'],
+        approval_requested: ['Genehmigung angefordert', 'Approval requested'], approval_decided: ['Genehmigung entschieden', 'Approval decided'],
+        created_on_behalf: ['Im Auftrag angelegt', 'Created on behalf'], participants_updated: ['Beteiligte geändert', 'Participants changed'],
+        related_linked: ['Ticketverknüpfung hinzugefügt', 'Ticket link added'],
+        calendar_event_created: ['Outlook-Termin angelegt', 'Outlook appointment created'],
+        merged_into: ['In anderes Ticket zusammengeführt', 'Merged into another ticket'],
+        merged_from: ['Anderes Ticket hierher zusammengeführt', 'Another ticket merged into this one'],
+        reassigned_absence: ['Wegen Abwesenheit an Vertretung übergeben', 'Reassigned to substitute due to absence'],
+        auto_closed_waiting: ['Automatisch geschlossen (keine Rückmeldung)', 'Closed automatically (no response)'],
+        waiting_reminder_sent: ['Erinnerung an anfragende Person gesendet', 'Reminder sent to requester']
     },
     // Mehrfach-Beteiligte: echte /api/v2/tickets/:id/participants-API (ticket_participants-
     // Tabelle), nicht mehr ein nie persistiertes ticket.participants-Feld.
@@ -576,12 +589,24 @@ export const Store = {
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(id)}/audit-log`, { credentials: 'same-origin' });
         if (!res.ok) return [];
         const payload = await res.json();
-        return (payload.log || []).map(l => {
-            const fieldLabel = l.field ? (Store.ticketAuditFieldLabels[l.field] || l.field) : null;
-            const details = fieldLabel ? `${fieldLabel}: ${l.old_value ?? '–'} → ${l.new_value ?? '–'}` : '';
+        const lang = Lang.current === 'en' ? 1 : 0;
+        // Die Benutzernamen-Zeile zeigt dieselbe Zuweisung lesbar -- die reine ID-Zeile waere doppelt.
+        return (payload.log || []).filter(l => l.field !== 'assigned_to_user_id').map(l => {
+            const isActivity = typeof l.action === 'string' && l.action.startsWith('activity:');
+            const activityKey = isActivity ? l.action.slice('activity:'.length) : null;
+            let details = '';
+            if (isActivity) {
+                if (l.new_value) details = lang ? `failed/denied (${l.new_value})` : `fehlgeschlagen/abgelehnt (${l.new_value})`;
+            } else if (l.field) {
+                const fieldLabel = Store.ticketAuditFieldLabels[l.field]?.[lang] || l.field;
+                details = `${fieldLabel}: ${l.old_value ?? '–'} → ${l.new_value ?? '–'}`;
+            } else if (l.new_value) {
+                details = l.new_value;
+            }
             return {
-                id: l.id, user: l.actor_username || 'System',
-                action: Store.ticketAuditActionLabels[l.action] || l.action,
+                id: l.id,
+                user: !l.actor_username ? 'System' : l.actor_username === '-' ? (lang ? 'Not signed in' : 'Nicht angemeldet') : l.actor_username,
+                action: isActivity ? (Store.logLabels[activityKey]?.[lang] || activityKey) : (Store.ticketAuditActionLabels[l.action]?.[lang] || l.action),
                 details, date: l.created_at
             };
         });
@@ -764,6 +789,8 @@ export const Store = {
                 autoArchiveDays: cfg.autoArchiveClosedAfterDays ?? 0,
                 waitingReminderDays: cfg.waitingReminderDays ?? 2,
                 waitingAutoCloseDays: cfg.waitingAutoCloseDays ?? 7,
+                waitingAfterAction: cfg.waitingAfterAction || 'close',
+                waitingReminderEnabled: cfg.waitingReminderEnabled !== false,
                 defaultPrio: cfg.defaultPrio || 'Normal',
                 showSlaToUsers: !!cfg.showSlaToUsers,
                 notifPolicy: cfg.notifPolicy || {},
@@ -979,6 +1006,10 @@ export const Store = {
     // Härtung statt Entfernung der In-App-Update-Funktion: Passwort (+ TOTP bei aktiver 2FA) und
     // der zuvor angezeigte Ziel-Commit-Hash müssen mitgeschickt werden (siehe update.ts
     // requireStepUp/Commit-Pinning) -- die Oberfläche fragt beides vor dem eigentlichen Aufruf ab.
+    getSystemInfo: async () => {
+        const res = await fetch('/api/v2/system/info', { credentials: 'same-origin' }).catch(() => null);
+        return res && res.ok ? res.json() : null;
+    },
     runUpdate: async (expectedCommit, password, totpCode) => {
         const res = await fetch('/api/v2/update/run', {
             method: 'POST', credentials: 'same-origin',
@@ -1029,6 +1060,10 @@ export const Store = {
         }).catch(() => null);
         return !!res && res.ok;
     },
+    updateTextBlock: async (id, title, text) => {
+        const res = await fetch(`/api/v2/text-blocks/${encodeURIComponent(id)}`, { method: 'PATCH', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, content: text }) });
+        return res.ok;
+    },
     deleteTextBlock: async (id) => {
         const res = await fetch(`/api/v2/text-blocks/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
         return !!res && res.ok;
@@ -1041,17 +1076,45 @@ export const Store = {
         const res = await fetch('/api/v2/kb/articles', { credentials: 'same-origin' });
         if (!res.ok) return [];
         return ((await res.json()).articles || []).map(a => ({
-            id: a.id, title: a.title, body: a.content, source: a.source_ticket_id, createdAt: a.created_at
+            id: a.id, title: a.title, body: a.content, source: a.source_ticket_id, createdAt: a.created_at, updatedAt: a.updated_at,
+            category: a.category || null, createdByUserId: a.created_by_user_id || null, createdByName: a.created_by_username || null
         }));
     },
-    createKbArticle: async (title, content, sourceTicketId) => {
+    createKbArticle: async (title, content, sourceTicketId, category = null) => {
         const res = await fetch('/api/v2/kb/articles', {
             method: 'POST', credentials: 'same-origin',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ title, content, source_ticket_id: sourceTicketId || undefined })
+            body: JSON.stringify({ title, content, source_ticket_id: sourceTicketId || undefined, category: category || undefined })
         }).catch(() => null);
         if (!res || !res.ok) return null;
         return (await res.json()).id || null;
+    },
+    updateKbArticle: async (id, patch) => {
+        const res = await fetch(`/api/v2/kb/articles/${encodeURIComponent(id)}`, {
+            method: 'PATCH', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(patch)
+        }).catch(() => null);
+        return !!res && res.ok;
+    },
+    // Ticket-Kategorien + zusaetzliche, reine Wissensdatenbank-Kategorien (source 'ticket' | 'kb').
+    getKbCategories: async () => {
+        const res = await fetch('/api/v2/kb/categories', { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return [];
+        return (await res.json()).categories || [];
+    },
+    createKbCategory: async (name) => {
+        const res = await fetch('/api/v2/kb/categories', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name })
+        }).catch(() => null);
+        if (!res) return { ok: false, error: 'network' };
+        return { ok: res.ok, error: res.ok ? null : (await res.json().catch(() => ({}))).error };
+    },
+    deleteKbCategory: async (id) => {
+        const res = await fetch(`/api/v2/kb/categories/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
+        return !!res && res.ok;
     },
     deleteKbArticle: async (id) => {
         const res = await fetch(`/api/v2/kb/articles/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
@@ -1127,33 +1190,200 @@ export const Store = {
     // Globales Audit-Log ist rein serverseitig erzeugt (siehe users.ts/settings.ts/tickets.ts) --
     // kein Client-Schreibpfad mehr, damit niemand sich selbst beliebige Logeinträge unterschieben
     // kann (Log-Integrität, "fehlendes Security Logging" aus der Anforderungsliste).
-    globalLogActionLabels: {
-        'user.created': 'Benutzer erstellt',
-        'user.updated': 'Benutzer bearbeitet',
-        'user.deleted': 'Benutzer gelöscht',
-        'user.mfa_reset': '2FA zurückgesetzt',
-        'user.csv_import': 'Benutzer per CSV importiert',
-        'group.created': 'Gruppe erstellt',
-        'group.updated': 'Gruppe bearbeitet',
-        'group.deleted': 'Gruppe gelöscht',
-        'category.created': 'Kategorie erstellt',
-        'category.updated': 'Kategorie bearbeitet',
-        'settings.updated': 'Systemeinstellungen gespeichert'
+    // [Deutsch, Englisch] je fachlichem Ereignis bzw. je protokollierter Aktion ("METHODE /route").
+    logLabels: {
+        'login.success': ['Angemeldet', 'Signed in'],
+        'login.wrong_password': ['Anmeldung fehlgeschlagen: falsches Passwort', 'Sign-in failed: wrong password'],
+        'login.unknown_user': ['Anmeldung fehlgeschlagen: unbekannter Benutzername', 'Sign-in failed: unknown username'],
+        'login.rejected_locked_or_archived': ['Anmeldung abgewiesen: Konto gesperrt/archiviert/abgelaufen', 'Sign-in rejected: account locked/archived/expired'],
+        'login.invalid_password_hash': ['Anmeldung fehlgeschlagen: Passwort-Hash ungültig', 'Sign-in failed: invalid password hash'],
+        'login.ldap_success': ['Angemeldet per LDAP', 'Signed in via LDAP'],
+        'login.rejected_mfa_required': ['Anmeldung abgewiesen: 2FA erforderlich', 'Sign-in rejected: 2FA required'],
+        'login.wrong_totp_code': ['Anmeldung fehlgeschlagen: falscher 2FA-Code', 'Sign-in failed: wrong 2FA code'],
+        'user.created': ['Benutzer erstellt', 'User created'],
+        'user.updated': ['Benutzer bearbeitet', 'User updated'],
+        'user.deleted': ['Benutzer gelöscht', 'User deleted'],
+        'user.mfa_reset': ['2FA zurückgesetzt', '2FA reset'],
+        'user.csv_import': ['Benutzer per CSV importiert', 'Users imported from CSV'],
+        'user.email_changed': ['E-Mail-Adresse geändert', 'Email address changed'],
+        'user.password_changed_self': ['Eigenes Passwort geändert', 'Own password changed'],
+        'user.password_changed_by_admin': ['Passwort durch Admin zurückgesetzt', 'Password reset by admin'],
+        'user.mfa_recovery_used': ['Wiederherstellungscode verwendet', 'Recovery code used'],
+        'group.created': ['Gruppe erstellt', 'Group created'],
+        'group.updated': ['Gruppe bearbeitet', 'Group updated'],
+        'group.deleted': ['Gruppe gelöscht', 'Group deleted'],
+        'category.created': ['Kategorie erstellt', 'Category created'],
+        'category.updated': ['Kategorie bearbeitet', 'Category updated'],
+        'settings.updated': ['Systemeinstellungen gespeichert', 'System settings saved'],
+        'settings.smtp_updated': ['SMTP-Einstellungen gespeichert', 'SMTP settings saved'],
+        'settings.ldap_updated': ['LDAP-Einstellungen gespeichert', 'LDAP settings saved'],
+        'settings.outlook_secret_updated': ['Outlook-Client-Secret gespeichert', 'Outlook client secret saved'],
+        'mail.queued': ['E-Mail versendet', 'Email sent'],
+        'mfa.disabled': ['2FA deaktiviert', '2FA disabled'],
+        'mfa.rotated': ['2FA-Gerät gewechselt', '2FA device changed'],
+        'mfa.passkey_added': ['Passkey hinzugefügt', 'Passkey added'],
+        'mfa.totp_enrolled': ['Authenticator-App eingerichtet', 'Authenticator app set up'],
+        'update.run_triggered': ['Update gestartet', 'Update started'],
+        'update.run_rejected_commit_mismatch': ['Update abgelehnt: Zielversion stimmt nicht', 'Update rejected: target version mismatch'],
+        'update.migrate_triggered': ['Datenbank-Migration gestartet', 'Database migration started'],
+        'update.rollback_triggered': ['Rollback gestartet', 'Rollback started'],
+        'POST /api/v1/auth/logout': ['Abgemeldet', 'Signed out'],
+        'POST /api/v1/setup/complete': ['Ersteinrichtung abgeschlossen', 'Initial setup completed'],
+        'POST /api/v2/mail/send': ['E-Mail versendet', 'Email sent'],
+        'POST /api/v2/notifications': ['Benachrichtigung gesendet', 'Notification sent'],
+        'POST /api/v2/notifications/:id/read': ['Benachrichtigung gelesen', 'Notification marked as read'],
+        'POST /api/v2/notifications/read-all': ['Alle Benachrichtigungen gelesen', 'All notifications marked as read'],
+        'DELETE /api/v2/notifications/:id': ['Benachrichtigung gelöscht', 'Notification deleted'],
+        'DELETE /api/v2/notifications': ['Alle Benachrichtigungen gelöscht', 'All notifications deleted'],
+        'POST /api/v2/account-requests': ['Kontoanfrage gestellt', 'Account requested'],
+        'PATCH /api/v2/account-requests/:id': ['Kontoanfrage entschieden', 'Account request decided'],
+        'GET /api/v2/attachments/:id': ['Anhang abgerufen', 'Attachment downloaded'],
+        'DELETE /api/v2/attachments/:id': ['Anhang gelöscht', 'Attachment deleted'],
+        'GET /api/v2/attachments/:id/preview': ['Anhangvorschau geöffnet', 'Attachment preview opened'],
+        'GET /api/v2/attachments/:id/office-view': ['Office-Ansicht geöffnet', 'Office view opened'],
+        'POST /api/v2/attachments': ['Anhang hochgeladen', 'Attachment uploaded'],
+        'GET /api/v2/audit-log': ['Systemprotokoll eingesehen', 'System log viewed'],
+        'POST /api/v2/list-views': ['Listenansicht gespeichert', 'List view saved'],
+        'DELETE /api/v2/list-views/:id': ['Listenansicht gelöscht', 'List view deleted'],
+        'POST /api/v2/kb/articles': ['Wissensartikel erstellt', 'Knowledge article created'],
+        'PATCH /api/v2/kb/articles/:id': ['Wissensartikel bearbeitet', 'Knowledge article updated'],
+        'DELETE /api/v2/kb/articles/:id': ['Wissensartikel gelöscht', 'Knowledge article deleted'],
+        'GET /api/v2/kb/attachments/:attachmentId': ['Wissensanhang abgerufen', 'Knowledge attachment downloaded'],
+        'POST /api/v2/kb/articles/:id/attachments': ['Wissensanhang hochgeladen', 'Knowledge attachment uploaded'],
+        'DELETE /api/v2/kb/attachments/:attachmentId': ['Wissensanhang gelöscht', 'Knowledge attachment deleted'],
+        'POST /api/v2/text-blocks': ['Textbaustein erstellt', 'Text block created'],
+        'DELETE /api/v2/text-blocks/:id': ['Textbaustein gelöscht', 'Text block deleted'],
+        'POST /api/v2/mfa/setup': ['2FA-Einrichtung gestartet', '2FA setup started'],
+        'POST /api/v2/mfa/confirm': ['2FA bestätigt', '2FA confirmed'],
+        'POST /api/v2/mfa/disable': ['2FA deaktivieren', 'Disable 2FA'],
+        'POST /api/v2/mfa/login/status': ['Anmeldestatus (2FA) abgefragt', 'Sign-in status (2FA) requested'],
+        'POST /api/v2/mfa/login/totp-setup': ['2FA-Einrichtung bei Anmeldung gestartet', '2FA setup started during sign-in'],
+        'POST /api/v2/mfa/login/totp': ['2FA-Code bei Anmeldung eingegeben', '2FA code entered during sign-in'],
+        'POST /api/v2/mfa/passkeys/options': ['Passkey-Anfrage gestartet', 'Passkey request started'],
+        'POST /api/v2/mfa/passkeys/verify': ['Passkey geprüft', 'Passkey verified'],
+        'POST /api/v2/mfa/login/finish': ['Anmeldung abschließen', 'Complete sign-in'],
+        'POST /api/v2/mfa/manage': ['MFA-Verwaltung geöffnet', 'MFA management opened'],
+        'POST /api/v2/mfa/recovery/generate': ['Wiederherstellungscodes erzeugt', 'Recovery codes generated'],
+        'POST /api/v2/mfa/login/recovery': ['Wiederherstellungscode eingegeben', 'Recovery code entered'],
+        'POST /api/v2/mfa/passkeys/remove': ['Passkey entfernt', 'Passkey removed'],
+        'GET /api/v2/outlook/callback': ['Outlook-Kalender verbinden', 'Connect Outlook calendar'],
+        'POST /api/v2/outlook/disconnect': ['Outlook-Kalender getrennt', 'Outlook calendar disconnected'],
+        'POST /api/v2/outlook/events': ['Outlook-Termin angelegt', 'Outlook appointment created'],
+        'PATCH /api/v2/users/me/preferences': ['Persönliche Einstellungen geändert', 'Personal preferences changed'],
+        'POST /api/v2/recurring-rules': ['Wiederkehrende Ticketregel erstellt', 'Recurring ticket rule created'],
+        'PATCH /api/v2/recurring-rules/:id': ['Wiederkehrende Ticketregel bearbeitet', 'Recurring ticket rule updated'],
+        'DELETE /api/v2/recurring-rules/:id': ['Wiederkehrende Ticketregel gelöscht', 'Recurring ticket rule deleted'],
+        'PATCH /api/v2/settings': ['Systemeinstellungen speichern', 'Save system settings'],
+        'GET /api/v2/settings/smtp': ['SMTP-Einstellungen eingesehen', 'SMTP settings viewed'],
+        'PATCH /api/v2/settings/smtp': ['SMTP-Einstellungen speichern', 'Save SMTP settings'],
+        'POST /api/v2/settings/smtp/test': ['SMTP-Test ausgeführt', 'SMTP test run'],
+        'GET /api/v2/settings/outlook': ['Outlook-Einstellungen eingesehen', 'Outlook settings viewed'],
+        'PATCH /api/v2/settings/outlook/secret': ['Outlook-Client-Secret speichern', 'Save Outlook client secret'],
+        'GET /api/v2/settings/ldap': ['LDAP-Einstellungen eingesehen', 'LDAP settings viewed'],
+        'PATCH /api/v2/settings/ldap': ['LDAP-Einstellungen speichern', 'Save LDAP settings'],
+        'POST /api/v2/settings/ldap/test': ['LDAP-Test ausgeführt', 'LDAP test run'],
+        'POST /api/v2/categories': ['Kategorie erstellen', 'Create category'],
+        'PATCH /api/v2/categories/:id': ['Kategorie bearbeiten', 'Update category'],
+        'POST /api/v2/tickets': ['Ticket erstellt', 'Ticket created'],
+        'PATCH /api/v2/tickets/:id': ['Ticket bearbeitet', 'Ticket updated'],
+        'POST /api/v2/tickets/:id/messages': ['Chat-Nachricht gesendet', 'Chat message sent'],
+        'PATCH /api/v2/tickets/:id/messages/:messageId': ['Chat-Nachricht bearbeitet', 'Chat message edited'],
+        'POST /api/v2/tickets/:id/notes': ['Interne Notiz erstellt', 'Internal note created'],
+        'PATCH /api/v2/tickets/:id/notes/:noteId': ['Interne Notiz bearbeitet', 'Internal note updated'],
+        'GET /api/v2/tickets/:id/audit-log': ['Ticketprotokoll eingesehen', 'Ticket log viewed'],
+        'POST /api/v2/tickets/:id/link-incident': ['Mit Großstörung verknüpft', 'Linked to major incident'],
+        'POST /api/v2/tickets/:id/request-approval': ['Genehmigung angefordert', 'Approval requested'],
+        'POST /api/v2/tickets/:id/approval-decision': ['Genehmigung entschieden', 'Approval decided'],
+        'POST /api/v2/tickets/:id/time-entries': ['Zeit erfasst', 'Time logged'],
+        'DELETE /api/v2/tickets/:id/time-entries/:entryId': ['Zeiteintrag gelöscht', 'Time entry deleted'],
+        'POST /api/v2/tickets/:id/todos': ['Teilaufgabe erstellt', 'Subtask created'],
+        'PATCH /api/v2/tickets/:id/todos/:todoId': ['Teilaufgabe bearbeitet', 'Subtask updated'],
+        'DELETE /api/v2/tickets/:id/todos/:todoId': ['Teilaufgabe gelöscht', 'Subtask deleted'],
+        'PUT /api/v2/tickets/:id/participants': ['Beteiligte geändert', 'Participants changed'],
+        'POST /api/v2/tickets/:id/related': ['Ticketverknüpfung hinzugefügt', 'Ticket link added'],
+        'DELETE /api/v2/tickets/:id/related/:relatedId': ['Ticketverknüpfung entfernt', 'Ticket link removed'],
+        'POST /api/v2/tickets/:id/calendar-event': ['Outlook-Termin zum Ticket angelegt', 'Outlook appointment for ticket created'],
+        'POST /api/v2/tickets/:id/merge': ['Tickets zusammengeführt', 'Tickets merged'],
+        'POST /api/v2/todos/recurring': ['Wiederkehrende Aufgabe erstellt', 'Recurring task created'],
+        'PATCH /api/v2/todos/recurring/:id': ['Wiederkehrende Aufgabe bearbeitet', 'Recurring task updated'],
+        'DELETE /api/v2/todos/recurring/:id': ['Wiederkehrende Aufgabe gelöscht', 'Recurring task deleted'],
+        'POST /api/v2/todos': ['Aufgabe erstellt', 'Task created'],
+        'PATCH /api/v2/todos/:id': ['Aufgabe bearbeitet', 'Task updated'],
+        'DELETE /api/v2/todos/:id': ['Aufgabe gelöscht', 'Task deleted'],
+        'POST /api/v2/update/run': ['Update starten', 'Start update'],
+        'POST /api/v2/update/migrate': ['Migration starten', 'Start migration'],
+        'POST /api/v2/update/rollback': ['Rollback starten', 'Start rollback'],
+        'POST /api/v2/uploads': ['Datei-Upload begonnen', 'File upload started'],
+        'PUT /api/v2/uploads/:id/chunks/:part': ['Datei-Upload (Teil)', 'File upload (part)'],
+        'POST /api/v2/uploads/:id/complete': ['Datei-Upload abgeschlossen', 'File upload completed'],
+        'DELETE /api/v2/uploads/:id': ['Datei-Upload abgebrochen', 'File upload cancelled'],
+        'GET /api/v2/uploads/:id/content': ['Datei heruntergeladen', 'File downloaded'],
+        'POST /api/v2/users': ['Benutzer erstellen', 'Create user'],
+        'PATCH /api/v2/users/:id': ['Benutzer bearbeitet', 'User updated'],
+        'DELETE /api/v2/users/:id': ['Benutzer löschen', 'Delete user'],
+        'POST /api/v2/users/:id/mfa-reset': ['2FA zurücksetzen', 'Reset 2FA'],
+        'POST /api/v2/users/:id/change-password': ['Passwort ändern', 'Change password'],
+        'POST /api/v2/groups': ['Gruppe erstellen', 'Create group'],
+        'PATCH /api/v2/groups/:id': ['Gruppe bearbeiten', 'Update group'],
+        'DELETE /api/v2/groups/:id': ['Gruppe löschen', 'Delete group'],
+        'POST /api/v2/users/me/absence': ['Eigene Abwesenheit gesetzt', 'Own absence set'],
+        'POST /api/v2/users/:id/absence': ['Abwesenheit gesetzt', 'Absence set'],
+        'GET /api/v2/users/export.csv': ['Benutzer exportiert', 'Users exported'],
+        'POST /api/v2/users/import.csv': ['Benutzer importieren', 'Import users'],
+        'POST /api/v2/work-timer': ['Arbeitszeit gestartet', 'Work timer started'],
+        'POST /api/v2/work-timer/:id/stop': ['Arbeitszeit gestoppt', 'Work timer stopped'],
+        'POST /api/v2/work-timer/:id/complete': ['Arbeitszeit abgeschlossen', 'Work timer completed'],
+        'POST /api/v2/kb/categories': ['Wissenskategorie erstellt', 'Knowledge category created'],
+        'DELETE /api/v2/kb/categories/:id': ['Wissenskategorie gelöscht', 'Knowledge category deleted'],
+        'GET /api/v2/system/info': ['Systeminformationen eingesehen', 'System information viewed'],
+        'system.auto_archived': ['Tickets automatisch archiviert', 'Tickets archived automatically'],
+        'system.recurring_tickets_created': ['Wiederkehrende Tickets automatisch angelegt', 'Recurring tickets created automatically'],
+        'system.recurring_todos_created': ['Wiederkehrende Aufgaben automatisch angelegt', 'Recurring tasks created automatically'],
+        'system.waiting_processed': ['Erinnerungen gesendet / Tickets automatisch geschlossen', 'Reminders sent / tickets closed automatically'],
+        'system.job_failed': ['Wartungsjob fehlgeschlagen', 'Maintenance job failed']
     },
-    getGlobalLogs: async () => {
-        const res = await fetch('/api/v2/audit-log', { credentials: 'same-origin' });
-        if (!res.ok) return [];
+    mapGlobalLog: (l) => {
+        let detail = null;
+        try { detail = l.detail_json ? JSON.parse(l.detail_json) : null; } catch { detail = null; }
+        const en = Lang.current === 'en';
+        const isRequest = typeof l.action === 'string' && l.action.startsWith('request:');
+        const key = isRequest ? l.action.slice('request:'.length) : l.action;
+        const failed = isRequest && Number(detail?.status) >= 400;
+        let details;
+        if (isRequest) {
+            const parts = [];
+            if (detail?.ticket) parts.push(`Ticket ${detail.ticket}`);
+            else if (l.target_id) parts.push(`${en ? 'Target' : 'Ziel'}: ${l.target_id}`);
+            if (failed) parts.push(en ? `failed/denied (HTTP ${detail.status})` : `fehlgeschlagen/abgelehnt (HTTP ${detail.status})`);
+            if (detail?.ip) parts.push(`IP ${detail.ip}`);
+            details = parts.join(' · ');
+        } else {
+            details = detail ? Object.entries(detail).filter(([, v]) => v !== undefined && v !== null)
+                .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ') : (l.target_id || '');
+        }
+        const method = isRequest ? key.split(' ')[0] : '';
+        const icon = failed ? 'shield-alert' : key.startsWith('login.') ? 'log-in' : key === 'POST /api/v1/auth/logout' ? 'log-out'
+            : method === 'DELETE' || key.endsWith('.deleted') ? 'trash-2' : method === 'GET' ? 'eye'
+            : method === 'POST' || key.endsWith('.created') ? 'plus-circle' : 'refresh-cw';
+        return {
+            id: l.id, raw: l, icon, failed,
+            user: l.actor_username === '-' ? (en ? 'Not signed in' : 'Nicht angemeldet') : l.actor_username,
+            action: Store.logLabels[key]?.[en ? 1 : 0] || key,
+            details,
+            date: l.created_at
+        };
+    },
+    // Seitenweise (neueste zuerst); from/to in Millisekunden, before/beforeId = Cursor des letzten Eintrags.
+    getGlobalLogs: async ({ from = null, to = null, before = null, beforeId = null } = {}) => {
+        const params = new URLSearchParams({ limit: '500' });
+        if (from) params.set('from', new Date(from).toISOString());
+        if (to) params.set('to', new Date(to).toISOString());
+        if (before) params.set('before', before);
+        if (beforeId) params.set('beforeId', beforeId);
+        const res = await fetch(`/api/v2/audit-log?${params.toString()}`, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return { entries: [], hasMore: false };
         const payload = await res.json();
-        return (payload.log || []).map(l => {
-            const detail = l.detail_json ? JSON.parse(l.detail_json) : null;
-            return {
-                id: l.id,
-                user: l.actor_username,
-                action: Store.globalLogActionLabels[l.action] || l.action,
-                details: detail ? Object.entries(detail).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => `${k}: ${v}`).join(', ') : (l.target_id || ''),
-                date: l.created_at
-            };
-        });
+        return { hasMore: !!payload.hasMore, entries: (payload.log || []).map(l => Store.mapGlobalLog(l)) };
     },
     // Benachrichtigungen laufen über die echte /api/v2/notifications-API; Erzeugung passiert
     // serverseitig bei der jeweiligen Ticket-Aktion (siehe tickets.ts), nicht mehr clientseitig.
@@ -1192,6 +1422,7 @@ export const Store = {
     // Welche Benachrichtigungs-Ereignisse es gibt, für wen sie relevant sind, und wie sie heißen.
     notifTypeMeta: {
         newTicket: { label: 'Neues Ticket eingegangen', roles: ['admin'] },
+        ticketAssigned: { label: 'Ticket mir zugewiesen / als beteiligte Person hinzugefügt', roles: ['admin'] },
         mention: { label: 'In einem Kommentar erwähnt worden', roles: ['admin'] },
         statusChange: { label: 'Status deines Tickets geändert', roles: ['user'] },
         newMessage: { label: 'Neue Chat-Nachricht', roles: ['user', 'admin'] },
@@ -1201,6 +1432,7 @@ export const Store = {
     // Werkseinstellung: wer darf was personalisieren, und was gilt, solange nichts eingestellt ist.
     defaultNotifPolicy: () => ({
         newTicket: { admin: { appLocked: true, emailLocked: false, defaultApp: true, defaultEmail: true } },
+        ticketAssigned: { admin: { appLocked: true, emailLocked: false, defaultApp: true, defaultEmail: true } },
         mention: { admin: { appLocked: true, emailLocked: false, defaultApp: true, defaultEmail: false } },
         statusChange: { user: { appLocked: false, emailLocked: false, defaultApp: true, defaultEmail: true } },
         newMessage: {

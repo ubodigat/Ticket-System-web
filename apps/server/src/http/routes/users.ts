@@ -241,6 +241,7 @@ function levenshteinWithinTwo(a: string, b: string): boolean {
 
 const setAbsenceSchema = z.object({
   active: z.boolean(),
+  append: z.boolean().default(false),
   from_at: z.string().datetime().nullable().optional(),
   until_at: z.string().datetime().nullable().optional(),
   substitute_user_id: z.string().nullable().optional(),
@@ -266,18 +267,18 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   const absenceSelects = (eb: any) => [
     eb.selectFrom('user_absences').select('from_at')
       .whereRef('user_absences.user_id', '=', 'users.id').where('user_absences.active', '=', true)
-      .limit(1).as('absence_from_at'),
+      .where((filter: any) => filter.or([filter('user_absences.until_at', 'is', null), filter('user_absences.until_at', '>=', new Date())])).orderBy('user_absences.from_at', 'asc').limit(1).as('absence_from_at'),
     eb.selectFrom('user_absences').select('until_at')
       .whereRef('user_absences.user_id', '=', 'users.id').where('user_absences.active', '=', true)
-      .limit(1).as('absence_until_at'),
+      .where((filter: any) => filter.or([filter('user_absences.until_at', 'is', null), filter('user_absences.until_at', '>=', new Date())])).orderBy('user_absences.from_at', 'asc').limit(1).as('absence_until_at'),
     eb.selectFrom('user_absences').select('visible')
       .whereRef('user_absences.user_id', '=', 'users.id').where('user_absences.active', '=', true)
-      .limit(1).as('absence_visible'),
+      .where((filter: any) => filter.or([filter('user_absences.until_at', 'is', null), filter('user_absences.until_at', '>=', new Date())])).orderBy('user_absences.from_at', 'asc').limit(1).as('absence_visible'),
     eb.selectFrom('user_absences')
-      .innerJoin('users as su', 'su.id', 'user_absences.substitute_user_id')
+      .leftJoin('users as su', 'su.id', 'user_absences.substitute_user_id')
       .select('su.username')
       .whereRef('user_absences.user_id', '=', 'users.id').where('user_absences.active', '=', true)
-      .limit(1).as('absence_substitute_username')
+      .where((filter: any) => filter.or([filter('user_absences.until_at', 'is', null), filter('user_absences.until_at', '>=', new Date())])).orderBy('user_absences.from_at', 'asc').limit(1).as('absence_substitute_username')
   ];
 
   // Wandelt die vier absence_*-Rohspalten in das vom Frontend erwartete Objekt
@@ -1027,24 +1028,34 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   // "speicherte" es über Store.saveUsers, das das absence-Feld gar nicht kennt -- Abwesenheiten
   // für andere Personen wurden dadurch nie tatsächlich in der Datenbank gespeichert.
   async function applyUserAbsence(targetUserId: string, actor: { uid: string; username: string }, data: z.infer<typeof setAbsenceSchema>) {
+    return app.db.transaction().execute(async db => {
+    await db.selectFrom('users').select('id').where('id', '=', targetUserId).forUpdate().executeTakeFirstOrThrow();
     if (data.active && data.substitute_user_id) {
-      const substitute = await app.db.selectFrom('users').select(['id', 'account_archived']).where('id', '=', data.substitute_user_id).executeTakeFirst();
-      if (!substitute || substitute.account_archived || substitute.id === targetUserId) throw { statusCode: 400, message: 'invalid_substitute' };
+      const substitute = await db.selectFrom('users').select(['id', 'role', 'account_archived', 'locked_permanent', 'account_valid_until']).where('id', '=', data.substitute_user_id).executeTakeFirst();
+      if (!substitute || substitute.account_archived || substitute.locked_permanent || isAccountExpired(substitute.account_valid_until) || substitute.role === 'user' || substitute.id === targetUserId) throw { statusCode: 400, message: 'invalid_substitute' };
     }
     // Laufende Abwesenheit derselben Person beenden, bevor eine neue beginnt -- nie zwei
     // gleichzeitig aktive Zeilen für dieselbe Person.
-    await app.db.updateTable('user_absences')
+    if (!data.append && (!data.active || !data.from_at || Date.parse(data.from_at) <= Date.now())) await db.updateTable('user_absences')
       .set({ active: false, ended_at: mysqlTimestamp() })
       .where('user_id', '=', targetUserId)
       .where('active', '=', true)
+      .where(eb => eb.or([eb('from_at', 'is', null), eb('from_at', '<=', new Date())]))
       .execute();
 
     if (!data.active) {
       return { success: true, active: false };
     }
 
+    const start = data.from_at ? Date.parse(data.from_at) : Date.now();
+    const end = data.until_at ? Date.parse(data.until_at) : Infinity;
+    if (end < start || end < Date.now()) throw { statusCode: 400, message: 'invalid_absence_period' };
+    const periods = await db.selectFrom('user_absences').select(['from_at', 'until_at']).where('user_id', '=', targetUserId).where('active', '=', true).forUpdate().execute();
+    if (periods.some(period => (period.from_at ? new Date(period.from_at).getTime() : -Infinity) <= end && (period.until_at ? new Date(period.until_at).getTime() : Infinity) >= start)) {
+      throw { statusCode: 409, message: 'absence_periods_overlap' };
+    }
     const id = randomUUID();
-    await app.db.insertInto('user_absences').values({
+    await db.insertInto('user_absences').values({
       id,
       user_id: targetUserId,
       active: true,
@@ -1056,31 +1067,45 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
     // Sofortige Wirkung (docs/SPEC.md §7.1): offene, zugewiesene Tickets gehen sofort an die
     // Vertretung über, nicht erst beim nächsten Login irgendeiner Person.
-    if (data.substitute_user_id) {
-      const reassigned = await app.db.selectFrom('tickets')
+    if (start <= Date.now()) {
+      const reassigned = await db.selectFrom('tickets')
         .select('id')
         .where('assigned_to_user_id', '=', targetUserId)
         .where('archived_at', 'is', null)
+        .where('status', '!=', 'Geschlossen')
         .execute();
       if (reassigned.length > 0) {
-        const substitute = await app.db.selectFrom('users').select('username').where('id', '=', data.substitute_user_id).executeTakeFirst();
-        await app.db.updateTable('tickets')
-          .set({ assigned_to_user_id: data.substitute_user_id, assigned_to_username: substitute?.username ?? null, updated_at: mysqlTimestamp() })
+        const substitute = data.substitute_user_id ? await db.selectFrom('users').select('username').where('id', '=', data.substitute_user_id).executeTakeFirst() : null;
+        await db.updateTable('tickets')
+          .set({ assigned_to_user_id: data.substitute_user_id ?? null, assigned_to_username: substitute?.username ?? null, updated_at: mysqlTimestamp() })
           .where('assigned_to_user_id', '=', targetUserId)
           .where('archived_at', 'is', null)
+          .where('status', '!=', 'Geschlossen')
           .execute();
         for (const ticket of reassigned) {
-          await app.db.insertInto('ticket_audit_log').values({
+          await db.insertInto('ticket_audit_log').values({
             id: randomUUID(), ticket_id: ticket.id, actor_user_id: actor.uid, actor_username: actor.username,
-            action: 'reassigned_absence', field: 'assigned_to_user_id', old_value: targetUserId, new_value: data.substitute_user_id
+            action: 'reassigned_absence', field: 'assigned_to_user_id', old_value: targetUserId, new_value: data.substitute_user_id ?? null
           }).execute();
         }
       }
     }
 
     return { success: true, active: true, id };
+    });
   }
 
+  app.get('/api/v2/users/me/absences', async (req, reply) => {
+    try { const actor = requireAdmin(req); return { absences: await app.db.selectFrom('user_absences').selectAll().where('user_id', '=', actor.uid).where('active', '=', true).orderBy('from_at', 'asc').execute() }; }
+    catch (error) { return routeError(app, reply, error); }
+  });
+  app.delete('/api/v2/users/me/absences/:id', async (req, reply) => {
+    try {
+      const actor = requireAdmin(req); const { id } = req.params as { id: string };
+      const changed = await app.db.updateTable('user_absences').set({ active: false, ended_at: mysqlTimestamp() }).where('id', '=', id).where('user_id', '=', actor.uid).where('active', '=', true).executeTakeFirst();
+      return Number(changed.numUpdatedRows) ? { success: true } : reply.code(404).send({ error: 'not_found' });
+    } catch (error) { return routeError(app, reply, error); }
+  });
   app.post('/api/v2/users/me/absence', async (req, reply) => {
     try {
       const session = requireAdmin(req);

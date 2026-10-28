@@ -133,6 +133,8 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
   app.delete('/api/v2/uploads/:id', async (req, reply) => {
     try {
       const actor = requireSession(req); const { id } = req.params as { id: string };
+      const pending = await app.db.selectFrom('file_uploads').select('ticket_id').where('id', '=', id).where('owner_user_id', '=', actor.uid).executeTakeFirst();
+      if (pending?.ticket_id) req.auditDetail = { ticketId: pending.ticket_id };
       await app.db.deleteFrom('file_uploads').where('id', '=', id).where('owner_user_id', '=', actor.uid).where('completed', '=', false).execute();
       return reply.send({ success: true });
     } catch (error) { return routeError(app, reply, error); }

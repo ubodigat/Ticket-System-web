@@ -16,7 +16,8 @@ import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
-import { queueMail as sendMail, queueMailIfConfigured as sendMailSafe, queueUserMail } from '../../mail/queue.js';
+import { queueMail as sendMail, queueMailIfConfigured as sendMailSafe } from '../../mail/queue.js';
+import { notifyUser } from '../../domain/notifications.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { convertOfficePreview, discardOfficePreview } from '../../documents/officePreview.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
@@ -67,42 +68,10 @@ const attachmentSchema = z.object({
 export async function createNotification(
   app: FastifyInstance,
   deps: ExtrasRouteDeps,
-  params: { recipientUserId: string | null; recipientUsername: string; type: string; ticketId?: string | null; ticketNumber?: string | null; message: string }
+  params: { recipientUserId: string | null; recipientUsername?: string | undefined; type: string; ticketId?: string | null; ticketNumber?: string | null;
+    message: string; actorUserId?: string | null }
 ): Promise<void> {
-  if (!params.recipientUserId) return;
-  const id = randomUUID();
-  const dek = await ensureDek(app.db, deps.keyProvider, 'notifications.message');
-  const encrypted = fieldCipher.encryptField(params.message, dek.rawDek, {
-    installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'notifications',
-    recordId: id,
-    fieldName: 'message',
-    keyVersion: dek.keyVersion
-  });
-  await app.db.insertInto('notifications').values({
-    id,
-    recipient_user_id: params.recipientUserId,
-    recipient_username: params.recipientUsername,
-    type: params.type,
-    ticket_id: params.ticketId ?? null,
-    ticket_number: params.ticketNumber ?? null,
-    message: encrypted,
-    is_read: false
-  }).execute();
-
-  // E-Mail-Zustellung ist best-effort und blockiert die In-App-Benachrichtigung nie.
-  // Security-Audit R-15: ein Fehler beim Einreihen (DB-Fehler, kaputtes JSON in
-  // notif_prefs_json, ...) liess bisher den ganzen Aufruf durchschlagen -- ein bereits
-  // gespeicherter Vorgang (neues Ticket, Statuswechsel) endete dadurch trotzdem mit HTTP 500,
-  // obwohl die In-App-Benachrichtigung oben schon erfolgreich angelegt war. Jetzt nur noch
-  // geloggt, nie mehr nach aussen durchgereicht.
-  try {
-    await queueUserMail({ db: app.db, ...deps }, params.recipientUserId,
-      params.ticketNumber ? `Ticket ${params.ticketNumber}` : 'Benachrichtigung', params.message, params.type);
-  } catch (err) {
-    app.log.error({ err, recipientUserId: params.recipientUserId }, 'Mail konnte nicht eingereiht werden');
-  }
+  await notifyUser({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, params, app.log);
 }
 
 export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDeps): void {
@@ -208,7 +177,8 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
           type: parsed.data.type,
           ticketId: parsed.data.ticket_id ?? null,
           ticketNumber: ticket?.ticket_number ?? null,
-          message: parsed.data.message
+          message: parsed.data.message,
+          actorUserId: session.uid
         });
       }
       return reply.code(201).send({ success: true });
@@ -454,6 +424,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const attachment = await app.db.selectFrom('attachments').select(['id', 'ticket_id', 'uploaded_by_user_id']).where('id', '=', id).executeTakeFirst();
       if (!attachment) return reply.code(404).send({ error: 'not_found' });
       if (attachment.uploaded_by_user_id !== actor.uid) return reply.code(403).send({ error: 'forbidden' });
+      req.auditDetail = { ticketId: attachment.ticket_id };
       await app.db.deleteFrom('attachments').where('id', '=', id).where('uploaded_by_user_id', '=', actor.uid).execute();
       await app.db.deleteFrom('file_uploads').where('id', '=', id).execute();
       discardOfficePreview(id);
@@ -567,9 +538,27 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
     try {
       const session = requireAdmin(req);
       if (!(await hasAdminPermission(session, 'canViewLogs'))) return reply.code(403).send({ error: 'forbidden' });
-      const log = await app.db.selectFrom('global_audit_log')
-        .selectAll().orderBy('created_at', 'desc').limit(500).execute();
-      return reply.send({ log });
+      // Seitenweise statt fest 500 Eintraege: der Cursor (before + beforeId) ist eindeutig, auch wenn
+      // mehrere Eintraege in derselben Sekunde entstanden sind.
+      const timestamp = z.string().max(40).refine(value => Number.isFinite(Date.parse(value)), 'invalid_timestamp');
+      const parsed = z.object({
+        limit: z.coerce.number().int().min(1).max(2000).default(500),
+        before: timestamp.optional(), beforeId: z.string().max(36).optional(),
+        from: timestamp.optional(), to: timestamp.optional()
+      }).safeParse(req.query);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_query' });
+      const { limit, before, beforeId, from, to } = parsed.data;
+      let query = app.db.selectFrom('global_audit_log').selectAll();
+      if (from) query = query.where('created_at', '>=', new Date(from));
+      if (to) query = query.where('created_at', '<=', new Date(to));
+      if (before) {
+        const cursor = new Date(before);
+        query = beforeId
+          ? query.where(eb => eb.or([eb('created_at', '<', cursor), eb.and([eb('created_at', '=', cursor), eb('id', '<', beforeId)])]))
+          : query.where('created_at', '<', cursor);
+      }
+      const rows = await query.orderBy('created_at', 'desc').orderBy('id', 'desc').limit(limit + 1).execute();
+      return reply.send({ log: rows.slice(0, limit), hasMore: rows.length > limit });
     } catch (e: any) {
       return routeError(app, reply, e);
     }

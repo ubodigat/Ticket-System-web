@@ -1148,9 +1148,25 @@ export const UI = {
             container.classList.remove('open');
             dropdown.classList.remove('open');
             header.setAttribute('aria-expanded', 'false');
+            window.removeEventListener('resize', position);
+            window.removeEventListener('scroll', position, true);
             // Zurück in den Container legen, statt es dauerhaft an <body> hängen zu lassen
             // (verhindert verwaiste Elemente, falls der umgebende Dialog währenddessen geschlossen wird)
             container.appendChild(dropdown);
+        };
+        dropdown._closeOwner = close;
+        dropdown.onkeydown = event => { if (event.key === 'Escape') { event.stopPropagation(); close(); header.focus(); } };
+        const position = () => {
+            if (!header.isConnected) { close(); return; }
+            const rect = header.getBoundingClientRect();
+            const below = window.innerHeight - rect.bottom - 14, above = rect.top - 14;
+            const upwards = below < 180 && above > below;
+            const height = Math.max(40, Math.min(300, upwards ? above : below));
+            dropdown.style.position = 'fixed'; dropdown.style.width = `${Math.min(rect.width, window.innerWidth - 16)}px`;
+            dropdown.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8))}px`;
+            dropdown.style.maxHeight = `${height}px`;
+            dropdown.style.top = upwards ? 'auto' : `${Math.max(8, rect.bottom + 6)}px`;
+            dropdown.style.bottom = upwards ? `${window.innerHeight - rect.top + 6}px` : 'auto';
         };
 
         // Das Dropdown wird beim Öffnen an <body> angehängt (fixed positioniert über dem Feld) --
@@ -1158,15 +1174,12 @@ export const UI = {
         // Dialogen) die Liste ab, obwohl eigentlich genug Platz auf dem Bildschirm wäre.
         const open = () => {
             document.querySelectorAll('.multi-select-dropdown.open').forEach(d => {
-                if (d !== dropdown) { d.classList.remove('open'); d.closest('.multi-select-container')?.classList.remove('open'); }
+                if (d !== dropdown) { if (d._closeOwner) d._closeOwner(); else d.classList.remove('open'); }
             });
             document.body.appendChild(dropdown);
-            const rect = header.getBoundingClientRect();
-            dropdown.style.position = 'fixed';
-            dropdown.style.left = `${rect.left}px`;
-            dropdown.style.width = `${rect.width}px`;
-            dropdown.style.top = `${rect.bottom + 6}px`;
-            dropdown.style.maxHeight = `${Math.max(120, Math.min(260, window.innerHeight - rect.bottom - 18))}px`;
+            position();
+            window.addEventListener('resize', position);
+            window.addEventListener('scroll', position, true);
             container.classList.add('open');
             dropdown.classList.add('open');
             header.setAttribute('aria-expanded', 'true');

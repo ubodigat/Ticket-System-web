@@ -97,6 +97,8 @@ const settingsConfigSchema = z.object({
   autoArchiveClosedAfterDays: z.number().int().min(0).max(3650).optional(),
   waitingReminderDays: z.number().int().min(1).max(365).optional(),
   waitingAutoCloseDays: z.number().int().min(1).max(365).optional(),
+  waitingAfterAction: z.enum(['close', 'keep_open']).optional(),
+  waitingReminderEnabled: z.boolean().optional(),
   approvalWorkflow: z.object({
     enabled: z.boolean().default(false),
     priorities: z.array(z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch'])).default([]),
@@ -171,7 +173,7 @@ const settingsConfigSchema = z.object({
     privacyUrl: z.string().trim().max(500).optional(),
     // Felder aus der lokalen Version vom 07.10.2026, die bisher auf dieser Seite fehlten.
     department: z.string().trim().max(255).optional(),
-    timezone: z.string().trim().max(100).optional(),
+    timezone: z.string().trim().max(100).refine(value => { try { new Intl.DateTimeFormat('de', { timeZone: value }); return true; } catch { return false; } }, 'Invalid time zone').optional(),
     location: z.string().trim().max(255).optional()
     // signature/htmlSignature gibt es hier bewusst nicht mehr -- siehe emailAdvancedConfig
     // (einzige E-Mail-Signatur-Einstellung, war vorher sinnlos doppelt).
@@ -212,7 +214,7 @@ const ldapConfigSchema = z.object({
 // (Legacy-)Schluessel in config_json gelangen so nie versehentlich an normale Konten.
 const USER_VISIBLE_CONFIG_KEYS = ['slaHoursByPriority', 'showSlaToUsers', 'defaultPrio', 'businessHours', 'ticketNumberFormat',
   'ticketNumberCategoryFormats', 'accountSelfServiceFields', 'autoArchiveClosedAfterDays', 'waitingReminderDays',
-  'waitingAutoCloseDays', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig'] as const;
+  'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig'] as const;
 function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any> {
   const source = config || {};
   const clone: Record<string, any> = {};
@@ -611,6 +613,9 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
       const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
+      const previous = parsed.data.name !== undefined
+        ? await app.db.selectFrom('categories').select('name').where('id', '=', id).executeTakeFirst()
+        : undefined;
       if (parsed.data.name !== undefined) updates.name = parsed.data.name;
       if (parsed.data.auto_assign_group_id !== undefined) updates.auto_assign_group_id = parsed.data.auto_assign_group_id;
       if (parsed.data.custom_fields !== undefined) updates.custom_fields_json = JSON.stringify(parsed.data.custom_fields);
@@ -618,6 +623,9 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       if (parsed.data.archived !== undefined) updates.archived = parsed.data.archived;
 
       await app.db.updateTable('categories').set(updates).where('id', '=', id).execute();
+      if (previous && parsed.data.name !== undefined && previous.name !== parsed.data.name) {
+        await app.db.updateTable('kb_articles').set({ category: parsed.data.name }).where('category', '=', previous.name).execute();
+      }
       await app.db.insertInto('global_audit_log').values({
         id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
         action: 'category.updated', target_type: 'category', target_id: id,

@@ -60,6 +60,9 @@ services:
     build:
       context: ../..
       dockerfile: ops/docker/Dockerfile.server
+      args:
+        APP_COMMIT: ${APP_COMMIT:-unknown}
+        APP_BUILT_AT: ${APP_BUILT_AT:-unknown}
     restart: unless-stopped
     # "clamav" ist immer in der Netzliste, auch wenn der Dienst selbst ohne das Profil
     # "antivirus" (install.sh --enable-antivirus) nie gestartet wird -- harmlos, das Netz
@@ -93,6 +96,8 @@ services:
       TRUSTED_PROXY_CIDR: ${EDGE_SUBNET:-172.30.250.0/24}
       OFFICE_PREVIEW_URL: http://office:3000
       WEBAUTHN_ORIGIN: ${PUBLIC_URL:-}
+      # Feste Basis-URL fuer den Outlook-OAuth-Callback (Security-Audit R-21, outlookPersonal.ts).
+      PUBLIC_BASE_URL: ${PUBLIC_URL:-}
       ONLYOFFICE_ENABLED: ${ONLYOFFICE_ENABLED:-false}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-}
       UPDATE_SERVICE_URL: ${UPDATE_SERVICE_URL:-}

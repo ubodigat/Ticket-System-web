@@ -15,6 +15,7 @@ import { renderWorkbook } from './excel-preview.js';
 import { renderPdfPreview } from './pdf-preview.js';
 import { UserDash } from './user-dash.js';
 import { WorkTimer } from './work-timer.js';
+import { KbSearch } from './kb-search.js';
 import { getStatusColorClass, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
 
 // Fragezeichen-Icon neben einem Einstellungs-Label: nutzt UI.initTooltips() (title-Attribut
@@ -343,6 +344,7 @@ export const AdminBoard = {
     },
 
     init: async () => {
+        AdminBoard.organizeInternalCommunication();
         if (!q('.kanban-board')) return;
         if (q('#m-calendar-event-btn') && q('#m-print')) {
             q('#m-calendar-event-btn').classList.remove('btn-xs');
@@ -886,19 +888,35 @@ export const AdminBoard = {
             q('#gl-exclude').oninput = () => AdminBoard.renderGlobalLogs();
             AdminBoard.glFromMs = null;
             AdminBoard.glToMs = null;
-            UI.createDateTimePicker(q('#gl-from'), { onChange: (ms) => { AdminBoard.glFromMs = ms; AdminBoard.renderGlobalLogs(); } });
-            UI.createDateTimePicker(q('#gl-to'), { onChange: (ms) => { AdminBoard.glToMs = ms; AdminBoard.renderGlobalLogs(); } });
+            UI.createDateTimePicker(q('#gl-from'), { onChange: async (ms) => { AdminBoard.glFromMs = ms; await AdminBoard.loadGlobalLogs(); AdminBoard.renderGlobalLogs(); } });
+            UI.createDateTimePicker(q('#gl-to'), { onChange: async (ms) => { AdminBoard.glToMs = ms; await AdminBoard.loadGlobalLogs(); AdminBoard.renderGlobalLogs(); } });
             q('#btn-gl-print').onclick = () => AdminBoard.printGlobalLogs();
             q('#global-logs-modal-close').onclick = () => modal.classList.remove('open');
         }
 
+        await AdminBoard.loadGlobalLogs();
         AdminBoard.renderGlobalLogs();
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
     },
 
+    // Laedt die erste Seite fuer den gewaehlten Zeitraum neu oder haengt (append) die naechstaelteren an.
+    glEntries: [],
+    glHasMore: false,
+    loadGlobalLogs: async (append = false) => {
+        const last = append ? AdminBoard.glEntries[AdminBoard.glEntries.length - 1] : null;
+        const page = await Store.getGlobalLogs({
+            from: AdminBoard.glFromMs ?? null,
+            to: AdminBoard.glToMs ? AdminBoard.glToMs + 59999 : null,
+            before: last?.raw?.created_at ?? null,
+            beforeId: last?.raw?.id ?? null
+        });
+        AdminBoard.glEntries = append ? [...AdminBoard.glEntries, ...page.entries] : page.entries;
+        AdminBoard.glHasMore = page.hasMore;
+    },
+
     getFilteredGlobalLogs: async () => {
-        const logs = await Store.getGlobalLogs();
+        const logs = AdminBoard.glEntries || [];
         const search = q('#gl-search')?.value.toLowerCase().trim() || '';
         const from = AdminBoard.glFromMs ?? -Infinity;
         const to = AdminBoard.glToMs ? AdminBoard.glToMs + 59999 : Infinity;
@@ -913,7 +931,7 @@ export const AdminBoard = {
                 && include.every(term => text.includes(term))
                 && !exclude.some(term => text.includes(term));
         });
-        return filtered.slice().reverse();
+        return filtered;
     },
 
     printGlobalLogs: async () => {
@@ -961,15 +979,22 @@ export const AdminBoard = {
             if (text.includes('benutzer')) return 'user-round';
             return 'activity';
         };
-        body.innerHTML = visibleLogs.length ?
+        body.innerHTML = (visibleLogs.length ?
             visibleLogs.map(l => UI.logRow({
-                icon: iconForLog(l.action),
+                icon: l.icon || iconForLog(l.action),
                 user: l.user,
                 date: l.date,
                 action: l.action,
                 details: l.details
             })).join('') :
-            `<div class="empty-state">${Lang.t('noEntriesFound')}</div>`;
+            `<div class="empty-state">${Lang.t('noEntriesFound')}</div>`)
+            + (AdminBoard.glHasMore ? `<div class="log-load-more"><button type="button" class="btn-secondary btn-sm" id="gl-load-more">${Lang.t('loadOlderEntries')}</button></div>` : '');
+        const more = q('#gl-load-more');
+        if (more) more.onclick = async () => {
+            more.disabled = true;
+            await AdminBoard.loadGlobalLogs(true);
+            AdminBoard.renderGlobalLogs();
+        };
         if (window.lucide) lucide.createIcons();
     },
 
@@ -1957,6 +1982,118 @@ export const AdminBoard = {
     // Fortschritt live sichtbar ist (ein docker build --no-cache kann mehrere Minuten dauern) --
     // ohne dass die Person manuell auf "Pruefen" klicken muss.
     updatePollTimer: null,
+    // Anleitung im Update-Tab. Jede settings-section-title-Ueberschrift wird beim Aufbau des Dialogs
+    // zu einem eigenen, einklappbaren Abschnitt (siehe Aufbau der .tab-content-Bereiche).
+    // Systemeinstellungen > Info & Updates: Versionen und Zustand der Installation (nur Superadmin).
+    renderSystemInfo: async () => {
+        const area = q('#sys-info');
+        if (!area) return;
+        const actor = await Store.currentUser();
+        if (actor?.role !== 'superadmin') { area.textContent = Lang.t('sysInfoSuperadminOnly'); return; }
+        area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} ${Utils.esc(Lang.t('updateStatusChecking'))}</div>`;
+        const info = await Store.getSystemInfo();
+        if (!q('#sys-info')) return;
+        if (!info) {
+            area.innerHTML = `<div class="callout callout-danger">${Utils.esc(Lang.t('sysInfoLoadFailed'))}</div>`;
+            return;
+        }
+        const v = value => Utils.esc(value === null || value === undefined || value === '' ? '–' : String(value));
+        const state = on => `<span class="badge${on ? ' badge-accent' : ''}">${Utils.esc(Lang.t(on ? 'sysInfoActive' : 'sysInfoInactive'))}</span>`;
+        const row = (labelKey, value) => `<div class="sys-info-row"><dt>${Utils.esc(Lang.t(labelKey))}</dt><dd>${value}</dd></div>`;
+        const card = (labelKey, value, small = '') => `<div class="summary-card"><span>${Utils.esc(Lang.t(labelKey))}</span><strong>${v(value)}</strong><small>${v(small) === '–' ? '' : v(small)}</small></div>`;
+        const uptime = seconds => {
+            const d = Math.floor(seconds / 86400), h = Math.floor(seconds / 3600) % 24, m = Math.floor(seconds / 60) % 60;
+            return Lang.current === 'en' ? `${d} d ${h} h ${m} min` : `${d} T ${h} Std. ${m} Min.`;
+        };
+        const commit = info.app.commit ? info.app.commit.slice(0, 12) : null;
+        const libs = list => list.length
+            ? list.map(lib => `<div class="sys-info-row"><dt><code>${Utils.esc(lib.name)}</code></dt><dd>${v(lib.version)}</dd></div>`).join('')
+            : `<div class="sys-info-row"><dt>–</dt><dd>–</dd></div>`;
+        area.innerHTML = `
+            <div class="settings-summary-grid">
+                ${card('sysInfoAppVersion', info.app.version, commit ? `Commit ${commit}` : Lang.t('sysInfoUnknownCommit'))}
+                ${card('sysInfoNode', info.runtime.node, info.runtime.platform)}
+                ${card('sysInfoDatabase', info.database.version, info.database.tls ? Lang.t('sysInfoTlsOn') : Lang.t('sysInfoTlsOff'))}
+                ${card('sysInfoSchema', info.database.latestMigration, Lang.format('sysInfoMigrationCount', { count: info.database.migrationCount ?? '–' }))}
+            </div>
+            <h4 class="section-title">${Utils.esc(Lang.t('sysInfoInstallation'))}</h4>
+            <dl class="sys-info-list">
+                ${row('sysInfoCommit', `<code>${v(info.app.commit)}</code>`)}
+                ${row('sysInfoBuiltAt', v(info.app.builtAt ? Utils.fmtDate(info.app.builtAt) : null))}
+                ${row('sysInfoPublicUrl', v(info.installation.publicUrl))}
+                ${row('sysInfoEnvironment', v(info.installation.environment))}
+                ${row('sysInfoInstallationId', `<code>${v(info.installation.installationId)}</code>`)}
+                ${row('sysInfoSetupAt', v(info.installation.setupCompletedAt ? Utils.fmtDate(info.installation.setupCompletedAt) : null))}
+                ${row('sysInfoKernel', v(info.runtime.kernel))}
+                ${row('sysInfoUptime', v(uptime(info.runtime.uptimeSeconds || 0)))}
+                ${row('sysInfoMemory', v(`${info.runtime.memoryMb} MB`))}
+            </dl>
+            <h4 class="section-title">${Utils.esc(Lang.t('sysInfoIntegrations'))}</h4>
+            <dl class="sys-info-list">
+                ${row('sysInfoDbTls', state(info.database.tls) + (info.database.cipher ? ` <code>${v(info.database.cipher)}</code>` : ''))}
+                ${row('sysInfoSmtp', state(info.integrations.smtp))}
+                ${row('sysInfoLdap', state(info.integrations.ldap))}
+                ${row('sysInfoOutlook', state(info.integrations.outlook))}
+                ${row('sysInfoPasskeys', state(info.integrations.passkeys))}
+                ${row('sysInfoAntivirus', state(info.integrations.antivirus))}
+                ${row('sysInfoOfficePreview', state(info.integrations.officePreview))}
+                ${row('sysInfoOnlyoffice', state(info.integrations.onlyoffice))}
+                ${row('sysInfoUpdater', state(info.integrations.updater))}
+                ${row('sysInfoProxy', v(info.integrations.trustedProxy))}
+            </dl>
+            <h4 class="section-title">${Utils.esc(Lang.t('sysInfoServerLibs'))}</h4>
+            <dl class="sys-info-list">${libs(info.libraries.server || [])}</dl>
+            <h4 class="section-title">${Utils.esc(Lang.t('sysInfoClientLibs'))}</h4>
+            <dl class="sys-info-list">${libs(info.libraries.client || [])}</dl>
+            <h4 class="section-title">${Utils.esc(Lang.t('sysInfoCounts'))}</h4>
+            <dl class="sys-info-list">
+                ${row('sysInfoUsers', v(`${info.counts.usersActive ?? '–'} / ${info.counts.usersTotal ?? '–'}`))}
+                ${row('sysInfoTickets', v(`${info.counts.ticketsOpen ?? '–'} / ${info.counts.ticketsArchived ?? '–'}`))}
+                ${row('sysInfoAttachments', v(info.counts.attachments))}
+                ${row('sysInfoKbArticles', v(info.counts.kbArticles))}
+            </dl>`;
+        if (window.lucide) lucide.createIcons();
+    },
+
+    updateGuideMarkup: () => {
+        const code = text => `<pre class="update-guide-code"><code>${Utils.esc(text)}</code></pre>`;
+        const p = key => `<p class="update-guide-text">${Utils.esc(Lang.t(key))}</p>`;
+        const step = (key, command) => `<li>${Utils.esc(Lang.t(key))}${command ? code(command) : ''}</li>`;
+        const title = key => `<div class="settings-section-title">${Utils.esc(Lang.t(key))}</div>`;
+        const cd = 'cd /opt/ticket-system';
+        return `
+            ${title('updateGuideSecurityTitle')}
+            ${p('updateGuideSecurityText1')}
+            ${p('updateGuideSecurityText2')}
+            <div class="callout callout-info">${Utils.esc(Lang.t('updateGuideSecurityRecommendation'))}</div>
+            ${title('updateGuideEnableTitle')}
+            ${p('updateGuideEnablePrereq')}
+            <ol class="update-guide-steps">
+                ${step('updateGuideEnableStep1', cd)}
+                ${step('updateGuideEnableStep2', 'gpg --show-keys --with-fingerprint /root/release-signing-key.asc')}
+                ${step('updateGuideEnableStep3', 'mkdir -p ops/docker/update-keys\nchmod 700 ops/docker/update-keys\ngpg --homedir "$PWD/ops/docker/update-keys" --import /root/release-signing-key.asc')}
+                ${step('updateGuideEnableStep4', 'bash install.sh --enable-updates')}
+                ${step('updateGuideEnableStep5')}
+            </ol>
+            ${p('updateGuideSigningNote')}
+            ${code('git config --global user.signingkey <KEY-ID>\ngit config --global commit.gpgsign true\ngpg --armor --export <KEY-ID> > release-signing-key.asc')}
+            ${p('updateGuideGithubCommitsNote')}
+            ${title('updateGuideDisableTitle')}
+            ${p('updateGuideDisableText')}
+            <ol class="update-guide-steps">
+                ${step('updateGuideDisableStep1', cd)}
+                ${step('updateGuideDisableStep2', 'bash install.sh --disable-updates')}
+                ${step('updateGuideDisableStep3', 'rm -rf ops/docker/update-keys')}
+            </ol>
+            ${p('updateGuideStateNote')}
+            ${title('updateGuideManualTitle')}
+            ${p('updateGuideManualText')}
+            <ol class="update-guide-steps">
+                ${step('updateGuideManualStep1', 'gpg --import /root/release-signing-key.asc')}
+                ${step('updateGuideManualStep2', `${cd}\nbash ops/docker/backup.sh\nbash ops/verify-and-pull.sh\nbash install.sh`)}
+            </ol>`;
+    },
+
     renderUpdateStatus: async () => {
         const area = q('#sys-update-status');
         if (!area) return;
@@ -1982,6 +2119,7 @@ export const AdminBoard = {
             area.innerHTML = `<div class="callout callout-info">${Lang.t('onlineUpdatesDisabled')}</div>`;
             const runBtn = q('#sys-update-run');
             if (runBtn) runBtn.disabled = true;
+            if (q('#sys-update-migrate')) q('#sys-update-migrate').disabled = true;
             if (window.lucide) lucide.createIcons();
             return;
         }
@@ -1994,6 +2132,7 @@ export const AdminBoard = {
             area.innerHTML = `<div class="callout callout-info">${Lang.t('updaterDeploymentDisabled')}</div>`;
             const runBtn = q('#sys-update-run');
             if (runBtn) runBtn.disabled = true;
+            if (q('#sys-update-migrate')) q('#sys-update-migrate').disabled = true;
             if (window.lucide) lucide.createIcons();
             return;
         }
@@ -2018,6 +2157,7 @@ export const AdminBoard = {
         const updateAvailable = !!status.updateAvailable;
         // Fuer die Bestaetigungsdialoge der Klick-Handler weiter unten (Commit-Pinning).
         AdminBoard._lastUpdateStatus = status;
+        if (q('#sys-update-migrate')) q('#sys-update-migrate').disabled = false;
         area.innerHTML = `
             <div class="settings-summary-grid">
                 <div class="summary-card"><span>${Lang.t('localVersion')}</span><strong>${Utils.esc((status.localCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.localSubject || '')}</small></div>
@@ -2026,6 +2166,7 @@ export const AdminBoard = {
             </div>
             ${job ? `<div class="update-log ${job.failed ? 'failed' : job.ok ? 'ok' : 'running'}">
                 <strong>${job.running ? Lang.t('updateRunning') : job.ok ? Lang.t('lastUpdateSuccessful') : job.failed ? Lang.t('lastUpdateFailed') : ''}</strong>
+                ${job.ok && job.needsInstaller ? `<div class="callout callout-info">${Lang.t('updateNeedsInstaller')}</div>` : ''}
                 ${AdminBoard.renderUpdateProgress(job)}
                 <pre>${Utils.esc((job.log || []).slice(-18).join('\n'))}</pre>
             </div>` : ''}
@@ -2114,7 +2255,7 @@ export const AdminBoard = {
                             <i data-lucide="building-2"></i><span>${Lang.t('companySettingsTab')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-update">
-                            <i data-lucide="download-cloud"></i><span>${Lang.t('update')}</span>
+                            <i data-lucide="info"></i><span>${Lang.t('infoAndUpdates')}</span>
                         </button>
                     </nav>
                     <div class="modal-body sys-settings-content">
@@ -2214,6 +2355,9 @@ export const AdminBoard = {
 
                         <!-- Update -->
                         <div id="sys-update" class="tab-content">
+                            <div class="settings-section-title">${Lang.t('sysInfoTitle')}</div>
+                            <div id="sys-info"><div class="empty-state compact">${Lang.t('notCheckedYet')}</div></div>
+                            <div class="settings-section-title">${Lang.t('update')}</div>
                             <div class="callout">${Lang.t('updateTabCallout')}</div>
                             <div class="update-status" id="sys-update-status">
                                 <div class="empty-state compact">${Lang.t('notCheckedYet')}</div>
@@ -2231,6 +2375,7 @@ export const AdminBoard = {
                                     <button class="btn-secondary btn-sm" id="sys-update-migrate" type="button">${Icon('database', 15)}${Lang.t('runDbMigrations')}</button>
                                 </div>
                             </div>
+                            ${AdminBoard.updateGuideMarkup()}
                         </div>
 
                         <!-- LDAP -->
@@ -2275,7 +2420,7 @@ export const AdminBoard = {
                                 <div class="field"><label>${Lang.t('bccArchiveAddress')} ${FieldHelp(Lang.t('bccArchiveAddressHelp'))}</label><input id="sys-email-bcc" type="email" placeholder="archiv@example.com"></div>
                             </div>
                             <div class="settings-section-title">${Icon('mail-check', 15)}${Lang.t('templateAndSignature')}</div>
-                            <div class="field field-wide"><label>${Lang.t('emailTemplate')} ${FieldHelp(Lang.t('emailTemplateHelp'))}</label><div class="email-template-variables"><code>{{subject}}</code><code>{{message}}</code><code>{{recipient}}</code></div><textarea id="sys-email-template" rows="4" placeholder="{{subject}}\n\n{{message}}"></textarea></div>
+                            <div class="field field-wide"><label>${Lang.t('emailTemplate')} ${FieldHelp(Lang.t('emailTemplateHelp'))}</label><div class="email-template-variables">${['subject', 'message', 'recipient', 'recipientName', 'username', 'company', 'portalName', 'portalUrl', 'supportEmail', 'date', 'time', 'year'].map(key => `<button type="button" class="btn-secondary btn-sm email-variable" data-variable="${key}"><code>{{${key}}}</code></button>`).join('')}</div><p class="hint">${Lang.current === 'en' ? 'Click to insert. Name and username are available for account notifications; other messages use the email address as name.' : 'Zum Einfügen anklicken. Name und Benutzername sind bei Kontobenachrichtigungen verfügbar; sonst wird die E-Mail-Adresse als Name verwendet.'}</p><textarea id="sys-email-template" rows="4" placeholder="{{subject}}\n\n{{message}}"></textarea></div>
                             <div class="field field-wide"><label>${Lang.t('signatureText')} ${FieldHelp(Lang.t('signatureTextHelp'))}</label><textarea id="sys-email-text-signature" rows="4" placeholder="Mit freundlichen Grüßen&#10;IT Service Desk"></textarea></div>
                             <div class="field">
                                 <label class="check-row">
@@ -2383,7 +2528,7 @@ export const AdminBoard = {
                                 <div class="field"><label>${Lang.t('phone')}</label><input id="sys-company-phone" type="text" placeholder="+49 ..."></div>
                             </div>
                             <div class="form-grid">
-                                <div class="field"><label>${Lang.t('defaultTimezone')}</label><input id="sys-company-timezone" type="text" placeholder="Europe/Berlin"></div>
+                                <div class="field"><label for="sys-company-timezone">${Lang.t('defaultTimezone')}</label><select id="sys-company-timezone"></select></div>
                                 <div class="field"><label>${Lang.t('locationRegion')}</label><input id="sys-company-location" type="text" placeholder="Deutschland"></div>
                             </div>
                             <div class="field field-wide"><label>${Lang.t('address')}</label><textarea id="sys-company-address" rows="3" placeholder="Straße, PLZ Ort"></textarea></div>
@@ -2476,7 +2621,7 @@ export const AdminBoard = {
                     btn.classList.add('active');
                     modal.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
                     q('#' + btn.dataset.tab).classList.add('active');
-                    if (btn.dataset.tab === 'sys-update') AdminBoard.renderUpdateStatus();
+                    if (btn.dataset.tab === 'sys-update') { AdminBoard.renderSystemInfo(); AdminBoard.renderUpdateStatus(); }
                     else clearTimeout(AdminBoard.updatePollTimer);
                     if (window.lucide) lucide.createIcons();
                 };
@@ -2545,6 +2690,19 @@ export const AdminBoard = {
         q('#sys-default-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(general.defaultPrio) ? general.defaultPrio : 'Normal';
         q('#sys-wait-remind').value = general.waitingReminderDays ?? 2;
         q('#sys-wait-close').value = general.waitingAutoCloseDays ?? 7;
+        if (!q('#sys-wait-action')) {
+            const settingsFields = q('#sys-wait-close').closest('.form-grid') || q('#sys-wait-close').parentElement.parentElement;
+            const info = document.createElement('p'); info.className = 'hint waiting-policy-info';
+            info.textContent = Lang.current === 'en' ? 'Both periods start when a ticket begins waiting for the user. If enabled, one reminder is sent after the first period. Choose what happens after the second period. A reply ends the waiting period.' : 'Beide Fristen beginnen, sobald das Ticket auf eine Benutzerantwort wartet. Ist die Erinnerung aktiviert, wird nach der ersten Frist einmal erinnert. Für die zweite Frist wählst du die Aktion. Eine Antwort beendet die Wartephase.';
+            settingsFields.before(info);
+            const controls = document.createElement('div'); controls.className = 'field waiting-policy-controls';
+            controls.innerHTML = `<label class="check-row"><input type="checkbox" id="sys-wait-reminder-enabled"><span>${Lang.current === 'en' ? 'Send reminder' : 'Erinnerung versenden'}</span></label><label for="sys-wait-action">${Lang.current === 'en' ? 'Action after the second period' : 'Aktion nach der zweiten Frist'}</label><select id="sys-wait-action"><option value="close">${Lang.current === 'en' ? 'Close automatically and notify user' : 'Automatisch schließen und Benutzer benachrichtigen'}</option><option value="keep_open">${Lang.current === 'en' ? 'Keep waiting; do not close automatically' : 'Weiter warten, nicht automatisch schließen'}</option></select>`;
+            settingsFields.after(controls);
+        }
+        q('#sys-wait-reminder-enabled').checked = general.waitingReminderEnabled !== false;
+        q('#sys-wait-action').value = general.waitingAfterAction || 'close';
+        const updateWaitingControls = () => { q('#sys-wait-close').disabled = q('#sys-wait-action').value === 'keep_open'; q('#sys-wait-remind').disabled = !q('#sys-wait-reminder-enabled').checked; };
+        q('#sys-wait-action').onchange = updateWaitingControls; q('#sys-wait-reminder-enabled').onchange = updateWaitingControls; updateWaitingControls();
         const slaHours = general.slaHours || {};
         AdminBoard.setSlaField('low', slaHours.low ?? 72);
         AdminBoard.setSlaField('normal', slaHours.normal ?? 48);
@@ -2590,7 +2748,10 @@ export const AdminBoard = {
         };
         q('#sys-company-support').value = companyBranding.supportEmail || '';
         q('#sys-company-phone').value = companyBranding.phone || '';
-        q('#sys-company-timezone').value = companyBranding.timezone || 'Europe/Berlin';
+        const timezoneSelect = q('#sys-company-timezone');
+        const zones = new Set(['UTC', 'Europe/Berlin', companyBranding.timezone || 'Europe/Berlin', ...(Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : ['Europe/London', 'America/New_York', 'Asia/Tokyo', 'Australia/Sydney'])]);
+        timezoneSelect.replaceChildren(...[...zones].sort().map(zone => { const option = document.createElement('option'); option.value = zone; option.textContent = zone.replaceAll('_', ' '); return option; }));
+        timezoneSelect.value = companyBranding.timezone || 'Europe/Berlin';
         q('#sys-company-location').value = companyBranding.location || '';
         q('#sys-company-address').value = companyBranding.address || '';
         q('#sys-company-imprint').value = companyBranding.imprintUrl || '';
@@ -2629,6 +2790,7 @@ export const AdminBoard = {
         q('#sys-email-replyto').value = emailAdvanced.replyTo || '';
         q('#sys-email-bcc').value = emailAdvanced.bccArchive || '';
         q('#sys-email-template').value = emailAdvanced.template || '';
+        modal.querySelectorAll('.email-variable').forEach(button => button.onclick = () => AdminBoard.insertTextAtCursor(q('#sys-email-template'), `{{${button.dataset.variable}}}`));
         q('#sys-email-text-signature').value = emailAdvanced.signature || '';
         q('#sys-email-html-enabled').checked = !!emailAdvanced.htmlEnabled;
         q('#sys-email-signature').value = emailAdvanced.htmlSignature || '';
@@ -2781,6 +2943,8 @@ export const AdminBoard = {
                 config: {
                     autoArchiveClosedAfterDays: Math.max(0, parseInt(q('#sys-auto-archive').value, 10) || 0),
                     waitingReminderDays: Math.max(1, parseInt(q('#sys-wait-remind').value, 10) || 2),
+                    waitingAfterAction: q('#sys-wait-action').value,
+                    waitingReminderEnabled: q('#sys-wait-reminder-enabled').checked,
                     waitingAutoCloseDays: Math.max(1, parseInt(q('#sys-wait-close').value, 10) || 7),
                     defaultPrio: ['Niedrig', 'Normal', 'Hoch'].includes(q('#sys-default-prio').value) ? q('#sys-default-prio').value : 'Normal',
                     showSlaToUsers: !!q('#sys-sla-show-users').checked,
@@ -3434,29 +3598,8 @@ export const AdminBoard = {
         if (newStatus === 'Geschlossen' && ticket.isMajorIncident) {
             await AdminBoard.notifyLinkedIncidentTickets(ticket, ticket.desc);
         }
-        // Die In-App-Benachrichtigung an die jeweiligen Ticketersteller erzeugt die Server-PATCH-
-        // Route bereits pro geaendertem Ticket. Hier keine zweite Client-Benachrichtigung senden.
-        const requestDetails = newStatus === 'Warten auf Benutzer' ? `\nAnforderung: ${ticket.waitingMessage}` : '';
-        await Store.addGlobalLog('Ticket Status geändert', `Ticket: ${ticket.title}, Status: ${newStatus}${requestDetails}`);
-        const notificationMessage = newStatus === 'Warten auf Benutzer' ?
-            Lang.format('infoNeededColon', { message: ticket.waitingMessage }) :
-            Lang.format('statusChangedTo', { status: Lang.status(newStatus) });
-        const statusNotifType = newStatus === 'Geschlossen' ? 'ticketClosed' : 'statusChange';
-        const participantRecipients = (ticket.participants || []).filter(name => name && name !== ticket.author);
-        if (participantRecipients.length) {
-            await Store.addNotifications(participantRecipients, ticket, notificationMessage, actor?.username, statusNotifType);
-        }
-
-        const settings = await Store.getSettings();
-        const author = (await Store.getUsers()).find(user => user.username === ticket.author);
-        if (author?.email && settings.emailConfig?.host) {
-            const statusPref = await Store.resolveNotifPref(author, statusNotifType);
-            if (statusNotifType === 'ticketClosed' && statusPref.email) {
-                await Store.sendEmail(author.email, Lang.format('ticketClosedEmailSubject', { title: ticket.title }), Lang.t('ticketClosedEmailBody'));
-            } else if (statusNotifType === 'statusChange' && statusPref.email) {
-                await Store.sendEmail(author.email, Lang.format('ticketUpdateEmailSubject', { title: ticket.title }), Lang.format('ticketUpdateEmailBody', { status: Lang.status(newStatus) }) + (newStatus === 'Warten auf Benutzer' ? `\n\n${Lang.format('infoNeededColon', { message: ticket.waitingMessage })}` : ''));
-            }
-        }
+        // Benachrichtigungen (Ersteller + Beteiligte, App und E-Mail nach Einstellung) und der
+        // Protokolleintrag entstehen serverseitig in PATCH /api/v2/tickets/:id.
         await AdminBoard.render();
         if (AdminBoard.currentTicketId === ticket.id && q('#ticket-modal.open')) await AdminBoard.renderChat(ticket, '#m-chat-msgs');
         if (q('#user-tickets')) await UserDash.renderList();
@@ -4158,7 +4301,6 @@ export const AdminBoard = {
         UI.toast(person.absence.substitute
             ? Lang.format('personCurrentlyAbsentSubstitute', { name: person.name || person.username, substitute: users.find(u => u.username === person.absence.substitute)?.name || person.absence.substitute })
             : Lang.format('personCurrentlyAbsentNoSubstitute', { name: person.name || person.username }));
-        await Store.addNotifications([username], ticket, Lang.format('ticketAssignedWhileAbsent', { title: ticket.title }), actorUsername, 'newTicket');
         if (person.absence.substitute) {
             await Store.addNotifications([person.absence.substitute], ticket, Lang.format('absentPersonGotNewTicket', { name: person.name || person.username, title: ticket.title }), actorUsername, 'newTicket');
         }
@@ -4269,20 +4411,28 @@ export const AdminBoard = {
             icon: 'message-square-plus',
             size: 'md',
             body: `
-                <div id="tb-list"></div>
                 <div class="field"><label for="tb-title">${Lang.t('titleLabel')}</label><input id="tb-title" type="text" placeholder="${Lang.t('egDeviceTypeQuery')}"></div>
                 <div class="field"><label for="tb-text">${Lang.t('textLabel')}</label><textarea id="tb-text" rows="4" placeholder="${Lang.t('chatInsertTextPlaceholder')}"></textarea></div>
                 <div class="setting-row"><span class="hint">${Lang.t('textBlocksAvailableHint')}</span>
                     <button class="btn-primary btn-sm" id="tb-add" type="button">${Icon('plus', 15)}${Lang.t('add')}</button>
-                </div>`
+                </div><button class="btn-secondary btn-sm" id="tb-cancel-edit" type="button" hidden>${Lang.t('cancel')}</button><input type="search" id="tb-search" class="section-search" placeholder="${Lang.t('search')}" aria-label="${Lang.t('search')}"><div id="tb-list"></div>`
         });
+        let editingId = null;
+        let blocks = [];
         const render = async () => {
-            const list = await Store.getTextBlocks();
+            blocks = await Store.getTextBlocks();
+            const list = blocks.filter(block => Utils.matchesSearch(modal.querySelector('#tb-search').value, block));
             modal.querySelector('#tb-list').innerHTML = list.length ? list.map(b => `
                 <div class="absence-overview-row">
                     <div><strong>${Utils.esc(b.title)}</strong><span class="hint">${Utils.esc(b.text)}</span></div>
-                    <button class="btn-ghost btn-icon btn-danger tb-del" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
+                    <button class="btn-ghost btn-icon tb-edit" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button><button class="btn-ghost btn-icon btn-danger tb-del" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
                 </div>`).join('') : `<div class="empty-state compact">${Lang.t('noTextBlocksYet')}</div>`;
+            modal.querySelectorAll('.tb-edit').forEach(button => button.onclick = () => {
+                const block = blocks.find(item => item.id === button.dataset.id); editingId = block.id;
+                modal.querySelector('#tb-title').value = block.title; modal.querySelector('#tb-text').value = block.text;
+                modal.querySelector('#tb-add').textContent = Lang.t('save');
+                modal.querySelector('#tb-cancel-edit').hidden = false; modal.querySelector('#tb-title').focus();
+            });
             modal.querySelectorAll('.tb-del').forEach(btn => btn.onclick = async () => {
                 await Store.deleteTextBlock(btn.dataset.id);
                 await render();
@@ -4293,11 +4443,14 @@ export const AdminBoard = {
             const title = modal.querySelector('#tb-title').value.trim();
             const text = modal.querySelector('#tb-text').value.trim();
             if (!title || !text) return UI.toast(Lang.t('enterTitleAndText'));
-            if (!(await Store.createTextBlock(title, text))) return UI.toast(Lang.t('saveFailed'));
+            if (!(await (editingId ? Store.updateTextBlock(editingId, title, text) : Store.createTextBlock(title, text)))) return UI.toast(Lang.t('saveFailed'));
             modal.querySelector('#tb-title').value = '';
             modal.querySelector('#tb-text').value = '';
+            editingId = null; modal.querySelector('#tb-cancel-edit').hidden = true; modal.querySelector('#tb-add').textContent = Lang.t('add');
             await render();
         };
+        modal.querySelector('#tb-cancel-edit').onclick = () => { editingId = null; modal.querySelector('#tb-title').value = ''; modal.querySelector('#tb-text').value = ''; modal.querySelector('#tb-add').textContent = Lang.t('add'); modal.querySelector('#tb-cancel-edit').hidden = true; };
+        modal.querySelector('#tb-search').oninput = () => render();
         await render();
     },
 
@@ -4444,11 +4597,21 @@ export const AdminBoard = {
             title: Lang.t('knowledgeBase'),
             icon: 'book-open',
             size: 'md',
-            body: `<input type="search" id="kb-search" class="section-search" placeholder="${Lang.t('searchArticlesPlaceholder')}">
+            body: `${KbSearch.filtersMarkup('kb')}
                    <div id="kb-list" class="mt-3"></div>
-                   ${canEdit ? `<div class="kb-editor">
+                   ${canEdit ? `<details class="kb-categories-manage">
+                       <summary>${Icon('tags', 15)} ${Utils.esc(Lang.t('kbManageCategories'))}</summary>
+                       <p class="hint">${Utils.esc(Lang.t('kbCategoryHint'))}</p>
+                       <div id="kb-own-categories" class="file-preview"></div>
+                       <div class="kb-add-category">
+                           <input id="kb-new-category-name" type="text" maxlength="128" placeholder="${Utils.esc(Lang.t('kbNewCategoryPlaceholder'))}" aria-label="${Utils.esc(Lang.t('kbNewCategoryPlaceholder'))}">
+                           <button type="button" class="btn-secondary btn-sm" id="kb-add-category">${Icon('plus', 14)}${Utils.esc(Lang.t('kbAddCategory'))}</button>
+                       </div>
+                   </details>
+                   <div class="kb-editor">
                        <h4 class="section-title">${Lang.t('newArticle')}</h4>
                        <div class="field"><label for="kb-new-title">${Lang.t('titleLabel')}</label><input id="kb-new-title" type="text"></div>
+                       <div class="field"><label for="kb-new-category">${Utils.esc(Lang.t('kbFilterCategory'))}</label><select id="kb-new-category"></select></div>
                        <div class="field">
                            <label for="kb-new-body">${Lang.t('content')}</label>
                            <div class="note-toolbar">
@@ -4469,7 +4632,7 @@ export const AdminBoard = {
                 const bodyEl = m.querySelector('#kb-new-body');
                 const body = Utils.sanitizeRichHtml(bodyEl.innerHTML);
                 if (!title || !bodyEl.textContent.trim()) return UI.toast(Lang.t('enterTitleAndContent'));
-                const articleId = await Store.createKbArticle(title, body);
+                const articleId = await Store.createKbArticle(title, body, undefined, m.querySelector('#kb-new-category').value || null);
                 if (!articleId) return UI.toast(Lang.t('saveFailed'));
                 if (AdminBoard.kbFiles.length) {
                     try {
@@ -4487,6 +4650,12 @@ export const AdminBoard = {
             } : null
         });
         AdminBoard.kbFiles = [];
+        const kbBody = modal.querySelector('.modal-body');
+        const editor = modal.querySelector('.kb-editor');
+        if (editor) kbBody.prepend(editor);
+        const browse = document.createElement('button'); browse.type = 'button'; browse.id = 'kb-browse'; browse.className = 'btn-secondary kb-browse-button';
+        browse.textContent = Lang.current === 'en' ? 'View knowledge base' : 'Wissensdatenbank ansehen';
+        browse.onclick = () => KbSearch.open(); if (editor) editor.after(browse); else kbBody.prepend(browse);
         const renderKbFilePreview = () => {
             const preview = modal.querySelector('#kb-file-preview');
             if (!preview) return;
@@ -4540,40 +4709,41 @@ export const AdminBoard = {
             UI.bindFileDrop(modal.querySelector('.kb-editor'), addKbFiles);
             UI.bindPasteFiles(bodyInput, addKbFiles);
         }
-        const render = async () => {
-            const term = modal.querySelector('#kb-search').value.toLowerCase().trim();
-            const articles = (await Store.getKbArticles()).filter(a => !term || `${a.title} ${a.body}`.toLowerCase().includes(term));
-            modal.querySelector('#kb-list').innerHTML = articles.length ? articles.map(a => `
-                <details class="kb-article" data-id="${Utils.esc(a.id)}">
-                    <summary><strong>${Utils.esc(a.title)}</strong> <span class="hint">${Utils.esc(a.source || '')} · ${Utils.fmtDate(a.createdAt)}</span></summary>
-                    <div class="desc-text rich-content">${Utils.sanitizeRichHtml(a.body)}</div>
-                    <div class="file-preview kb-article-attachments" hidden></div>
-                    ${canEdit ? `<button class="btn-ghost btn-sm kb-del" type="button" data-id="${Utils.esc(a.id)}">${Icon('trash-2', 14)}${Lang.t('delete')}</button>` : ''}
-                </details>`).join('') : `<div class="empty-state compact">${Lang.t('noArticlesFound')}</div>`;
-            modal.querySelectorAll('.kb-del').forEach(btn => btn.onclick = async () => {
-                await Store.deleteKbArticle(btn.dataset.id);
-                await render();
-            });
-            // Anhänge je Artikel erst beim Aufklappen laden, nicht pauschal für alle Treffer.
-            modal.querySelectorAll('.kb-article').forEach(details => {
-                let loaded = false;
-                details.addEventListener('toggle', async () => {
-                    if (!details.open || loaded) return;
-                    loaded = true;
-                    const box = details.querySelector('.kb-article-attachments');
-                    const attachments = await Store.getKbArticleAttachments(details.dataset.id);
-                    box.hidden = attachments.length === 0;
-                    box.innerHTML = attachments.map(file => `<button type="button" class="file-chip kb-att" data-id="${Utils.esc(file.id)}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('');
-                    box.querySelectorAll('.kb-att').forEach(btn => btn.onclick = async () => {
-                        const full = await Store.getKbAttachment(btn.dataset.id);
-                        if (full) AdminBoard.openAttachmentPreview(full);
-                    });
-                    if (window.lucide) lucide.createIcons();
+        const view = KbSearch.bind(modal, 'kb', { list: modal.querySelector('#kb-list'), canEdit });
+        // Kategorieauswahl im Editor + Verwaltung der zusaetzlichen, reinen Wissensdatenbank-Kategorien.
+        const renderEditorCategories = () => {
+            if (!canEdit) return;
+            const categories = view.getCategories();
+            const select = modal.querySelector('#kb-new-category');
+            const keep = select.value;
+            select.innerHTML = `<option value="">${Utils.esc(Lang.t('kbNoCategory'))}</option>` + categories.map(c => `<option value="${Utils.esc(c.name)}">${Utils.esc(c.name)}</option>`).join('');
+            if (categories.some(c => c.name === keep)) select.value = keep;
+            const own = categories.filter(c => c.source === 'kb');
+            const box = modal.querySelector('#kb-own-categories');
+            box.innerHTML = own.length ? own.map(c => `<span class="file-chip">${Icon('tag', 13)}<span>${Utils.esc(c.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger kb-cat-del" data-id="${Utils.esc(c.id)}" data-name="${Utils.esc(c.name)}" title="${Utils.esc(Lang.t('kbDeleteCategory'))}" aria-label="${Utils.esc(Lang.t('kbDeleteCategory'))}">${Icon('x', 13)}</button></span>`).join('')
+                : `<span class="hint">${Utils.esc(Lang.t('kbNoOwnCategories'))}</span>`;
+            box.querySelectorAll('.kb-cat-del').forEach(btn => btn.onclick = () => {
+                UI.confirm(Lang.format('kbConfirmDeleteCategory', { name: btn.dataset.name }), async () => {
+                    if (!(await Store.deleteKbCategory(btn.dataset.id))) return UI.toast(Lang.t('saveFailed'));
+                    await render();
                 });
             });
             if (window.lucide) lucide.createIcons();
         };
-        modal.querySelector('#kb-search').oninput = render;
+        const render = async () => { await view.refresh(); renderEditorCategories(); };
+        if (canEdit) {
+            const addCategory = async () => {
+                const input = modal.querySelector('#kb-new-category-name');
+                const name = input.value.trim();
+                if (!name) return input.focus();
+                const result = await Store.createKbCategory(name);
+                if (!result.ok) return UI.toast(result.error === 'category_exists' ? Lang.t('kbCategoryExists') : Lang.t('saveFailed'));
+                input.value = '';
+                await render();
+            };
+            modal.querySelector('#kb-add-category').onclick = addCategory;
+            modal.querySelector('#kb-new-category-name').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); addCategory(); } };
+        }
         await render();
     },
 
@@ -4620,9 +4790,13 @@ export const AdminBoard = {
         });
         let recNextRunMs = Date.now();
         UI.createDateTimePicker(modal.querySelector('#rec-next-run'), { onChange: (ms) => { recNextRunMs = ms; } });
-        const unitLabel = { day: Lang.t('days'), week: Lang.t('weeks'), month: Lang.t('months') };
+        const unitLabel = { day: Lang.t('days'), week: Lang.t('weeks'), month: Lang.t('months'), year: Lang.t('years') };
+        const recurringBody = modal.querySelector('.modal-body');
+        recurringBody.classList.add('recurring-manager');
+        const recurringSearch = document.createElement('input'); recurringSearch.type = 'search'; recurringSearch.id = 'rec-search'; recurringSearch.className = 'section-search'; recurringSearch.placeholder = Lang.t('search'); recurringSearch.setAttribute('aria-label', Lang.t('search'));
+        recurringBody.append(recurringSearch, modal.querySelector('#rec-list'));
         const render = async () => {
-            const list = await Store.getRecurringRules();
+            const list = (await Store.getRecurringRules()).filter(rule => Utils.matchesSearch(recurringSearch.value, rule));
             modal.querySelector('#rec-list').innerHTML = list.length ? list.map(r => `
                 <div class="absence-overview-row">
                     <div><strong>${Utils.esc(r.title)}</strong><span class="hint">${Lang.format('recurringRuleSummary', { count: r.intervalCount, unit: unitLabel[r.intervalUnit] || r.intervalUnit, date: Utils.fmtDate(r.nextRunAt), category: Utils.esc(r.category || '-'), prio: Utils.esc(r.prio) })}${r.active ? '' : ' · ' + Lang.t('paused')}</span></div>
@@ -4634,6 +4808,7 @@ export const AdminBoard = {
             });
             if (window.lucide) lucide.createIcons();
         };
+        recurringSearch.oninput = () => render();
         modal.querySelector('#rec-add').onclick = async () => {
             const title = modal.querySelector('#rec-title').value.trim();
             if (!title) return UI.toast(Lang.t('enterASubject'));
@@ -5356,8 +5531,6 @@ export const AdminBoard = {
             ticket.desc = desc;
             await Store.addLog(ticket, 'Ticketdaten bearbeitet', `Vorher: ${before}\nNachher: ${title}\n${desc}`);
             await Store.saveTickets(tickets);
-            const actor = await Store.currentUser();
-            await Store.addNotifications([ticket.author], ticket, 'Titel oder Beschreibung wurde vom Support angepasst.', actor?.username, 'ticketEdited');
             await Store.addGlobalLog('Ticketdaten bearbeitet', `Ticket ${ticket.ticketNumber || ticket.id}: ${title}`);
             modal.classList.remove('open');
             q('#m-title').textContent = `${ticket.ticketNumber || ticket.id} - ${ticket.title}`;
@@ -5853,6 +6026,8 @@ export const AdminBoard = {
             const chatSend = q('#btn-chat-send');
             const btnArch = q('#btn-archive-ticket');
             const btnLogs = q('#m-logs');
+            const btnKb = q('#m-kb-search');
+            if (btnKb) btnKb.onclick = () => KbSearch.open();
             const btnEditTicket = q('#m-edit-ticket');
             if (btnEditTicket) {
                 btnEditTicket.style.display = t.archived ? 'none' : '';
@@ -6025,17 +6200,7 @@ export const AdminBoard = {
                     t.prio = prioSel.value;
                     await Store.addLog(t, `Priorität geändert von ${old} zu ${t.prio}`);
                     await Store.saveTickets(tickets);
-
-                    // Email Notification
-                    const s = await Store.getSettings();
-                    if (s.emailConfig && s.emailConfig.host) {
-                        const users = await Store.getUsers();
-                        const author = users.find(u => u.username === t.author);
-                        if (author && author.email) {
-                            Store.sendEmail(author.email, Lang.format('ticketUpdateEmailSubject', { title: t.title }), Lang.format('priorityChangedTo', { prio: t.prio }));
-                        }
-                    }
-                    await Store.addGlobalLog('Ticket Priorität geändert', `Ticket: ${t.title}, Priorität: ${t.prio}`);
+                    // Hinweis an den Ersteller ("Ticket bearbeitet") entsteht serverseitig.
                     await AdminBoard.render();
                 };
             }
@@ -6292,12 +6457,31 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    organizeInternalCommunication: () => {
+        qa('.internal-note-composer').forEach(composer => {
+            if (composer.querySelector('.internal-options')) return;
+            const stream = composer.parentElement;
+            const search = stream.querySelector(':scope > .note-search-wrap');
+            const list = stream.querySelector(':scope > .note-list');
+            if (search && list) stream.append(search, list, composer);
+            const toolbar = composer.querySelector('.note-toolbar');
+            if (!toolbar) return;
+            const details = document.createElement('details'); details.className = 'internal-options';
+            const summary = document.createElement('summary'); summary.textContent = Lang.current === 'en' ? 'Entry type and options' : 'Eintragsart und Optionen';
+            const options = document.createElement('div'); options.className = 'note-options-row';
+            toolbar.querySelectorAll('select, .note-option').forEach(control => options.appendChild(control));
+            toolbar.before(details); details.append(summary, options);
+            const input = composer.querySelector('textarea'); if (input) input.rows = 3;
+        });
+    },
     editInternalComment: async (noteId, channel = 'solution') => {
         const note = (AdminBoard._currentNotes || []).find(n => n.id === noteId);
         if (!note) return;
         const prefix = channel === 'admin-chat' ? 'm-admin-note' : 'm-note';
         const input = q(channel === 'admin-chat' ? '#m-admin-new-comment' : '#m-new-comment');
         input.value = note.content || '';
+        const options = input.closest('.internal-note-composer')?.querySelector('.internal-options');
+        if (options) options.open = true;
         if (q(`#${prefix}-type`)) q(`#${prefix}-type`).value = note.note_type || (channel === 'admin-chat' ? 'Abstimmung' : 'Analyse');
         if (q(`#${prefix}-pin`)) q(`#${prefix}-pin`).checked = !!note.is_pinned;
         if (q('#m-note-resolution')) q('#m-note-resolution').checked = !!note.is_resolution;
@@ -6733,44 +6917,17 @@ export const AdminBoard = {
         q('#approve-modal').classList.remove('open');
         AdminBoard.currentReq = null;
     },
+    // Ueber den Server-Export statt im Browser: jeder Export landet im Systemprotokoll und der
+    // Server neutralisiert Formel-Zellen zentral.
     exportUsersCSV: async () => {
-        const users = await Store.getUsers();
-        if (users.length === 0) {
-            UI.toast('Keine User zum Exportieren');
-            return;
-        }
-
-        // Header
-        let csv = 'id,username,name,email,role,dept\n';
-
-        users.forEach(u => {
-            const dept = Array.isArray(u.dept) ? u.dept.join(';') : (u.dept || '');
-            const row = [
-                u.id,
-                u.username,
-                u.name || '',
-                u.email || '',
-                u.role,
-                dept
-            ].map(f => {
-                const cell = String(f);
-                const neutralized = /^[=+\-@\t\r]/.test(cell) ? `'${cell}` : cell;
-                return `"${neutralized.replace(/"/g, '""')}"`;
-            }).join(',');
-            csv += row + '\n';
-        });
-
-        const blob = new Blob([csv], {
-            type: 'text/csv'
-        });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `users_export_${Utils.nowISO().split('T')[0]}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        await Store.addGlobalLog('Benutzer exportiert', `Anzahl: ${users.length}`);
+        const res = await fetch('/api/v2/users/export.csv', { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return UI.toast(Lang.t('saveFailed'));
+        const url = URL.createObjectURL(await res.blob());
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `users_export_${Utils.nowISO().split('T')[0]}.csv`;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
     },
 
     importUsersCSV: () => {

@@ -40,8 +40,10 @@ export interface KnowledgeRouteDeps {
 const createArticleSchema = z.object({
   title: z.string().trim().min(1).max(500),
   content: z.string().trim().min(1).max(200000),
-  source_ticket_id: z.string().nullable().optional()
+  source_ticket_id: z.string().nullable().optional(),
+  category: z.string().trim().min(1).max(128).nullable().optional()
 });
+const kbCategorySchema = z.object({ name: z.string().trim().min(1).max(128) });
 
 const createTextBlockSchema = z.object({
   title: z.string().trim().min(1).max(255),
@@ -63,13 +65,21 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
     return permissions[key] === true;
   }
 
+  // Erlaubte Kategorien: aktive Ticket-Kategorien plus eigene Wissensdatenbank-Kategorien.
+  async function categoryExists(name: string): Promise<boolean> {
+    const ticketCategory = await app.db.selectFrom('categories').select('id').where('name', '=', name).where('archived', '=', false).executeTakeFirst();
+    if (ticketCategory) return true;
+    return !!await app.db.selectFrom('kb_categories').select('id').where('name', '=', name).executeTakeFirst();
+  }
+
   // --- Wissensdatenbank ---
 
   app.get('/api/v2/kb/articles', async (req, reply) => {
     try {
       const session = requireSession(req);
       if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
-      const rows = await app.db.selectFrom('kb_articles').selectAll().orderBy('updated_at', 'desc').execute();
+      const rows = await app.db.selectFrom('kb_articles').leftJoin('users', 'users.id', 'kb_articles.created_by_user_id')
+        .selectAll('kb_articles').select('users.username as created_by_username').orderBy('kb_articles.updated_at', 'desc').execute();
       const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
       const contentDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.content');
       const articles = rows.map(row => ({
@@ -89,6 +99,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = createArticleSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      if (parsed.data.category && !(await categoryExists(parsed.data.category))) return reply.code(400).send({ error: 'invalid_category' });
 
       // Security-Audit B9: Wissensdatenbank-Inhalte werden roh im Browser gerendert (innerHTML) --
       // ohne serverseitige Bereinigung könnte jedes Konto mit KB-Schreibrecht HTML platzieren,
@@ -104,6 +115,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
         title: fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, ctx(deps, 'kb_articles', id, 'title', titleDek.keyVersion)),
         content: fieldCipher.encryptField(cleanContent, contentDek.rawDek, ctx(deps, 'kb_articles', id, 'content', contentDek.keyVersion)),
         source_ticket_id: parsed.data.source_ticket_id ?? null,
+        category: parsed.data.category ?? null,
         created_by_user_id: session.uid
       }).execute();
       return reply.code(201).send({ id });
@@ -121,6 +133,10 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
       const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
+      if (parsed.data.category !== undefined) {
+        if (parsed.data.category && !(await categoryExists(parsed.data.category))) return reply.code(400).send({ error: 'invalid_category' });
+        updates.category = parsed.data.category;
+      }
       if (parsed.data.title !== undefined) {
         const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
         updates.title = fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, ctx(deps, 'kb_articles', id, 'title', titleDek.keyVersion));
@@ -144,6 +160,55 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       await app.db.deleteFrom('kb_articles').where('id', '=', id).execute();
+      return reply.send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // --- Wissensdatenbank: Kategorien (Ticket-Kategorien + eigene) ---
+
+  app.get('/api/v2/kb/categories', async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      const ticketCategories = await app.db.selectFrom('categories').select(['id', 'name']).where('archived', '=', false).orderBy('name', 'asc').execute();
+      const kbCategories = await app.db.selectFrom('kb_categories').select(['id', 'name']).orderBy('name', 'asc').execute();
+      const taken = new Set(ticketCategories.map(c => c.name.toLocaleLowerCase('de-DE')));
+      return reply.send({ categories: [
+        ...ticketCategories.map(c => ({ id: c.id, name: c.name, source: 'ticket' })),
+        ...kbCategories.filter(c => !taken.has(c.name.toLocaleLowerCase('de-DE'))).map(c => ({ id: c.id, name: c.name, source: 'kb' }))
+      ] });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.post('/api/v2/kb/categories', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
+      const parsed = kbCategorySchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      if (await categoryExists(parsed.data.name)) return reply.code(409).send({ error: 'category_exists' });
+      const id = randomUUID();
+      await app.db.insertInto('kb_categories').values({ id, name: parsed.data.name, created_by_user_id: session.uid }).execute();
+      return reply.code(201).send({ id, name: parsed.data.name });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.delete('/api/v2/kb/categories/:id', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb', 'edit'))) return reply.code(403).send({ error: 'forbidden' });
+      const { id } = req.params as { id: string };
+      const category = await app.db.selectFrom('kb_categories').select('name').where('id', '=', id).executeTakeFirst();
+      if (!category) return reply.code(404).send({ error: 'not_found' });
+      // Artikel bleiben erhalten und werden "ohne Kategorie" gefuehrt.
+      await app.db.updateTable('kb_articles').set({ category: null }).where('category', '=', category.name).execute();
+      await app.db.deleteFrom('kb_categories').where('id', '=', id).execute();
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -283,6 +348,21 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
     }
   });
 
+  app.patch('/api/v2/text-blocks/:id', async (req, reply) => {
+    try {
+      const actor = requireAdmin(req);
+      if (!(await hasPermission(actor, 'textBlocks'))) return reply.code(403).send({ error: 'forbidden' });
+      const { id } = req.params as { id: string };
+      const parsed = createTextBlockSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      const existing = await app.db.selectFrom('text_blocks').select('id').where('id', '=', id).executeTakeFirst();
+      if (!existing) return reply.code(404).send({ error: 'not_found' });
+      const dek = await ensureDek(app.db, deps.keyProvider, 'text_blocks.content');
+      await app.db.updateTable('text_blocks').set({ title: parsed.data.title,
+        content: fieldCipher.encryptField(parsed.data.content, dek.rawDek, ctx(deps, 'text_blocks', id, 'content', dek.keyVersion)) }).where('id', '=', id).execute();
+      return { success: true };
+    } catch (error) { return routeError(app, reply, error); }
+  });
   app.delete('/api/v2/text-blocks/:id', async (req, reply) => {
     try {
       const session = requireAdmin(req);
