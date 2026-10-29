@@ -264,8 +264,9 @@ export const AdminBoard = {
         const rect = input.getBoundingClientRect();
         menu.style.left = `${Math.max(8, rect.left)}px`;
         menu.style.width = `${Math.min(rect.width, window.innerWidth - 16)}px`;
-        menu.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 220))}px`;
+        menu.style.top = `${rect.bottom + 4}px`;
         menu.hidden = false;
+        if (rect.bottom + 4 + menu.offsetHeight > window.innerHeight - 8) menu.style.top = `${Math.max(8, rect.top - menu.offsetHeight - 4)}px`;
     },
 
     renderFilePreview: () => {
@@ -344,17 +345,10 @@ export const AdminBoard = {
     },
 
     init: async () => {
-        AdminBoard.organizeInternalCommunication();
         if (!q('.kanban-board')) return;
         if (q('#m-calendar-event-btn') && q('#m-print')) {
             q('#m-calendar-event-btn').classList.remove('btn-xs');
             q('#m-print').before(q('#m-calendar-event-btn'));
-        }
-
-        const internalPane = q('#tab-internal');
-        const internalSection = q('#tab-details .comments-section');
-        if (internalPane && internalSection && internalSection.parentElement !== internalPane) {
-            internalPane.appendChild(internalSection);
         }
 
         // Superadmin UI Injection
@@ -512,20 +506,6 @@ export const AdminBoard = {
                 }
             };
         }
-        qa('.internal-stream-tab').forEach(button => {
-            button.onclick = () => {
-                const selected = button.dataset.stream;
-                qa('.internal-stream-tab').forEach(tab => {
-                    const active = tab === button;
-                    tab.classList.toggle('active', active);
-                    tab.setAttribute('aria-selected', String(active));
-                });
-                qa('.internal-stream').forEach(stream => {
-                    stream.classList.toggle('active', stream.dataset.stream === selected);
-                });
-            };
-        });
-
         // Chat Send (Admin)
         if (q('#btn-chat-send')) {
             q('#btn-chat-send').onclick = () => AdminBoard.postChat('admin');
@@ -556,6 +536,22 @@ export const AdminBoard = {
             const noteInput = q(inputSelector);
             const fileInput = q(`#${prefix}-file-input`);
             if (q(send)) q(send).onclick = () => AdminBoard.postInternalComment(channel);
+            // Formatierungsleiste nur bei Bedarf einblenden.
+            const formatToggle = q(`#${prefix}-format`);
+            const toolbar = q(`#${prefix}-toolbar`);
+            if (formatToggle && toolbar) formatToggle.onclick = () => {
+                toolbar.hidden = !toolbar.hidden;
+                formatToggle.setAttribute('aria-expanded', String(!toolbar.hidden));
+                formatToggle.classList.toggle('active', !toolbar.hidden);
+            };
+            const cancelEdit = q(`#${prefix}-cancel`);
+            if (cancelEdit) cancelEdit.onclick = () => AdminBoard.resetNoteComposer(channel);
+            // Strg/Cmd + Enter sendet; eine offene @-Auswahl verarbeitet Enter vorher selbst.
+            if (noteInput) noteInput.addEventListener('keydown', event => {
+                if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return;
+                event.preventDefault();
+                AdminBoard.postInternalComment(channel);
+            });
             if (fileInput) fileInput.onchange = () => {
                 Array.from(fileInput.files).forEach(file => AdminBoard.noteFiles[channel].push(file));
                 AdminBoard.renderNoteFilePreview(channel);
@@ -3733,8 +3729,8 @@ export const AdminBoard = {
                 </div>
             </div>
         `;
-        const commentsSection = details.querySelector('.comments-section');
-        if (commentsSection) commentsSection.before(section);
+        const actionsRow = details.querySelector(':scope > .actions-row');
+        if (actionsRow) actionsRow.before(section);
         else details.appendChild(section);
 
         const ownerSelect = q('#m-owner-select');
@@ -4427,6 +4423,7 @@ export const AdminBoard = {
                     <div><strong>${Utils.esc(b.title)}</strong><span class="hint">${Utils.esc(b.text)}</span></div>
                     <button class="btn-ghost btn-icon tb-edit" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button><button class="btn-ghost btn-icon btn-danger tb-del" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
                 </div>`).join('') : `<div class="empty-state compact">${Lang.t('noTextBlocksYet')}</div>`;
+            UI.limitList(modal.querySelector('#tb-list'), { search: modal.querySelector('#tb-search'), total: blocks.length });
             modal.querySelectorAll('.tb-edit').forEach(button => button.onclick = () => {
                 const block = blocks.find(item => item.id === button.dataset.id); editingId = block.id;
                 modal.querySelector('#tb-title').value = block.title; modal.querySelector('#tb-text').value = block.text;
@@ -4796,12 +4793,14 @@ export const AdminBoard = {
         const recurringSearch = document.createElement('input'); recurringSearch.type = 'search'; recurringSearch.id = 'rec-search'; recurringSearch.className = 'section-search'; recurringSearch.placeholder = Lang.t('search'); recurringSearch.setAttribute('aria-label', Lang.t('search'));
         recurringBody.append(recurringSearch, modal.querySelector('#rec-list'));
         const render = async () => {
-            const list = (await Store.getRecurringRules()).filter(rule => Utils.matchesSearch(recurringSearch.value, rule));
+            const rules = await Store.getRecurringRules();
+            const list = rules.filter(rule => Utils.matchesSearch(recurringSearch.value, rule));
             modal.querySelector('#rec-list').innerHTML = list.length ? list.map(r => `
                 <div class="absence-overview-row">
                     <div><strong>${Utils.esc(r.title)}</strong><span class="hint">${Lang.format('recurringRuleSummary', { count: r.intervalCount, unit: unitLabel[r.intervalUnit] || r.intervalUnit, date: Utils.fmtDate(r.nextRunAt), category: Utils.esc(r.category || '-'), prio: Utils.esc(r.prio) })}${r.active ? '' : ' · ' + Lang.t('paused')}</span></div>
                     <button class="btn-ghost btn-icon btn-danger rec-del" type="button" data-id="${Utils.esc(r.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
                 </div>`).join('') : `<div class="empty-state compact">${Lang.t('noRecurringTickets')}</div>`;
+            UI.limitList(modal.querySelector('#rec-list'), { search: recurringSearch, total: rules.length });
             modal.querySelectorAll('.rec-del').forEach(btn => btn.onclick = async () => {
                 await Store.deleteRecurringRule(btn.dataset.id);
                 await render();
@@ -6159,7 +6158,7 @@ export const AdminBoard = {
             if (catSel) catSel.disabled = t.archived;
             if (commentInput) commentInput.disabled = t.archived;
             if (commentBtn) commentBtn.disabled = t.archived;
-            ['#m-note-type', '#m-note-bold', '#m-note-italic', '#m-note-list', '#m-note-numbered', '#m-note-table', '#m-note-file-input', '#m-note-pin', '#m-note-resolution', '#m-admin-note-type', '#m-admin-note-bold', '#m-admin-note-italic', '#m-admin-note-list', '#m-admin-note-file-input', '#m-admin-note-pin'].forEach(selector => {
+            ['#m-note-type', '#m-note-format', '#m-note-bold', '#m-note-italic', '#m-note-list', '#m-note-numbered', '#m-note-table', '#m-note-file-input', '#m-note-resolution', '#m-admin-note-format', '#m-admin-note-bold', '#m-admin-note-italic', '#m-admin-note-list', '#m-admin-note-file-input'].forEach(selector => {
                 const el = q(selector);
                 if (el) el.disabled = t.archived;
             });
@@ -6243,12 +6242,10 @@ export const AdminBoard = {
             await AdminBoard.ensureResponsibilitySection(t, allUsers, tickets);
             await AdminBoard.setupMentionAutocomplete(t);
 
-            AdminBoard.noteFiles = {
-                'admin-chat': [],
-                solution: []
-            };
-            AdminBoard.renderNoteFilePreview('admin-chat');
-            AdminBoard.renderNoteFilePreview('solution');
+            // Entwuerfe und Bearbeitungsmodus nie in ein anderes Ticket mitnehmen.
+            AdminBoard.noteFiles = { 'admin-chat': [], solution: [] };
+            AdminBoard.resetNoteComposer('admin-chat');
+            AdminBoard.resetNoteComposer('solution');
             AdminBoard.renderInternalComments(t, 'admin-chat');
             AdminBoard.renderInternalComments(t, 'solution');
             await AdminBoard.renderChat(t, '#m-chat-msgs');
@@ -6373,13 +6370,13 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    // Lädt über /api/v2/tickets/:id/notes -- t.comments existiert nicht mehr. Dateianhänge an
-    // internen Notizen sind in dieser Umstellung noch nicht angebunden.
+    // Interne Kommunikation als ruhiger, chronologischer Verlauf (neueste unten, direkt ueber dem
+    // Eingabefeld); die Loesungsdokumentation als eigene, strukturierte Liste (endgueltige Loesung zuerst).
     renderInternalComments: async (t, channel = 'solution') => {
-        const prefix = channel === 'admin-chat' ? 'm-admin-note' : 'm-note';
-        const box = q(channel === 'admin-chat' ? '#m-admin-comments' : '#m-comments');
-        if (!box) return;
-        box.innerHTML = '';
+        const isChat = channel === 'admin-chat';
+        const prefix = isChat ? 'm-admin-note' : 'm-note';
+        const box = q(isChat ? '#m-admin-comments' : '#m-comments');
+        if (!box || !t) return;
         const mentionUsers = await Store.getUsers();
         const mentionRegex = Utils.buildMentionRegex(mentionUsers);
         const highlightMentions = (html) => mentionRegex ? html.replace(mentionRegex, (full, matched) => {
@@ -6394,46 +6391,68 @@ export const AdminBoard = {
         AdminBoard._currentNotes = allNotes;
         const commentsRaw = allNotes.filter(n => n.stream === channel);
 
-        const countSelector = channel === 'admin-chat' ? '#m-admin-note-count' : '#m-solution-note-count';
+        const countSelector = isChat ? '#m-admin-note-count' : '#m-solution-note-count';
         if (q(countSelector)) q(countSelector).textContent = String(commentsRaw.length);
-        if (searchWrap) searchWrap.style.display = commentsRaw.length ? 'flex' : 'none';
+        // Suche erst ab mehr als 6 Eintraegen (oder solange noch ein Suchbegriff eingegeben ist).
         if (commentsRaw.length === 0 && searchInput) searchInput.value = '';
+        if (searchWrap) searchWrap.style.display = commentsRaw.length > 6 || searchInput?.value ? 'flex' : 'none';
+        box.innerHTML = '';
         if (commentsRaw.length === 0) {
-            box.innerHTML = `<div class="empty-state compact">${channel === 'admin-chat' ? Lang.t('noAdminMessagesYet') : Lang.t('noSolutionAttemptsYet')}</div>`;
+            box.innerHTML = `<div class="empty-state compact">${Utils.esc(isChat ? Lang.t('noInternalMessagesYet') : Lang.t('noSolutionAttemptsYet'))}</div>`;
             return;
         }
         const renderText = (value = '') => highlightMentions(Utils.renderMarkdown(value));
         const query = (searchInput?.value || '').toLowerCase().trim();
-        const comments = [...commentsRaw]
-            .filter(c => !query || [c.content, c.author_name, c.note_type, Utils.fmtDate(c.created_at)].join(' ').toLowerCase().includes(query))
-            .sort((a, b) => Number(!!b.is_pinned) - Number(!!a.is_pinned) || Number(!!b.is_resolution) - Number(!!a.is_resolution) || new Date(b.created_at) - new Date(a.created_at));
+        const byTime = (a, b) => new Date(a.created_at) - new Date(b.created_at);
+        const comments = commentsRaw
+            .filter(c => !query || [c.content, c.author_name, c.author_username, c.note_type, Utils.fmtDate(c.created_at)].join(' ').toLowerCase().includes(query))
+            .sort(isChat ? byTime : (a, b) => Number(!!b.is_resolution) - Number(!!a.is_resolution) || byTime(a, b));
         if (comments.length === 0) {
-            box.innerHTML = `<div class="empty-state compact">${Lang.t('noMatchingInternalComments')}</div>`;
+            box.innerHTML = `<div class="empty-state compact">${Utils.esc(Lang.t('noMatchingInternalComments'))}</div>`;
             return;
         }
+        const nameOf = c => c.author_name || c.author_username || '–';
+        const initials = name => String(name).split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join('') || '?';
+        const files = c => (c.attachments || []).length
+            ? `<div class="note-files">${c.attachments.map(file => `<button type="button" class="file-chip note-att" data-id="${Utils.esc(file.id)}" data-name="${Utils.esc(file.name)}" data-size="${Number(file.size) || 0}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('')}</div>`
+            : '';
+        const editButton = `<button type="button" class="btn-ghost btn-icon btn-xs note-edit" title="${Utils.esc(Lang.t('editComment'))}" aria-label="${Utils.esc(Lang.t('editComment'))}">${Icon('pencil', 13)}</button>`;
+        let previous = null;
         comments.forEach(c => {
-            const div = document.createElement('div');
-            div.className = `note-item ${c.is_pinned ? 'is-pinned' : ''} ${c.is_resolution ? 'is-resolution' : ''}`;
-            div.dataset.id = c.id;
-            div.innerHTML = `
-                <div class="note-meta">
-                    <div class="note-author">
-                        ${c.is_pinned ? Icon('pin', 13) : ''}
-                        <strong>${Utils.esc(c.author_name || c.author_username)}</strong>
-                        <span class="note-type">${Utils.esc(c.note_type || Lang.t('noteFallback'))}</span>
-                        ${c.is_resolution ? `<span class="note-type note-resolution">${Icon('check-circle', 12)}${Lang.t('finalSolution')}</span>` : ''}
+            const item = document.createElement(isChat ? 'div' : 'article');
+            item.dataset.id = c.id;
+            if (isChat) {
+                // Folgenachrichten derselben Person innerhalb von 5 Minuten ohne erneuten Kopf.
+                const continued = !!previous && previous.author_username === c.author_username && !query
+                    && new Date(c.created_at) - new Date(previous.created_at) < 5 * 60 * 1000;
+                item.className = `tl-item${continued ? ' is-continued' : ''}${c.is_pinned ? ' is-pinned' : ''}`;
+                item.innerHTML = `
+                    <div class="tl-avatar" aria-hidden="true">${continued ? '' : Utils.esc(initials(nameOf(c)))}</div>
+                    <div class="tl-main">
+                        <div class="tl-head"${continued ? ' hidden' : ''}><strong>${Utils.esc(nameOf(c))}</strong><time datetime="${Utils.esc(c.created_at)}">${Utils.esc(Utils.fmtDate(c.created_at))}</time>${c.is_pinned ? `<span class="tl-pin" title="${Utils.esc(Lang.t('pin'))}">${Icon('pin', 12)}</span>` : ''}</div>
+                        <div class="tl-body note-body">${renderText(c.content)}</div>
+                        ${files(c)}
                     </div>
-                    <div class="note-actions">
-                        <span>${Utils.fmtDate(c.created_at)}</span>
-                        <button class="btn-ghost btn-icon btn-xs note-edit" title="${Lang.t('editComment')}" aria-label="${Lang.t('editComment')}">${Icon('pencil', 13)}</button>
-                    </div>
-                </div>
-                <div class="note-body">${renderText(c.content)}</div>
-            `;
-            div.querySelector('.note-edit')?.addEventListener('click', () => AdminBoard.editInternalComment(c.id, channel));
-            box.appendChild(div);
+                    <div class="tl-actions">${editButton}</div>`;
+                previous = c;
+            } else {
+                item.className = `solution-entry${c.is_resolution ? ' is-resolution' : ''}`;
+                item.innerHTML = `
+                    <header class="solution-entry-head">
+                        ${c.is_resolution ? `<span class="note-type note-resolution">${Icon('check-circle', 12)}${Utils.esc(Lang.t('finalSolution'))}</span>` : ''}
+                        ${c.note_type && c.note_type !== 'note' ? `<span class="note-type">${Utils.esc(c.note_type)}</span>` : ''}
+                        <span class="solution-entry-meta">${Utils.esc(nameOf(c))} · <time datetime="${Utils.esc(c.created_at)}">${Utils.esc(Utils.fmtDate(c.created_at))}</time></span>
+                        ${editButton}
+                    </header>
+                    <div class="note-body">${renderText(c.content)}</div>
+                    ${files(c)}`;
+            }
+            item.querySelector('.note-edit').addEventListener('click', () => AdminBoard.editInternalComment(c.id, channel));
+            item.querySelectorAll('.note-att').forEach(btn => btn.addEventListener('click', () =>
+                AdminBoard.openAttachmentPreview({ attachmentId: btn.dataset.id, name: btn.dataset.name, size: Number(btn.dataset.size) || 0 })));
+            box.appendChild(item);
         });
-        box.scrollTop = 0;
+        box.scrollTop = isChat ? box.scrollHeight : 0;
         if (window.lucide) lucide.createIcons();
     },
 
@@ -6457,88 +6476,86 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    organizeInternalCommunication: () => {
-        qa('.internal-note-composer').forEach(composer => {
-            if (composer.querySelector('.internal-options')) return;
-            const stream = composer.parentElement;
-            const search = stream.querySelector(':scope > .note-search-wrap');
-            const list = stream.querySelector(':scope > .note-list');
-            if (search && list) stream.append(search, list, composer);
-            const toolbar = composer.querySelector('.note-toolbar');
-            if (!toolbar) return;
-            const details = document.createElement('details'); details.className = 'internal-options';
-            const summary = document.createElement('summary'); summary.textContent = Lang.current === 'en' ? 'Entry type and options' : 'Eintragsart und Optionen';
-            const options = document.createElement('div'); options.className = 'note-options-row';
-            toolbar.querySelectorAll('select, .note-option').forEach(control => options.appendChild(control));
-            toolbar.before(details); details.append(summary, options);
-            const input = composer.querySelector('textarea'); if (input) input.rows = 3;
-        });
-    },
-    editInternalComment: async (noteId, channel = 'solution') => {
-        const note = (AdminBoard._currentNotes || []).find(n => n.id === noteId);
-        if (!note) return;
-        const prefix = channel === 'admin-chat' ? 'm-admin-note' : 'm-note';
-        const input = q(channel === 'admin-chat' ? '#m-admin-new-comment' : '#m-new-comment');
-        input.value = note.content || '';
-        const options = input.closest('.internal-note-composer')?.querySelector('.internal-options');
-        if (options) options.open = true;
-        if (q(`#${prefix}-type`)) q(`#${prefix}-type`).value = note.note_type || (channel === 'admin-chat' ? 'Abstimmung' : 'Analyse');
-        if (q(`#${prefix}-pin`)) q(`#${prefix}-pin`).checked = !!note.is_pinned;
-        if (q('#m-note-resolution')) q('#m-note-resolution').checked = !!note.is_resolution;
-        const saveBtn = q(channel === 'admin-chat' ? '#btn-add-admin-comment' : '#btn-add-comment');
+    // Beschriftung des Speichern-Knopfs je Bereich und Modus (neu / Bearbeitung).
+    setNoteComposerMode: (channel, editId = null) => {
+        const isChat = channel === 'admin-chat';
+        const saveBtn = q(isChat ? '#btn-add-admin-comment' : '#btn-add-comment');
         if (saveBtn) {
-            saveBtn.dataset.editId = noteId;
-            saveBtn.innerHTML = `${Icon('save', 16)}Eintrag aktualisieren`;
+            if (editId) saveBtn.dataset.editId = editId; else delete saveBtn.dataset.editId;
+            const icon = editId ? 'save' : (isChat ? 'send' : 'plus');
+            const label = editId ? Lang.t('saveChanges') : (isChat ? Lang.t('send') : Lang.t('addSolutionEntry'));
+            saveBtn.innerHTML = `${Icon(icon, 16)}<span>${Utils.esc(label)}</span>`;
         }
-        input.focus();
+        const cancel = q(`#${isChat ? 'm-admin-note' : 'm-note'}-cancel`);
+        if (cancel) cancel.hidden = !editId;
         if (window.lucide) lucide.createIcons();
     },
 
-    // Speichert über /api/v2/tickets/:id/notes (bzw. PATCH beim Bearbeiten). Datei-Anhänge und
-    // automatische @Erwähnungs-Benachrichtigungen sind in dieser Umstellung noch nicht
-    // angebunden (eigener, noch offener Schritt).
-    postInternalComment: async (channel = 'solution') => {
-        const prefix = channel === 'admin-chat' ? 'm-admin-note' : 'm-note';
-        const input = q(channel === 'admin-chat' ? '#m-admin-new-comment' : '#m-new-comment');
-        const txt = input.value.trim();
-        const saveBtn = q(channel === 'admin-chat' ? '#btn-add-admin-comment' : '#btn-add-comment');
-        const editId = saveBtn?.dataset.editId;
-        const isEditing = !!editId;
-        if (!txt) return;
-        const id = AdminBoard.currentTicketId;
+    resetNoteComposer: (channel) => {
+        const isChat = channel === 'admin-chat';
+        const input = q(isChat ? '#m-admin-new-comment' : '#m-new-comment');
+        if (input) input.value = '';
+        if (!isChat && q('#m-note-resolution')) q('#m-note-resolution').checked = false;
+        if (isChat && q('#m-admin-mention-picker')) q('#m-admin-mention-picker').hidden = true;
+        AdminBoard.noteFiles[channel] = [];
+        AdminBoard.renderNoteFilePreview(channel);
+        AdminBoard.setNoteComposerMode(channel, null);
+    },
 
+    editInternalComment: async (noteId, channel = 'solution') => {
+        const note = (AdminBoard._currentNotes || []).find(n => n.id === noteId);
+        if (!note) return;
+        const isChat = channel === 'admin-chat';
+        const input = q(isChat ? '#m-admin-new-comment' : '#m-new-comment');
+        input.value = note.content || '';
+        if (!isChat) {
+            const type = q('#m-note-type');
+            if (type && [...type.options].some(option => option.value === note.note_type)) type.value = note.note_type;
+            if (q('#m-note-resolution')) q('#m-note-resolution').checked = !!note.is_resolution;
+        }
+        AdminBoard.setNoteComposerMode(channel, noteId);
+        input.focus();
+    },
+
+    // Speichert ueber /api/v2/tickets/:id/notes (bzw. PATCH beim Bearbeiten) und laedt danach die
+    // ausgewaehlten Dateien als Anhang genau dieser Notiz hoch.
+    postInternalComment: async (channel = 'solution') => {
+        const isChat = channel === 'admin-chat';
+        const input = q(isChat ? '#m-admin-new-comment' : '#m-new-comment');
+        const saveBtn = q(isChat ? '#btn-add-admin-comment' : '#btn-add-comment');
+        const txt = input?.value.trim();
+        if (!txt) return input?.focus();
+        const editId = saveBtn?.dataset.editId || null;
+        const existing = editId ? (AdminBoard._currentNotes || []).find(n => n.id === editId) : null;
+        const id = AdminBoard.currentTicketId;
+        // Interne Nachrichten ohne Kategorie; Loesungseintraege mit strukturierter Art. Bestehende
+        // Markierungen (z.B. frueher angepinnte Eintraege) bleiben beim Bearbeiten erhalten.
         const body = {
             content: txt,
-            note_type: q(`#${prefix}-type`)?.value || 'Notiz',
-            is_pinned: !!q(`#${prefix}-pin`)?.checked,
-            is_resolution: channel === 'solution' && !!q('#m-note-resolution')?.checked
+            note_type: isChat ? (existing?.note_type || 'Notiz') : (q('#m-note-type')?.value || 'Lösung'),
+            is_pinned: !!existing?.is_pinned,
+            is_resolution: !isChat && !!q('#m-note-resolution')?.checked
         };
-        if (!isEditing) body.stream = channel;
-
-        const res = await fetch(
-            isEditing ? `/api/v2/tickets/${encodeURIComponent(id)}/notes/${encodeURIComponent(editId)}` : `/api/v2/tickets/${encodeURIComponent(id)}/notes`,
-            {
-                method: isEditing ? 'PATCH' : 'POST',
-                credentials: 'same-origin',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(body)
+        if (!editId) body.stream = channel;
+        if (saveBtn) saveBtn.disabled = true;
+        try {
+            const res = await fetch(
+                editId ? `/api/v2/tickets/${encodeURIComponent(id)}/notes/${encodeURIComponent(editId)}` : `/api/v2/tickets/${encodeURIComponent(id)}/notes`,
+                { method: editId ? 'PATCH' : 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+            ).catch(() => null);
+            if (!res || !res.ok) return UI.toast(Lang.t('saveFailed'));
+            const noteId = editId || (await res.json().catch(() => ({}))).note?.id;
+            let failedUploads = 0;
+            for (const file of [...(AdminBoard.noteFiles[channel] || [])]) {
+                try { await Store.saveAttachment(file, { ticketId: id, noteId }); } catch { failedUploads++; }
             }
-        ).catch(() => null);
-        if (!res || !res.ok) {
-            UI.toast('Speichern fehlgeschlagen.');
-            return;
+            if (failedUploads) UI.toast(Lang.t('noteAttachmentFailed'));
+            AdminBoard.resetNoteComposer(channel);
+            const t = (await Store.getTickets()).find(x => x.id === id) || await Store.getTicketById(id);
+            await AdminBoard.renderInternalComments(t, channel);
+        } finally {
+            if (saveBtn) saveBtn.disabled = false;
         }
-
-        input.value = '';
-        if (q('#m-admin-mention-picker')) q('#m-admin-mention-picker').hidden = true;
-        if (saveBtn) {
-            delete saveBtn.dataset.editId;
-            saveBtn.innerHTML = `${Icon('plus', 16)}Eintrag speichern`;
-        }
-        if (q(`#${prefix}-pin`)) q(`#${prefix}-pin`).checked = false;
-        if (channel === 'solution' && q('#m-note-resolution')) q('#m-note-resolution').checked = false;
-        const t = (await Store.getTickets()).find(x => x.id === id);
-        await AdminBoard.renderInternalComments(t, channel);
     },
 
     editChatMessage: async (ticketId, messageId, containerSelector) => {

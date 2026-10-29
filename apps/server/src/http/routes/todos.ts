@@ -81,7 +81,7 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
         .innerJoin('admin_todo_members as m', 'm.todo_id', 't.id')
         .selectAll('t').where('m.user_id', '=', actor.uid).where('m.hidden', '=', false).execute();
       const tasks = await app.db.selectFrom('ticket_todos as t').innerJoin('tickets as k', 'k.id', 't.ticket_id')
-        .select(['t.id', 't.content', 't.done', 't.ticket_id', 'k.title', 'k.ticket_number', 'k.custom_due_at', 'k.sla_due_at'])
+        .select(['t.id', 't.content', 't.done', 't.done_at', 't.ticket_id', 'k.title', 'k.ticket_number', 'k.custom_due_at', 'k.sla_due_at', 'k.status', 'k.closed_at'])
         .where('k.archived_at', 'is', null)
         .where(eb => eb.or([
           eb('t.assignee_user_id', '=', actor.uid),
@@ -98,9 +98,10 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
         fieldCipher.decryptField(value, dek.rawDek, context(table, field, id, dek.keyVersion));
       return reply.send({ todos: [
         ...own.map(t => ({ id: t.id, kind: 'personal', content: decrypt(t.content, 'admin_todos', 'content', t.id, personalDek),
-          done: !!t.done, due_at: t.due_at, creator_id: t.created_by_user_id })),
+          done: !!t.done, done_at: t.done_at ?? null, due_at: t.due_at, creator_id: t.created_by_user_id })),
         ...tasks.map(t => ({ id: t.id, kind: 'ticket', content: decrypt(t.content, 'ticket_todos', 'content', t.id, taskDek),
-          done: !!t.done, due_at: t.custom_due_at || t.sla_due_at, ticket_id: t.ticket_id, ticket_number: t.ticket_number,
+          done: !!t.done, done_at: t.done_at ?? null, due_at: t.custom_due_at || t.sla_due_at, ticket_id: t.ticket_id, ticket_number: t.ticket_number,
+          ticket_closed: t.status === 'Geschlossen', ticket_closed_at: t.status === 'Geschlossen' ? t.closed_at ?? null : null,
           ticket_title: decrypt(t.title, 'tickets', 'title', t.ticket_id, titleDek) }))
       ] });
     } catch (error) { return routeError(app, reply, error); }
@@ -125,7 +126,7 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
         .where('todo_id', '=', id).where('user_id', '=', actor.uid).where('hidden', '=', false).executeTakeFirst();
       if (!member) return reply.code(404).send({ error: 'not_found' });
       const updates: Record<string, unknown> = {};
-      if (parsed.data.done !== undefined) updates.done = parsed.data.done;
+      if (parsed.data.done !== undefined) { updates.done = parsed.data.done; updates.done_at = parsed.data.done ? mysqlTimestamp() : null; }
       if (parsed.data.content !== undefined || parsed.data.due_at !== undefined) {
         const todo = await app.db.selectFrom('admin_todos').select('created_by_user_id').where('id', '=', id).executeTakeFirst();
         if (todo?.created_by_user_id !== actor.uid) return reply.code(403).send({ error: 'forbidden' });

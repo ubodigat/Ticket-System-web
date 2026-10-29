@@ -5,10 +5,10 @@ import { fieldCipher } from '../src/crypto/fieldCrypto.js';
 
 vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
 const uid = 'owner';
-async function requestAttachment({ method = 'DELETE', role = 'admin', uploader = uid, owner = uid, preview = false }:
-  { method?: 'GET' | 'DELETE'; role?: 'user' | 'admin' | 'superadmin'; uploader?: string; owner?: string; preview?: boolean } = {}) {
+async function requestAttachment({ method = 'DELETE', role = 'admin', uploader = uid, owner = uid, preview = false, noteId = null }:
+  { method?: 'GET' | 'DELETE'; role?: 'user' | 'admin' | 'superadmin'; uploader?: string; owner?: string; preview?: boolean; noteId?: string | null } = {}) {
   const context = (fieldName: string) => ({ installationId: 'test', schemaVersion: 1, tableName: 'attachments', recordId: 'file', fieldName, keyVersion: 1 });
-  const file = { id: 'file', uploaded_by_user_id: uploader, ticket_id: 'ticket',
+  const file = { id: 'file', uploaded_by_user_id: uploader, ticket_id: 'ticket', note_id: noteId,
     filename: fieldCipher.encryptField('document.xlsx', Buffer.alloc(32, 7), context('filename')) };
   const deleted: unknown[][] = [];
   const db: any = {
@@ -48,6 +48,13 @@ describe('attachment ownership enforcement', () => {
   it('authorizes previews before decoding documents or contacting the converter', async () => {
     const result = await requestAttachment({ method: 'GET', role: 'user', owner: 'other', preview: true });
     expect(result.response.statusCode).toBe(403);
+  });
+  it('never serves attachments of internal notes to the requester, even on their own ticket', async () => {
+    for (const preview of [false, true]) {
+      const result = await requestAttachment({ method: 'GET', role: 'user', noteId: 'note', preview });
+      expect(result.response.statusCode).toBe(403);
+    }
+    expect((await requestAttachment({ method: 'GET', noteId: 'note', preview: true })).response.statusCode).toBe(503);
   });
   it('reports missing conversion configuration instead of pretending to render Office documents', async () => {
     const result = await requestAttachment({ method: 'GET', preview: true });

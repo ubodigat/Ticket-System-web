@@ -139,11 +139,13 @@ export const TodoList = {
             const items = TodoList.items.filter(t => (TodoList.showDone || !t.done) && (TodoList.tab === 'all' || t.kind === TodoList.tab) && Utils.matchesSearch(query, t))
                 .sort((a, b) => Number(a.done) - Number(b.done) || (a.due_at ? Date.parse(a.due_at) : Infinity) - (b.due_at ? Date.parse(b.due_at) : Infinity));
             for (const item of items) {
-                const row = document.createElement('div'); row.className = `todo-row${item.done ? ' is-done' : ''}`;
+                const row = document.createElement('div'); row.className = `todo-row${item.done ? ' is-done' : ''}${item.ticket_closed ? ' is-ticket-closed' : ''}`;
                 const overdue = !item.done && item.due_at && new Date(item.due_at) < new Date();
                 row.innerHTML = `<input type="checkbox" ${item.done ? 'checked' : ''} aria-label="${Lang.t('taskDone')}"><div class="todo-copy"><div class="todo-title">${Utils.esc(item.content)}</div>
                     ${item.ticket_id ? `<button class="btn-ghost todo-ticket">${Utils.esc(item.ticket_number)} · ${Utils.esc(item.ticket_title)}</button>` : `<small>${Lang.t('ownTask')}</small>`}
-                    ${item.due_at ? `<time class="${overdue ? 'todo-overdue' : ''}">${Icon('calendar-clock', 13)}${Utils.esc(Utils.fmtDate(item.due_at))}</time>` : ''}</div>
+                    ${item.due_at && !item.done ? `<time class="${overdue ? 'todo-overdue' : ''}">${Icon('calendar-clock', 13)}${Utils.esc(Utils.fmtDate(item.due_at))}</time>` : ''}
+                    ${item.done ? `<span class="todo-done-at">${Icon('check', 12)}${Utils.esc(item.done_at ? `${Lang.t('doneOn')} ${Utils.fmtDate(item.done_at)}` : Lang.t('taskDone'))}</span>` : ''}
+                    ${item.ticket_closed ? `<span class="todo-ticket-closed">${Icon('lock', 12)}${Utils.esc(item.ticket_closed_at ? Lang.format('ticketClosedOn', { date: Utils.fmtDate(item.ticket_closed_at) }) : Lang.t('statusClosed'))}</span>` : ''}</div>
                     ${item.kind === 'personal' && item.creator_id === TodoList.user.id ? `<button class="btn-ghost btn-icon" data-edit title="${Lang.t('editTask')}" aria-label="${Lang.t('editTask')}">${Icon('pencil', 16)}</button>` : ''}
                     ${item.kind === 'personal' ? `<button class="btn-ghost btn-icon" data-remove title="${Lang.t('removeFromMyList')}" aria-label="${Lang.t('removeFromMyList')}">${Icon('trash-2', 16)}</button>` : ''}`;
                 row.querySelector('input').onchange = async e => {

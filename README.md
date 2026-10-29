@@ -12,7 +12,7 @@ für den optionalen Virenscanner zusätzlich 1-2 GB, für die Office-Oberfläche
 `--enable-office-viewer` aktiviert (Anleitung unten).
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=089207a0fc8b10924912766e2c4dabcb1233fdb0596235721df8f1ea96af9065 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=7fa1f83b3cd83ec42c14f7f0c6fc270be6469dbce01ce6b40b008a26995cdae5 bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -39,7 +39,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=089207a0fc8b10924912766e2c4dabcb1233fdb0596235721df8f1ea96af9065 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=7fa1f83b3cd83ec42c14f7f0c6fc270be6469dbce01ce6b40b008a26995cdae5 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist
@@ -66,7 +66,7 @@ Bei der Erstinstallation diesen verifizierten Befehl verwenden; mit einer eigene
 zusätzlich `--domain=… --acme-email=…` hinter `--enable-office-viewer` ergänzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=089207a0fc8b10924912766e2c4dabcb1233fdb0596235721df8f1ea96af9065 bash "$f" --enable-office-viewer'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=7fa1f83b3cd83ec42c14f7f0c6fc270be6469dbce01ce6b40b008a26995cdae5 bash "$f" --enable-office-viewer'
 ```
 
 Bei einem bereits aktualisierten Checkout auf dem Server:

@@ -489,6 +489,7 @@ export interface Database {
     created_by_user_id: Nullable<string>;
     due_at: NullableTimestamp;
     done: ColumnType<boolean, boolean, boolean>;
+    done_at: NullableTimestamp;
     created_at: CreatedAt;
   };
   admin_todo_members: {

@@ -162,6 +162,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         <div class="tab-btn active" data-tab="details">Details</div>
                         <div class="tab-btn" data-tab="chat">Chat</div>
                         <div class="tab-btn" data-tab="internal">Interne Kommunikation</div>
+                        <div class="tab-btn" data-tab="solution">Lösung</div>
                     </div>
 
                     <div id="tab-details" class="tab-content active">
@@ -214,74 +215,6 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         <div id="m-ticket-attachments" class="ticket-attachments"></div>
                         <div id="m-incident-linked-list" class="incident-linked-list" hidden></div>
 
-                        <div class="comments-section">
-                            <h4 class="section-title">Interne Kommunikation</h4>
-                            <div class="internal-stream-tabs" role="tablist" data-i18n-aria-label="internalCommAreasAriaLabel" aria-label="Interne Kommunikationsbereiche">
-                                <button class="internal-stream-tab active" id="internal-tab-admin-chat" type="button" role="tab" aria-selected="true" data-stream="admin-chat">
-                                    <span data-i18n="adminChatTabLabel">Admin-Chat</span><span class="internal-stream-count" id="m-admin-note-count">0</span>
-                                </button>
-                                <button class="internal-stream-tab" id="internal-tab-solution" type="button" role="tab" aria-selected="false" data-stream="solution">
-                                    <span data-i18n="solutionPathHeading">Lösungsweg</span><span class="internal-stream-count" id="m-solution-note-count">0</span>
-                                </button>
-                            </div>
-                            <div class="internal-stream-grid">
-                                <section class="internal-stream active" id="internal-stream-admin-chat" role="tabpanel" aria-labelledby="internal-tab-admin-chat" data-stream="admin-chat">
-                                    <div class="internal-note-composer">
-                                        <div class="note-toolbar">
-                                            <select id="m-admin-note-type" data-i18n-title="entryTypeTitle" title="Art des Eintrags">
-                                                <option value="Abstimmung" data-i18n="noteTypeVote">Abstimmung</option>
-                                                <option value="Rückfrage" data-i18n="noteTypeFollowUp">Rückfrage</option>
-                                                <option value="Entscheidung" data-i18n="noteTypeDecision">Entscheidung</option>
-                                            </select>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-bold" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-italic" data-i18n-title="italic" data-i18n-aria-label="italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-admin-note-list" data-i18n-title="list" data-i18n-aria-label="list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
-                                            <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="addAttachment" data-i18n-aria-label="addAttachment" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-admin-note-file-input" hidden multiple></label>
-                                            <label class="note-option"><input type="checkbox" id="m-admin-note-pin"> <span data-i18n="pin">Anpinnen</span></label>
-                                        </div>
-                                        <textarea id="m-admin-new-comment" rows="4" data-i18n-placeholder="adminChatMessagePlaceholder" placeholder="Nachricht an andere Admins... @Benutzername"></textarea>
-                                        <div id="m-admin-mention-picker" class="mention-autocomplete" role="listbox" data-i18n-aria-label="adminsWithTicketAccessAriaLabel" aria-label="Admins mit Ticketzugriff" hidden></div>
-                                        <div id="m-admin-note-file-preview" class="file-preview"></div>
-                                        <button class="btn-primary btn-block" id="btn-add-admin-comment"><i data-lucide="send"></i><span data-i18n="send">Senden</span></button>
-                                    </div>
-                                    <div class="note-search-wrap" id="m-admin-note-search-wrap">
-                                        <input type="text" id="m-admin-note-search" data-i18n-placeholder="searchAdminChatPlaceholder" placeholder="Admin-Chat durchsuchen...">
-                                        <span><i data-lucide="search"></i></span>
-                                    </div>
-                                    <div id="m-admin-comments" class="note-list"></div>
-                                </section>
-                                <section class="internal-stream" id="internal-stream-solution" role="tabpanel" aria-labelledby="internal-tab-solution" data-stream="solution">
-                                    <div class="internal-note-composer">
-                                        <div class="note-toolbar">
-                                            <select id="m-note-type" data-i18n-title="entryTypeTitle" title="Art des Eintrags">
-                                                <option value="Analyse" data-i18n="noteTypeAnalysis">Analyse</option>
-                                                <option value="Lösungsschritt" data-i18n="noteTypeSolutionStep">Lösungsschritt</option>
-                                                <option value="Rückfrage" data-i18n="noteTypeFollowUp">Rückfrage</option>
-                                                <option value="Entscheidung" data-i18n="noteTypeDecision">Entscheidung</option>
-                                                <option value="Systemänderung" data-i18n="noteTypeSystemChange">Systemänderung</option>
-                                            </select>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-bold" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-italic" data-i18n-title="italic" data-i18n-aria-label="italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-list" data-i18n-title="list" data-i18n-aria-label="list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-numbered" data-i18n-title="numberedList" data-i18n-aria-label="numberedList" title="Nummerierte Liste" aria-label="Nummerierte Liste"><i data-lucide="list-ordered"></i></button>
-                                            <button class="btn-ghost btn-icon btn-sm" id="m-note-table" data-i18n-title="insertTable" data-i18n-aria-label="insertTable" title="Tabelle einfügen" aria-label="Tabelle einfügen"><i data-lucide="table"></i></button>
-                                            <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="addAttachment" data-i18n-aria-label="addAttachment" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" hidden multiple></label>
-                                            <label class="note-option"><input type="checkbox" id="m-note-pin"> <span data-i18n="pin">Anpinnen</span></label>
-                                            <label class="note-option"><input type="checkbox" id="m-note-resolution"> <span data-i18n="finalSolution">Endgültige Lösung</span></label>
-                                        </div>
-                                        <textarea id="m-new-comment" rows="4" data-i18n-placeholder="solutionComposerPlaceholder" placeholder="Analyse, Ursache, Lösungsweg, nächste Schritte..."></textarea>
-                                        <div id="m-note-file-preview" class="file-preview"></div>
-                                        <button class="btn-primary btn-block" id="btn-add-comment"><i data-lucide="plus"></i><span data-i18n="saveEntryButton">Eintrag speichern</span></button>
-                                    </div>
-                                    <div class="note-search-wrap" id="m-note-search-wrap">
-                                        <input type="text" id="m-note-search" data-i18n-placeholder="searchSolutionPlaceholder" placeholder="Lösungsweg durchsuchen...">
-                                        <span><i data-lucide="search"></i></span>
-                                    </div>
-                                    <div id="m-comments" class="note-list"></div>
-                                </section>
-                            </div>
-                        </div>
-
                         <div class="actions-row">
                             <button id="btn-mark-incident" class="btn-secondary"><i data-lucide="siren"></i><span data-i18n="markAsMajorIncidentButton">Als Großstörung markieren</span></button>
                             <button id="btn-assign-incident" class="btn-secondary" hidden><i data-lucide="link"></i><span data-i18n="assignToIncidentButton">Einer Störung zuordnen</span></button>
@@ -290,7 +223,85 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         </div>
                     </div>
 
-                    <div id="tab-internal" class="tab-content"></div>
+                    <div id="tab-internal" class="tab-content">
+                        <section class="comments-section internal-section" aria-labelledby="m-internal-heading">
+                            <header class="internal-head">
+                                <div>
+                                    <h4 class="section-title" id="m-internal-heading">Interne Kommunikation</h4>
+                                    <p class="internal-head-hint"><i data-lucide="lock"></i><span data-i18n="internalVisibilityHint">Nur für berechtigte Mitarbeitende sichtbar – nie für die anfragende Person.</span></p>
+                                </div>
+                                <span class="internal-stream-count" id="m-admin-note-count">0</span>
+                            </header>
+                            <div class="note-search-wrap" id="m-admin-note-search-wrap">
+                                <input type="search" id="m-admin-note-search" data-i18n-placeholder="searchInternalPlaceholder" placeholder="Interne Kommunikation durchsuchen …" data-i18n-aria-label="searchInternalPlaceholder" aria-label="Interne Kommunikation durchsuchen">
+                                <span><i data-lucide="search"></i></span>
+                            </div>
+                            <div id="m-admin-comments" class="note-timeline" role="log" aria-live="polite"></div>
+                            <div class="internal-note-composer internal-composer">
+                                <div class="note-toolbar" id="m-admin-note-toolbar" hidden>
+                                    <button type="button" class="btn-ghost btn-icon btn-sm" id="m-admin-note-bold" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
+                                    <button type="button" class="btn-ghost btn-icon btn-sm" id="m-admin-note-italic" data-i18n-title="italic" data-i18n-aria-label="italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
+                                    <button type="button" class="btn-ghost btn-icon btn-sm" id="m-admin-note-list" data-i18n-title="list" data-i18n-aria-label="list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
+                                </div>
+                                <textarea id="m-admin-new-comment" rows="2" data-i18n-placeholder="internalMessagePlaceholder" placeholder="Interne Nachricht schreiben … (@Name erwähnt Kolleg:innen)"></textarea>
+                                <div id="m-admin-mention-picker" class="mention-autocomplete" role="listbox" data-i18n-aria-label="adminsWithTicketAccessAriaLabel" aria-label="Admins mit Ticketzugriff" hidden></div>
+                                <div id="m-admin-note-file-preview" class="file-preview"></div>
+                                <div class="composer-bar">
+                                    <div class="composer-tools">
+                                        <button type="button" class="btn-ghost btn-icon btn-sm" id="m-admin-note-format" aria-expanded="false" aria-controls="m-admin-note-toolbar" data-i18n-title="formattingToggle" data-i18n-aria-label="formattingToggle" title="Formatierung" aria-label="Formatierung"><i data-lucide="type"></i></button>
+                                        <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="addAttachment" data-i18n-aria-label="addAttachment" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-admin-note-file-input" hidden multiple></label>
+                                        <button type="button" class="btn-ghost btn-sm" id="m-admin-note-cancel" hidden data-i18n="cancelEdit">Bearbeitung abbrechen</button>
+                                        <span class="composer-hint" data-i18n="ctrlEnterToSend">Strg + Enter zum Senden</span>
+                                    </div>
+                                    <button type="button" class="btn-primary btn-sm" id="btn-add-admin-comment"><i data-lucide="send"></i><span data-i18n="send">Senden</span></button>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div id="tab-solution" class="tab-content">
+                        <section class="solution-section" aria-labelledby="m-solution-heading">
+                            <header class="internal-head">
+                                <div>
+                                    <h4 class="section-title" id="m-solution-heading" data-i18n="solutionDocumentation">Lösungsdokumentation</h4>
+                                    <p class="internal-head-hint" data-i18n="solutionDocumentationHint">Ursache, durchgeführte Maßnahmen und endgültige Lösung – getrennt von der Kommunikation.</p>
+                                </div>
+                                <span class="internal-stream-count" id="m-solution-note-count">0</span>
+                            </header>
+                            <div class="internal-note-composer solution-composer">
+                                <div class="solution-composer-row">
+                                    <select id="m-note-type" data-i18n-title="entryTypeTitle" title="Art des Eintrags" data-i18n-aria-label="entryTypeTitle" aria-label="Art des Eintrags">
+                                        <option value="Ursache" data-i18n="noteTypeCause">Ursache</option>
+                                        <option value="Maßnahme" data-i18n="noteTypeMeasure">Durchgeführte Maßnahme</option>
+                                        <option value="Lösung" data-i18n="noteTypeSolution">Lösung</option>
+                                    </select>
+                                    <label class="note-option"><input type="checkbox" id="m-note-resolution"> <span data-i18n="markAsFinalSolution">Als endgültige Lösung markieren</span></label>
+                                </div>
+                                <div class="note-toolbar" id="m-note-toolbar" hidden>
+                                    <button type="button" class="btn-ghost btn-icon btn-sm" id="m-note-bold" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
+                                    <button type="button" class="btn-ghost btn-icon btn-sm" id="m-note-italic" data-i18n-title="italic" data-i18n-aria-label="italic" title="Kursiv" aria-label="Kursiv"><i data-lucide="italic"></i></button>
+                                    <button type="button" class="btn-ghost btn-icon btn-sm" id="m-note-list" data-i18n-title="list" data-i18n-aria-label="list" title="Liste" aria-label="Liste"><i data-lucide="list"></i></button>
+                                    <button type="button" class="btn-ghost btn-icon btn-sm" id="m-note-numbered" data-i18n-title="numberedList" data-i18n-aria-label="numberedList" title="Nummerierte Liste" aria-label="Nummerierte Liste"><i data-lucide="list-ordered"></i></button>
+                                    <button type="button" class="btn-ghost btn-icon btn-sm" id="m-note-table" data-i18n-title="insertTable" data-i18n-aria-label="insertTable" title="Tabelle einfügen" aria-label="Tabelle einfügen"><i data-lucide="table"></i></button>
+                                </div>
+                                <textarea id="m-new-comment" rows="3" data-i18n-placeholder="solutionComposerPlaceholder" placeholder="Analyse, Ursache, Lösungsweg, nächste Schritte..."></textarea>
+                                <div id="m-note-file-preview" class="file-preview"></div>
+                                <div class="composer-bar">
+                                    <div class="composer-tools">
+                                        <button type="button" class="btn-ghost btn-icon btn-sm" id="m-note-format" aria-expanded="false" aria-controls="m-note-toolbar" data-i18n-title="formattingToggle" data-i18n-aria-label="formattingToggle" title="Formatierung" aria-label="Formatierung"><i data-lucide="type"></i></button>
+                                        <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="addAttachment" data-i18n-aria-label="addAttachment" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" hidden multiple></label>
+                                        <button type="button" class="btn-ghost btn-sm" id="m-note-cancel" hidden data-i18n="cancelEdit">Bearbeitung abbrechen</button>
+                                    </div>
+                                    <button type="button" class="btn-primary btn-sm" id="btn-add-comment"><i data-lucide="plus"></i><span data-i18n="addSolutionEntry">Eintrag hinzufügen</span></button>
+                                </div>
+                            </div>
+                            <div class="note-search-wrap" id="m-note-search-wrap">
+                                <input type="search" id="m-note-search" data-i18n-placeholder="searchSolutionPlaceholder" placeholder="Lösungsweg durchsuchen..." data-i18n-aria-label="searchSolutionPlaceholder" aria-label="Lösungsweg durchsuchen">
+                                <span><i data-lucide="search"></i></span>
+                            </div>
+                            <div id="m-comments" class="note-list solution-list"></div>
+                        </section>
+                    </div>
 
                     <div id="tab-chat" class="tab-content">
                         <div class="chat-container">

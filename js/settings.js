@@ -230,6 +230,17 @@ export const Settings = {
                 row.append(label, remove); list.appendChild(row);
             }
             if (!periods.length) list.textContent = tr('Keine Abwesenheiten geplant.', 'No absences planned.');
+            // Suche erst ab mehr als 6 Zeitraeumen; die Liste zeigt maximal 6 und scrollt dann.
+            const absenceSearch = document.createElement('input');
+            absenceSearch.type = 'search'; absenceSearch.id = 's-absence-search'; absenceSearch.className = 'section-search';
+            absenceSearch.placeholder = Lang.t('search'); absenceSearch.setAttribute('aria-label', Lang.t('search'));
+            list.before(absenceSearch);
+            absenceSearch.oninput = () => {
+                const query = absenceSearch.value.trim().toLocaleLowerCase();
+                [...list.children].forEach(row => { row.hidden = !!query && !row.textContent.toLocaleLowerCase().includes(query); });
+                UI.limitList(list, { search: absenceSearch, total: periods.length });
+            };
+            UI.limitList(list, { search: absenceSearch, total: periods.length });
             q('#btn-save-absence').onclick = async event => {
                 const button = event.currentTarget; button.disabled = true;
                 try {

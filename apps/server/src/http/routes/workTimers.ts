@@ -10,7 +10,10 @@ import { routeError } from './routeError.js';
 export function timerMinutes(start: Date, stop: Date) {
   return Math.max(1, Math.ceil((stop.getTime() - start.getTime()) / 60000));
 }
-export const finishTimerSchema = z.object({ activity: z.string().trim().min(1).max(4000), solution: z.string().trim().max(10000).optional() }).strict();
+// minutes: optional angepasste Dauer (z.B. vergessenes Stoppen); Obergrenze 14 Tage. Abweichungen von
+// der serverseitig gemessenen Zeit werden im Ticket-Protokoll festgehalten.
+export const finishTimerSchema = z.object({ activity: z.string().trim().min(1).max(4000), solution: z.string().trim().max(10000).optional(),
+  minutes: z.number().int().min(1).max(20160).optional() }).strict();
 
 export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDeps) {
   app.get('/api/v2/work-timer', async (req, reply) => {
@@ -67,7 +70,11 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
         const timer = await trx.selectFrom('ticket_work_timers').selectAll().where('user_id', '=', session.uid).where('id', '=', id).forUpdate().executeTakeFirst();
         if (!timer?.stopped_at) return null;
         req.auditDetail = { ticketId: timer.ticket_id };
-        const entryId = randomUUID(); const minutes = timerMinutes(new Date(timer.started_at), new Date(timer.stopped_at));
+        const entryId = randomUUID(); const measured = timerMinutes(new Date(timer.started_at), new Date(timer.stopped_at));
+        const minutes = parsed.data.minutes ?? measured;
+        if (minutes !== measured) await trx.insertInto('ticket_audit_log').values({ id: randomUUID(), ticket_id: timer.ticket_id,
+          actor_user_id: session.uid, actor_username: session.username, action: 'work_time_adjusted', field: 'work_minutes',
+          old_value: String(measured), new_value: String(minutes) }).execute();
         await trx.insertInto('ticket_time_entries').values({ id: entryId, ticket_id: timer.ticket_id, user_id: session.uid,
           username: session.username, minutes,
           note: null, note_enc: encrypt(parsed.data.activity, 'ticket_time_entries', entryId, 'note', activityDek) }).execute();
@@ -79,7 +86,7 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
             is_pinned: false, is_resolution: false, has_attachments: false }).execute();
         }
         await trx.deleteFrom('ticket_work_timers').where('user_id', '=', session.uid).where('id', '=', id).execute();
-        return { entryId, ticketId: timer.ticket_id, minutes };
+        return { entryId, ticketId: timer.ticket_id, minutes, measured };
       });
       return result ? reply.code(201).send(result) : reply.code(409).send({ error: 'timer_not_stopped' });
     } catch (error) { return routeError(app, reply, error); }

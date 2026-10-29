@@ -71,6 +71,22 @@ describe('personal workspace routes', () => {
       expect(f.tables.ticket_time_entries).toHaveLength(1);
     } finally { await f.app.close(); }
   });
+  it('accepts an adjusted duration within limits and records the deviation in the ticket log', async () => {
+    const f = await fixture();
+    try {
+      const timer = (await f.post('/api/v2/work-timer', { ticketId: tid })).json().timer;
+      await f.post(`/api/v2/work-timer/${timer.id}/stop`);
+      for (const minutes of [0, 20161, 1.5, '30']) {
+        expect((await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: 'Fixed', minutes })).statusCode).toBe(400);
+      }
+      const done = await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: 'Fixed', minutes: 45 });
+      expect(done.statusCode).toBe(201);
+      expect(done.json()).toMatchObject({ minutes: 45, measured: 1 });
+      expect(f.tables.ticket_time_entries![0].minutes).toBe(45);
+      expect(f.tables.ticket_audit_log).toEqual([expect.objectContaining({ ticket_id: tid, actor_user_id: uid,
+        action: 'work_time_adjusted', field: 'work_minutes', old_value: '1', new_value: '45' })]);
+    } finally { await f.app.close(); }
+  });
   it('restricts timers to admins and their own timer IDs', async () => {
     const f = await fixture();
     try {

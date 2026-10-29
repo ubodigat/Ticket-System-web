@@ -512,7 +512,8 @@ export const Store = {
         custom_due_at: ['Individuelle Frist', 'Custom deadline'], approval_status: ['Genehmigungsstatus', 'Approval status'],
         type: ['Typ', 'Type'], incident_notice: ['Störungs-Hinweis', 'Incident notice'], archived: ['Archiviert', 'Archived'],
         archived_author_ack: ['Archivierung bestätigt', 'Archiving acknowledged'], participants: ['Beteiligte', 'Participants'],
-        incident_id: ['Großstörung', 'Major incident'], assigned_to_user_id: ['Zuständige Person (ID)', 'Assignee (ID)']
+        incident_id: ['Großstörung', 'Major incident'], assigned_to_user_id: ['Zuständige Person (ID)', 'Assignee (ID)'],
+        work_minutes: ['Erfasste Zeit (Minuten)', 'Recorded time (minutes)']
     },
     ticketAuditActionLabels: {
         created: ['Ticket erstellt', 'Ticket created'], updated: ['Ticket geändert', 'Ticket changed'],
@@ -523,6 +524,7 @@ export const Store = {
         created_on_behalf: ['Im Auftrag angelegt', 'Created on behalf'], participants_updated: ['Beteiligte geändert', 'Participants changed'],
         related_linked: ['Ticketverknüpfung hinzugefügt', 'Ticket link added'],
         calendar_event_created: ['Outlook-Termin angelegt', 'Outlook appointment created'],
+        work_time_adjusted: ['Erfasste Zeit angepasst', 'Recorded time adjusted'],
         merged_into: ['In anderes Ticket zusammengeführt', 'Merged into another ticket'],
         merged_from: ['Anderes Ticket hierher zusammengeführt', 'Another ticket merged into this one'],
         reassigned_absence: ['Wegen Abwesenheit an Vertretung übergeben', 'Reassigned to substitute due to absence'],

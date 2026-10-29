@@ -91,7 +91,7 @@ describe('admin todos', () => {
     const { db, calls } = database([{ todo_id: 'task-id' }]);
     expect((await request('PATCH', db, { done: true })).statusCode).toBe(200);
     expect(calls[0].conditions).toContainEqual(['hidden', '=', false]);
-    expect(calls[1]).toEqual({ table: 'admin_todos', operation: 'update', values: { done: true }, conditions: [['id', '=', 'task-id']] });
+    expect(calls[1]).toEqual({ table: 'admin_todos', operation: 'update', values: { done: true, done_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/) }, conditions: [['id', '=', 'task-id']] });
     const denied = database([undefined]);
     expect((await request('PATCH', denied.db, { done: false })).statusCode).toBe(404);
     expect(denied.calls.some(c => c.operation === 'update')).toBe(false);

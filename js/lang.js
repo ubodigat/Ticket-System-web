@@ -192,6 +192,7 @@ export const Lang = {
         setText('#ticket-modal .tab-btn[data-tab="details"]', Lang.t('details'));
         setText('#ticket-modal .tab-btn[data-tab="chat"]', Lang.t('chat'));
         setText('#ticket-modal .tab-btn[data-tab="internal"]', Lang.t('internalCommunication'));
+        setText('#ticket-modal .tab-btn[data-tab="solution"]', Lang.t('solutionTab'));
         const setMetaLabel = (fieldSelector, text) => {
             const label = q(fieldSelector)?.closest('.meta-item')?.querySelector('strong');
             if (label) label.textContent = text;
@@ -210,9 +211,6 @@ export const Lang = {
         if (assignLabel) assignLabel.textContent = `${Lang.t('assignTo')} (${Lang.t('multipleSelection')})`;
         const notesHead = q('.comments-section h4');
         if (notesHead) notesHead.textContent = Lang.t('internalCommunication');
-        const commentInput = q('#m-new-comment');
-        if (commentInput) commentInput.placeholder = Lang.t('addComment');
-        setText('#btn-add-comment', Lang.t('comment'));
         setIconText('#btn-archive-ticket', 'archive', 16, Lang.t('archive'));
         setIconText('#approve-modal h3', 'user-plus', 18, Lang.t('createUser'));
         setIconText('#user-man-modal h3', 'users', 18, Lang.t('userManagement'));
@@ -1049,6 +1047,7 @@ Object.assign(Lang.translations.de, {
     noTicketsLinkedYet: 'Noch keine Tickets zugeordnet.',
     addTicket: 'Ticket hinzufügen',
     doneOn: 'Erledigt am',
+    ticketClosedOn: 'Ticket geschlossen am {date}',
     editSubtask: 'Teilaufgabe bearbeiten',
     deleteSubtask: 'Teilaufgabe löschen',
     noSubtasksYet: 'Noch keine Teilaufgaben.',
@@ -1401,6 +1400,22 @@ Object.assign(Lang.translations.de, {
     solutionComposerPlaceholder: 'Analyse, Ursache, Lösungsweg, nächste Schritte...',
     saveEntryButton: 'Eintrag speichern',
     searchSolutionPlaceholder: 'Lösungsweg durchsuchen...',
+    internalVisibilityHint: 'Nur für berechtigte Mitarbeitende sichtbar – nie für die anfragende Person.',
+    searchInternalPlaceholder: 'Interne Kommunikation durchsuchen …',
+    internalMessagePlaceholder: 'Interne Nachricht schreiben … (@Name erwähnt Kolleg:innen)',
+    formattingToggle: 'Formatierung',
+    cancelEdit: 'Bearbeitung abbrechen',
+    ctrlEnterToSend: 'Strg + Enter zum Senden',
+    solutionDocumentation: 'Lösungsdokumentation',
+    solutionDocumentationHint: 'Ursache, durchgeführte Maßnahmen und endgültige Lösung – getrennt von der Kommunikation.',
+    noteTypeCause: 'Ursache',
+    noteTypeMeasure: 'Durchgeführte Maßnahme',
+    noteTypeSolution: 'Lösung',
+    markAsFinalSolution: 'Als endgültige Lösung markieren',
+    addSolutionEntry: 'Eintrag hinzufügen',
+    solutionTab: 'Lösung',
+    noInternalMessagesYet: 'Noch keine internen Nachrichten.',
+    noteAttachmentFailed: 'Der Eintrag wurde gespeichert, aber mindestens ein Anhang konnte nicht hochgeladen werden.',
     assignToIncidentButton: 'Einer Störung zuordnen',
     chatMessageWithShortcutHint: 'Nachricht schreiben... Strg+Enter zum Senden',
     createAccountForLabel: 'Erstelle einen Account für {name}.',
@@ -2258,6 +2273,7 @@ Object.assign(Lang.translations.en, {
     noTicketsLinkedYet: 'No tickets linked yet.',
     addTicket: 'Add ticket',
     doneOn: 'Done on',
+    ticketClosedOn: 'Ticket closed on {date}',
     editSubtask: 'Edit subtask',
     deleteSubtask: 'Delete subtask',
     noSubtasksYet: 'No subtasks yet.',
@@ -2610,6 +2626,22 @@ Object.assign(Lang.translations.en, {
     solutionComposerPlaceholder: 'Analysis, cause, solution path, next steps...',
     saveEntryButton: 'Save entry',
     searchSolutionPlaceholder: 'Search solution path...',
+    internalVisibilityHint: 'Visible to authorised staff only – never to the requester.',
+    searchInternalPlaceholder: 'Search internal communication …',
+    internalMessagePlaceholder: 'Write an internal message … (@name mentions colleagues)',
+    formattingToggle: 'Formatting',
+    cancelEdit: 'Cancel editing',
+    ctrlEnterToSend: 'Ctrl + Enter to send',
+    solutionDocumentation: 'Solution documentation',
+    solutionDocumentationHint: 'Cause, actions taken and final solution – kept separate from the communication.',
+    noteTypeCause: 'Cause',
+    noteTypeMeasure: 'Action taken',
+    noteTypeSolution: 'Solution',
+    markAsFinalSolution: 'Mark as final solution',
+    addSolutionEntry: 'Add entry',
+    solutionTab: 'Solution',
+    noInternalMessagesYet: 'No internal messages yet.',
+    noteAttachmentFailed: 'The entry was saved, but at least one attachment could not be uploaded.',
     assignToIncidentButton: 'Assign to an incident',
     chatMessageWithShortcutHint: 'Write a message... Ctrl+Enter to send',
     createAccountForLabel: 'Create an account for {name}.',

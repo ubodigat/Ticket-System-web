@@ -95,6 +95,8 @@ export const WorkTimer = {
             print.before(button);
         }
         const timer = WorkTimer.timer;
+        button.classList.toggle('is-timer-running', !!timer && !timer.stopped_at);
+        button.classList.toggle('is-timer-pending', !!timer?.stopped_at);
         button.innerHTML = Icon(timer ? 'square' : 'play', 18);
         const label = timer ? t('Zeiterfassung beenden und Tätigkeit dokumentieren', 'Stop timer and document activity') : t('Zeiterfassung starten', 'Start timer');
         button.title = label; button.setAttribute('aria-label', label);
@@ -130,8 +132,11 @@ export const WorkTimer = {
             <dl class="work-timer-summary">
                 <div><dt>${t('Ticket', 'Ticket')}</dt><dd id="work-timer-ticket"></dd></div>
                 <div><dt>${t('Zeitraum', 'Period')}</dt><dd>${Utils.esc(period)}</dd></div>
-                <div><dt>${t('Dauer', 'Duration')}</dt><dd>${minutes} ${t(minutes === 1 ? 'Minute' : 'Minuten', minutes === 1 ? 'minute' : 'minutes')}</dd></div>
+                <div><dt>${t('Gemessen', 'Measured')}</dt><dd>${minutes} ${t(minutes === 1 ? 'Minute' : 'Minuten', minutes === 1 ? 'minute' : 'minutes')}</dd></div>
             </dl>
+            <label for="work-minutes">${t('Erfasste Zeit (Minuten)', 'Recorded time (minutes)')}</label>
+            <input id="work-minutes" type="number" min="1" max="20160" step="1" required value="${minutes}" aria-describedby="work-minutes-hint">
+            <p class="hint" id="work-minutes-hint">${t('Bei Bedarf anpassen, z. B. wenn das Stoppen vergessen wurde. Eine Änderung wird im Ticket-Protokoll vermerkt.', 'Adjust if needed, e.g. if you forgot to stop the timer. Changes are recorded in the ticket log.')}</p>
             <p>${t('Bitte beschreibe deine Tätigkeit, um die Zeiterfassung abzuschließen.', 'Describe your activity to finish tracking.')}</p>
             <label for="work-activity">${t('Tätigkeit (Pflichtfeld)', 'Activity (required)')}</label><textarea id="work-activity" required maxlength="4000"></textarea>
             <label for="work-solution">${t('Lösungsschritte (optional)', 'Solution steps (optional)')}</label><textarea id="work-solution" maxlength="10000"></textarea><p role="alert"></p>
@@ -142,7 +147,7 @@ export const WorkTimer = {
         const guard = event => {
             if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); }
             if (event.key === 'Tab') {
-                const controls = [...overlay.querySelectorAll('textarea,button')].filter(control => !control.disabled);
+                const controls = [...overlay.querySelectorAll('input,textarea,button')].filter(control => !control.disabled);
                 const first = controls[0], last = controls.at(-1);
                 if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
                 else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -157,9 +162,12 @@ export const WorkTimer = {
         overlay.querySelector('form').onsubmit = async event => {
             event.preventDefault(); const activity = overlay.querySelector('#work-activity').value.trim();
             if (!activity) { overlay.querySelector('#work-activity').focus(); return; }
+            const minutesInput = overlay.querySelector('#work-minutes');
+            const recorded = Number(minutesInput.value);
+            if (!Number.isInteger(recorded) || recorded < 1 || recorded > 20160) { minutesInput.focus(); minutesInput.reportValidity(); return; }
             const button = overlay.querySelector('button'); button.disabled = true;
             try {
-                const result = await request(`/${timer.id}/complete`, { activity, solution: overlay.querySelector('#work-solution').value.trim() });
+                const result = await request(`/${timer.id}/complete`, { activity, minutes: recorded, solution: overlay.querySelector('#work-solution').value.trim() });
                 WorkTimer.closeActivity();
                 WorkTimer.timer = null; WorkTimer.ticket = null;
                 WorkTimer.renderButton();

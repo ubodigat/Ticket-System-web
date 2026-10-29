@@ -396,6 +396,8 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       // die hochladende Person den Anhang lesen -- vorher war er dann fuer jede angemeldete Person
       // abrufbar.
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      // Anhaenge interner Notizen sind wie die Notizen selbst nur fuer Admins sichtbar.
+      if (!isAdmin && attachment.note_id) return reply.code(403).send({ error: 'forbidden' });
       if (!isAdmin) {
         const ticket = attachment.ticket_id
           ? await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst()
@@ -440,7 +442,8 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       if (!attachment || !attachment.ticket_id) return reply.code(404).send({ error: 'not_found' });
       const ticket = await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
-      if (!['admin', 'superadmin'].includes(actor.role) && ticket.created_by_user_id !== actor.uid) return reply.code(403).send({ error: 'forbidden' });
+      const previewIsAdmin = ['admin', 'superadmin'].includes(actor.role);
+      if (!previewIsAdmin && (attachment.note_id || ticket.created_by_user_id !== actor.uid)) return reply.code(403).send({ error: 'forbidden' });
       if (attachment.size_bytes > 15 * 1024 * 1024) return reply.code(413).send({ error: 'preview_too_large' });
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'attachments.data');

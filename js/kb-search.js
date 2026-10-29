@@ -147,7 +147,7 @@ export const KbSearch = {
             id: 'kb-search-modal',
             title: Lang.t('kbSearchTitle'),
             icon: 'book-open',
-            size: 'md',
+            size: 'xl',
             body: `${KbSearch.filtersMarkup('kbs')}<div id="kbs-list" class="mt-3"></div>`
         });
         const view = KbSearch.bind(modal, 'kbs', { list: modal.querySelector('#kbs-list') });

@@ -1022,7 +1022,27 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         .selectAll().where('ticket_id', '=', id).orderBy('created_at', 'asc').execute();
       const noteDek = await loadNoteDek(app, deps.keyProvider);
       const notes = rows.map(row => decryptNote(row, noteDek, deps));
-      return reply.send({ notes });
+      // Anhaenge interner Notizen (nur Metadaten; Inhalt wie ueblich ueber /api/v2/attachments/:id).
+      const attachmentRows = await app.db.selectFrom('attachments')
+        .select(['id', 'note_id', 'filename', 'mime_type', 'size_bytes'])
+        .where('ticket_id', '=', id).where('note_id', 'is not', null).orderBy('created_at', 'asc').execute();
+      const byNote = new Map<string, Array<{ id: string; name: string; type: string; size: number }>>();
+      if (attachmentRows.length) {
+        const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
+        for (const att of attachmentRows) {
+          let name = 'Anhang';
+          try {
+            name = fieldCipher.decryptField(att.filename, filenameDek.rawDek, {
+              installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+              tableName: 'attachments', recordId: att.id, fieldName: 'filename', keyVersion: filenameDek.keyVersion
+            });
+          } catch { /* Name nicht entschluesselbar: Anhang bleibt mit neutralem Namen erreichbar. */ }
+          const list = byNote.get(att.note_id!) ?? [];
+          list.push({ id: att.id, name, type: att.mime_type, size: Number(att.size_bytes) });
+          byNote.set(att.note_id!, list);
+        }
+      }
+      return reply.send({ notes: notes.map(note => ({ ...note, attachments: byNote.get(note.id) ?? [] })) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }

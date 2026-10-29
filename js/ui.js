@@ -12,6 +12,25 @@ import { Store } from './store.js';
 
 // --- UI Components ---
 export const UI = {
+    // Zeigt hoechstens `max` Eintraege untereinander (der Rest ist scrollbar) und blendet die Suche
+    // erst ab mehr als `max` Eintraegen ein -- bzw. solange noch ein Suchbegriff eingegeben ist.
+    limitList: (list, { search = null, total = null, max = 6 } = {}) => {
+        if (!list) return;
+        if (search) search.hidden = (total ?? list.children.length) <= max && !search.value;
+        list.classList.add('limited-list');
+        list.classList.remove('is-scrollable');
+        list.style.maxHeight = '';
+        const apply = (attempt = 0) => {
+            const items = [...list.children].filter(child => !child.hidden && child.getClientRects().length);
+            if (items.length <= max) return;
+            const last = items[max - 1];
+            // Noch nicht gerendert (z.B. Dialog gerade erst eingeblendet): spaeter erneut messen.
+            if (!last.offsetHeight) { if (attempt < 20) requestAnimationFrame(() => apply(attempt + 1)); return; }
+            list.style.maxHeight = `${last.offsetTop + last.offsetHeight + 2}px`;
+            list.classList.add('is-scrollable');
+        };
+        apply();
+    },
     toast: (msg) => {
         let el = q('#toast');
         if (!el) {
