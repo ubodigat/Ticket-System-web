@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { loadModules } from '../../domain/modules.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { requireAdmin } from './session.js';
@@ -94,13 +95,14 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
         ensureDek(app.db, deps.keyProvider, 'ticket_todos.content'),
         ensureDek(app.db, deps.keyProvider, 'tickets.title')
       ]);
+      const slaModuleActive = (await loadModules(app.db)).sla;
       const decrypt = (value: Buffer, table: string, field: string, id: string, dek: typeof personalDek) =>
         fieldCipher.decryptField(value, dek.rawDek, context(table, field, id, dek.keyVersion));
       return reply.send({ todos: [
         ...own.map(t => ({ id: t.id, kind: 'personal', content: decrypt(t.content, 'admin_todos', 'content', t.id, personalDek),
           done: !!t.done, done_at: t.done_at ?? null, due_at: t.due_at, creator_id: t.created_by_user_id })),
         ...tasks.map(t => ({ id: t.id, kind: 'ticket', content: decrypt(t.content, 'ticket_todos', 'content', t.id, taskDek),
-          done: !!t.done, done_at: t.done_at ?? null, due_at: t.custom_due_at || t.sla_due_at, ticket_id: t.ticket_id, ticket_number: t.ticket_number,
+          done: !!t.done, done_at: t.done_at ?? null, due_at: slaModuleActive ? t.custom_due_at || t.sla_due_at : null, ticket_id: t.ticket_id, ticket_number: t.ticket_number,
           ticket_closed: t.status === 'Geschlossen', ticket_closed_at: t.status === 'Geschlossen' ? t.closed_at ?? null : null,
           ticket_title: decrypt(t.title, 'tickets', 'title', t.ticket_id, titleDek) }))
       ] });

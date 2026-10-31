@@ -74,10 +74,11 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
 
   // --- Wissensdatenbank ---
 
+  // Wissensdatenbank ist rein intern: anfragende Personen (Rolle "user") haben keinen Zugriff.
   app.get('/api/v2/kb/articles', async (req, reply) => {
     try {
       const session = requireSession(req);
-      if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('kb_articles').leftJoin('users', 'users.id', 'kb_articles.created_by_user_id')
         .selectAll('kb_articles').select('users.username as created_by_username').orderBy('kb_articles.updated_at', 'desc').execute();
       const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
@@ -171,7 +172,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
   app.get('/api/v2/kb/categories', async (req, reply) => {
     try {
       const session = requireSession(req);
-      if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const ticketCategories = await app.db.selectFrom('categories').select(['id', 'name']).where('archived', '=', false).orderBy('name', 'asc').execute();
       const kbCategories = await app.db.selectFrom('kb_categories').select(['id', 'name']).orderBy('name', 'asc').execute();
       const taken = new Set(ticketCategories.map(c => c.name.toLocaleLowerCase('de-DE')));
@@ -221,7 +222,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
   app.get('/api/v2/kb/articles/:id/attachments', async (req, reply) => {
     try {
       const session = requireSession(req);
-      if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const rows = await app.db.selectFrom('kb_article_attachments')
         .select(['id', 'filename', 'mime_type', 'size_bytes', 'uploaded_by_username', 'created_at'])
@@ -240,7 +241,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
   app.get('/api/v2/kb/attachments/:attachmentId', async (req, reply) => {
     try {
       const session = requireSession(req);
-      if (session.role !== 'user' && !(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const { attachmentId } = req.params as { attachmentId: string };
       const row = await app.db.selectFrom('kb_article_attachments').selectAll().where('id', '=', attachmentId).executeTakeFirst();
       if (!row) return reply.code(404).send({ error: 'not_found' });

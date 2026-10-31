@@ -275,7 +275,9 @@ export const Settings = {
         field.hidden = false;
         area.innerHTML = `
             <div class="form-grid">
-                ${rows.map(row => `<div class="field"><label for="acc-${row.key}">${row.label}${editable[row.key] ? '' : ` <span class="hint">${Lang.t('lockedByAdmin')}</span>`}</label><input id="acc-${row.key}" type="text" value="${Utils.esc(row.value)}"${editable[row.key] ? '' : ' disabled'}></div>`).join('')}
+                ${rows.map(row => editable[row.key]
+                    ? `<div class="field"><label for="acc-${row.key}">${row.label}</label><input id="acc-${row.key}" type="text" value="${Utils.esc(row.value)}"></div>`
+                    : `<div class="field is-locked"><label for="acc-${row.key}">${row.label} ${Icon('lock', 12)}<span class="sr-only">${Lang.t('lockedByAdmin')}</span></label><input id="acc-${row.key}" type="text" value="${Utils.esc(row.value)}" disabled><span class="locked-tip" aria-hidden="true">${Lang.t('lockedByAdminTip')}</span></div>`).join('')}
             </div>
             ${anyEditable ? `<div class="setting-row"><span class="hint">${Lang.t('onlyEditableFieldsHint')}</span>
                 <button class="btn-primary btn-sm" id="btn-save-account">${Icon('save', 15)}${Lang.t('saveAccountButton')}</button>
@@ -447,7 +449,16 @@ export const Settings = {
             `;
             const passkeyButton = document.createElement('button'); passkeyButton.type = 'button'; passkeyButton.className = 'btn-secondary mt-3';
             passkeyButton.textContent = Lang.current === 'en' ? 'Manage MFA / passkeys' : 'MFA / Passkeys verwalten';
-            passkeyButton.onclick = () => MFA.manage().catch(error => UI.toast(error.message)); secArea.appendChild(passkeyButton);
+            // Passkeys/Wiederherstellungscodes setzen einen eingerichteten Authenticator voraus -- ohne 2FA
+            // gibt es keinen Code, den man eingeben koennte, also direkt zur Einrichtung.
+            passkeyButton.onclick = () => {
+                if (isEnabled) return MFA.manage().catch(error => UI.toast(error.message));
+                UI.toast(Lang.t('mfaSetupFirstHint'));
+                modal.classList.remove('open');
+                setTimeout(() => Auth.open2FAModal(user), 200);
+            };
+            secArea.appendChild(passkeyButton);
+            if (!isEnabled) secArea.insertAdjacentHTML('beforeend', `<p class="hint">${Lang.t('mfaSetupFirstHint')}</p>`);
             q('#btn-toggle-2fa').onclick = async () => {
                 if (isEnabled) {
                     // Deaktivieren erfordert das aktuelle Passwort UND einen gültigen TOTP-Code

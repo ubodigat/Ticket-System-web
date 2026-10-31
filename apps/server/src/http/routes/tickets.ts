@@ -18,6 +18,8 @@ import { fieldCipher, decryptFieldTolerant, computeBlindIndex } from '../../cryp
 import { routeError } from './routeError.js';
 import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
+import { loadModules, maskTicketModules, modulesFromConfig } from '../../domain/modules.js';
+import { groupWithDescendants } from '../../domain/groups.js';
 import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
 import { mysqlTimestamp } from '../../db/date.js';
@@ -334,7 +336,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   async function staffRecipients(groupId: string | null): Promise<string[]> {
     const base = () => app.db.selectFrom('users').select('id').where('role', 'in', ['admin', 'superadmin']).where('account_archived', '=', false);
     if (groupId) {
-      const members = await base().where('department_group_id', '=', groupId).execute();
+      // Untergruppen gehoeren dazu: ein Ticket an "IT" erreicht auch "IT > Netzwerk".
+      const groups = await app.db.selectFrom('groups').select(['id', 'parent_id']).execute();
+      const members = await base().where('department_group_id', 'in', groupWithDescendants(groupId, groups)).execute();
       if (members.length) return members.map(r => r.id);
     }
     return (await base().execute()).map(r => r.id);
@@ -373,6 +377,25 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (match) found.add(match.id);
     }
     return [...found];
+  }
+
+  // Vollstaendige Namen (statt Benutzernamen) fuer Chat und interne Notizen; Fallback bleibt der
+  // gespeicherte Benutzername (z.B. bei geloeschten Konten).
+  async function displayNames(ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    const unique = [...new Set(ids.filter((value): value is string => !!value))];
+    if (!unique.length) return names;
+    const rows = await app.db.selectFrom('users').select(['id', 'name_enc']).where('id', 'in', unique).execute();
+    if (!rows.length) return names;
+    const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
+    for (const row of rows) {
+      try {
+        const name = fieldCipher.decryptField(row.name_enc, nameDek.rawDek, { installationId: deps.env.INSTALLATION_ID,
+          schemaVersion: deps.env.SCHEMA_VERSION, tableName: 'users', recordId: row.id, fieldName: 'name', keyVersion: nameDek.keyVersion });
+        if (name) names.set(row.id, name);
+      } catch { /* Name nicht entschluesselbar: Benutzername bleibt sichtbar. */ }
+    }
+    return names;
   }
 
   app.get('/api/v2/tickets', async (req, reply) => {
@@ -449,7 +472,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           : null,
         custom_fields_json: decryptCustomFieldsJson(row.custom_fields_json, deks.customFields, deps, row.id)
       }));
-      return reply.send({ tickets });
+      const modules = await loadModules(app.db);
+      return reply.send({ tickets: tickets.map(ticket => maskTicketModules(ticket, modules)) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -467,7 +491,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (!isAdmin) query = query.where('created_by_user_id', '=', session.uid);
       const rows = await query.execute();
       const deks = await loadTicketDeks(app, deps.keyProvider);
-      const tickets = rows.map(row => decryptTicketRow(row, deks, deps));
+      const modules = await loadModules(app.db);
+      const tickets = rows.map(row => maskTicketModules(decryptTicketRow(row, deks, deps), modules));
       return reply.send({ tickets });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -564,7 +589,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       // businessHours), nicht aus dem Request.
       const settingsRowForSla = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
       const slaConfig = settingsRowForSla?.config_json ? JSON.parse(settingsRowForSla.config_json) : {};
-      const slaDueAt = calculateSlaDueAt(new Date(), parsed.data.priority, slaConfig);
+      // Ohne Modul "Lösungsfristen" bekommen neue Tickets keine Frist.
+      const slaDueAt = modulesFromConfig(slaConfig).sla ? calculateSlaDueAt(new Date(), parsed.data.priority, slaConfig) : null;
 
       const numberingSettingsRow = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
       const numberingConfig = numberingSettingsRow?.config_json ? JSON.parse(numberingSettingsRow.config_json) : {};
@@ -631,7 +657,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         const settingsRow = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
         const config = settingsRow?.config_json ? JSON.parse(settingsRow.config_json) : {};
         const wf = config.approvalWorkflow;
-        if (wf?.enabled && (wf.priorities || []).includes(parsed.data.priority)) {
+        if (modulesFromConfig(config).approvals && wf?.enabled && (wf.priorities || []).includes(parsed.data.priority)) {
           const creator = await app.db.selectFrom('users').select('supervisor_user_id').where('id', '=', session.uid).executeTakeFirst();
           let approverId: string | null = creator?.supervisor_user_id ?? null;
           if (!approverId && wf.fallbackApproverUserId) approverId = wf.fallbackApproverUserId;
@@ -702,7 +728,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const authorRow = ticket.created_by_user_id
         ? await app.db.selectFrom('users').select('account_archived').where('id', '=', ticket.created_by_user_id).executeTakeFirst()
         : undefined;
-      return reply.send({ ticket: { ...decryptTicketRow(ticket, deks, deps), author_archived: authorRow?.account_archived ?? false } });
+      const modules = await loadModules(app.db);
+      return reply.send({ ticket: maskTicketModules({ ...decryptTicketRow(ticket, deks, deps), author_archived: authorRow?.account_archived ?? false }, modules) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -791,8 +818,11 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         }
       }
 
+      // Fristen gehoeren zum Modul "Lösungsfristen" -- ist es deaktiviert, bleiben sie unveraendert.
+      const slaModuleActive = (await loadModules(app.db)).sla;
       for (const [key, value] of Object.entries(parsed.data)) {
         if (key === 'title' || key === 'description' || key === 'incident_notice' || key === 'archived' || key === 'waiting_message') continue;
+        if ((key === 'custom_due_at' || key === 'sla_due_at') && !slaModuleActive) continue;
         if (value !== undefined) {
           const oldValue = (ticket as any)[key];
           let nextValue = value;
@@ -909,7 +939,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const rows = await app.db.selectFrom('ticket_messages')
         .selectAll().where('ticket_id', '=', id).orderBy('created_at', 'asc').execute();
       const msgDeks = await loadMessageDeks(app, deps.keyProvider);
-      const messages = rows.map(row => decryptMessage(row, msgDeks, deps));
+      const names = await displayNames(rows.map(row => row.sender_user_id));
+      const messages = rows.map(row => ({ ...decryptMessage(row, msgDeks, deps),
+        sender_name: (row.sender_user_id && names.get(row.sender_user_id)) || row.sender_username }));
       return reply.send({ messages });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -985,7 +1017,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const parsed = z.object({ content: z.string().trim().min(1).max(50000) }).safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const existing = await app.db.selectFrom('ticket_messages').select(['id', 'sender_user_id'])
+      const existing = await app.db.selectFrom('ticket_messages').select(['id', 'sender_user_id', 'content'])
         .where('id', '=', messageId).where('ticket_id', '=', id).executeTakeFirst();
       if (!existing) return reply.code(404).send({ error: 'not_found' });
       if (existing.sender_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
@@ -999,10 +1031,16 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
         tableName: 'ticket_messages', recordId: messageId
       };
-      await app.db.updateTable('ticket_messages')
-        .set({ content: fieldCipher.encryptField(parsed.data.content, msgDeks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: msgDeks.content.keyVersion }), content_html: null })
-        .where('id', '=', messageId)
-        .execute();
+      // Nur echte inhaltliche Aenderungen werden gespeichert und als "bearbeitet" markiert.
+      let previous: string | null = null;
+      try { previous = fieldCipher.decryptField(existing.content, msgDeks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: msgDeks.content.keyVersion }); } catch { previous = null; }
+      if (previous !== parsed.data.content) {
+        await app.db.updateTable('ticket_messages')
+          .set({ content: fieldCipher.encryptField(parsed.data.content, msgDeks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: msgDeks.content.keyVersion }),
+            content_html: null, edited_at: mysqlTimestamp() })
+          .where('id', '=', messageId)
+          .execute();
+      }
 
       const msgRow = await app.db.selectFrom('ticket_messages').selectAll().where('id', '=', messageId).executeTakeFirstOrThrow();
       return reply.send({ message: decryptMessage(msgRow, msgDeks, deps) });
@@ -1042,7 +1080,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           byNote.set(att.note_id!, list);
         }
       }
-      return reply.send({ notes: notes.map(note => ({ ...note, attachments: byNote.get(note.id) ?? [] })) });
+      const names = await displayNames(rows.map(row => row.author_user_id));
+      return reply.send({ notes: notes.map(note => ({ ...note, author_name: (note.author_user_id && names.get(note.author_user_id)) || note.author_username,
+        attachments: byNote.get(note.id) ?? [] })) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -1101,7 +1141,14 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       const noteDek = await loadNoteDek(app, deps.keyProvider);
       const updates: Record<string, unknown> = {};
-      if (parsed.data.content !== undefined) updates.content = encryptNote(deps, noteDek, noteId, parsed.data.content);
+      if (parsed.data.content !== undefined) {
+        let previous: string | null = null;
+        try { previous = decryptNote(existingNote, noteDek, deps).content; } catch { previous = null; }
+        if (previous !== parsed.data.content) {
+          updates.content = encryptNote(deps, noteDek, noteId, parsed.data.content);
+          updates.edited_at = mysqlTimestamp();
+        }
+      }
       if (parsed.data.note_type !== undefined) updates.note_type = parsed.data.note_type;
       if (parsed.data.is_pinned !== undefined) updates.is_pinned = parsed.data.is_pinned;
       if (parsed.data.is_resolution !== undefined) updates.is_resolution = parsed.data.is_resolution;
@@ -1228,6 +1275,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   app.post('/api/v2/tickets/:id/request-approval', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await loadModules(app.db)).approvals) return reply.code(403).send({ error: 'module_disabled' });
       if (!(await hasAdminPermission(session, 'approvals'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const parsed = requestApprovalSchema.safeParse(req.body);
@@ -1290,6 +1338,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   app.post('/api/v2/tickets/:id/approval-decision', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await loadModules(app.db)).approvals) return reply.code(403).send({ error: 'module_disabled' });
       const { id } = req.params as { id: string };
       const parsed = decideApprovalSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });

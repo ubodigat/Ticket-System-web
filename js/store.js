@@ -346,12 +346,50 @@ export const Store = {
         if (!res.ok) return [];
         const payload = await res.json();
         const users = await Store.getUsers();
-        return (payload.groups || []).map(g => ({
+        return Store.orderGroupTree((payload.groups || []).map(g => ({
             id: g.id,
             name: g.name,
             isDefault: !!g.is_default,
+            parentId: g.parent_id || null,
             members: users.filter(u => u.department_group_id === g.id).map(u => u.username)
-        }));
+        })));
+    },
+    // Gruppen in Baumreihenfolge (Eltern vor Untergruppen) mit Ebene, Pfadbezeichnung
+    // ("IT › Netzwerk") und allen Untergruppen-IDs -- fuer eingerueckte Listen, Auswahlfelder und Filter.
+    orderGroupTree: (groups) => {
+        const byId = new Map(groups.map(g => [g.id, g]));
+        const children = new Map();
+        groups.forEach(g => {
+            const parent = g.parentId && byId.has(g.parentId) ? g.parentId : null;
+            if (!children.has(parent)) children.set(parent, []);
+            children.get(parent).push(g);
+        });
+        const ordered = [];
+        const seen = new Set();
+        const visit = (parent, depth, path) => {
+            (children.get(parent) || []).sort((a, b) => a.name.localeCompare(b.name, 'de')).forEach(g => {
+                if (seen.has(g.id)) return;
+                seen.add(g.id);
+                const label = path ? `${path} › ${g.name}` : g.name;
+                const entry = { ...g, depth, label, descendantIds: [] };
+                ordered.push(entry);
+                const start = ordered.length;
+                visit(g.id, depth + 1, label);
+                entry.descendantIds = ordered.slice(start).map(item => item.id);
+            });
+        };
+        visit(null, 0, '');
+        return ordered;
+    },
+    // Liefert null bei Erfolg, sonst den Fehlercode des Servers (z.B. group_too_deep).
+    updateGroup: async (id, data) => {
+        const res = await fetch(`/api/v2/groups/${encodeURIComponent(id)}`, {
+            method: 'PATCH', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(data)
+        }).catch(() => null);
+        if (res && res.ok) return null;
+        return (await res?.json().catch(() => null))?.error || 'failed';
     },
     createGroup: async (name) => {
         const res = await fetch('/api/v2/groups', {
@@ -756,6 +794,14 @@ export const Store = {
     // echten /api/v2/settings-API (Server ist die einzige Quelle der Wahrheit für diese Felder --
     // siehe updateServerSettings). Nur Erscheinungsbild (theme/accentColor/lang/bgType/bgValue)
     // bleibt ein reines Browser-/Geräte-Setting ohne DB-Bezug.
+    // Systemeinstellungen > Module (Server: domain/modules.ts). Deaktivierte Module sind in der
+    // Oberflaeche nicht vorhanden; Elemente mit data-module blendet style.css ueber diese Klassen aus.
+    modules: { sla: true, approvals: true },
+    applyModules: (raw = {}) => {
+        Store.modules = { sla: raw?.sla !== false, approvals: raw?.approvals !== false };
+        Object.entries(Store.modules).forEach(([key, on]) => document.documentElement.classList.toggle(`module-off-${key}`, !on));
+        return Store.modules;
+    },
     getSettings: async () => {
         const stored = await Store.readPersistent('app_settings', {});
         // Im Serverbetrieb nur Darstellungseinstellungen aus dem Browser-Speicher uebernehmen --
@@ -814,6 +860,7 @@ export const Store = {
                     holidays: cfg.businessHours?.holidays || []
                 }
             };
+            settings.modules = Store.applyModules(cfg.modules);
             settings.approvalConfig = {
                 enabled: !!cfg.approvalWorkflow?.enabled,
                 priorities: cfg.approvalWorkflow?.priorities || [],
@@ -1179,6 +1226,18 @@ export const Store = {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
                 title: data.title, description: data.desc || data.title, category: data.category || undefined,
+                priority: data.prio, interval_unit: data.intervalUnit, interval_count: data.intervalCount || 1,
+                next_run_at: data.nextRunAt
+            })
+        }).catch(() => null);
+        return !!res && res.ok;
+    },
+    updateRecurringRule: async (id, data) => {
+        const res = await fetch(`/api/v2/recurring-rules/${encodeURIComponent(id)}`, {
+            method: 'PATCH', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                title: data.title, description: data.desc || data.title, category: data.category || null,
                 priority: data.prio, interval_unit: data.intervalUnit, interval_count: data.intervalCount || 1,
                 next_run_at: data.nextRunAt
             })
@@ -1593,6 +1652,7 @@ export const Store = {
         return cursor.getTime();
     },
     ticketSlaDueAt: (ticket, settings) => {
+        if (Store.modules.sla === false) return null;
         // Manuell gesetzte Frist überschreibt die berechnete Lösungsfrist vollständig.
         if (ticket?.customDueAt) {
             const customMs = new Date(ticket.customDueAt).getTime();

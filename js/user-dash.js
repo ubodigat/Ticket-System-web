@@ -11,7 +11,6 @@ import { Lang } from './lang.js';
 import { Store, Notifications } from './store.js';
 import { UI } from './ui.js';
 import { AdminBoard } from './admin-board.js';
-import { KbSearch } from './kb-search.js';
 import { getStatusColorClass, isPendingApprover, insertMarkdownText, insertMarkdownLink } from './ticket-helpers.js';
 
 // --- User Dashboard Logic ---
@@ -189,7 +188,6 @@ export const UserDash = {
 
         // Modal Events
         if (q('#u-m-close')) q('#u-m-close').onclick = UserDash.closeModal;
-        if (q('#u-m-kb-search')) q('#u-m-kb-search').onclick = () => KbSearch.open();
         if (q('#u-ticket-modal')) q('#u-ticket-modal').onclick = (e) => {
             if (e.target.id === 'u-ticket-modal') UserDash.closeModal();
         };

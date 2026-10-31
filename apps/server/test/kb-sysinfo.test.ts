@@ -58,17 +58,22 @@ function kbDb(state: { ticketCategories: any[]; kbCategories: any[] }) {
   };
   return { db, inserted };
 }
-async function kbRequest(method: 'GET' | 'POST', url: string, payload?: any) {
+async function kbRequest(method: 'GET' | 'POST', url: string, payload?: any, role: 'user' | 'admin' | 'superadmin' = 'superadmin') {
   const state = { ticketCategories: [{ id: 't1', name: 'Netzwerk' }], kbCategories: [{ id: 'k1', name: 'Anleitungen' }, { id: 'k2', name: 'netzwerk' }] };
   const { db, inserted } = kbDb(state);
   const app = Fastify(); app.decorate('db', db);
-  app.addHook('onRequest', async req => { req.ticketSession = { uid: 'admin', username: 'admin', role: 'superadmin' }; });
+  app.addHook('onRequest', async req => { req.ticketSession = { uid: 'admin', username: 'admin', role }; });
   registerKnowledgeRoutes(app, deps);
   try { return { response: await app.inject({ method, url, payload }), inserted }; }
   finally { await app.close(); }
 }
 
 describe('knowledge base categories', () => {
+  it('denies requesters (role user) every knowledge base read endpoint', async () => {
+    for (const url of ['/api/v2/kb/articles', '/api/v2/kb/categories', '/api/v2/kb/articles/a1/attachments', '/api/v2/kb/attachments/f1']) {
+      expect((await kbRequest('GET', url, undefined, 'user')).response.statusCode).toBe(403);
+    }
+  });
   it('lists ticket categories plus own knowledge base categories without duplicates', async () => {
     const { response } = await kbRequest('GET', '/api/v2/kb/categories');
     expect(response.json().categories).toEqual([

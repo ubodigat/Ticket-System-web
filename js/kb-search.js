@@ -141,7 +141,7 @@ export const KbSearch = {
     // Reine Suche (nur lesen), z.B. aus einem Ticket heraus.
     open: async () => {
         const user = await Store.currentUser();
-        const mayRead = user?.role === 'user' || user?.role === 'superadmin' || ['read', 'edit'].includes(user?.permissions?.kb);
+        const mayRead = user?.role === 'superadmin' || (user?.role === 'admin' && ['read', 'edit'].includes(user?.permissions?.kb));
         if (!mayRead) return UI.toast(Lang.t('kbNoPermission'));
         const modal = AdminBoard.openDialog({
             id: 'kb-search-modal',

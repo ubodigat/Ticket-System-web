@@ -73,6 +73,8 @@ export const MFA = {
         });
     },
     async manage() {
+        // Ohne eingerichteten Authenticator gibt es keinen Code -- die Einrichtung laeuft ueber die 2FA-Einstellungen.
+        if (!(await Store.currentUser())?.twoFactorEnabled) throw new Error(Lang.t('mfaSetupFirstHint'));
         const password = await UI.promptText({ title: 'MFA / Passkeys', label: text('Aktuelles Passwort', 'Current password'), type: 'password' });
         if (!password) return;
         const code = await UI.promptText({ title: 'TOTP', label: text('Aktueller Authenticator-Code', 'Current authenticator code'), placeholder: '123456' });

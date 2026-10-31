@@ -3,6 +3,7 @@ import { AdminBoard } from './admin-board.js';
 import { UI } from './ui.js';
 import { Icon, Utils, q } from './utils.js';
 import { Lang } from './lang.js';
+import { insertMarkdownText, insertMarkdownList } from './ticket-helpers.js';
 const t = (de, en) => Lang.current === 'en' ? en : de;
 async function request(path = '', body) {
     const response = await fetch('/api/v2/work-timer' + path, { credentials: 'same-origin',
@@ -13,6 +14,8 @@ async function request(path = '', body) {
 }
 const pad = value => String(value).padStart(2, '0');
 const stamp = value => `${Utils.fmtDateOnly(value)} ${Utils.fmtTimeOnly(value)}`;
+// Eintragsarten wie im Loesungs-Tab des Tickets.
+const SOLUTION_TYPES = [['Ursache', 'noteTypeCause', 'search', 'cause'], ['Maßnahme', 'noteTypeMeasure', 'wrench', 'measure'], ['Lösung', 'noteTypeSolution', 'lightbulb', 'solution']];
 export const WorkTimer = {
     timer: null,
     ticket: null,
@@ -56,6 +59,8 @@ export const WorkTimer = {
         WorkTimer.indicatorTick = null;
         const host = q('.topbar-right');
         const timer = WorkTimer.timer;
+        AdminBoard.activeTimer = timer ? { ticketId: timer.ticket_id, stopped: !!timer.stopped_at } : null;
+        AdminBoard.syncTimerBadges();
         let pill = q('#topbar-work-timer');
         if (!host || !timer) { pill?.remove(); return; }
         if (!pill) {
@@ -139,8 +144,30 @@ export const WorkTimer = {
             <p class="hint" id="work-minutes-hint">${t('Bei Bedarf anpassen, z. B. wenn das Stoppen vergessen wurde. Eine Änderung wird im Ticket-Protokoll vermerkt.', 'Adjust if needed, e.g. if you forgot to stop the timer. Changes are recorded in the ticket log.')}</p>
             <p>${t('Bitte beschreibe deine Tätigkeit, um die Zeiterfassung abzuschließen.', 'Describe your activity to finish tracking.')}</p>
             <label for="work-activity">${t('Tätigkeit (Pflichtfeld)', 'Activity (required)')}</label><textarea id="work-activity" required maxlength="4000"></textarea>
-            <label for="work-solution">${t('Lösungsschritte (optional)', 'Solution steps (optional)')}</label><textarea id="work-solution" maxlength="10000"></textarea><p role="alert"></p>
+            <fieldset class="work-solution">
+                <legend>${t('Lösungsdokumentation (optional)', 'Solution documentation (optional)')}</legend>
+                <div class="solution-type-picker" role="radiogroup" aria-label="${Utils.esc(Lang.t('entryTypeTitle'))}">${SOLUTION_TYPES.map(([value, key, icon, tone]) =>
+                    `<label class="solution-type-option type-${tone}"><input type="radio" name="work-solution-type" value="${value}"${value === 'Maßnahme' ? ' checked' : ''}>${Icon(icon, 14)}<span>${Utils.esc(Lang.t(key))}</span></label>`).join('')}</div>
+                <div class="note-toolbar">${[['bold', 'bold', t('Fett', 'Bold')], ['italic', 'italic', t('Kursiv', 'Italic')], ['list', 'list', t('Liste', 'List')], ['numbered', 'list-ordered', t('Nummerierte Liste', 'Numbered list')]].map(([kind, icon, label]) =>
+                    `<button type="button" class="btn-ghost btn-icon btn-sm" data-format="${kind}" title="${label}" aria-label="${label}">${Icon(icon, 15)}</button>`).join('')}</div>
+                <textarea id="work-solution" maxlength="10000" aria-label="${t('Lösungsschritt', 'Solution step')}" placeholder="${Utils.esc(Lang.t('solutionComposerPlaceholder'))}"></textarea>
+                <label class="check-row" id="work-solution-final-row" hidden><input type="checkbox" id="work-solution-final"><span>${Utils.esc(Lang.t('markAsFinalSolution'))}</span></label>
+            </fieldset><p role="alert"></p>
             <div class="modal-footer"><button class="btn-primary" type="submit">${t('Zeit und Dokumentation speichern', 'Save time and documentation')}</button></div></div></form>`;
+        const solutionInput = overlay.querySelector('#work-solution');
+        overlay.querySelectorAll('[data-format]').forEach(btn => btn.onclick = () => {
+            if (btn.dataset.format === 'bold') insertMarkdownText(solutionInput, '**');
+            else if (btn.dataset.format === 'italic') insertMarkdownText(solutionInput, '*');
+            else insertMarkdownList(solutionInput, btn.dataset.format === 'numbered');
+        });
+        UI.bindListContinuation(solutionInput);
+        const solutionType = () => overlay.querySelector('input[name="work-solution-type"]:checked')?.value || 'Maßnahme';
+        const syncSolutionType = () => {
+            const isSolution = solutionType() === 'Lösung';
+            overlay.querySelector('#work-solution-final-row').hidden = !isSolution;
+            if (!isSolution) overlay.querySelector('#work-solution-final').checked = false;
+        };
+        overlay.querySelectorAll('input[name="work-solution-type"]').forEach(radio => radio.onchange = syncSolutionType);
         const ticketEl = overlay.querySelector('#work-timer-ticket');
         ticketEl.textContent = WorkTimer.ticketLabel();
         if (!WorkTimer.ticket) WorkTimer.loadTicket().then(() => { ticketEl.textContent = WorkTimer.ticketLabel(); }).catch(() => {});
@@ -165,9 +192,10 @@ export const WorkTimer = {
             const minutesInput = overlay.querySelector('#work-minutes');
             const recorded = Number(minutesInput.value);
             if (!Number.isInteger(recorded) || recorded < 1 || recorded > 20160) { minutesInput.focus(); minutesInput.reportValidity(); return; }
-            const button = overlay.querySelector('button'); button.disabled = true;
+            const button = overlay.querySelector('button[type="submit"]'); button.disabled = true;
             try {
-                const result = await request(`/${timer.id}/complete`, { activity, minutes: recorded, solution: overlay.querySelector('#work-solution').value.trim() });
+                const result = await request(`/${timer.id}/complete`, { activity, minutes: recorded, solution: solutionInput.value.trim(),
+                    solution_type: solutionType(), solution_final: overlay.querySelector('#work-solution-final').checked });
                 WorkTimer.closeActivity();
                 WorkTimer.timer = null; WorkTimer.ticket = null;
                 WorkTimer.renderButton();

@@ -27,7 +27,6 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
     } else if (articleId) {
       const article = await app.db.selectFrom('kb_articles').select('id').where('id', '=', articleId).executeTakeFirst();
       if (!article) throw { statusCode: 404, message: 'article_not_found' };
-      if (!write && actor.role === 'user') return;
       if (actor.role === 'superadmin') return;
       const user = await app.db.selectFrom('users').select('permissions_json').where('id', '=', actor.uid).executeTakeFirst();
       let permission; try { permission = JSON.parse(user?.permissions_json || '{}').kb; } catch { /* Deny malformed permission data. */ }

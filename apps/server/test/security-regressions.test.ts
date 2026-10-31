@@ -67,6 +67,20 @@ describe('audit authorization regressions', () => {
     expect(result.response.statusCode).toBe(403);
     expect(result.operations).toHaveLength(0);
   });
+  it('edits recurring ticket rules with encrypted texts and rejects unknown fields', async () => {
+    const result = await request('superadmin', 'PATCH', '/api/v2/recurring-rules/r1',
+      { title: 'Backup prüfen', priority: 'Hoch', interval_unit: 'month', interval_count: 2, next_run_at: '2026-11-02T08:00:00.000Z' });
+    expect(result.response.statusCode).toBe(200);
+    const update = result.operations.find(op => op.table === 'recurring_ticket_rules' && op.set)!.set;
+    expect(update).toMatchObject({ priority: 'Hoch', interval_unit: 'month', interval_count: 2 });
+    expect(Buffer.isBuffer(update.title)).toBe(true);
+    expect(update.title.toString()).not.toContain('Backup');
+    expect(update).not.toHaveProperty('description');
+    for (const payload of [{}, { created_by_user_id: 'x' }, { priority: 'Egal' }, { interval_count: 0 }]) {
+      expect((await request('superadmin', 'PATCH', '/api/v2/recurring-rules/r1', payload)).response.statusCode).toBe(400);
+    }
+    expect((await request('user', 'PATCH', '/api/v2/recurring-rules/r1', { title: 'X' })).response.statusCode).toBe(403);
+  });
   it.each(['admin', 'superadmin'] as const)('allows external recipients past validation but still requires Outlook configuration for %s', async role => {
     const result = await request(role, 'POST', '/api/v2/tickets/source/calendar-event', {
       subject: 'Spam', start_at: '2026-11-01T10:00:00Z', end_at: '2026-11-01T11:00:00Z', attendee_emails: ['outsider@example.org']

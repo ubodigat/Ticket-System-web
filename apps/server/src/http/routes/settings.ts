@@ -99,6 +99,8 @@ const settingsConfigSchema = z.object({
   waitingAutoCloseDays: z.number().int().min(1).max(365).optional(),
   waitingAfterAction: z.enum(['close', 'keep_open']).optional(),
   waitingReminderEnabled: z.boolean().optional(),
+  // Systemeinstellungen > Module (siehe domain/modules.ts); fehlende Eintraege gelten als aktiv.
+  modules: z.object({ sla: z.boolean().optional(), approvals: z.boolean().optional() }).strict().optional(),
   approvalWorkflow: z.object({
     enabled: z.boolean().default(false),
     priorities: z.array(z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch'])).default([]),
@@ -214,7 +216,7 @@ const ldapConfigSchema = z.object({
 // (Legacy-)Schluessel in config_json gelangen so nie versehentlich an normale Konten.
 const USER_VISIBLE_CONFIG_KEYS = ['slaHoursByPriority', 'showSlaToUsers', 'defaultPrio', 'businessHours', 'ticketNumberFormat',
   'ticketNumberCategoryFormats', 'accountSelfServiceFields', 'autoArchiveClosedAfterDays', 'waitingReminderDays',
-  'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig'] as const;
+  'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig', 'modules'] as const;
 function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any> {
   const source = config || {};
   const clone: Record<string, any> = {};

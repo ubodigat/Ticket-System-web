@@ -53,6 +53,13 @@ const ASSETS: Record<string, Asset> = {
   '/favicon.ico': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
   '/picture/favicon.png': { file: 'picture/favicon.png', contentType: 'image/png', root: 'app' },
   '/picture/setup-background.png': { file: 'picture/setup-background.png', contentType: 'image/png', root: 'app' },
+  // Platzhalter-Profilbilder (Utils.avatarUrl).
+  '/picture/avatars/avatar-1.png': { file: 'picture/avatars/avatar-1.png', contentType: 'image/png', root: 'app' },
+  '/picture/avatars/avatar-2.png': { file: 'picture/avatars/avatar-2.png', contentType: 'image/png', root: 'app' },
+  '/picture/avatars/avatar-3.png': { file: 'picture/avatars/avatar-3.png', contentType: 'image/png', root: 'app' },
+  '/picture/avatars/avatar-4.png': { file: 'picture/avatars/avatar-4.png', contentType: 'image/png', root: 'app' },
+  '/picture/avatars/avatar-5.png': { file: 'picture/avatars/avatar-5.png', contentType: 'image/png', root: 'app' },
+  '/picture/avatars/avatar-6.png': { file: 'picture/avatars/avatar-6.png', contentType: 'image/png', root: 'app' },
   // Self-hosted statt CDN (Anforderung "Bibliotheken lokal statt per CDN") -- feste Versionen,
   // heruntergeladen und einmalig ins Repository gelegt, kein Build-Schritt zur Laufzeit nötig.
   '/vendor/lucide.min.js': { file: 'lucide.min.js', contentType: 'application/javascript; charset=utf-8', root: 'vendor' },

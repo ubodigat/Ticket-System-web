@@ -66,6 +66,16 @@ export function insertMarkdownText(area, marker) {
     area.selectionEnd = end + marker.length;
 }
 
+// Macht die markierten Zeilen (oder einen neuen Punkt) zur Aufzaehlung bzw. nummerierten Liste.
+export function insertMarkdownList(area, numbered = false) {
+    const start = area.selectionStart;
+    const end = area.selectionEnd;
+    const selected = area.value.substring(start, end) || 'Punkt';
+    const listText = selected.split('\n').map((line, index) => `${numbered ? `${index + 1}.` : '-'} ${line}`).join('\n');
+    area.value = area.value.substring(0, start) + listText + area.value.substring(end);
+    area.focus();
+}
+
 export async function insertMarkdownLink(area) {
     const start = area.selectionStart;
     const end = area.selectionEnd;

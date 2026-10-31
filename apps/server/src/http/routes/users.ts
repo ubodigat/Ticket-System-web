@@ -8,6 +8,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
 // V2 Users & Groups API - Sichere Benutzerverwaltung mit RBAC
 import type { FastifyInstance } from 'fastify';
+import { validateGroupParent } from '../../domain/groups.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import * as argon2 from 'argon2';
@@ -174,12 +175,14 @@ const changePasswordSchema = z.object({
 
 const createGroupSchema = z.object({
   name: z.string().trim().min(1).max(128),
-  is_default: z.boolean().default(false)
+  is_default: z.boolean().default(false),
+  parent_id: z.string().trim().min(1).max(36).nullable().optional()
 });
 
 const updateGroupSchema = z.object({
   name: z.string().trim().min(1).max(128).optional(),
-  is_default: z.boolean().optional()
+  is_default: z.boolean().optional(),
+  parent_id: z.string().trim().min(1).max(36).nullable().optional()
 });
 
 const deleteUserQuerySchema = z.object({
@@ -966,8 +969,13 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = createGroupSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      const parentId = parsed.data.parent_id ?? null;
+      if (parentId) {
+        const problem = validateGroupParent(null, parentId, await app.db.selectFrom('groups').select(['id', 'parent_id']).execute());
+        if (problem) return reply.code(400).send({ error: problem });
+      }
       const id = randomUUID();
-      await app.db.insertInto('groups').values({ id, name: parsed.data.name, is_default: parsed.data.is_default }).execute();
+      await app.db.insertInto('groups').values({ id, name: parsed.data.name, is_default: parsed.data.is_default, parent_id: parentId }).execute();
       await app.db.insertInto('global_audit_log').values({
         id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
         action: 'group.created', target_type: 'group', target_id: id, detail_json: JSON.stringify({ name: parsed.data.name })
@@ -989,6 +997,13 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const updates: Record<string, unknown> = {};
       if (parsed.data.name !== undefined) updates.name = parsed.data.name;
       if (parsed.data.is_default !== undefined) updates.is_default = parsed.data.is_default;
+      if (parsed.data.parent_id !== undefined) {
+        const groups = await app.db.selectFrom('groups').select(['id', 'parent_id']).execute();
+        if (!groups.some(group => group.id === id)) return reply.code(404).send({ error: 'not_found' });
+        const problem = validateGroupParent(id, parsed.data.parent_id, groups);
+        if (problem) return reply.code(400).send({ error: problem });
+        updates.parent_id = parsed.data.parent_id;
+      }
       if (Object.keys(updates).length) {
         await app.db.updateTable('groups').set(updates).where('id', '=', id).execute();
         await app.db.insertInto('global_audit_log').values({
@@ -1008,6 +1023,9 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireAdmin(req);
       if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
+      // Untergruppen bleiben erhalten und rutschen eine Ebene nach oben.
+      const deleted = await app.db.selectFrom('groups').select('parent_id').where('id', '=', id).executeTakeFirst();
+      await app.db.updateTable('groups').set({ parent_id: deleted?.parent_id ?? null }).where('parent_id', '=', id).execute();
       await app.db.deleteFrom('groups').where('id', '=', id).execute();
       await app.db.insertInto('global_audit_log').values({
         id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,

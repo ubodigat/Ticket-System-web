@@ -24,6 +24,8 @@ import { migration_0052_audit_log_redact_multiline } from './migrations/0052_aud
 import { migration_0053_global_audit_log_index } from './migrations/0053_global_audit_log_index.js';
 import { migration_0054_kb_categories } from './migrations/0054_kb_categories.js';
 import { migration_0055_admin_todo_done_at } from './migrations/0055_admin_todo_done_at.js';
+import { migration_0056_message_edited_at } from './migrations/0056_message_edited_at.js';
+import { migration_0057_group_parent } from './migrations/0057_group_parent.js';
 import { migration_0001_installations } from './migrations/0001_installations.js';
 import { migration_0002_key_management } from './migrations/0002_key_management.js';
 import { migration_0003_users_and_groups } from './migrations/0003_users_and_groups.js';
@@ -121,7 +123,9 @@ const migrations: Record<string, Migration> = {
   '0052_audit_log_redact_multiline': migration_0052_audit_log_redact_multiline,
   '0053_global_audit_log_index': migration_0053_global_audit_log_index,
   '0054_kb_categories': migration_0054_kb_categories,
-  '0055_admin_todo_done_at': migration_0055_admin_todo_done_at
+  '0055_admin_todo_done_at': migration_0055_admin_todo_done_at,
+  '0056_message_edited_at': migration_0056_message_edited_at,
+  '0057_group_parent': migration_0057_group_parent
 };
 
 const provider: MigrationProvider = {

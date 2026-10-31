@@ -71,6 +71,20 @@ describe('personal workspace routes', () => {
       expect(f.tables.ticket_time_entries).toHaveLength(1);
     } finally { await f.app.close(); }
   });
+  it('stores the solution step with its entry type and only marks real solutions as final', async () => {
+    const f = await fixture();
+    try {
+      const timer = (await f.post('/api/v2/work-timer', { ticketId: tid })).json().timer;
+      await f.post(`/api/v2/work-timer/${timer.id}/stop`);
+      expect((await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: 'Fixed', solution: 'X', solution_type: 'Analyse' })).statusCode).toBe(400);
+      expect((await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: 'Fixed', solution: 'Kabel getauscht', solution_type: 'Lösung', solution_final: true })).statusCode).toBe(201);
+      expect(f.tables.ticket_notes![0]).toMatchObject({ stream: 'solution', note_type: 'Lösung', is_resolution: true });
+      const second = (await f.post('/api/v2/work-timer', { ticketId: tid })).json().timer;
+      await f.post(`/api/v2/work-timer/${second.id}/stop`);
+      expect((await f.post(`/api/v2/work-timer/${second.id}/complete`, { activity: 'Checked', solution: 'Treiber geprüft', solution_type: 'Ursache', solution_final: true })).statusCode).toBe(201);
+      expect(f.tables.ticket_notes![1]).toMatchObject({ note_type: 'Ursache', is_resolution: false });
+    } finally { await f.app.close(); }
+  });
   it('accepts an adjusted duration within limits and records the deviation in the ticket log', async () => {
     const f = await fixture();
     try {

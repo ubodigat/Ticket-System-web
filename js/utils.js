@@ -73,6 +73,12 @@ export const Utils = {
         return Array.from(bytes, b => b.toString(36).padStart(2, '0')).join('');
     },
     nowISO: () => new Date().toISOString(),
+    // Platzhalter-Profilbild: fest pro Person (Hash der Benutzer-ID bzw. des Benutzernamens).
+    avatarUrl: (key) => {
+        let hash = 0;
+        for (const ch of String(key || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+        return `picture/avatars/avatar-${(hash % 6) + 1}.png`;
+    },
     esc: (v) => String(v ?? '').replace(/[&<>"']/g, c => ({
         '&': '&amp;',
         '<': '&lt;',

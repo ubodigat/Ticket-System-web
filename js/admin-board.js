@@ -598,6 +598,9 @@ export const AdminBoard = {
             };
         });
 
+        qa('#m-note-type input').forEach(radio => radio.addEventListener('change', AdminBoard.syncSolutionType));
+        AdminBoard.syncSolutionType();
+
         // Date input (Admin) + Formatting
         const fileAdmin = q('#m-chat-file-input');
         if (fileAdmin) {
@@ -679,6 +682,28 @@ export const AdminBoard = {
     },
 
     // ... render methods ...
+    // Eigene laufende Zeiterfassung ({ ticketId, stopped }), gesetzt von WorkTimer.
+    activeTimer: null,
+
+    // Rot pulsierendes Symbol an dem Ticket in Board und Liste, fuer das die Zeiterfassung laeuft.
+    syncTimerBadges: () => {
+        qa('.work-timer-badge').forEach(el => el.remove());
+        const timer = AdminBoard.activeTimer;
+        if (!timer?.ticketId) return;
+        const label = Lang.t(timer.stopped ? 'workTimerPendingBadge' : 'workTimerRunningBadge');
+        const badge = () => {
+            const el = document.createElement('span');
+            el.className = `work-timer-badge${timer.stopped ? ' is-pending' : ''}`;
+            el.title = label;
+            el.setAttribute('role', 'img');
+            el.setAttribute('aria-label', label);
+            return el;
+        };
+        const id = CSS.escape(timer.ticketId);
+        qa(`.ticket-card[data-id="${id}"] .card-meta-line`).forEach(line => line.prepend(badge()));
+        qa(`#lv-body tr.lv-row[data-id="${id}"] td:nth-child(2)`).forEach(cell => cell.prepend(badge()));
+    },
+
     render: async () => {
         const user = await Store.currentUser();
         // currentUser() liefert null sowohl bei 401 (Sitzung abgelaufen, das behandelt bereits
@@ -747,6 +772,7 @@ export const AdminBoard = {
         if (q('#count-doing')) q('#count-doing').textContent = counts['In Bearbeitung'];
         if (q('#count-waiting')) q('#count-waiting').textContent = counts['Warten'];
         if (q('#count-done')) q('#count-done').textContent = counts['Geschlossen'];
+        AdminBoard.syncTimerBadges();
         if (window.lucide) lucide.createIcons();
 
         AdminBoard.renderRequests();
@@ -828,26 +854,40 @@ export const AdminBoard = {
                 });
             }
             card.addEventListener('click', () => AdminBoard.openModal(t.id));
+            if (t.status === 'Geschlossen' && !t.archived) {
+                const archiveBtn = document.createElement('button');
+                archiveBtn.type = 'button';
+                archiveBtn.className = 'btn-ghost btn-icon btn-xs card-archive-btn';
+                archiveBtn.title = Lang.t('moveToArchive');
+                archiveBtn.setAttribute('aria-label', `${Lang.t('moveToArchive')}: ${t.ticketNumber || t.id}`);
+                archiveBtn.draggable = false;
+                archiveBtn.innerHTML = Icon('archive', 14);
+                archiveBtn.addEventListener('click', event => { event.stopPropagation(); AdminBoard.archiveTicketById(t.id); });
+                card.classList.add('has-archive-action');
+                card.appendChild(archiveBtn);
+            }
             return card;
         }
     },
 
     // START OF MISSING FUNCTIONS
-    archiveCurrent: () => {
+    archiveCurrent: () => AdminBoard.archiveTicketById(AdminBoard.currentTicketId),
+
+    // Archiviert ein Ticket nach Rueckfrage -- aus dem Ticketfenster oder direkt von Karte/Listenzeile.
+    archiveTicketById: (id) => {
         UI.confirm(Lang.t('confirmArchiveTicket'), async () => {
-            const id = AdminBoard.currentTicketId;
             const tickets = await Store.getTickets();
             const t = tickets.find(x => x.id === id);
-            if (t) {
-                t.archived = true;
-                t.archivedAt = Utils.nowISO(); // Save archive timestamp
-                await Store.addLog(t, 'Ticket archiviert');
-                await Store.saveTickets(tickets);
-                await Store.addGlobalLog('Ticket archiviert', `Titel: ${t.title}`);
-                AdminBoard.closeModal();
-                await AdminBoard.render();
-                UI.toast(Lang.t('ticketArchivedToast'));
-            }
+            if (!t) return;
+            t.archived = true;
+            t.archivedAt = Utils.nowISO(); // Save archive timestamp
+            await Store.addLog(t, 'Ticket archiviert');
+            await Store.saveTickets(tickets);
+            await Store.addGlobalLog('Ticket archiviert', `Titel: ${t.title}`);
+            if (AdminBoard.currentTicketId === id && q('#ticket-modal.open')) AdminBoard.closeModal();
+            await AdminBoard.render();
+            if (q('#list-view') && !q('#list-view').hidden) await AdminBoard.renderListView();
+            UI.toast(Lang.t('ticketArchivedToast'));
         });
     },
 
@@ -1089,13 +1129,16 @@ export const AdminBoard = {
             const groups = await Store.getGroups();
             const filteredGroups = groups.filter(g => Utils.matchesSearch(searchTerm, g));
 
+            const parentLabel = id => groups.find(item => item.id === id)?.label || '';
             filteredGroups.forEach(g => {
                 const el = document.createElement('div');
-                el.className = 'table-row user-manager-row';
+                el.className = 'table-row user-manager-row group-row';
+                // Bei einer Suche flach anzeigen, sonst nach Ebene eingerueckt.
+                el.style.setProperty('--group-depth', searchTerm ? 0 : g.depth || 0);
                 el.innerHTML = `
                     <div class="user-manager-text">
-                        <span class="user-manager-name">${Icon('users-round', 15)}${Utils.esc(g.name)}</span>
-                        <span class="row-sub">${Utils.esc(g.description || '-')}</span>
+                        <span class="user-manager-name">${g.depth && !searchTerm ? '<span class="group-branch" aria-hidden="true">↳</span>' : ''}${Icon(g.depth ? 'users' : 'users-round', 15)}${Utils.esc(g.name)}</span>
+                        <span class="row-sub">${g.parentId ? Utils.esc(Lang.format('subgroupOf', { name: parentLabel(g.parentId) })) : Utils.esc(g.description || '-')}</span>
                         <span class="badge">${(g.members || []).length} ${(g.members || []).length === 1 ? Lang.t('member') : Lang.t('members')}</span>
                     </div>
                     <div class="user-manager-actions">
@@ -1326,7 +1369,7 @@ export const AdminBoard = {
                 <button type="button" class="btn-secondary btn-sm" id="cat-add-field">${Icon('plus', 15)}${Lang.t('addField')}</button>
             </div>
         `;
-        const autoGroupPicker = UI.createMultiSelect(q('#cat-auto-group'), groups.map(g => ({ value: g.id, label: g.name })), category?.autoAssignGroupId || '', null, { single: true, emptyLabel: Lang.t('none') });
+        const autoGroupPicker = UI.createMultiSelect(q('#cat-auto-group'), groups.map(g => ({ value: g.id, label: g.label || g.name })), category?.autoAssignGroupId || '', null, { single: true, emptyLabel: Lang.t('none') });
 
         const existingFields = category?.customFields ? category.customFields.slice() : [];
         const fieldsContainer = q('#cat-custom-fields');
@@ -1513,10 +1556,18 @@ export const AdminBoard = {
         const confirmBtn = modal.querySelector('.btn-primary');
         const users = await Store.getUsers();
         const members = group?.members || [];
+        // Als uebergeordnete Gruppe nicht waehlbar: die Gruppe selbst und ihre Untergruppen (keine Zyklen).
+        const allGroups = await Store.getGroups();
+        const current = group ? allGroups.find(item => item.id === group.id) : null;
+        const blocked = new Set(current ? [current.id, ...current.descendantIds] : []);
 
         title.textContent = group ? Lang.format('editGroupName', { name: group.name }) : Lang.t('newGroup');
         content.innerHTML = `
-            <div class="field"><label>${Lang.t('name')}</label><input id="ge-name" type="text" value="${Utils.esc(group?.name || '')}" placeholder="${Lang.t('egVerwaltung')}"></div>
+            <div class="field"><label for="ge-name">${Lang.t('name')}</label><input id="ge-name" type="text" value="${Utils.esc(group?.name || '')}" placeholder="${Lang.t('egVerwaltung')}"></div>
+            <div class="field"><label for="ge-parent">${Lang.t('parentGroup')}</label>
+                <select id="ge-parent"><option value="">${Lang.t('noParentGroup')}</option>${allGroups.filter(item => !blocked.has(item.id)).map(item => `<option value="${Utils.esc(item.id)}"${current?.parentId === item.id ? ' selected' : ''}>${Utils.esc(item.label)}</option>`).join('')}</select>
+                <p class="hint">${Lang.t('parentGroupHint')}</p>
+            </div>
             <div class="field">
                 <label>${Lang.t('members')}</label>
                 <p class="hint">${Lang.t('onePersonOneGroupHint')}</p>
@@ -1538,19 +1589,22 @@ export const AdminBoard = {
                 return;
             }
             const selectedMembers = qa('#generic-modal .checkbox-list input:checked').map(x => x.value);
+            const parentId = q('#ge-parent').value || null;
+            const groupError = error => UI.toast(Lang.t(error === 'group_too_deep' ? 'groupTooDeep' : error === 'group_cycle' || error === 'invalid_parent' ? 'groupParentInvalid' : group ? 'groupRenameFailed' : 'groupCreateFailed'));
 
             let groupId = group?.id;
             if (group) {
-                if (name !== group.name && !(await Store.renameGroup(group.id, name))) {
-                    return UI.toast(Lang.t('groupRenameFailed'));
+                if (name !== group.name || parentId !== (current?.parentId || null)) {
+                    const error = await Store.updateGroup(group.id, { name, parent_id: parentId });
+                    if (error) return groupError(error);
                 }
             } else {
                 const createRes = await fetch('/api/v2/groups', {
                     method: 'POST', credentials: 'same-origin',
                     headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({ name })
+                    body: JSON.stringify({ name, parent_id: parentId })
                 }).catch(() => null);
-                if (!createRes || !createRes.ok) return UI.toast(Lang.t('groupCreateFailed'));
+                if (!createRes || !createRes.ok) return groupError((await createRes?.json().catch(() => null))?.error);
                 groupId = (await createRes.json()).id;
             }
 
@@ -1622,7 +1676,7 @@ export const AdminBoard = {
                             <div class="perm-grid">
                                 <label class="check-row"><input type="checkbox" data-perm="textBlocks"><span>${Lang.t('manageTextBlocks')}</span></label>
                                 <label class="check-row"><input type="checkbox" data-perm="reports"><span>${Lang.t('viewReports')}</span></label>
-                                <label class="check-row"><input type="checkbox" data-perm="approvals"><span>${Lang.t('decideApprovals')}</span></label>
+                                <label class="check-row" data-module="approvals"><input type="checkbox" data-perm="approvals"><span>${Lang.t('decideApprovals')}</span></label>
                                 <label class="check-row"><input type="checkbox" data-perm="recurring"><span>${Lang.t('manageRecurringTickets')}</span></label>
                             </div>
                             <label for="ue-kb">${Lang.t('knowledgeBase')}</label>
@@ -1736,7 +1790,7 @@ export const AdminBoard = {
         let groupPicker = null;
         if (groupList) {
             const groups = await Store.getGroups();
-            groupPicker = UI.createMultiSelect(groupList, groups.map(g => ({ value: g.id, label: g.name })), user?.department_group_id || '', null, { single: true, emptyLabel: Lang.t('none') });
+            groupPicker = UI.createMultiSelect(groupList, groups.map(g => ({ value: g.id, label: g.label || g.name })), user?.department_group_id || '', null, { single: true, emptyLabel: Lang.t('none') });
         }
         // Vorgesetzte Person -- genutzt vom automatischen Genehmigungsworkflow (Systemeinstellungen).
         const supervisorBox = q('#ue-supervisor');
@@ -2014,11 +2068,11 @@ export const AdminBoard = {
             </div>
             <h4 class="section-title">${Utils.esc(Lang.t('sysInfoInstallation'))}</h4>
             <dl class="sys-info-list">
-                ${row('sysInfoCommit', `<code>${v(info.app.commit)}</code>`)}
+                ${row('sysInfoCommit', info.app.commit ? `<span class="code-copy is-inline"><code>${v(info.app.commit)}</code>${AdminBoard.copyButton()}</span>` : v(null))}
                 ${row('sysInfoBuiltAt', v(info.app.builtAt ? Utils.fmtDate(info.app.builtAt) : null))}
                 ${row('sysInfoPublicUrl', v(info.installation.publicUrl))}
                 ${row('sysInfoEnvironment', v(info.installation.environment))}
-                ${row('sysInfoInstallationId', `<code>${v(info.installation.installationId)}</code>`)}
+                ${row('sysInfoInstallationId', info.installation.installationId ? `<span class="code-copy is-inline"><code>${v(info.installation.installationId)}</code>${AdminBoard.copyButton()}</span>` : v(null))}
                 ${row('sysInfoSetupAt', v(info.installation.setupCompletedAt ? Utils.fmtDate(info.installation.setupCompletedAt) : null))}
                 ${row('sysInfoKernel', v(info.runtime.kernel))}
                 ${row('sysInfoUptime', v(uptime(info.runtime.uptimeSeconds || 0)))}
@@ -2051,8 +2105,11 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    // Kopier-Symbol fuer Codebloecke/Kennungen; ausgewertet per Delegation in openSystemSettings.
+    copyButton: () => `<button type="button" class="btn-ghost btn-icon btn-xs code-copy-btn" title="${Utils.esc(Lang.t('copyToClipboard'))}" aria-label="${Utils.esc(Lang.t('copyToClipboard'))}">${Icon('copy', 14)}</button>`,
+
     updateGuideMarkup: () => {
-        const code = text => `<pre class="update-guide-code"><code>${Utils.esc(text)}</code></pre>`;
+        const code = text => `<div class="code-copy"><pre class="update-guide-code"><code>${Utils.esc(text)}</code></pre>${AdminBoard.copyButton()}</div>`;
         const p = key => `<p class="update-guide-text">${Utils.esc(Lang.t(key))}</p>`;
         const step = (key, command) => `<li>${Utils.esc(Lang.t(key))}${command ? code(command) : ''}</li>`;
         const title = key => `<div class="settings-section-title">${Utils.esc(Lang.t(key))}</div>`;
@@ -2231,6 +2288,9 @@ export const AdminBoard = {
                     <nav class="sys-settings-nav" aria-label="${Lang.t('systemSettings')}">
                         <button class="tab-btn active" data-tab="sys-general">
                             <i data-lucide="sliders"></i><span>${Lang.t('general')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-modules">
+                            <i data-lucide="blocks"></i><span>${Lang.t('modulesTab')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-security">
                             <i data-lucide="shield"></i><span>Sicherheit</span>
@@ -2504,6 +2564,16 @@ export const AdminBoard = {
                             </div>
                         </div>
 
+                        <!-- Module: optionale Funktionsbereiche, nur aktiv und sichtbar, wenn eingeschaltet -->
+                        <div id="sys-modules" class="tab-content">
+                            <p class="hint">${Lang.t('modulesHint')}</p>
+                            <div class="module-list">
+                                <label class="module-card"><input type="checkbox" id="sys-module-sla"><span class="module-icon">${Icon('timer', 20)}</span><span class="module-text"><strong>${Lang.t('moduleSla')}</strong><span>${Lang.t('moduleSlaHint')}</span></span><span class="module-switch" aria-hidden="true"></span></label>
+                                <label class="module-card"><input type="checkbox" id="sys-module-approvals"><span class="module-icon">${Icon('badge-check', 20)}</span><span class="module-text"><strong>${Lang.t('moduleApprovals')}</strong><span>${Lang.t('moduleApprovalsHint')}</span></span><span class="module-switch" aria-hidden="true"></span></label>
+                                <div class="module-card is-upcoming" aria-disabled="true"><span class="module-icon">${Icon('monitor-smartphone', 20)}</span><span class="module-text"><strong>${Lang.t('moduleDevices')}</strong><span>${Lang.t('moduleDevicesHint')}</span></span><span class="badge">${Lang.t('comingSoon')}</span></div>
+                            </div>
+                        </div>
+
                         <!-- Unternehmenseinstellungen -->
                         <div id="sys-company" class="tab-content">
                             <div class="form-grid">
@@ -2568,6 +2638,17 @@ export const AdminBoard = {
                 </div>`;
             document.body.appendChild(modal);
             modal.querySelector('#sys-save-head').onclick = () => q('#sys-save')?.click();
+            modal.querySelector('#sys-update').addEventListener('click', async event => {
+                const button = event.target.closest('.code-copy-btn');
+                if (!button) return;
+                const text = button.closest('.code-copy')?.querySelector('code')?.textContent || '';
+                if (!text || !(await UI.copyText(text))) return UI.toast(Lang.t('copyFailed'));
+                UI.toast(Lang.t('copiedToClipboard'));
+                button.classList.add('is-copied');
+                button.innerHTML = Icon('check', 14);
+                setTimeout(() => { button.classList.remove('is-copied'); button.innerHTML = Icon('copy', 14); if (window.lucide) lucide.createIcons(); }, 1500);
+                if (window.lucide) lucide.createIcons();
+            });
             const company = modal.querySelector('#sys-company');
             const headings = [...company.querySelectorAll('.settings-section-title')];
             const numbering = headings.find(heading => heading.textContent === Lang.t('ticketNumbersForNewTickets'));
@@ -2576,6 +2657,10 @@ export const AdminBoard = {
                 const nodes = []; for (let node = approval; node; node = node.nextSibling) nodes.push(node);
                 nodes.forEach(node => company.insertBefore(node, numbering));
             }
+            // Modul-Abschnitte kennzeichnen: ausgeblendet, solange das jeweilige Modul deaktiviert ist.
+            if (approval) for (let node = approval; node && node !== numbering; node = node.nextElementSibling) node.dataset.module = 'approvals';
+            const slaHeading = [...modal.querySelectorAll('#sys-general .settings-section-title')].find(heading => heading.textContent === Lang.t('resolutionDeadlinePerPriority'));
+            for (let node = slaHeading; node; node = node.nextElementSibling) node.dataset.module = 'sla';
             const updatePanel = modal.querySelector('#sys-update');
             const preferences = await Store.getPersonalPreferences(true);
             modal.querySelectorAll('.tab-content').forEach(panel => {
@@ -2844,6 +2929,8 @@ export const AdminBoard = {
         q('#sys-acc-jobTitle').checked = !!accEditable.jobTitle;
         q('#sys-acc-officeLocation').checked = !!accEditable.officeLocation;
 
+        q('#sys-module-sla').checked = settings.modules?.sla !== false;
+        q('#sys-module-approvals').checked = settings.modules?.approvals !== false;
         const appr = settings.approvalConfig || {};
         q('#sys-appr-enabled').checked = !!appr.enabled;
         qa('.sys-appr-prio').forEach(cb => { cb.checked = (appr.priorities || []).includes(cb.value); });
@@ -3035,6 +3122,7 @@ export const AdminBoard = {
                             .filter(([, format]) => format)
                     ),
                     accountSelfServiceFields,
+                    modules: { sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked },
                     approvalWorkflow: {
                         enabled: q('#sys-appr-enabled').checked,
                         priorities: qa('.sys-appr-prio:checked').map(cb => cb.value),
@@ -3046,6 +3134,7 @@ export const AdminBoard = {
                 console.error('Systemeinstellungen speichern fehlgeschlagen:', Store.lastError);
                 return UI.toast(Lang.t('systemSettingsSaveFailed'));
             }
+            Store.applyModules({ sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked });
             const outlookSecret = q('#sys-outlook-secret').value;
             if (outlookSecret && !await Store.updateOutlookSecret(outlookSecret)) return UI.toast(Lang.t('saveFailed'));
             q('#sys-outlook-secret').value = '';
@@ -3076,7 +3165,7 @@ export const AdminBoard = {
                         <summary class="btn-secondary btn-sm">${Icon('sliders-horizontal', 15)}${Lang.t('filtersAndViews')}</summary>
                         <div class="lv-more-body">
                             <label class="check-row compact"><input type="checkbox" id="lv-mine">${Lang.t('onlyMine')}</label>
-                            <label class="check-row compact"><input type="checkbox" id="lv-sla-risk">${Lang.t('slaAtRisk')}</label>
+                            <label class="check-row compact" data-module="sla"><input type="checkbox" id="lv-sla-risk">${Lang.t('slaAtRisk')}</label>
                             <select id="lv-saved-views"><option value="">${Lang.t('savedViewPlaceholder')}</option></select>
                             <button id="lv-save-view" class="btn-secondary btn-sm">${Icon('bookmark-plus', 15)}${Lang.t('saveView')}</button>
                             <button id="lv-delete-view" class="btn-ghost btn-icon btn-danger btn-sm" title="${Lang.t('deleteSelectedView')}" aria-label="${Lang.t('deleteSelectedView')}">${Icon('trash-2', 15)}</button>
@@ -3105,7 +3194,7 @@ export const AdminBoard = {
                             <th data-sort="category">${Lang.t('category')}</th>
                             <th data-sort="owner">${Lang.t('colResponsible')}</th>
                             <th data-sort="createdAt">${Lang.t('colCreated')}</th>
-                            <th data-sort="sla">${Lang.t('colDeadline')}</th>
+                            <th data-sort="sla" data-module="sla">${Lang.t('colDeadline')}</th>
                         </tr></thead>
                         <tbody id="lv-body"></tbody>
                     </table>
@@ -3229,7 +3318,7 @@ export const AdminBoard = {
         catSel.innerHTML = `<option value="">${Lang.t('allCategories')}</option>` + (settings.categories || []).map(c => `<option ${c === curCat ? 'selected' : ''}>${Utils.esc(c)}</option>`).join('');
         const teamSel = q('#lv-team');
         const curTeam = teamSel.value;
-        teamSel.innerHTML = `<option value="">${Lang.t('allTeams')}</option>` + groups.map(g => `<option value="${Utils.esc(g.id)}" ${g.id === curTeam ? 'selected' : ''}>${Utils.esc(g.name)}</option>`).join('');
+        teamSel.innerHTML = `<option value="">${Lang.t('allTeams')}</option>` + groups.map(g => `<option value="${Utils.esc(g.id)}" ${g.id === curTeam ? 'selected' : ''}>${Utils.esc(g.label || g.name)}</option>`).join('');
         const viewsSel = q('#lv-saved-views');
         viewsSel.innerHTML = `<option value="">${Lang.t('savedViewPlaceholder')}</option>` + views.filter(v => v.ownerUserId === actor?.id || v.isShared).map(v => `<option value="${Utils.esc(v.id)}">${Utils.esc(v.name)}${v.isShared ? ` (${Lang.t('shared')})` : ''}</option>`).join('');
     },
@@ -3256,7 +3345,7 @@ export const AdminBoard = {
         const catFilter = q('#lv-category').value;
         const teamFilter = q('#lv-team').value;
         const mineOnly = q('#lv-mine').checked;
-        const slaRiskOnly = q('#lv-sla-risk').checked;
+        const slaRiskOnly = Store.modules.sla !== false && q('#lv-sla-risk').checked;
 
         let visible = tickets.filter(t => !t.archived);
         if (actor?.role === 'admin') visible = visible.filter(t => AdminBoard.canAccessTicket(actor, t));
@@ -3264,7 +3353,11 @@ export const AdminBoard = {
         if (statusFilter) visible = visible.filter(t => t.status === statusFilter);
         if (prioFilter) visible = visible.filter(t => t.prio === prioFilter);
         if (catFilter) visible = visible.filter(t => (Array.isArray(t.category) ? t.category : [t.category]).includes(catFilter));
-        if (teamFilter) visible = visible.filter(t => t.team === teamFilter);
+        if (teamFilter) {
+            // Ein Team umfasst auch seine Untergruppen.
+            const teamIds = new Set([teamFilter, ...(groups.find(g => g.id === teamFilter)?.descendantIds || [])]);
+            visible = visible.filter(t => teamIds.has(t.team));
+        }
         if (mineOnly) visible = visible.filter(t => t.owner === actor?.username || (t.assignees || []).includes(actor?.username));
         if (slaRiskOnly) visible = visible.filter(t => { const c = Store.formatSlaCountdown(t, settings); return c && (c.tone === 'warning' || c.tone === 'danger'); });
 
@@ -3303,14 +3396,19 @@ export const AdminBoard = {
                 <td><input type="checkbox" data-id="${Utils.esc(t.id)}" ${checked}></td>
                 <td>${Utils.esc(t.ticketNumber || t.id)}</td>
                 <td class="lv-title" title="${Utils.esc(t.title)}">${t.isMajorIncident ? `<span class="t-incident-badge lv-incident-icon" title="${Lang.t('majorIncident')}">${Icon('siren', 12)}</span> ` : ''}${Utils.esc(t.title)}</td>
-                <td>${pendingApproval ? `<span class="approval-badge" title="${Lang.t('awaitingApproval')}">${Icon('hourglass', 12)}${Lang.t('approvals')}</span>` : `<span class="status-badge">${Utils.esc(Lang.status(t.status))}</span>`}</td>
+                <td>${pendingApproval ? `<span class="approval-badge" title="${Lang.t('awaitingApproval')}">${Icon('hourglass', 12)}${Lang.t('approvals')}</span>` : `<span class="status-badge">${Utils.esc(Lang.status(t.status))}</span>`}${t.status === 'Geschlossen' && !t.archived ? `<button type="button" class="btn-ghost btn-icon btn-xs lv-archive-btn" data-archive="${Utils.esc(t.id)}" title="${Utils.esc(Lang.t('moveToArchive'))}" aria-label="${Utils.esc(Lang.t('moveToArchive'))}: ${Utils.esc(t.ticketNumber || t.id)}">${Icon('archive', 13)}</button>` : ''}</td>
                 <td><span class="t-tag prio-${t.prio}">${Utils.esc(Lang.prio(t.prio))}</span></td>
                 <td>${Utils.esc((Array.isArray(t.category) ? t.category : [t.category]).filter(Boolean).join(', ') || '-')}${team ? ` <span class="t-team">${Icon('route', 10)}${Utils.esc(team.name)}</span>` : ''}</td>
                 <td>${Utils.esc(nameFor(t.owner))}</td>
                 <td>${Utils.esc(Utils.fmtDate(t.createdAt))}</td>
-                <td>${countdown ? `<span class="sla-mini-badge sla-badge-${countdown.tone}" title="${Lang.t('deadline')}: ${Utils.esc(countdown.dueDateLabel)}">${Utils.esc(countdown.dueDateLabel)} · ${Utils.esc(countdown.label)}</span>` : '-'}</td>
+                <td data-module="sla">${countdown ? `<span class="sla-mini-badge sla-badge-${countdown.tone}" title="${Lang.t('deadline')}: ${Utils.esc(countdown.dueDateLabel)}">${Utils.esc(countdown.dueDateLabel)} · ${Utils.esc(countdown.label)}</span>` : '-'}</td>
             </tr>`;
         }).join('') : `<tr><td colspan="9"><div class="empty-state">${Lang.t('noTickets')}</div></td></tr>`;
+        AdminBoard.syncTimerBadges();
+        qa('#lv-body .lv-archive-btn').forEach(btn => btn.addEventListener('click', event => {
+            event.stopPropagation();
+            AdminBoard.archiveTicketById(btn.dataset.archive);
+        }));
 
         qa('#lv-body tr.lv-row').forEach(row => {
             row.querySelector('td:not(:first-child)').parentElement.onclick = null;
@@ -4335,11 +4433,12 @@ export const AdminBoard = {
             ['btn-approvals', 'badge-check', 'Genehmigungen', 'approvals', () => AdminBoard.openApprovals()],
             ['btn-recurring', 'repeat', 'Wiederkehrende Tickets', 'recurring', () => AdminBoard.openRecurring()]
         ];
-        extras.filter(([, , , perm]) => AdminBoard.can(user, perm)).forEach(([id, icon, label, , handler]) => {
+        extras.filter(([, , , perm]) => AdminBoard.can(user, perm)).forEach(([id, icon, label, perm, handler]) => {
             const btn = document.createElement('button');
             btn.id = id;
             btn.type = 'button';
             btn.className = 'btn-ghost';
+            if (perm === 'approvals') btn.dataset.module = 'approvals';
             btn.innerHTML = `${Icon(icon, 16)}${label}`;
             btn.onclick = handler;
             body.appendChild(btn);
@@ -4421,7 +4520,7 @@ export const AdminBoard = {
             modal.querySelector('#tb-list').innerHTML = list.length ? list.map(b => `
                 <div class="absence-overview-row">
                     <div><strong>${Utils.esc(b.title)}</strong><span class="hint">${Utils.esc(b.text)}</span></div>
-                    <button class="btn-ghost btn-icon tb-edit" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button><button class="btn-ghost btn-icon btn-danger tb-del" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
+                    <div class="row-actions"><button class="btn-ghost btn-icon tb-edit" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button><button class="btn-ghost btn-icon btn-danger tb-del" type="button" data-id="${Utils.esc(b.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button></div>
                 </div>`).join('') : `<div class="empty-state compact">${Lang.t('noTextBlocksYet')}</div>`;
             UI.limitList(modal.querySelector('#tb-list'), { search: modal.querySelector('#tb-search'), total: blocks.length });
             modal.querySelectorAll('.tb-edit').forEach(button => button.onclick = () => {
@@ -4765,64 +4864,116 @@ export const AdminBoard = {
     openRecurring: async () => {
         const settings = await Store.getSettings();
         const categories = settings.categories || ['Allgemein'];
+        // Werte bleiben die deutschen Prioritaetsnamen (Server-Enum), nur die Beschriftung wird uebersetzt.
+        const priorities = [['Niedrig', 'low'], ['Normal', 'normal'], ['Hoch', 'high'], ['Kritisch', 'critical']];
         const modal = AdminBoard.openDialog({
             id: 'recurring-modal',
             title: Lang.t('recurringTickets'),
             icon: 'repeat',
             size: 'md',
             body: `
-                <div id="rec-list"></div>
-                <div class="field"><label for="rec-title">${Lang.t('subject')}</label><input id="rec-title" type="text" placeholder="${Lang.t('egCheckBackup')}"></div>
-                <div class="field"><label for="rec-desc">${Lang.t('description')}</label><textarea id="rec-desc" rows="3"></textarea></div>
-                <div class="form-grid">
-                    <div class="field"><label for="rec-cat">${Lang.t('category')}</label><select id="rec-cat">${categories.map(c => `<option value="${Utils.esc(c)}">${Utils.esc(c)}</option>`).join('')}</select></div>
-                    <div class="field"><label for="rec-prio">${Lang.t('priority')}</label><select id="rec-prio"><option>${Lang.t('low')}</option><option selected>${Lang.t('normal')}</option><option>${Lang.t('high')}</option><option>${Lang.t('critical')}</option></select></div>
-                    <div class="field"><label for="rec-interval">${Lang.t('unit')}</label><select id="rec-interval"><option value="day">${Lang.t('days')}</option><option value="week" selected>${Lang.t('weeks')}</option><option value="month">${Lang.t('months')}</option></select></div>
-                    <div class="field"><label for="rec-count">${Lang.t('everyHowManyUnits')}</label><input id="rec-count" type="number" min="1" value="1"></div>
+                <div class="recurring-form">
+                    <div class="field"><label for="rec-title">${Lang.t('subject')}</label><input id="rec-title" type="text" placeholder="${Lang.t('egCheckBackup')}"></div>
+                    <div class="field"><label for="rec-desc">${Lang.t('description')}</label><textarea id="rec-desc" rows="3"></textarea></div>
+                    <div class="form-grid">
+                        <div class="field"><label for="rec-cat">${Lang.t('category')}</label><select id="rec-cat">${categories.map(c => `<option value="${Utils.esc(c)}">${Utils.esc(c)}</option>`).join('')}</select></div>
+                        <div class="field"><label for="rec-prio">${Lang.t('priority')}</label><select id="rec-prio">${priorities.map(([value, key]) => `<option value="${value}"${value === 'Normal' ? ' selected' : ''}>${Lang.t(key)}</option>`).join('')}</select></div>
+                        <div class="field"><label for="rec-interval">${Lang.t('unit')}</label><select id="rec-interval"><option value="day">${Lang.t('days')}</option><option value="week" selected>${Lang.t('weeks')}</option><option value="month">${Lang.t('months')}</option></select></div>
+                        <div class="field"><label for="rec-count">${Lang.t('everyHowManyUnits')}</label><input id="rec-count" type="number" min="1" max="365" value="1"></div>
+                    </div>
+                    <div class="field"><label>${Lang.t('firstRun')}</label>${UI.dateTimePickerMarkup('rec-next-run')}</div>
+                    <div class="setting-row"><span class="hint">${Lang.t('firstTicketAutoCreatedHint')}</span>
+                        <span class="row-actions">
+                            <button class="btn-secondary btn-sm" id="rec-cancel-edit" type="button" hidden>${Lang.t('cancel')}</button>
+                            <button class="btn-primary btn-sm" id="rec-add" type="button">${Icon('plus', 15)}${Lang.t('add')}</button>
+                        </span>
+                    </div>
                 </div>
-                <div class="field"><label>${Lang.t('firstRun')}</label>${UI.dateTimePickerMarkup('rec-next-run')}</div>
-                <div class="setting-row"><span class="hint">${Lang.t('firstTicketAutoCreatedHint')}</span>
-                    <button class="btn-primary btn-sm" id="rec-add" type="button">${Icon('plus', 15)}${Lang.t('add')}</button>
-                </div>`
+                <div class="recurring-list-head">
+                    <div class="settings-section-title">${Lang.t('plannedRecurringTickets')} <span class="badge" id="rec-total">0</span></div>
+                    <input type="search" id="rec-search" class="section-search" placeholder="${Lang.t('search')}" aria-label="${Lang.t('search')}">
+                </div>
+                <div id="rec-list"></div>`
         });
-        let recNextRunMs = Date.now();
-        UI.createDateTimePicker(modal.querySelector('#rec-next-run'), { onChange: (ms) => { recNextRunMs = ms; } });
+        const picker = UI.createDateTimePicker(modal.querySelector('#rec-next-run'), { value: Date.now() });
         const unitLabel = { day: Lang.t('days'), week: Lang.t('weeks'), month: Lang.t('months'), year: Lang.t('years') };
-        const recurringBody = modal.querySelector('.modal-body');
-        recurringBody.classList.add('recurring-manager');
-        const recurringSearch = document.createElement('input'); recurringSearch.type = 'search'; recurringSearch.id = 'rec-search'; recurringSearch.className = 'section-search'; recurringSearch.placeholder = Lang.t('search'); recurringSearch.setAttribute('aria-label', Lang.t('search'));
-        recurringBody.append(recurringSearch, modal.querySelector('#rec-list'));
-        const render = async () => {
-            const rules = await Store.getRecurringRules();
-            const list = rules.filter(rule => Utils.matchesSearch(recurringSearch.value, rule));
-            modal.querySelector('#rec-list').innerHTML = list.length ? list.map(r => `
-                <div class="absence-overview-row">
-                    <div><strong>${Utils.esc(r.title)}</strong><span class="hint">${Lang.format('recurringRuleSummary', { count: r.intervalCount, unit: unitLabel[r.intervalUnit] || r.intervalUnit, date: Utils.fmtDate(r.nextRunAt), category: Utils.esc(r.category || '-'), prio: Utils.esc(r.prio) })}${r.active ? '' : ' · ' + Lang.t('paused')}</span></div>
-                    <button class="btn-ghost btn-icon btn-danger rec-del" type="button" data-id="${Utils.esc(r.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
-                </div>`).join('') : `<div class="empty-state compact">${Lang.t('noRecurringTickets')}</div>`;
-            UI.limitList(modal.querySelector('#rec-list'), { search: recurringSearch, total: rules.length });
-            modal.querySelectorAll('.rec-del').forEach(btn => btn.onclick = async () => {
-                await Store.deleteRecurringRule(btn.dataset.id);
-                await render();
-            });
+        const prioLabel = Object.fromEntries(priorities.map(([value, key]) => [value, Lang.t(key)]));
+        const search = modal.querySelector('#rec-search');
+        const addBtn = modal.querySelector('#rec-add');
+        const cancelBtn = modal.querySelector('#rec-cancel-edit');
+        let rules = [];
+        let editingId = null;
+        const resetForm = () => {
+            editingId = null;
+            modal.querySelector('#rec-title').value = '';
+            modal.querySelector('#rec-desc').value = '';
+            modal.querySelector('#rec-prio').value = 'Normal';
+            modal.querySelector('#rec-interval').value = 'week';
+            modal.querySelector('#rec-count').value = '1';
+            picker.setValue(Date.now());
+            addBtn.innerHTML = `${Icon('plus', 15)}${Lang.t('add')}`;
+            cancelBtn.hidden = true;
+            modal.querySelectorAll('#rec-list .is-editing').forEach(row => row.classList.remove('is-editing'));
             if (window.lucide) lucide.createIcons();
         };
-        recurringSearch.oninput = () => render();
-        modal.querySelector('#rec-add').onclick = async () => {
+        const startEdit = (rule) => {
+            editingId = rule.id;
+            modal.querySelector('#rec-title').value = rule.title || '';
+            modal.querySelector('#rec-desc').value = rule.desc || '';
+            const cat = modal.querySelector('#rec-cat');
+            if (rule.category && ![...cat.options].some(option => option.value === rule.category)) cat.add(new Option(rule.category, rule.category));
+            cat.value = rule.category || cat.options[0]?.value || '';
+            modal.querySelector('#rec-prio').value = rule.prio || 'Normal';
+            modal.querySelector('#rec-interval').value = rule.intervalUnit || 'week';
+            modal.querySelector('#rec-count').value = String(rule.intervalCount || 1);
+            picker.setValue(rule.nextRunAt ? new Date(rule.nextRunAt).getTime() : Date.now());
+            addBtn.innerHTML = `${Icon('save', 15)}${Lang.t('save')}`;
+            cancelBtn.hidden = false;
+            modal.querySelectorAll('#rec-list .absence-overview-row').forEach(row => row.classList.toggle('is-editing', row.dataset.id === rule.id));
+            if (window.lucide) lucide.createIcons();
+            modal.querySelector('#rec-title').focus();
+        };
+        const render = async () => {
+            rules = await Store.getRecurringRules();
+            modal.querySelector('#rec-total').textContent = String(rules.length);
+            const list = rules.filter(rule => Utils.matchesSearch(search.value, rule));
+            modal.querySelector('#rec-list').innerHTML = list.length ? list.map(r => `
+                <div class="absence-overview-row${r.id === editingId ? ' is-editing' : ''}" data-id="${Utils.esc(r.id)}">
+                    <div><strong>${Utils.esc(r.title)}</strong><span class="hint">${Lang.format('recurringRuleSummary', { count: r.intervalCount, unit: unitLabel[r.intervalUnit] || r.intervalUnit, date: Utils.fmtDate(r.nextRunAt), category: Utils.esc(r.category || '-'), prio: Utils.esc(prioLabel[r.prio] || r.prio) })}${r.active ? '' : ' · ' + Lang.t('paused')}</span></div>
+                    <div class="row-actions">
+                        <button class="btn-ghost btn-icon rec-edit" type="button" data-id="${Utils.esc(r.id)}" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>
+                        <button class="btn-ghost btn-icon btn-danger rec-del" type="button" data-id="${Utils.esc(r.id)}" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
+                    </div>
+                </div>`).join('') : `<div class="empty-state compact">${Lang.t(search.value ? 'noMatches' : 'noRecurringTickets')}</div>`;
+            UI.limitList(modal.querySelector('#rec-list'), { search, total: rules.length });
+            modal.querySelectorAll('.rec-edit').forEach(btn => btn.onclick = () => startEdit(rules.find(rule => rule.id === btn.dataset.id)));
+            modal.querySelectorAll('.rec-del').forEach(btn => btn.onclick = () => UI.confirm(Lang.t('confirmDeleteRecurring'), async () => {
+                if (!(await Store.deleteRecurringRule(btn.dataset.id))) return UI.toast(Lang.t('saveFailed'));
+                if (editingId === btn.dataset.id) resetForm();
+                await render();
+            }));
+            if (window.lucide) lucide.createIcons();
+        };
+        search.oninput = () => render();
+        cancelBtn.onclick = resetForm;
+        addBtn.onclick = async () => {
             const title = modal.querySelector('#rec-title').value.trim();
             if (!title) return UI.toast(Lang.t('enterASubject'));
-            const ok = await Store.createRecurringRule({
+            let nextRunMs;
+            try { nextRunMs = picker.getValue() || Date.now(); } catch (error) { return UI.toast(error.message); }
+            const data = {
                 title,
                 desc: modal.querySelector('#rec-desc').value.trim(),
                 category: modal.querySelector('#rec-cat').value,
                 prio: modal.querySelector('#rec-prio').value,
                 intervalUnit: modal.querySelector('#rec-interval').value,
-                intervalCount: Math.max(1, parseInt(modal.querySelector('#rec-count').value, 10) || 1),
-                nextRunAt: new Date(recNextRunMs).toISOString()
-            });
+                intervalCount: Math.min(365, Math.max(1, parseInt(modal.querySelector('#rec-count').value, 10) || 1)),
+                nextRunAt: new Date(nextRunMs).toISOString()
+            };
+            const ok = editingId ? await Store.updateRecurringRule(editingId, data) : await Store.createRecurringRule(data);
             if (!ok) return UI.toast(Lang.t('saveFailed'));
-            modal.querySelector('#rec-title').value = '';
-            modal.querySelector('#rec-desc').value = '';
+            UI.toast(Lang.t(editingId ? 'recurringSaved' : 'recurringCreated'));
+            resetForm();
             await render();
         };
         await render();
@@ -4858,6 +5009,7 @@ export const AdminBoard = {
     },
 
     openApprovals: async () => {
+        if (Store.modules.approvals === false) return;
         const me = await Store.currentUser();
         const settings = await Store.getSettings();
         const modal = AdminBoard.openDialog({ id: 'approvals-modal', title: Lang.t('approvals'), icon: 'badge-check', size: 'lg', body: '<div id="apr-list"></div>' });
@@ -5882,7 +6034,7 @@ export const AdminBoard = {
         if (opts.todos) {
             const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/todos`, { credentials: 'same-origin' }).catch(() => null);
             const list = res && res.ok ? (await res.json()).todos || [] : [];
-            todos = list.map(d => `<li>${d.done ? '☑' : '☐'} ${Utils.esc(d.content)}${d.assignee_username ? ' – ' + Utils.esc(nameFor(d.assignee_username)) : ''}</li>`).join('');
+            todos = list.map(d => `<li>${d.done ? '☑' : '☐'} ${Utils.esc(d.content)}${d.assignee_username ? ' – ' + Utils.esc(nameFor(d.assignee_username)) : ''}${d.done && d.done_at ? ` – ${Utils.esc(Lang.t('doneOn'))} ${Utils.esc(Utils.fmtDate(d.done_at))}` : ''}</li>`).join('');
         }
         let adminChatEntries = '', solutionEntries = '';
         if (opts.adminChat || opts.solution) {
@@ -5933,7 +6085,7 @@ export const AdminBoard = {
             <div class="grid">
                 <div><strong>${Lang.t('from')}</strong>${Utils.esc(nameFor(t.author) || t.author)}</div>
                 <div><strong>${Lang.t('createdOn')}</strong>${Utils.esc(Utils.fmtDate(t.createdAt))}</div>
-                <div><strong>${Lang.t('status')}</strong>${Utils.esc(t.status)}</div>
+                <div><strong>${Lang.t('status')}</strong>${Utils.esc(Lang.status(t.status))}${t.archived ? ` · ${Utils.esc(Lang.t('archivedState'))}${t.archivedAt ? ` (${Utils.esc(Utils.fmtDate(t.archivedAt))})` : ''}` : ''}</div>
                 <div><strong>${Lang.t('priority')}</strong>${Utils.esc(t.prio)}</div>
                 <div><strong>${Lang.t('category')}</strong>${Utils.esc((t.category || []).join(', ') || '-')}</div>
                 <div><strong>${Lang.t('mainResponsible')}</strong>${Utils.esc(nameFor(t.owner))}</div>
@@ -6062,7 +6214,7 @@ export const AdminBoard = {
                 extra.innerHTML = t.archived ? '' : `
                     <button class="btn-secondary" id="m-link-related" type="button">${Icon('link', 16)}${Lang.t('linkRelatedButton')}</button>
                     <button class="btn-secondary" id="m-merge" type="button">${Icon('git-merge', 16)}${Lang.t('mergeButton')}</button>
-                    <button class="btn-secondary" id="m-request-approval" type="button">${Icon('badge-check', 16)}Genehmigung anfordern</button>
+                    <button class="btn-secondary" id="m-request-approval" type="button" data-module="approvals">${Icon('badge-check', 16)}Genehmigung anfordern</button>
                     <button class="btn-secondary" id="m-kb-add" type="button">${Icon('book-open', 16)}${Lang.t('takeOverAsKnowledgeArticle')}</button>`;
                 const bindAction = (sel, fn) => { const el = q(sel); if (el) el.onclick = () => fn(t); };
                 bindAction('#m-link-related', AdminBoard.linkRelatedTicket);
@@ -6158,7 +6310,8 @@ export const AdminBoard = {
             if (catSel) catSel.disabled = t.archived;
             if (commentInput) commentInput.disabled = t.archived;
             if (commentBtn) commentBtn.disabled = t.archived;
-            ['#m-note-type', '#m-note-format', '#m-note-bold', '#m-note-italic', '#m-note-list', '#m-note-numbered', '#m-note-table', '#m-note-file-input', '#m-note-resolution', '#m-admin-note-format', '#m-admin-note-bold', '#m-admin-note-italic', '#m-admin-note-list', '#m-admin-note-file-input'].forEach(selector => {
+            qa('#m-note-type input').forEach(radio => { radio.disabled = t.archived; });
+            ['#m-note-format', '#m-note-bold', '#m-note-italic', '#m-note-list', '#m-note-numbered', '#m-note-table', '#m-note-file-input', '#m-note-resolution', '#m-admin-note-format', '#m-admin-note-bold', '#m-admin-note-italic', '#m-admin-note-list', '#m-admin-note-file-input'].forEach(selector => {
                 const el = q(selector);
                 if (el) el.disabled = t.archived;
             });
@@ -6371,7 +6524,7 @@ export const AdminBoard = {
     },
 
     // Interne Kommunikation als ruhiger, chronologischer Verlauf (neueste unten, direkt ueber dem
-    // Eingabefeld); die Loesungsdokumentation als eigene, strukturierte Liste (endgueltige Loesung zuerst).
+    // Eingabefeld); die Loesungsdokumentation gegliedert nach endgueltiger Loesung, Ursache, Massnahmen.
     renderInternalComments: async (t, channel = 'solution') => {
         const isChat = channel === 'admin-chat';
         const prefix = isChat ? 'm-admin-note' : 'm-note';
@@ -6398,62 +6551,117 @@ export const AdminBoard = {
         if (searchWrap) searchWrap.style.display = commentsRaw.length > 6 || searchInput?.value ? 'flex' : 'none';
         box.innerHTML = '';
         if (commentsRaw.length === 0) {
-            box.innerHTML = `<div class="empty-state compact">${Utils.esc(isChat ? Lang.t('noInternalMessagesYet') : Lang.t('noSolutionAttemptsYet'))}</div>`;
+            box.innerHTML = isChat
+                ? `<div class="empty-state compact">${Utils.esc(Lang.t('noInternalMessagesYet'))}</div>`
+                : `<div class="solution-empty">${Icon('clipboard-list', 28)}<strong>${Utils.esc(Lang.t('noSolutionAttemptsYet'))}</strong><span>${Utils.esc(Lang.t('solutionEmptyHint'))}</span></div>`;
+            if (window.lucide) lucide.createIcons();
             return;
         }
         const renderText = (value = '') => highlightMentions(Utils.renderMarkdown(value));
         const query = (searchInput?.value || '').toLowerCase().trim();
-        const byTime = (a, b) => new Date(a.created_at) - new Date(b.created_at);
         const comments = commentsRaw
             .filter(c => !query || [c.content, c.author_name, c.author_username, c.note_type, Utils.fmtDate(c.created_at)].join(' ').toLowerCase().includes(query))
-            .sort(isChat ? byTime : (a, b) => Number(!!b.is_resolution) - Number(!!a.is_resolution) || byTime(a, b));
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         if (comments.length === 0) {
             box.innerHTML = `<div class="empty-state compact">${Utils.esc(Lang.t('noMatchingInternalComments'))}</div>`;
             return;
         }
         const nameOf = c => c.author_name || c.author_username || '–';
-        const initials = name => String(name).split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join('') || '?';
+        const avatar = (c, cls) => `<img class="${cls}" src="${Utils.esc(Utils.avatarUrl(c.author_user_id || c.author_username))}" alt="" aria-hidden="true">`;
+        const edited = c => c.edited_at
+            ? `<span class="note-edited" title="${Utils.esc(Lang.format('editedAt', { date: Utils.fmtDate(c.edited_at) }))}">${Utils.esc(Lang.t('edited'))}</span>`
+            : '';
         const files = c => (c.attachments || []).length
             ? `<div class="note-files">${c.attachments.map(file => `<button type="button" class="file-chip note-att" data-id="${Utils.esc(file.id)}" data-name="${Utils.esc(file.name)}" data-size="${Number(file.size) || 0}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('')}</div>`
             : '';
         const editButton = `<button type="button" class="btn-ghost btn-icon btn-xs note-edit" title="${Utils.esc(Lang.t('editComment'))}" aria-label="${Utils.esc(Lang.t('editComment'))}">${Icon('pencil', 13)}</button>`;
-        let previous = null;
-        comments.forEach(c => {
-            const item = document.createElement(isChat ? 'div' : 'article');
-            item.dataset.id = c.id;
-            if (isChat) {
-                // Folgenachrichten derselben Person innerhalb von 5 Minuten ohne erneuten Kopf.
-                const continued = !!previous && previous.author_username === c.author_username && !query
-                    && new Date(c.created_at) - new Date(previous.created_at) < 5 * 60 * 1000;
-                item.className = `tl-item${continued ? ' is-continued' : ''}${c.is_pinned ? ' is-pinned' : ''}`;
-                item.innerHTML = `
-                    <div class="tl-avatar" aria-hidden="true">${continued ? '' : Utils.esc(initials(nameOf(c)))}</div>
-                    <div class="tl-main">
-                        <div class="tl-head"${continued ? ' hidden' : ''}><strong>${Utils.esc(nameOf(c))}</strong><time datetime="${Utils.esc(c.created_at)}">${Utils.esc(Utils.fmtDate(c.created_at))}</time>${c.is_pinned ? `<span class="tl-pin" title="${Utils.esc(Lang.t('pin'))}">${Icon('pin', 12)}</span>` : ''}</div>
-                        <div class="tl-body note-body">${renderText(c.content)}</div>
-                        ${files(c)}
-                    </div>
-                    <div class="tl-actions">${editButton}</div>`;
-                previous = c;
-            } else {
-                item.className = `solution-entry${c.is_resolution ? ' is-resolution' : ''}`;
-                item.innerHTML = `
-                    <header class="solution-entry-head">
-                        ${c.is_resolution ? `<span class="note-type note-resolution">${Icon('check-circle', 12)}${Utils.esc(Lang.t('finalSolution'))}</span>` : ''}
-                        ${c.note_type && c.note_type !== 'note' ? `<span class="note-type">${Utils.esc(c.note_type)}</span>` : ''}
-                        <span class="solution-entry-meta">${Utils.esc(nameOf(c))} · <time datetime="${Utils.esc(c.created_at)}">${Utils.esc(Utils.fmtDate(c.created_at))}</time></span>
-                        ${editButton}
-                    </header>
-                    <div class="note-body">${renderText(c.content)}</div>
-                    ${files(c)}`;
-            }
+        const bind = (item, c) => {
             item.querySelector('.note-edit').addEventListener('click', () => AdminBoard.editInternalComment(c.id, channel));
             item.querySelectorAll('.note-att').forEach(btn => btn.addEventListener('click', () =>
                 AdminBoard.openAttachmentPreview({ attachmentId: btn.dataset.id, name: btn.dataset.name, size: Number(btn.dataset.size) || 0 })));
-            box.appendChild(item);
-        });
+        };
+        if (isChat) {
+            let previous = null;
+            comments.forEach(c => {
+                // Folgenachrichten derselben Person innerhalb von 5 Minuten ohne erneuten Kopf.
+                const continued = !!previous && previous.author_username === c.author_username && !query
+                    && new Date(c.created_at) - new Date(previous.created_at) < 5 * 60 * 1000;
+                const item = document.createElement('div');
+                item.dataset.id = c.id;
+                item.className = `tl-item${continued ? ' is-continued' : ''}${c.is_pinned ? ' is-pinned' : ''}`;
+                item.innerHTML = `
+                    <div class="tl-avatar-slot">${continued ? '' : avatar(c, 'tl-avatar')}</div>
+                    <div class="tl-main">
+                        <div class="tl-head"${continued ? ' hidden' : ''}><strong>${Utils.esc(nameOf(c))}</strong><time datetime="${Utils.esc(c.created_at)}">${Utils.esc(Utils.fmtDate(c.created_at))}</time>${edited(c)}${c.is_pinned ? `<span class="tl-pin" title="${Utils.esc(Lang.t('pin'))}">${Icon('pin', 12)}</span>` : ''}</div>
+                        <div class="tl-body note-body">${renderText(c.content)}</div>
+                        ${continued && c.edited_at ? `<div class="tl-edited">${edited(c)}</div>` : ''}
+                        ${files(c)}
+                    </div>
+                    <div class="tl-actions">${editButton}</div>`;
+                bind(item, c);
+                box.appendChild(item);
+                previous = c;
+            });
+        } else {
+            const groups = [
+                { key: 'Ursache', label: Lang.t('noteTypeCause'), icon: 'search', tone: 'cause' },
+                { key: 'Maßnahme', label: Lang.t('solutionGroupMeasures'), icon: 'wrench', tone: 'measure', numbered: true },
+                { key: 'Lösung', label: Lang.t('noteTypeSolution'), icon: 'lightbulb', tone: 'solution' },
+                { key: null, label: Lang.t('solutionGroupOther'), icon: 'notebook-pen', tone: 'other' }
+            ];
+            const known = new Set(groups.map(group => group.key).filter(Boolean));
+            const entry = (c, step = 0) => {
+                const item = document.createElement('article');
+                item.className = 'solution-entry';
+                item.dataset.id = c.id;
+                // Aeltere Eintragsarten (z.B. "Analyse") bleiben als Kennzeichnung sichtbar.
+                const legacyType = c.note_type && !known.has(c.note_type) && !['note', 'Notiz'].includes(c.note_type)
+                    ? `<span class="note-type">${Utils.esc(c.note_type)}</span>` : '';
+                item.innerHTML = `
+                    ${step ? `<span class="solution-step" aria-hidden="true">${step}</span>` : ''}
+                    <div class="solution-entry-main">
+                        <header class="solution-entry-head">
+                            ${legacyType}
+                            <span class="solution-entry-meta">${avatar(c, 'solution-avatar')}<strong>${Utils.esc(nameOf(c))}</strong><time datetime="${Utils.esc(c.created_at)}">${Utils.esc(Utils.fmtDate(c.created_at))}</time>${edited(c)}</span>
+                            ${editButton}
+                        </header>
+                        <div class="note-body">${renderText(c.content)}</div>
+                        ${files(c)}
+                    </div>`;
+                bind(item, c);
+                return item;
+            };
+            const section = (cls, title) => {
+                const el = document.createElement('section');
+                el.className = cls;
+                el.innerHTML = title;
+                box.appendChild(el);
+                return el;
+            };
+            const finals = comments.filter(c => c.is_resolution);
+            if (finals.length) {
+                const panel = section('solution-final', `<h5 class="solution-group-title">${Icon('circle-check-big', 16)}<span>${Utils.esc(Lang.t('finalSolution'))}</span></h5>`);
+                finals.forEach(c => panel.appendChild(entry(c)));
+            }
+            const rest = comments.filter(c => !c.is_resolution);
+            groups.forEach(group => {
+                const items = rest.filter(c => group.key ? c.note_type === group.key : !known.has(c.note_type));
+                if (!items.length) return;
+                const el = section(`solution-group tone-${group.tone}`,
+                    `<h5 class="solution-group-title">${Icon(group.icon, 15)}<span>${Utils.esc(group.label)}</span><span class="solution-group-count">${items.length}</span></h5>`);
+                items.forEach((c, index) => el.appendChild(entry(c, group.numbered ? index + 1 : 0)));
+            });
+        }
         box.scrollTop = isChat ? box.scrollHeight : 0;
         if (window.lucide) lucide.createIcons();
+    },
+
+    // "Als endgueltige Loesung markieren" gibt es nur fuer Eintraege der Art Loesung.
+    syncSolutionType: () => {
+        const isSolution = q('#m-note-type input:checked')?.value === 'Lösung';
+        const option = q('#m-note-resolution-option');
+        if (option) option.hidden = !isSolution;
+        if (!isSolution && q('#m-note-resolution')) q('#m-note-resolution').checked = false;
     },
 
     renderNoteFilePreview: (channel = 'solution') => {
@@ -6496,6 +6704,10 @@ export const AdminBoard = {
         const input = q(isChat ? '#m-admin-new-comment' : '#m-new-comment');
         if (input) input.value = '';
         if (!isChat && q('#m-note-resolution')) q('#m-note-resolution').checked = false;
+        if (!isChat) {
+            if (!q('#m-note-type input:checked')) { const fallback = q('#m-note-type input[value="Maßnahme"]'); if (fallback) fallback.checked = true; }
+            AdminBoard.syncSolutionType();
+        }
         if (isChat && q('#m-admin-mention-picker')) q('#m-admin-mention-picker').hidden = true;
         AdminBoard.noteFiles[channel] = [];
         AdminBoard.renderNoteFilePreview(channel);
@@ -6509,9 +6721,10 @@ export const AdminBoard = {
         const input = q(isChat ? '#m-admin-new-comment' : '#m-new-comment');
         input.value = note.content || '';
         if (!isChat) {
-            const type = q('#m-note-type');
-            if (type && [...type.options].some(option => option.value === note.note_type)) type.value = note.note_type;
-            if (q('#m-note-resolution')) q('#m-note-resolution').checked = !!note.is_resolution;
+            // Aeltere Eintragsarten (z.B. "Analyse") haben keine Auswahl und bleiben beim Speichern erhalten.
+            qa('#m-note-type input').forEach(radio => { radio.checked = radio.value === note.note_type; });
+            AdminBoard.syncSolutionType();
+            if (q('#m-note-resolution')) q('#m-note-resolution').checked = !!note.is_resolution && note.note_type === 'Lösung';
         }
         AdminBoard.setNoteComposerMode(channel, noteId);
         input.focus();
@@ -6530,11 +6743,12 @@ export const AdminBoard = {
         const id = AdminBoard.currentTicketId;
         // Interne Nachrichten ohne Kategorie; Loesungseintraege mit strukturierter Art. Bestehende
         // Markierungen (z.B. frueher angepinnte Eintraege) bleiben beim Bearbeiten erhalten.
+        const pickedType = isChat ? null : q('#m-note-type input:checked')?.value;
         const body = {
             content: txt,
-            note_type: isChat ? (existing?.note_type || 'Notiz') : (q('#m-note-type')?.value || 'Lösung'),
+            note_type: isChat ? (existing?.note_type || 'Notiz') : (pickedType || existing?.note_type || 'Maßnahme'),
             is_pinned: !!existing?.is_pinned,
-            is_resolution: !isChat && !!q('#m-note-resolution')?.checked
+            is_resolution: !isChat && (pickedType ? pickedType === 'Lösung' && !!q('#m-note-resolution')?.checked : !!existing?.is_resolution)
         };
         if (!editId) body.stream = channel;
         if (saveBtn) saveBtn.disabled = true;
@@ -6824,8 +7038,8 @@ export const AdminBoard = {
 
             el.innerHTML = `
                 <div class="msg-meta">
-                    <span>${Utils.esc(m.sender_name || m.sender_username)}</span>
-                    <span class="msg-meta-actions">${Utils.fmtDate(m.created_at)}${isMe && !ticket.archived ? `<button type="button" class="btn-ghost btn-icon btn-xs chat-message-edit" data-message-id="${m.id}" title="Nachricht bearbeiten" aria-label="Nachricht bearbeiten">${Icon('pencil', 12)}</button>` : ''}</span>
+                    <span class="msg-author"><img class="msg-avatar" src="${Utils.esc(Utils.avatarUrl(m.sender_user_id || m.sender_username))}" alt="" aria-hidden="true">${Utils.esc(m.sender_name || m.sender_username)}</span>
+                    <span class="msg-meta-actions">${Utils.fmtDate(m.created_at)}${m.edited_at ? `<span class="msg-edited" title="${Utils.esc(Lang.format('editedAt', { date: Utils.fmtDate(m.edited_at) }))}">${Utils.esc(Lang.t('edited'))}</span>` : ''}${isMe && !ticket.archived ? `<button type="button" class="btn-ghost btn-icon btn-xs chat-message-edit" data-message-id="${m.id}" title="Nachricht bearbeiten" aria-label="Nachricht bearbeiten">${Icon('pencil', 12)}</button>` : ''}</span>
                 </div>
                 ${htmlText}
             `;

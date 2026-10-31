@@ -36,6 +36,18 @@ const createRuleSchema = z.object({
   next_run_at: z.string().datetime()
 });
 
+// Bearbeiten: alle Felder optional (ohne Standardwerte, damit nichts ungewollt ueberschrieben wird).
+const updateRuleSchema = z.object({
+  title: z.string().trim().min(1).max(255).optional(),
+  description: z.string().trim().min(1).max(50000).optional(),
+  category: z.string().trim().max(128).nullable().optional(),
+  priority: z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch']).optional(),
+  interval_unit: z.enum(['day', 'week', 'month']).optional(),
+  interval_count: z.number().int().positive().max(365).optional(),
+  next_run_at: z.string().datetime().optional(),
+  active: z.boolean().optional()
+}).strict();
+
 export function registerRecurringRoutes(app: FastifyInstance, deps: RecurringRouteDeps): void {
   async function hasRecurringPermission(session: { uid: string; role: string }): Promise<boolean> {
     if (session.role === 'superadmin') return true;
@@ -126,9 +138,27 @@ export function registerRecurringRoutes(app: FastifyInstance, deps: RecurringRou
       const session = requireAdmin(req);
       if (!(await hasRecurringPermission(session))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
-      const parsed = z.object({ active: z.boolean() }).safeParse(req.body);
+      const parsed = updateRuleSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
-      await app.db.updateTable('recurring_ticket_rules').set({ active: parsed.data.active }).where('id', '=', id).execute();
+      const existing = await app.db.selectFrom('recurring_ticket_rules').select('id').where('id', '=', id).executeTakeFirst();
+      if (!existing) return reply.code(404).send({ error: 'not_found' });
+      const data = parsed.data;
+      const updates: Record<string, unknown> = {};
+      if (data.title !== undefined || data.description !== undefined) {
+        const { titleDek, descriptionDek } = await loadRuleDeks();
+        const ctx = (fieldName: string, keyVersion: number) => ({ installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+          tableName: 'recurring_ticket_rules', recordId: id, fieldName, keyVersion });
+        if (data.title !== undefined) updates.title = fieldCipher.encryptField(data.title, titleDek.rawDek, ctx('title', titleDek.keyVersion));
+        if (data.description !== undefined) updates.description = fieldCipher.encryptField(data.description, descriptionDek.rawDek, ctx('description', descriptionDek.keyVersion));
+      }
+      if (data.category !== undefined) updates.category = data.category || null;
+      if (data.priority !== undefined) updates.priority = data.priority;
+      if (data.interval_unit !== undefined) updates.interval_unit = data.interval_unit;
+      if (data.interval_count !== undefined) updates.interval_count = data.interval_count;
+      if (data.next_run_at !== undefined) updates.next_run_at = mysqlTimestamp(new Date(data.next_run_at));
+      if (data.active !== undefined) updates.active = data.active;
+      if (!Object.keys(updates).length) return reply.code(400).send({ error: 'invalid_body' });
+      await app.db.updateTable('recurring_ticket_rules').set(updates).where('id', '=', id).execute();
       return reply.send({ success: true });
     } catch (e: any) {
       return routeError(app, reply, e);

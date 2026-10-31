@@ -43,6 +43,8 @@ export interface KeyRotationLogTable {
 export interface GroupsTable {
   id: string;
   name: string;
+  // Uebergeordnete Gruppe (Untergruppen, Migration 0057).
+  parent_id: Nullable<string>;
   is_default: ColumnType<boolean, boolean, boolean>;
   created_at: CreatedAt;
 }
@@ -335,6 +337,7 @@ export interface TicketMessagesTable {
   content: Buffer;
   content_html: Nullable<Buffer>;
   has_attachments: ColumnType<boolean, boolean, boolean>;
+  edited_at: NullableTimestamp;
   created_at: CreatedAt;
 }
 
@@ -350,6 +353,7 @@ export interface TicketNotesTable {
   is_pinned: ColumnType<boolean, boolean, boolean>;
   is_resolution: ColumnType<boolean, boolean, boolean>;
   has_attachments: ColumnType<boolean, boolean, boolean>;
+  edited_at: NullableTimestamp;
   created_at: CreatedAt;
 }
 

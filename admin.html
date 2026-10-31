@@ -268,14 +268,16 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                                 </div>
                                 <span class="internal-stream-count" id="m-solution-note-count">0</span>
                             </header>
+                            <div class="note-search-wrap" id="m-note-search-wrap">
+                                <input type="search" id="m-note-search" data-i18n-placeholder="searchSolutionPlaceholder" placeholder="Lösungsweg durchsuchen..." data-i18n-aria-label="searchSolutionPlaceholder" aria-label="Lösungsweg durchsuchen">
+                                <span><i data-lucide="search"></i></span>
+                            </div>
+                            <div id="m-comments" class="solution-board"></div>
                             <div class="internal-note-composer solution-composer">
-                                <div class="solution-composer-row">
-                                    <select id="m-note-type" data-i18n-title="entryTypeTitle" title="Art des Eintrags" data-i18n-aria-label="entryTypeTitle" aria-label="Art des Eintrags">
-                                        <option value="Ursache" data-i18n="noteTypeCause">Ursache</option>
-                                        <option value="Maßnahme" data-i18n="noteTypeMeasure">Durchgeführte Maßnahme</option>
-                                        <option value="Lösung" data-i18n="noteTypeSolution">Lösung</option>
-                                    </select>
-                                    <label class="note-option"><input type="checkbox" id="m-note-resolution"> <span data-i18n="markAsFinalSolution">Als endgültige Lösung markieren</span></label>
+                                <div class="solution-type-picker" id="m-note-type" role="radiogroup" data-i18n-aria-label="entryTypeTitle" aria-label="Art des Eintrags">
+                                    <label class="solution-type-option type-cause"><input type="radio" name="m-note-type" value="Ursache"><i data-lucide="search"></i><span data-i18n="noteTypeCause">Ursache</span></label>
+                                    <label class="solution-type-option type-measure"><input type="radio" name="m-note-type" value="Maßnahme" checked><i data-lucide="wrench"></i><span data-i18n="noteTypeMeasure">Durchgeführte Maßnahme</span></label>
+                                    <label class="solution-type-option type-solution"><input type="radio" name="m-note-type" value="Lösung"><i data-lucide="lightbulb"></i><span data-i18n="noteTypeSolution">Lösung</span></label>
                                 </div>
                                 <div class="note-toolbar" id="m-note-toolbar" hidden>
                                     <button type="button" class="btn-ghost btn-icon btn-sm" id="m-note-bold" data-i18n-title="bold" data-i18n-aria-label="bold" title="Fett" aria-label="Fett"><i data-lucide="bold"></i></button>
@@ -290,16 +292,12 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                                     <div class="composer-tools">
                                         <button type="button" class="btn-ghost btn-icon btn-sm" id="m-note-format" aria-expanded="false" aria-controls="m-note-toolbar" data-i18n-title="formattingToggle" data-i18n-aria-label="formattingToggle" title="Formatierung" aria-label="Formatierung"><i data-lucide="type"></i></button>
                                         <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="addAttachment" data-i18n-aria-label="addAttachment" title="Anhang hinzufügen" aria-label="Anhang hinzufügen"><i data-lucide="paperclip"></i><input type="file" id="m-note-file-input" hidden multiple></label>
+                                        <label class="note-option" id="m-note-resolution-option" hidden><input type="checkbox" id="m-note-resolution"> <span data-i18n="markAsFinalSolution">Als endgültige Lösung markieren</span></label>
                                         <button type="button" class="btn-ghost btn-sm" id="m-note-cancel" hidden data-i18n="cancelEdit">Bearbeitung abbrechen</button>
                                     </div>
                                     <button type="button" class="btn-primary btn-sm" id="btn-add-comment"><i data-lucide="plus"></i><span data-i18n="addSolutionEntry">Eintrag hinzufügen</span></button>
                                 </div>
                             </div>
-                            <div class="note-search-wrap" id="m-note-search-wrap">
-                                <input type="search" id="m-note-search" data-i18n-placeholder="searchSolutionPlaceholder" placeholder="Lösungsweg durchsuchen..." data-i18n-aria-label="searchSolutionPlaceholder" aria-label="Lösungsweg durchsuchen">
-                                <span><i data-lucide="search"></i></span>
-                            </div>
-                            <div id="m-comments" class="note-list solution-list"></div>
                         </section>
                     </div>
 
