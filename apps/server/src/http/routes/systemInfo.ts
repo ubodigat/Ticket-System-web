@@ -85,7 +85,7 @@ export function registerSystemInfoRoutes(app: FastifyInstance, deps: UsersRouteD
           publicUrl: deps.env.PUBLIC_BASE_URL ?? null, setupCompletedAt: settings?.setup_completed_at ?? null },
         integrations: {
           smtp: !!smtp, ldap: !!ldap, outlook: !!outlook, passkeys: !!deps.env.WEBAUTHN_ORIGIN, antivirus: !!deps.env.CLAMAV_HOST,
-          officePreview: !!deps.env.OFFICE_PREVIEW_URL, onlyoffice: !!deps.env.ONLYOFFICE_ENABLED, updater: !!deps.env.UPDATE_SERVICE_URL,
+          officePreview: !!deps.env.OFFICE_PREVIEW_URL, onlyoffice: !!deps.env.ONLYOFFICE_ENABLED, updater: !!deps.env.UPDATE_BRIDGE_DIR,
           trustedProxy: deps.env.TRUSTED_PROXY_CIDR ?? null
         },
         libraries: { server: packages, client: vendor },

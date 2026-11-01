@@ -23,6 +23,7 @@ import { verifyAndConsumeTotp } from '../../domain/totp.js';
 import { loadSecurityPolicy } from '../../domain/securityPolicy.js';
 import { isSourceLocked, recordSourceFailure, clearSourceFailures } from '../../domain/loginThrottle.js';
 import { queueUserMail } from '../../mail/queue.js';
+import { secondFactorWait, noteSecondFactorFailure, clearSecondFactorFailures } from '../../domain/secondFactorThrottle.js';
 import { routeError } from './routeError.js';
 
 export interface MfaRouteDeps {
@@ -119,11 +120,14 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
       const targetEnc = pendingEnc ?? user?.totp_secret_enc ?? null;
       if (!targetEnc) return reply.code(409).send({ error: 'no_pending_setup' });
 
+      if (await secondFactorWait(app.db, session.uid)) return reply.code(429).send({ error: 'too_many_attempts' });
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
       const secret = fieldCipher.decryptField(targetEnc, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
       if (!(await verifyAndConsumeTotp(app.db, session.uid, secret, parsed.data.code))) {
+        await noteSecondFactorFailure({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, session.uid, req.ip);
         return reply.code(401).send({ error: 'invalid_code' });
       }
+      await clearSecondFactorFailures(app.db, session.uid);
 
       if (pendingEnc) {
         await app.db.updateTable('users').set({ totp_secret_enc: pendingEnc, totp_pending_secret_enc: null, totp_enabled: true }).where('id', '=', session.uid).execute();
@@ -173,11 +177,14 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
       if (result !== 'ok') return reply.code(401).send({ error: result === 'locked' ? 'too_many_attempts' : 'wrong_password' });
 
       if (!user.totp_secret_enc) return reply.code(409).send({ error: 'mfa_not_enabled' });
+      if (await secondFactorWait(app.db, session.uid)) return reply.code(429).send({ error: 'too_many_attempts' });
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
       const secret = fieldCipher.decryptField(user.totp_secret_enc, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
       if (!(await verifyAndConsumeTotp(app.db, session.uid, secret, parsed.data.code))) {
+        await noteSecondFactorFailure({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, session.uid, req.ip);
         return reply.code(401).send({ error: 'invalid_code' });
       }
+      await clearSecondFactorFailures(app.db, session.uid);
 
       await app.db.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null }).where('id', '=', session.uid).execute();
       await app.db.insertInto('global_audit_log').values({

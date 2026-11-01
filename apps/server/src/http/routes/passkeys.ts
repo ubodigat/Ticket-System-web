@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { Secret, TOTP } from 'otpauth';
 import QRCode from 'qrcode';
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse,
-  type RegistrationResponseJSON, type AuthenticationResponseJSON, type AuthenticatorTransportFuture } from '@simplewebauthn/server';
+  type RegistrationResponseJSON, type AuthenticationResponseJSON, type AuthenticatorTransport } from '@simplewebauthn/server';
 import type { MfaRouteDeps } from './mfa.js';
 import { verifyStepUpPassword } from './mfa.js';
 import { requireSession } from './session.js';
@@ -19,11 +19,17 @@ import { loadSecurityPolicy, force2faAppliesToRole } from '../../domain/security
 import { isSourceLocked, recordSourceFailure, clearSourceFailures } from '../../domain/loginThrottle.js';
 import { isAccountExpired } from '../../domain/accountValidity.js';
 import { mfaSatisfied, type MfaMode } from '../../domain/mfaPolicy.js';
+import { secondFactorWait, noteSecondFactorFailure, clearSecondFactorFailures } from '../../domain/secondFactorThrottle.js';
+import { enrollCodeHash, enrollCodeMatches, generateMailEnrollCode, MAIL_CODE_MAX_ATTEMPTS, MAIL_CODE_MAX_SENDS, MAIL_CODE_RESEND_MS,
+  MAIL_CODE_TTL_MS } from '../../domain/mfaEnrollment.js';
+import { isSmtpConfigured } from '../../mail/mailer.js';
 import { routeError } from './routeError.js';
 
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
 const deviceCookie = '__Host-ticket_mfa_device';
-type Proof = { totp: boolean; passkey: boolean; passwordVersion?: string; recovering?: boolean; challenge?: string; operation?: 'register' | 'authenticate'; pendingSecret?: string };
+type Proof = { totp: boolean; passkey: boolean; passwordVersion?: string; recovering?: boolean; challenge?: string; operation?: 'register' | 'authenticate'; pendingSecret?: string;
+  // Security-Audit R-25: Nachweis vor der Ersteinrichtung (Mail- oder Admin-Code).
+  enrollVerified?: boolean; enrollCodeHash?: string; enrollCodeExpires?: number; enrollAttempts?: number; enrollSends?: number; enrollSentAt?: number };
 const tokenSchema = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).passthrough();
 const limits = { config: { rateLimit: { max: 15, timeWindow: '5 minutes' } } };
 
@@ -99,6 +105,16 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
     await queueUserMail({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, uid, subject, text, 'security')
       .catch(err => app.log.error({ err }, 'Sicherheits-Mail nicht eingereiht'));
   }
+  const mailDeps = () => ({ db: app.db, env: deps.env, keyProvider: deps.keyProvider });
+  // Security-Audit R-23: kontoweite Wartezeit vor jeder Pruefung eines zweiten Faktors -- gilt fuer
+  // alle Quellen gleichzeitig, ohne Geraete-Ausnahme.
+  async function secondFactorBlocked(reply: FastifyReply, userId: string): Promise<boolean> {
+    const wait = await secondFactorWait(app.db, userId);
+    if (!wait) return false;
+    reply.header('retry-after', String(wait)).code(429).send({ error: 'too_many_attempts', retryAfter: wait });
+    return true;
+  }
+  const secondFactorFailed = (userId: string, ip: string) => noteSecondFactorFailure(mailDeps(), userId, ip);
   async function secretFor(uid: string, encrypted: Buffer) {
     const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
     return { dek, context: { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
@@ -118,6 +134,8 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
       return { mode: policy.mode, forceTotp: policy.forceTotp, hasTotp: !!user.totp_enabled, hasPasskey: credentials.length > 0,
         proof: { totp: state.totp, passkey: state.passkey }, freshDevice, purpose: flow.purpose,
         satisfied: mfaSatisfied(policy.mode, state, freshDevice) && (!policy.forceTotp || state.totp) && (!state.recovering || state.totp),
+        enrollmentRequired: !user.totp_enabled && !credentials.length && !state.recovering && !state.enrollVerified,
+        enrollMailAvailable: await isSmtpConfigured(mailDeps()),
         passkeysAvailable: !!deps.env.WEBAUTHN_ORIGIN && !isIP(new URL(deps.env.WEBAUTHN_ORIGIN).hostname) };
     } catch (error) { return fail(reply, error); }
   });
@@ -125,6 +143,8 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
     try {
       const { user, state, flow } = await flowFor(req.body);
       if (flow.purpose !== 'login' || user.totp_enabled) return reply.code(409).send({ error: 'totp_already_enabled' });
+      // Security-Audit R-25: das Passwort allein reicht fuer die Ersteinrichtung nicht.
+      if (!state.recovering && !state.enrollVerified) return reply.code(403).send({ error: 'enrollment_verification_required' });
       const secret = new Secret({ size: 20 }); const totp = new TOTP({ issuer: 'Ticket-System', label: user.username, secret });
       const { dek, context } = await secretFor(user.id, Buffer.alloc(0));
       state.pendingSecret = fieldCipher.encryptField(secret.base32, dek.rawDek, context).toString('base64');
@@ -132,10 +152,61 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
       return { secret: secret.base32, qrDataUrl: await QRCode.toDataURL(totp.toString(), { margin: 1, width: 240 }) };
     } catch (error) { return fail(reply, error); }
   });
+  // Security-Audit R-25: Bestaetigungscode per E-Mail an die hinterlegte Adresse.
+  app.post('/api/v2/mfa/login/enroll-code', limits, async (req, reply) => {
+    try {
+      const { user, state, flow } = await flowFor(req.body);
+      if (flow.purpose !== 'login' || user.totp_enabled) return reply.code(409).send({ error: 'totp_already_enabled' });
+      if (!(await isSmtpConfigured(mailDeps()))) return reply.code(409).send({ error: 'enroll_mail_unavailable' });
+      if ((state.enrollSends ?? 0) >= MAIL_CODE_MAX_SENDS) return reply.code(429).send({ error: 'too_many_attempts' });
+      const since = Date.now() - (state.enrollSentAt ?? 0);
+      if (since < MAIL_CODE_RESEND_MS) return reply.header('retry-after', String(Math.ceil((MAIL_CODE_RESEND_MS - since) / 1000))).code(429).send({ error: 'enroll_code_recently_sent' });
+      const code = generateMailEnrollCode();
+      state.enrollCodeHash = enrollCodeHash(deps.env.COOKIE_SECRET, user.id, code, 'mail');
+      state.enrollCodeExpires = Date.now() + MAIL_CODE_TTL_MS;
+      state.enrollAttempts = 0;
+      state.enrollSends = (state.enrollSends ?? 0) + 1;
+      state.enrollSentAt = Date.now();
+      await save(flow, state);
+      await securityMail(user.id, 'Bestaetigungscode fuer die Zwei-Faktor-Einrichtung',
+        `Dein Bestaetigungscode lautet: ${code}\n\nEr gilt 15 Minuten. Hast du gerade keine Zwei-Faktor-Anmeldung eingerichtet, kennt jemand dein Passwort -- aendere es bitte sofort und melde dich beim Support.`);
+      return { sent: true };
+    } catch (error) { return fail(reply, error); }
+  });
+  // Mail-Code aus diesem Ablauf oder einmaliger Einrichtungscode einer Admin-Person.
+  app.post('/api/v2/mfa/login/enroll-verify', limits, async (req, reply) => {
+    try {
+      const { user, state, flow } = await flowFor(req.body);
+      if (flow.purpose !== 'login' || user.totp_enabled) return reply.code(409).send({ error: 'totp_already_enabled' });
+      const code = z.string().trim().min(6).max(32).parse((req.body as any).code);
+      if (await isSourceLocked(app.db, user.id, req.ip)) return reply.code(429).send({ error: 'too_many_attempts' });
+      if (await secondFactorBlocked(reply, user.id)) return reply;
+      const mailCodeUsable = !!state.enrollCodeHash && (state.enrollCodeExpires ?? 0) > Date.now() && (state.enrollAttempts ?? 0) < MAIL_CODE_MAX_ATTEMPTS;
+      const viaMail = mailCodeUsable && enrollCodeMatches(state.enrollCodeHash, enrollCodeHash(deps.env.COOKIE_SECRET, user.id, code, 'mail'));
+      const adminCodeUsable = !!user.mfa_enroll_code_hash && !!user.mfa_enroll_code_expires_at && new Date(user.mfa_enroll_code_expires_at) > new Date();
+      const viaAdmin = !viaMail && adminCodeUsable && enrollCodeMatches(user.mfa_enroll_code_hash, enrollCodeHash(deps.env.COOKIE_SECRET, user.id, code, 'admin'));
+      if (!viaMail && !viaAdmin) {
+        if (state.enrollCodeHash) { state.enrollAttempts = (state.enrollAttempts ?? 0) + 1; await save(flow, state); }
+        await secondFactorFailed(user.id, req.ip);
+        return reply.code(401).send({ error: 'invalid_enroll_code' });
+      }
+      state.enrollVerified = true;
+      delete state.enrollCodeHash; delete state.enrollCodeExpires; delete state.enrollAttempts;
+      await withLiveFlow(flow, state, async trx => {
+        await trx.updateTable('mfa_flows').set({ state_json: JSON.stringify(state) }).where('token_hash', '=', flow.token_hash).execute();
+        // Der Admin-Code gilt genau einmal.
+        if (viaAdmin) await trx.updateTable('users').set({ mfa_enroll_code_hash: null, mfa_enroll_code_expires_at: null }).where('id', '=', user.id).execute();
+        await trx.insertInto('global_audit_log').values({ id: randomUUID(), actor_user_id: user.id, actor_username: user.username,
+          action: 'mfa.enrollment_verified', target_type: 'user', target_id: user.id, detail_json: JSON.stringify({ method: viaAdmin ? 'admin_code' : 'mail_code' }) }).execute();
+      });
+      return { success: true };
+    } catch (error) { return fail(reply, error); }
+  });
   app.post('/api/v2/mfa/login/totp', limits, async (req, reply) => {
     try {
       const { user, state, flow } = await flowFor(req.body); const code = z.string().regex(/^\d{6}$/).parse((req.body as any).code);
       if (await isSourceLocked(app.db, user.id, req.ip)) return reply.code(429).send({ error: 'too_many_attempts' });
+      if (await secondFactorBlocked(reply, user.id)) return reply;
       let enrolledNow = false;
       const verified = await withLiveFlow(flow, state, async (trx, currentUser) => {
         const encrypted = currentUser.totp_enabled ? currentUser.totp_secret_enc : state.pendingSecret ? Buffer.from(state.pendingSecret, 'base64') : null;
@@ -153,7 +224,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
         return true;
       });
       if (!verified) {
-        await recordSourceFailure(app.db, user.id, req.ip, await loadSecurityPolicy(app.db));
+        await secondFactorFailed(user.id, req.ip);
         return reply.code(401).send({ error: 'invalid_code' });
       }
       if (enrolledNow) await securityMail(user.id, 'Zwei-Faktor-Anmeldung eingerichtet',
@@ -173,7 +244,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
         ? await generateRegistrationOptions({ rpName: 'Ticket-System', rpID, userID: Buffer.from(user.id), userName: user.username,
           attestationType: 'none', authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },
           excludeCredentials: keys.map(key => ({ id: key.id })) })
-        : await generateAuthenticationOptions({ rpID, userVerification: 'required', allowCredentials: keys.map(key => ({ id: key.id, transports: JSON.parse(key.transports_json) as AuthenticatorTransportFuture[] })) });
+        : await generateAuthenticationOptions({ rpID, userVerification: 'required', allowCredentials: keys.map(key => ({ id: key.id, transports: JSON.parse(key.transports_json) as AuthenticatorTransport[] })) });
       if (operation === 'authenticate' && !keys.length) return reply.code(409).send({ error: 'no_passkey' });
       state.challenge = options.challenge; state.operation = operation; await save(flow, state);
       return { options };
@@ -184,6 +255,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
       const { user, state, flow } = await flowFor(req.body); const { rpID, origin } = relyingParty();
       if (!state.challenge || !state.operation) return reply.code(409).send({ error: 'challenge_required' });
       if (await isSourceLocked(app.db, user.id, req.ip)) return reply.code(429).send({ error: 'too_many_attempts' });
+      if (await secondFactorBlocked(reply, user.id)) return reply;
       const expectedChallenge = state.challenge; const operation = state.operation;
       delete state.challenge; delete state.operation; await save(flow, state); // Consume before verification; failed assertions need a new challenge.
       try {
@@ -220,7 +292,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
         }
         return { success: true };
       } catch (error) {
-        await recordSourceFailure(app.db, user.id, req.ip, await loadSecurityPolicy(app.db));
+        await secondFactorFailed(user.id, req.ip);
         app.log.warn({ userId: user.id }, 'Passkey verification failed');
         return reply.code(401).send({ error: 'passkey_verification_failed' });
       }
@@ -258,11 +330,13 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
       const user = await app.db.selectFrom('users').selectAll().where('id', '=', session.uid).executeTakeFirstOrThrow();
       if (await verifyStepUpPassword(app, user.id, req.ip, user.password_hash, body.password) !== 'ok') return reply.code(401).send({ error: 'invalid_password' });
       if (!user.totp_enabled || !user.totp_secret_enc) return reply.code(409).send({ error: 'enable_totp_first' });
+      if (await secondFactorBlocked(reply, user.id)) return reply;
       const { dek, context } = await secretFor(user.id, user.totp_secret_enc);
       if (!await verifyAndConsumeTotp(app.db, user.id, fieldCipher.decryptField(user.totp_secret_enc, dek.rawDek, context), body.code)) {
-        await recordSourceFailure(app.db, user.id, req.ip, await loadSecurityPolicy(app.db));
+        await secondFactorFailed(user.id, req.ip);
         return reply.code(401).send({ error: 'invalid_code' });
       }
+      await clearSecondFactorFailures(app.db, user.id);
       return { token: await newFlow(app, user.id, 'manage', { totp: true, passkey: false, passwordVersion: hash(String(user.password_hash ?? '')) }) };
     } catch (error) { return fail(reply, error); }
   });
@@ -291,6 +365,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
       if (flow.purpose !== 'login') return reply.code(403).send({ error: 'login_flow_required' });
       const code = z.string().min(32).max(64).parse((req.body as any).code);
       if (await isSourceLocked(app.db, user.id, req.ip)) return reply.code(429).send({ error: 'too_many_attempts' });
+      if (await secondFactorBlocked(reply, user.id)) return reply;
       const valid = await withLiveFlow(flow, state, async trx => {
         const consumed = await trx.deleteFrom('mfa_recovery_codes').where('user_id', '=', user.id).where('code_hash', '=', recoveryHash(user.id, code)).executeTakeFirst();
         if (Number(consumed.numDeletedRows) !== 1) return false;
@@ -303,7 +378,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
           action: 'user.mfa_recovery_used', target_type: 'user', target_id: user.id, detail_json: null }).execute();
         return true;
       });
-      if (!valid) { await recordSourceFailure(app.db, user.id, req.ip, await loadSecurityPolicy(app.db)); return reply.code(401).send({ error: 'invalid_recovery_code' }); }
+      if (!valid) { await secondFactorFailed(user.id, req.ip); return reply.code(401).send({ error: 'invalid_recovery_code' }); }
       return { token: await newFlow(app, user.id, 'login', { totp: false, passkey: false, recovering: true, passwordVersion: hash(String(user.password_hash ?? '')) }) };
     } catch (error) { return fail(reply, error); }
   });

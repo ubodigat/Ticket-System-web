@@ -15,8 +15,8 @@ if [[ ! -d .git ]]; then
   exit 1
 fi
 
-echo "==> Hole neue Commits (noch kein Merge)"
-git fetch origin
+echo "==> Hole neue Commits und Release-Tags (noch kein Merge)"
+git fetch --tags origin
 
 TARGET_REF="origin/$(git rev-parse --abbrev-ref HEAD)"
 NEW_HEAD="$(git rev-parse "$TARGET_REF")"
@@ -27,8 +27,16 @@ if [[ "$NEW_HEAD" == "$CURRENT_HEAD" ]]; then
   exit 0
 fi
 
+# Gueltig: Signatur auf dem Commit selbst oder auf einem Release-Tag (v*, release-*), der genau darauf zeigt.
+verified_tag=""
+for tag in $(git tag --points-at "$NEW_HEAD"); do
+  [[ "$tag" =~ ^(v|release-)[0-9A-Za-z._-]+$ ]] || continue
+  if git verify-tag "$tag" >/dev/null 2>&1; then verified_tag="$tag"; break; fi
+done
 echo "==> Pruefe Signatur von $NEW_HEAD"
-if ! git verify-commit "$NEW_HEAD" 2>&1; then
+if [[ -n "$verified_tag" ]]; then
+  echo "Signierter Release-Tag: $verified_tag"
+elif ! git verify-commit "$NEW_HEAD" 2>&1; then
   cat >&2 <<EOF
 
 Der neue Commit ($NEW_HEAD) ist nicht mit einem bekannten Schluessel signiert.

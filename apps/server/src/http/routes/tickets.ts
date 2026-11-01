@@ -18,7 +18,7 @@ import { fieldCipher, decryptFieldTolerant, computeBlindIndex } from '../../cryp
 import { routeError } from './routeError.js';
 import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
-import { loadModules, maskTicketModules, modulesFromConfig } from '../../domain/modules.js';
+import { loadModules, maskTicketModules, modulesFromConfig, requireModule } from '../../domain/modules.js';
 import { groupWithDescendants } from '../../domain/groups.js';
 import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
@@ -338,13 +338,18 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     if (groupId) {
       // Untergruppen gehoeren dazu: ein Ticket an "IT" erreicht auch "IT > Netzwerk".
       const groups = await app.db.selectFrom('groups').select(['id', 'parent_id']).execute();
-      const members = await base().where('department_group_id', 'in', groupWithDescendants(groupId, groups)).execute();
+      const members = await base().where('id', 'in', eb => eb.selectFrom('user_groups').select('user_id')
+        .where('group_id', 'in', groupWithDescendants(groupId, groups))).execute();
       if (members.length) return members.map(r => r.id);
     }
     return (await base().execute()).map(r => r.id);
   }
+  // Security-Audit R-28: nur Beteiligte, die das Ticket auch lesen duerfen (aktive Admin-Konten) --
+  // sonst erhielten normale Konten Statuswechsel und Wartenachrichten fremder Tickets.
   async function participantIds(ticketId: string): Promise<string[]> {
-    return (await app.db.selectFrom('ticket_participants').select('user_id').where('ticket_id', '=', ticketId).execute()).map(r => r.user_id);
+    return (await app.db.selectFrom('ticket_participants').innerJoin('users', 'users.id', 'ticket_participants.user_id')
+      .select('ticket_participants.user_id').where('ticket_participants.ticket_id', '=', ticketId)
+      .where('users.role', 'in', ['admin', 'superadmin']).where('users.account_archived', '=', false).execute()).map(r => r.user_id);
   }
   async function notifyMany(ids: Array<string | null | undefined>, params: { type: string; ticketId: string; ticketNumber: string | null;
     message: string; actorUserId: string }) {
@@ -1587,9 +1592,13 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (!ticket) return reply.code(404).send({ error: 'not_found' });
       const previousParticipants = new Set(await participantIds(id));
 
-      const users = parsed.data.user_ids.length
-        ? await app.db.selectFrom('users').select(['id', 'username']).where('id', 'in', parsed.data.user_ids).execute()
+      // Security-Audit R-28: Beteiligte brauchen Lesezugriff -- den haben nur aktive Admin-Konten.
+      const requested = [...new Set(parsed.data.user_ids)];
+      const users = requested.length
+        ? await app.db.selectFrom('users').select(['id', 'username']).where('id', 'in', requested)
+          .where('role', 'in', ['admin', 'superadmin']).where('account_archived', '=', false).execute()
         : [];
+      if (users.length !== requested.length) return reply.code(400).send({ error: 'invalid_participant' });
 
       await app.db.deleteFrom('ticket_participants').where('ticket_id', '=', id).execute();
       if (users.length) {
@@ -1703,6 +1712,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   } } }, async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      await requireModule(app.db, 'outlook');
       const { id } = req.params as { id: string };
       const parsed = createCalendarEventSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
@@ -1718,6 +1728,25 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const endAt = new Date(parsed.data.end_at);
       if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) {
         return reply.code(400).send({ error: 'invalid_time_range' });
+      }
+
+      // Security-Audit R-7: Einladungen aus dem gemeinsamen Firmenpostfach nur an aktive Konten dieser
+      // Installation oder an ausdruecklich freigegebene Partnerdomains (Systemeinstellungen > Outlook).
+      const attendees = [...new Set((parsed.data.attendee_emails ?? []).map(email => email.toLowerCase()))];
+      const attendeeDomains = [...new Set(attendees.map(email => email.split('@').pop()!))];
+      if (attendees.length) {
+        const settingsRow = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+        let allowedDomains: string[] = [];
+        try { allowedDomains = JSON.parse(settingsRow?.config_json || '{}').outlookConfig?.externalDomains ?? []; } catch { allowedDomains = []; }
+        const allowed = new Set(allowedDomains.map(domain => String(domain).toLowerCase()));
+        const blindDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
+        const indexOf = (email: string) => computeBlindIndex(blindDek.rawDek, email);
+        const known = new Set((await app.db.selectFrom('users').select('email_blind_idx')
+          .where('email_blind_idx', 'in', attendees.map(indexOf)).where('account_archived', '=', false).execute()).map(row => row.email_blind_idx));
+        const rejected = attendees.filter(email => !known.has(indexOf(email)) && !allowed.has(email.split('@').pop()!));
+        if (rejected.length) {
+          return reply.code(403).send({ error: 'attendee_domain_not_allowed', domains: [...new Set(rejected.map(email => email.split('@').pop()))] });
+        }
       }
 
       const outlook = await loadOutlookSettings(app.db, deps.env, deps.keyProvider);
@@ -1736,7 +1765,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           subject: parsed.data.subject,
           bodyText: parsed.data.notes || `Ticket ${id}`,
           startAt, endAt,
-          attendeeEmails: parsed.data.attendee_emails
+          attendeeEmails: attendees.length ? attendees : undefined
         });
       } catch {
         return reply.code(502).send({ error: 'outlook_event_create_failed' });
@@ -1752,7 +1781,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       // im Klartext im Audit-Log.
       await app.db.insertInto('ticket_audit_log').values({
         id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
-        action: 'calendar_event_created', field: 'calendar_event', old_value: null, new_value: '(Termin angelegt)'
+        action: 'calendar_event_created', field: 'calendar_event', old_value: null,
+        new_value: attendees.length ? `(Termin angelegt, ${attendees.length} Teilnehmende: ${attendeeDomains.join(', ')})`.slice(0, 1000) : '(Termin angelegt)'
       }).execute();
       return reply.code(201).send({ id: eventId, webLink: created.webLink });
     } catch (e: any) {

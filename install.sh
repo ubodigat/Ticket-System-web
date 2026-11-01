@@ -22,6 +22,7 @@ ENABLE_ANTIVIRUS=false
 ENABLE_OFFICE_VIEWER=false
 PUBLIC_DOMAIN_ARG=""
 ACME_EMAIL_ARG=""
+OFFICE_DOMAIN_ARG=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -33,6 +34,7 @@ for arg in "$@"; do
     --enable-office-viewer) ENABLE_OFFICE_VIEWER=true ;;
     --domain=*) PUBLIC_DOMAIN_ARG="${arg#--domain=}" ;;
     --acme-email=*) ACME_EMAIL_ARG="${arg#--acme-email=}" ;;
+    --office-domain=*) OFFICE_DOMAIN_ARG="${arg#--office-domain=}" ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -255,6 +257,61 @@ set_env_var() {
   fi
 }
 
+# Security-Audit N-3: In-App-Updates laufen ueber den Host-Dienst ops/host-updater (systemd) statt
+# ueber einen Container mit Docker-Socket. App (uid 10001) und Host tauschen sich nur ueber dieses
+# Verzeichnis aus: requests/ gehoert der App, state/ und work/ gehoeren root.
+UPDATE_BRIDGE_HOST_DIR=/var/lib/ticket-system-update
+ensure_update_bridge() {
+  run_root mkdir -p "$UPDATE_BRIDGE_HOST_DIR/requests" "$UPDATE_BRIDGE_HOST_DIR/state" "$UPDATE_BRIDGE_HOST_DIR/work"
+  run_root chown root:root "$UPDATE_BRIDGE_HOST_DIR" "$UPDATE_BRIDGE_HOST_DIR/state" "$UPDATE_BRIDGE_HOST_DIR/work"
+  run_root chmod 0755 "$UPDATE_BRIDGE_HOST_DIR" "$UPDATE_BRIDGE_HOST_DIR/state"
+  run_root chmod 0700 "$UPDATE_BRIDGE_HOST_DIR/work"
+  run_root chown 10001:10001 "$UPDATE_BRIDGE_HOST_DIR/requests"
+  run_root chmod 0700 "$UPDATE_BRIDGE_HOST_DIR/requests"
+}
+
+install_host_updater() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "In-App-Updates benoetigen systemd auf dem Host (Host-Updater)." >&2
+    exit 1
+  fi
+  ensure_update_bridge
+  run_root install -d -m 0700 /etc/ticket-system-updater /etc/ticket-system-updater/keys
+  if [[ -d "$COMPOSE_DIR/update-keys" ]]; then
+    run_root cp -a "$COMPOSE_DIR/update-keys/." /etc/ticket-system-updater/keys/
+  fi
+  run_root install -d -m 0755 /usr/local/libexec
+  run_root install -m 0755 "$SCRIPT_DIR/ops/host-updater/ticket-system-updater.sh" /usr/local/libexec/ticket-system-updater
+  printf 'REPO_DIR=%q\nBRIDGE_DIR=%q\nUPDATE_BRANCH=main\nALLOW_MAIN_DEPLOY=true\nKEY_DIR=/etc/ticket-system-updater/keys\n' \
+    "$SCRIPT_DIR" "$UPDATE_BRIDGE_HOST_DIR" | run_root tee /etc/ticket-system-updater.conf >/dev/null
+  run_root chmod 0600 /etc/ticket-system-updater.conf
+  run_root install -m 0644 "$SCRIPT_DIR/ops/host-updater/ticket-system-updater.service" /etc/systemd/system/ticket-system-updater.service
+  run_root install -m 0644 "$SCRIPT_DIR/ops/host-updater/ticket-system-updater.path" /etc/systemd/system/ticket-system-updater.path
+  run_root systemctl daemon-reload
+  run_root systemctl enable --now ticket-system-updater.path
+  printf 'enabled=1\n' | run_root tee "$UPDATE_BRIDGE_HOST_DIR/state/agent.env" >/dev/null
+}
+
+remove_host_updater() {
+  if command -v systemctl >/dev/null 2>&1; then
+    run_root systemctl disable --now ticket-system-updater.path >/dev/null 2>&1 || true
+    run_root rm -f /etc/systemd/system/ticket-system-updater.path /etc/systemd/system/ticket-system-updater.service
+    run_root systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+  run_root rm -f /usr/local/libexec/ticket-system-updater /etc/ticket-system-updater.conf "$UPDATE_BRIDGE_HOST_DIR/state/agent.env"
+  run_root find "$UPDATE_BRIDGE_HOST_DIR/requests" -mindepth 1 -delete 2>/dev/null || true
+}
+
+# Frueherer Updater-Container (root + Docker-Socket) aus aelteren Versionen entfernen.
+remove_legacy_updater_container() {
+  local ids
+  ids="$(run_root docker ps -aq --filter 'label=com.docker.compose.project=ticket-system' --filter 'label=com.docker.compose.service=updater' 2>/dev/null || true)"
+  if [[ -n "$ids" ]]; then
+    # shellcheck disable=SC2086
+    run_root docker rm -f $ids >/dev/null
+  fi
+}
+
 ensure_public_env_defaults() {
   local primary_ip
   primary_ip="$(detect_primary_ip)"
@@ -262,9 +319,6 @@ ensure_public_env_defaults() {
   set_env_var "HTTP_PORT" "${HTTP_PORT:-80}" "$ENV_FILE"
   set_env_var "HTTPS_PORT" "${HTTPS_PORT:-443}" "$ENV_FILE"
   set_env_var "BIND_ADDRESS" "${BIND_ADDRESS:-0.0.0.0}" "$ENV_FILE"
-  if ! grep -q '^UPDATE_TOKEN=' "$ENV_FILE"; then
-    set_env_var "UPDATE_TOKEN" "$(openssl rand -base64 48)" "$ENV_FILE"
-  fi
 
   if [[ -n "$PUBLIC_DOMAIN_ARG" ]]; then
     set_env_var "PUBLIC_DOMAIN" "$PUBLIC_DOMAIN_ARG" "$ENV_FILE"
@@ -437,7 +491,6 @@ else
   DB_RUNTIME_USER="${DB_USER}_rt"
   DB_RUNTIME_PASSWORD="$(openssl rand -base64 32)"
   COOKIE_SECRET="$(openssl rand -base64 48)"
-  UPDATE_TOKEN="$(openssl rand -base64 48)"
   SETUP_TOKEN="$(openssl rand -hex 32)"
   INSTALLATION_ID="$(make_uuid)"
 
@@ -450,7 +503,6 @@ DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD
 DB_RUNTIME_USER=$DB_RUNTIME_USER
 DB_RUNTIME_PASSWORD=$DB_RUNTIME_PASSWORD
 COOKIE_SECRET=$COOKIE_SECRET
-UPDATE_TOKEN=$UPDATE_TOKEN
 SETUP_TOKEN=$SETUP_TOKEN
 INSTALLATION_ID=$INSTALLATION_ID
 HTTP_PORT=80
@@ -490,20 +542,51 @@ if [[ "$MFA_PORT" != "443" ]]; then MFA_PUBLIC_URL="${MFA_PUBLIC_URL}:${MFA_PORT
 set_env_var "PUBLIC_URL" "$MFA_PUBLIC_URL" "$ENV_FILE"
 
 COMPOSE_PROFILES_LIST=""
+# Security-Audit R-24: ONLYOFFICE nur unter einer eigenen Subdomain (eigene Herkunft), nie unter
+# /office/ der Hauptdomain -- eine XSS-Luecke im Document Server wirkt sonst direkt im Ticketsystem.
+OFFICE_SITE_FILE="$COMPOSE_DIR/caddy-sites/office.caddy"
 if [[ "$ENABLE_OFFICE_VIEWER" == "true" ]] || grep -q '^ONLYOFFICE_ENABLED=true$' "$ENV_FILE"; then
-  log "Enabling read-only ONLYOFFICE view (reserve an additional 4 GB RAM)"
-  COMPOSE_PROFILES_LIST="office-viewer"
-  set_env_var "ONLYOFFICE_ENABLED" "true" "$ENV_FILE"
-  if ! grep -q '^ONLYOFFICE_JWT_SECRET=.' "$ENV_FILE"; then
-    set_env_var "ONLYOFFICE_JWT_SECRET" "$(openssl rand -hex 32)" "$ENV_FILE"
+  OFFICE_MAIN_DOMAIN="$(grep '^PUBLIC_DOMAIN=' "$ENV_FILE" | cut -d= -f2-)"
+  OFFICE_DOMAIN_VALUE="${OFFICE_DOMAIN_ARG:-$({ grep '^OFFICE_DOMAIN=' "$ENV_FILE" || true; } | cut -d= -f2-)}"
+  if [[ -z "$OFFICE_DOMAIN_VALUE" ]]; then OFFICE_DOMAIN_VALUE="office.${OFFICE_MAIN_DOMAIN}"; fi
+  if [[ "$OFFICE_MAIN_DOMAIN" =~ ^[0-9.]+$ || "$OFFICE_MAIN_DOMAIN" == "localhost" || "$OFFICE_DOMAIN_VALUE" == "$OFFICE_MAIN_DOMAIN" \
+        || ! "$OFFICE_DOMAIN_VALUE" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]]; then
+    if [[ "$ENABLE_OFFICE_VIEWER" == "true" ]]; then
+      echo "Die Office-Oberflaeche braucht eine eigene Subdomain (z.B. office.example.com). Mit einer IP-Adresse ist das nicht moeglich -- bitte mit --domain=... und optional --office-domain=... installieren." >&2
+      exit 1
+    fi
+    warn "ONLYOFFICE was disabled: it now requires its own subdomain (Security-Audit R-24). Re-run with --domain=... --enable-office-viewer."
+    set_env_var "ONLYOFFICE_ENABLED" "false" "$ENV_FILE"
+    set_env_var "OFFICE_DOMAIN" "" "$ENV_FILE"
+    set_env_var "OFFICE_PUBLIC_URL" "" "$ENV_FILE"
+    rm -f "$OFFICE_SITE_FILE"
+  else
+    log "Enabling read-only ONLYOFFICE view on https://$OFFICE_DOMAIN_VALUE (reserve an additional 4 GB RAM)"
+    COMPOSE_PROFILES_LIST="office-viewer"
+    set_env_var "ONLYOFFICE_ENABLED" "true" "$ENV_FILE"
+    if ! grep -q '^ONLYOFFICE_JWT_SECRET=.' "$ENV_FILE"; then
+      set_env_var "ONLYOFFICE_JWT_SECRET" "$(openssl rand -hex 32)" "$ENV_FILE"
+    fi
+    OFFICE_PUBLIC_URL_VALUE="https://${OFFICE_DOMAIN_VALUE}"
+    if [[ "$(grep '^HTTPS_PORT=' "$ENV_FILE" | cut -d= -f2-)" != "443" ]]; then
+      OFFICE_PUBLIC_URL_VALUE="${OFFICE_PUBLIC_URL_VALUE}:$(grep '^HTTPS_PORT=' "$ENV_FILE" | cut -d= -f2-)"
+    fi
+    set_env_var "OFFICE_DOMAIN" "$OFFICE_DOMAIN_VALUE" "$ENV_FILE"
+    set_env_var "OFFICE_PUBLIC_URL" "$OFFICE_PUBLIC_URL_VALUE" "$ENV_FILE"
+    install -m 0644 "$COMPOSE_DIR/office.caddy" "$OFFICE_SITE_FILE"
+    warn "DNS: $OFFICE_DOMAIN_VALUE must resolve to this server (A/AAAA record), otherwise no certificate can be issued."
   fi
+else
+  rm -f "$OFFICE_SITE_FILE"
 fi
+# Aeltere Installationen: Einstellungen des frueheren Updater-Containers entfernen.
+sed -i '/^UPDATE_SERVICE_URL=/d; /^UPDATE_TOKEN=/d; /^UPDATE_REPO_DIR=/d' "$ENV_FILE"
+LEGACY_PROFILES="$({ grep '^COMPOSE_PROFILES=' "$ENV_FILE" || true; } | cut -d= -f2- | tr ',' '\n' | { grep -vx 'dangerous-updater' || true; } | paste -sd, -)"
+if grep -q '^COMPOSE_PROFILES=' "$ENV_FILE"; then set_env_var "COMPOSE_PROFILES" "$LEGACY_PROFILES" "$ENV_FILE"; fi
+set_env_var "UPDATE_BRIDGE_HOST_DIR" "$UPDATE_BRIDGE_HOST_DIR" "$ENV_FILE"
 if [[ "$ENABLE_UPDATES" == "true" ]]; then
-  log "Enabling in-app updates (the updater requires Docker host privileges)"
-  COMPOSE_PROFILES_LIST="${COMPOSE_PROFILES_LIST:+$COMPOSE_PROFILES_LIST,}dangerous-updater"
-  set_env_var "UPDATE_SERVICE_URL" "http://updater:3099" "$ENV_FILE"
+  log "Enabling in-app updates (host service, signed commits or release tags only)"
   set_env_var "UPDATE_ALLOW_MAIN_DEPLOY" "true" "$ENV_FILE"
-  set_env_var "UPDATE_REPO_DIR" "$SCRIPT_DIR" "$ENV_FILE"
   # Ohne geprueften Schluessel lehnt der Updater jedes Update ab -- frueh und deutlich warnen.
   UPDATE_KEYS="$( { command -v gpg >/dev/null 2>&1 && gpg --homedir "$COMPOSE_DIR/update-keys" --list-keys --with-colons 2>/dev/null; } || true)"
   if ! grep -q '^pub:' <<<"$UPDATE_KEYS"; then
@@ -511,13 +594,8 @@ if [[ "$ENABLE_UPDATES" == "true" ]]; then
   fi
 fi
 if [[ "$DISABLE_UPDATES" == "true" ]]; then
-  log "Disabling in-app updates (removing the updater and its Docker host access)"
-  set_env_var "UPDATE_SERVICE_URL" "" "$ENV_FILE"
+  log "Disabling in-app updates (removing the host updater service)"
   set_env_var "UPDATE_ALLOW_MAIN_DEPLOY" "false" "$ENV_FILE"
-  # Gemeinsames Geheimnis App<->Updater erneuern: ein frueher ausgelesener Wert gilt nirgends mehr.
-  set_env_var "UPDATE_TOKEN" "$(openssl rand -base64 48)" "$ENV_FILE"
-  REMAINING_PROFILES="$({ grep '^COMPOSE_PROFILES=' "$ENV_FILE" || true; } | cut -d= -f2- | tr ',' '\n' | { grep -vx 'dangerous-updater' || true; } | paste -sd, -)"
-  set_env_var "COMPOSE_PROFILES" "$REMAINING_PROFILES" "$ENV_FILE"
 fi
 if [[ "$ENABLE_ANTIVIRUS" == "true" ]]; then
   # Security-Audit B7: ClamAV-Virenscan fuer Anhaenge, optional (deutlicher Ressourcenbedarf --
@@ -571,6 +649,8 @@ fi
 
 open_firewall_ports
 
+ensure_update_bridge
+
 log "Building and starting Docker stack"
 set_env_var "APP_COMMIT" "$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)" "$ENV_FILE"
 set_env_var "APP_BUILT_AT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ENV_FILE"
@@ -609,21 +689,17 @@ printf '%s\n%s\n' "$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2-)" \
   | run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps -T \
     app sh -c 'set -eu; IFS= read -r DB_USER; IFS= read -r DB_PASSWORD; export DB_USER DB_PASSWORD; exec node dist/db/migrate.js'
 
-if [[ "$DISABLE_UPDATES" == "true" ]]; then
-  log "Removing the updater container"
-  run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile dangerous-updater rm --stop --force updater
-  if [[ -n "$(run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile dangerous-updater ps --all --quiet updater)" ]]; then
-    echo "The updater container is still present -- in-app updates were NOT fully disabled." >&2
-    exit 1
-  fi
-fi
+remove_legacy_updater_container
 
 log "Starting application stack"
 if grep -q '^ONLYOFFICE_ENABLED=true$' "$ENV_FILE"; then
   run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile office-viewer up -d --force-recreate documentserver
 fi
 if grep -q '^UPDATE_ALLOW_MAIN_DEPLOY=true$' "$ENV_FILE"; then
-  run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile dangerous-updater up -d --build --force-recreate updater
+  log "Installing the host updater service"
+  install_host_updater
+else
+  remove_host_updater
 fi
 if [[ "$ENABLE_ANTIVIRUS" == "true" ]]; then
   run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile antivirus up -d --force-recreate clamav

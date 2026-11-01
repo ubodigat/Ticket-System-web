@@ -13,7 +13,7 @@ async function sendReply(status: string, role: 'user' | 'admin' = 'user', foreig
   const audits: any[] = [];
   const db: any = {
     selectFrom: (table: string) => {
-      const chain: any = { select: () => chain, selectAll: () => chain, where: () => chain, forUpdate: () => chain,
+      const chain: any = { select: () => chain, selectAll: () => chain, where: () => chain, forUpdate: () => chain, innerJoin: () => chain,
         executeTakeFirst: async () => ticket, executeTakeFirstOrThrow: async () => table === 'ticket_messages' ? message : ticket,
         execute: async () => [] };
       return chain;

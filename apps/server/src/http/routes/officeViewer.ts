@@ -30,6 +30,8 @@ export function registerOfficeViewerRoutes(app: FastifyInstance, deps: UsersRout
       const attachment = await authorized(id, uid);
       reply.header('Cache-Control', 'no-store');
       if (!deps.env.ONLYOFFICE_ENABLED || !deps.env.ONLYOFFICE_JWT_SECRET) return { enabled: false, reason: 'office_viewer_not_enabled' };
+      // Security-Audit R-24: ohne eigene Subdomain kein Document Server (nie unter derselben Herkunft).
+      if (!deps.env.ONLYOFFICE_PUBLIC_URL) return { enabled: false, reason: 'office_domain_missing' };
       const title = await decrypt(attachment, 'filename'); const fileType = title.split('.').at(-1)?.toLowerCase() || '';
       const documentType = ['xlsx', 'xls', 'ods'].includes(fileType) ? 'cell' : ['pptx', 'ppt', 'odp'].includes(fileType) ? 'slide' : 'word';
       if (!['docx', 'doc', 'odt', 'xlsx', 'xls', 'ods', 'pptx', 'ppt', 'odp'].includes(fileType)) return { enabled: false, reason: 'unsupported_office_format' };
@@ -40,13 +42,16 @@ export function registerOfficeViewerRoutes(app: FastifyInstance, deps: UsersRout
         document: { fileType, key: `ticket-${id}`, title, url: `http://app:3000/api/v2/office/source/${id}?token=${source}`,
           permissions: { edit: false, comment: false, review: false, fillForms: false, copy: true, download: true, print: true } },
         editorConfig: { mode: 'view', lang: 'de', customization: { autosave: false, plugins: false, chat: false, comments: false, help: false } } };
-      return { enabled: true, config: { ...config, token: await signOfficeConfig(deps.env.ONLYOFFICE_JWT_SECRET, config) } };
+      return { enabled: true, apiUrl: `${new URL(deps.env.ONLYOFFICE_PUBLIC_URL).origin}/web-apps/apps/api/documents/api.js`,
+        config: { ...config, token: await signOfficeConfig(deps.env.ONLYOFFICE_JWT_SECRET, config) } };
     } catch (error) { return routeError(app, reply, error); }
   });
   app.get('/api/v2/attachments/:id/office-view', async (req, reply) => {
     try {
       const { uid } = requireSession(req); const { id } = req.params as { id: string }; await authorized(id, uid);
-      return reply.header('Cache-Control', 'no-store').header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'self'; object-src 'none'; base-uri 'none'")
+      // Nur die eigene Office-Herkunft darf Skript und Rahmen liefern (Security-Audit R-24).
+      const office = deps.env.ONLYOFFICE_PUBLIC_URL ? new URL(deps.env.ONLYOFFICE_PUBLIC_URL).origin : "'none'";
+      return reply.header('Cache-Control', 'no-store').header('Content-Security-Policy', `default-src 'self'; script-src 'self' ${office}; style-src 'self'; frame-src ${office}; connect-src 'self'; img-src 'self' data:; frame-ancestors 'self'; object-src 'none'; base-uri 'none'`)
         .header('X-Frame-Options', 'SAMEORIGIN').type('text/html; charset=utf-8').send('<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Office</title><link rel="stylesheet" href="/js/office-view.css"><div id="office-editor"></div><p id="office-error" role="alert" hidden></p><script src="/js/office-view.js" defer></script></html>');
     } catch (error) { return routeError(app, reply, error); }
   });

@@ -73,11 +73,26 @@ export const Utils = {
         return Array.from(bytes, b => b.toString(36).padStart(2, '0')).join('');
     },
     nowISO: () => new Date().toISOString(),
-    // Platzhalter-Profilbild: fest pro Person (Hash der Benutzer-ID bzw. des Benutzernamens).
-    avatarUrl: (key) => {
+    // Gewaehlte Profilbilder (Benutzer-ID bzw. Benutzername -> { id, preset, custom }), befuellt
+    // vom Store beim Laden des Personenverzeichnisses.
+    avatars: new Map(),
+    setAvatar: (user, avatar) => {
+        if (!user?.id) return;
+        const entry = { id: user.id, preset: avatar?.preset || null, custom: avatar?.custom || null };
+        Utils.avatars.set(String(user.id), entry);
+        if (user.username) Utils.avatars.set(String(user.username), entry);
+    },
+    // Automatisches Platzhalter-Profilbild: fest pro Person (Hash der Benutzer-ID bzw. des Benutzernamens).
+    avatarFallbackUrl: (key) => {
         let hash = 0;
         for (const ch of String(key || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
         return `picture/avatars/avatar-${(hash % 6) + 1}.png`;
+    },
+    avatarUrl: (key) => {
+        const avatar = Utils.avatars.get(String(key || ''));
+        if (avatar?.custom) return `/api/v2/users/${encodeURIComponent(avatar.id)}/avatar?v=${encodeURIComponent(avatar.custom)}`;
+        if (avatar?.preset) return `picture/avatars/avatar-${avatar.preset}.png`;
+        return Utils.avatarFallbackUrl(avatar?.id || key);
     },
     esc: (v) => String(v ?? '').replace(/[&<>"']/g, c => ({
         '&': '&amp;',

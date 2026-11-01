@@ -20,7 +20,7 @@ async function run(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, sta
   app.addHook('onResponse', async (req, reply) => { await recordActivity(db, req, reply); });
   const handler = async (_req: any, reply: any) => reply.code(status).send({ ok: status < 400 });
   for (const path of ['/api/v2/tickets/:id', '/api/v2/tickets', '/api/v2/users/:id/change-password', '/api/v1/auth/login', '/api/v2/attachments/:id',
-    '/api/v2/tickets/:id/messages', '/api/v2/tickets/:id/audit-log']) {
+    '/api/v2/tickets/:id/messages', '/api/v2/tickets/:id/audit-log', '/api/v2/mfa/login/totp']) {
     app.route({ method: ['GET', 'POST', 'PATCH', 'DELETE'], url: path, handler });
   }
   try { await app.inject({ method, url, payload: method === 'GET' ? undefined : { password: 'Geheim-123' } }); }
@@ -49,9 +49,11 @@ describe('complete activity log', () => {
     expect(await run('GET', '/api/v2/attachments/a-1')).toHaveLength(1);
     expect(await run('GET', '/api/v2/tickets/t-1')).toHaveLength(0);
   });
-  it('marks anonymous actions and skips rate-limited floods and self-logging login routes', async () => {
-    const anonymous = await run('POST', '/api/v2/tickets', 401, null);
-    expect(anonymous[0]).toMatchObject({ actor_user_id: null, actor_username: '-' });
+  it('records anonymous requests only for security-relevant routes, at most once per minute and source', async () => {
+    expect(await run('POST', '/api/v2/tickets', 401, null)).toHaveLength(0);
+    const mfa = await run('POST', '/api/v2/mfa/login/totp', 401, null);
+    expect(mfa[0]).toMatchObject({ actor_user_id: null, actor_username: '-' });
+    expect(await run('POST', '/api/v2/mfa/login/totp', 401, null)).toHaveLength(0);
     expect(await run('POST', '/api/v2/tickets', 429)).toHaveLength(0);
     expect(await run('POST', '/api/v1/auth/login', 401, null)).toHaveLength(0);
   });

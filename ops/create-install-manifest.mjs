@@ -1,9 +1,9 @@
 // Release maintenance: regenerate after source changes, before publishing the commit.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { encoding: 'utf8' })
-  .split('\0').filter(p => p && p !== 'README.md' && p !== 'install-manifest.sha256').sort();
+  .split('\0').filter(p => p && p !== 'README.md' && p !== 'install-manifest.sha256' && existsSync(p)).sort(); // ohne geloeschte, noch indizierte Dateien
 const manifest = [...new Set(files)].map(path => {
   let bytes = readFileSync(path);
   try {

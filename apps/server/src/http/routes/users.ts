@@ -9,6 +9,8 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 // V2 Users & Groups API - Sichere Benutzerverwaltung mit RBAC
 import type { FastifyInstance } from 'fastify';
 import { validateGroupParent } from '../../domain/groups.js';
+import { AVATAR_MAX_BYTES, AVATAR_PRESET_COUNT, avatarDescriptor, inspectAvatarImage } from '../../domain/avatar.js';
+import { ADMIN_CODE_TTL_MS, enrollCodeHash, generateAdminEnrollCode } from '../../domain/mfaEnrollment.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import * as argon2 from 'argon2';
@@ -17,7 +19,7 @@ import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
-import { queueMailIfConfigured } from '../../mail/queue.js';
+import { queueMailIfConfigured, queueUserMail } from '../../mail/queue.js';
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { isAccountExpired, isValidAccountDate } from '../../domain/accountValidity.js';
@@ -125,7 +127,8 @@ const createUserSchema = z.object({
   name: z.string().trim().min(1).max(255),
   email: z.string().email().max(255),
   role: z.enum(['user', 'admin', 'superadmin']),
-  department_group_id: z.string().nullable().optional(),
+  // Gruppenzugehoerigkeiten (beliebig viele, siehe Tabelle user_groups).
+  group_ids: z.array(z.string().trim().min(1).max(36)).max(100).optional(),
   department: z.string().trim().max(255).nullable().optional(),
   // Weitere, typischerweise aus einem AD synchronisierbare Kontakt-/Organisationsfelder
   // (telephoneNumber/mobile/title/physicalDeliveryOfficeName) -- gleiches Muster wie department:
@@ -145,8 +148,9 @@ const updateUserSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   email: z.string().email().max(255).optional(),
   role: z.enum(['user', 'admin']).optional(),
-  department_group_id: z.string().nullable().optional(),
-  // Freitext-Einrichtung/Abteilung (nicht zu verwechseln mit department_group_id, der
+  // Gruppenzugehoerigkeiten (beliebig viele, siehe Tabelle user_groups).
+  group_ids: z.array(z.string().trim().min(1).max(36)).max(100).optional(),
+  // Freitext-Einrichtung/Abteilung (nicht zu verwechseln mit group_ids, der
   // Gruppenzugehörigkeit) -- die UI-seitige Sichtbarkeit beim Selbst-Bearbeiten regelt
   // accountConfig.editable.department (Systemeinstellungen), nicht diese Schema-Prüfung hier;
   // dasselbe Muster wie bei name/email oben.
@@ -319,6 +323,27 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     return new Set(fields);
   }
 
+  // Gruppenmitgliedschaften je Person (user_id -> group_ids).
+  async function loadGroupIds(): Promise<Map<string, string[]>> {
+    const map = new Map<string, string[]>();
+    for (const row of await app.db.selectFrom('user_groups').select(['user_id', 'group_id']).execute()) {
+      map.set(row.user_id, [...(map.get(row.user_id) ?? []), row.group_id]);
+    }
+    return map;
+  }
+  async function groupIdsExist(ids: string[]): Promise<boolean> {
+    const unique = [...new Set(ids)];
+    if (!unique.length) return true;
+    return (await app.db.selectFrom('groups').select('id').where('id', 'in', unique).execute()).length === unique.length;
+  }
+  async function replaceUserGroups(userId: string, ids: string[]): Promise<void> {
+    const unique = [...new Set(ids)];
+    await app.db.transaction().execute(async trx => {
+      await trx.deleteFrom('user_groups').where('user_id', '=', userId).execute();
+      if (unique.length) await trx.insertInto('user_groups').values(unique.map(group_id => ({ user_id: userId, group_id }))).execute();
+    });
+  }
+
   async function hasAdminPermission(session: { uid: string; role: string }, key: 'canManageRequests' | 'canManageUsers' | 'canViewLogs' | 'canManage2FA'): Promise<boolean> {
     if (session.role === 'superadmin') return true;
     if (session.role !== 'admin') return false;
@@ -369,7 +394,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManageUsers')) && !(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'avatar_preset', 'avatar_mime', 'avatar_updated_at', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until',
           ...absenceSelects(eb)
         ])
         .orderBy('created_at', 'asc')
@@ -377,10 +402,13 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
       const contactDeks = await loadContactDeks(app, deps.keyProvider);
-      const users = rows.map(row => {
+      const groupIds = await loadGroupIds();
+      const users = rows.map(({ avatar_preset, avatar_mime, avatar_updated_at, ...row }) => {
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
         return {
           ...row,
+          group_ids: groupIds.get(row.id) ?? [],
+          avatar: avatarDescriptor({ avatar_preset, avatar_mime, avatar_updated_at }),
           name_enc: undefined,
           email_enc: undefined,
           permissions_json: undefined,
@@ -407,7 +435,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
       const rows = await app.db.selectFrom('users')
-        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived'])
+        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'avatar_preset', 'avatar_mime', 'avatar_updated_at', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived'])
         .where('account_archived', '=', false)
         .orderBy('username', 'asc')
         .execute();
@@ -425,11 +453,13 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           id: row.id,
           username: row.username,
           name: safeUserProfileFields(app, deps, row, nameDek, emailDek).name,
+          avatar: avatarDescriptor(row),
           account_archived: row.account_archived
         }));
         return reply.send({ users });
       }
       const contactDeks = await loadContactDeks(app, deps.keyProvider);
+      const groupIds = await loadGroupIds();
       const users = rows.map(row => {
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
         const contact = decryptContactFields(row, contactDeks, deps);
@@ -439,7 +469,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           name: profile.name,
           email: profile.email,
           role: row.role,
-          department_group_id: row.department_group_id,
+          group_ids: groupIds.get(row.id) ?? [],
+          avatar: avatarDescriptor(row),
           department: row.department,
           phone: contact.phone,
           mobile: contact.mobile,
@@ -461,7 +492,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const row = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'department_group_id', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'avatar_preset', 'avatar_mime', 'avatar_updated_at', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until',
           ...absenceSelects(eb)
         ])
         .where('id', '=', session.uid)
@@ -471,8 +502,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
       const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
+      const { avatar_preset, avatar_mime, avatar_updated_at, ...ownRow } = row;
       const user = {
-        ...row,
+        ...ownRow,
+        group_ids: (await loadGroupIds()).get(row.id) ?? [],
+        avatar: avatarDescriptor({ avatar_preset, avatar_mime, avatar_updated_at }),
         name_enc: undefined,
         email_enc: undefined,
         permissions_json: undefined,
@@ -581,6 +615,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const job_title_enc = parsed.data.job_title ? encryptContactField(parsed.data.job_title, contactDeks.jobTitle, deps, newId, 'job_title') : null;
       const office_location_enc = parsed.data.office_location ? encryptContactField(parsed.data.office_location, contactDeks.officeLocation, deps, newId, 'office_location') : null;
 
+      if (parsed.data.group_ids && !(await groupIdsExist(parsed.data.group_ids))) return reply.code(400).send({ error: 'invalid_group' });
+
       await app.db.insertInto('users').values({
         id: newId,
         username: parsed.data.username,
@@ -589,7 +625,6 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         email_blind_idx,
         password_hash,
         role: parsed.data.role,
-        department_group_id: parsed.data.department_group_id ?? null,
         department: parsed.data.department ?? null,
         phone: phone_enc,
         mobile: mobile_enc,
@@ -609,6 +644,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         ldap_login_enabled: parsed.data.ldap_login_enabled === true && session.role === 'superadmin' && parsed.data.role !== 'superadmin',
         installation_id: deps.env.INSTALLATION_ID
       }).execute();
+      if (parsed.data.group_ids?.length) await replaceUserGroups(newId, parsed.data.group_ids);
 
       // Global Audit-Log
       await app.db.insertInto('global_audit_log').values({
@@ -652,7 +688,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         if (parsed.data.office_location !== undefined && !allowedFields.has('officeLocation')) return reply.code(403).send({ error: 'field_not_editable', field: 'office_location' });
         if (
           parsed.data.role !== undefined ||
-          parsed.data.department_group_id !== undefined ||
+          parsed.data.group_ids !== undefined ||
           parsed.data.supervisor_user_id !== undefined ||
           parsed.data.account_archived !== undefined ||
           parsed.data.locked_permanent !== undefined ||
@@ -663,6 +699,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         }
       }
 
+      if (parsed.data.group_ids !== undefined && !(await groupIdsExist(parsed.data.group_ids))) return reply.code(400).send({ error: 'invalid_group' });
       const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
       let previousEmail: string | null = null;
       if (parsed.data.name !== undefined) {
@@ -742,7 +779,6 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           if (demotes || archives || locks || expires) await assertNotLastSuperadmin(id);
         }
         if (parsed.data.role !== undefined) updates.role = parsed.data.role;
-        if (parsed.data.department_group_id !== undefined) updates.department_group_id = parsed.data.department_group_id;
         if (parsed.data.supervisor_user_id !== undefined) updates.supervisor_user_id = parsed.data.supervisor_user_id;
         if (parsed.data.account_archived !== undefined) updates.account_archived = parsed.data.account_archived;
         if (parsed.data.locked_permanent !== undefined) updates.locked_permanent = parsed.data.locked_permanent;
@@ -778,6 +814,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       }
 
       await app.db.updateTable('users').set(updates).where('id', '=', id).execute();
+      if (canManageUsers && parsed.data.group_ids !== undefined) await replaceUserGroups(id, parsed.data.group_ids);
 
       if (previousEmail) {
         await app.db.insertInto('global_audit_log').values({
@@ -866,7 +903,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         return reply.code(403).send({ error: 'forbidden' });
       }
       await app.db.transaction().execute(async trx => {
-        await trx.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null, totp_last_step: null }).where('id', '=', id).execute();
+        await trx.updateTable('users').set({ totp_enabled: false, totp_secret_enc: null, totp_pending_secret_enc: null, totp_last_step: null,
+          mfa_failed_count: 0, mfa_failed_last_at: null, mfa_enroll_code_hash: null, mfa_enroll_code_expires_at: null }).where('id', '=', id).execute();
         await trx.deleteFrom('user_passkeys').where('user_id', '=', id).execute();
         await trx.deleteFrom('mfa_recovery_codes').where('user_id', '=', id).execute();
         await trx.deleteFrom('mfa_devices').where('user_id', '=', id).execute();
@@ -878,6 +916,36 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         action: 'user.mfa_reset', target_type: 'user', target_id: id, detail_json: null
       }).execute();
       return reply.send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // POST /api/v2/users/:id/mfa-enroll-code - einmaliger Einrichtungscode fuer die Ersteinrichtung des
+  // zweiten Faktors (Security-Audit R-25), z.B. ohne Mailversand. Gleiche Rechte wie mfa-reset; der
+  // Code wird genau einmal angezeigt und nur als HMAC gespeichert, die Person erhaelt eine Hinweis-Mail.
+  app.post('/api/v2/users/:id/mfa-enroll-code', { config: { rateLimit: { max: 20, timeWindow: '1 hour', keyGenerator: (req: any) => req.ticketSession?.uid ?? req.ip } } }, async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
+      const { id } = req.params as { id: string };
+      if (id === session.uid) return reply.code(403).send({ error: 'forbidden' });
+      const target = await app.db.selectFrom('users').select(['role', 'totp_enabled', 'account_archived']).where('id', '=', id).executeTakeFirst();
+      if (!target || target.account_archived) return reply.code(404).send({ error: 'not_found' });
+      if ((target.role === 'admin' || target.role === 'superadmin') && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
+      if (target.totp_enabled) return reply.code(409).send({ error: 'mfa_already_enabled' });
+      const code = generateAdminEnrollCode();
+      const expiresAt = new Date(Date.now() + ADMIN_CODE_TTL_MS);
+      await app.db.updateTable('users').set({ mfa_enroll_code_hash: enrollCodeHash(deps.env.COOKIE_SECRET, id, code, 'admin'), mfa_enroll_code_expires_at: expiresAt })
+        .where('id', '=', id).execute();
+      await app.db.insertInto('global_audit_log').values({
+        id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
+        action: 'user.mfa_enroll_code_created', target_type: 'user', target_id: id, detail_json: null
+      }).execute();
+      await queueUserMail({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, id, 'Einrichtungscode fuer die Zwei-Faktor-Anmeldung erstellt',
+        'Fuer dein Konto wurde ein Einrichtungscode fuer die Zwei-Faktor-Anmeldung erstellt. Hast du keinen angefordert, melde dich bitte sofort beim Support.', 'security')
+        .catch(err => app.log.error({ err }, 'Hinweis-Mail (mfa_enroll_code) nicht eingereiht'));
+      return reply.header('Cache-Control', 'no-store').send({ code, expires_at: expiresAt.toISOString() });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -950,6 +1018,119 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   });
 
   // --- Gruppen ---
+
+  // PATCH /api/v2/groups/:id/members - Personen einer Gruppe hinzufuegen/entfernen (weitere
+  // Gruppen der Personen bleiben unberuehrt).
+  const groupMembersSchema = z.object({
+    add: z.array(z.string().trim().min(1).max(36)).max(1000).default([]),
+    remove: z.array(z.string().trim().min(1).max(36)).max(1000).default([])
+  }).strict();
+  app.patch('/api/v2/groups/:id/members', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
+      const { id } = req.params as { id: string };
+      const parsed = groupMembersSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      if (!(await app.db.selectFrom('groups').select('id').where('id', '=', id).executeTakeFirst())) return reply.code(404).send({ error: 'not_found' });
+      const add = [...new Set(parsed.data.add)];
+      const remove = [...new Set(parsed.data.remove)].filter(userId => !add.includes(userId));
+      if (add.length) {
+        const known = await app.db.selectFrom('users').select('id').where('id', 'in', add).execute();
+        if (known.length !== add.length) return reply.code(400).send({ error: 'invalid_user' });
+        const present = new Set((await app.db.selectFrom('user_groups').select('user_id').where('group_id', '=', id).where('user_id', 'in', add).execute()).map(row => row.user_id));
+        const missing = add.filter(userId => !present.has(userId));
+        if (missing.length) await app.db.insertInto('user_groups').values(missing.map(user_id => ({ user_id, group_id: id }))).execute();
+      }
+      if (remove.length) await app.db.deleteFrom('user_groups').where('group_id', '=', id).where('user_id', 'in', remove).execute();
+      await app.db.insertInto('global_audit_log').values({
+        id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
+        action: 'group.members_updated', target_type: 'group', target_id: id, detail_json: JSON.stringify({ added: add.length, removed: remove.length })
+      }).execute();
+      return reply.send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // --- Profilbild: Vorlage waehlen oder eigenes Bild hochladen (nur fuer das eigene Konto) ---
+  const avatarCtx = (userId: string, keyVersion: number) => ({
+    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+    tableName: 'users', recordId: userId, fieldName: 'avatar_image', keyVersion
+  });
+
+  // Eigenes Bild einer Person -- fuer alle angemeldeten Konten (wie Name im Personenverzeichnis).
+  // Ausgeliefert wird nur, was die Pruefung beim Hochladen bestanden hat, mit festem Bildtyp und
+  // ohne Ausfuehrungskontext (CSP sandbox, nosniff).
+  app.get('/api/v2/users/:id/avatar', async (req, reply) => {
+    try {
+      requireSession(req);
+      const { id } = req.params as { id: string };
+      const row = await app.db.selectFrom('users').select(['avatar_image_enc', 'avatar_mime']).where('id', '=', id).executeTakeFirst();
+      if (!row?.avatar_image_enc || !row.avatar_mime) return reply.code(404).send({ error: 'not_found' });
+      const dek = await ensureDek(app.db, deps.keyProvider, 'users.avatar_image');
+      const image = Buffer.from(fieldCipher.decryptField(row.avatar_image_enc, dek.rawDek, avatarCtx(id, dek.keyVersion)), 'base64');
+      const info = inspectAvatarImage(image);
+      if (!info) return reply.code(404).send({ error: 'not_found' });
+      return reply
+        .header('content-type', info.mime)
+        .header('cache-control', 'private, max-age=86400')
+        .header('x-content-type-options', 'nosniff')
+        .header('content-security-policy', "default-src 'none'; sandbox")
+        .header('content-disposition', 'inline; filename="avatar"')
+        .send(image);
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.put('/api/v2/users/me/avatar', async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      const parsed = z.object({ preset: z.number().int().min(1).max(AVATAR_PRESET_COUNT).nullable() }).strict().safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      await app.db.updateTable('users').set({
+        avatar_preset: parsed.data.preset, avatar_image_enc: null, avatar_mime: null, avatar_updated_at: mysqlTimestamp()
+      }).where('id', '=', session.uid).execute();
+      return reply.send({ avatar: avatarDescriptor({ avatar_preset: parsed.data.preset }) });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.post('/api/v2/users/me/avatar/image', {
+    bodyLimit: 512 * 1024,
+    config: { rateLimit: { max: 20, timeWindow: '1 hour', keyGenerator: req => req.ticketSession?.uid ?? req.ip } }
+  }, async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      const parsed = z.object({ data_b64: z.string().min(1).max(Math.ceil(AVATAR_MAX_BYTES / 3) * 4).regex(/^[A-Za-z0-9+/]+={0,2}$/) }).strict().safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_image' });
+      const image = Buffer.from(parsed.data.data_b64, 'base64');
+      const info = inspectAvatarImage(image);
+      if (!info) return reply.code(400).send({ error: 'invalid_image' });
+      const dek = await ensureDek(app.db, deps.keyProvider, 'users.avatar_image');
+      const updatedAt = mysqlTimestamp();
+      await app.db.updateTable('users').set({
+        avatar_preset: null, avatar_mime: info.mime, avatar_updated_at: updatedAt,
+        avatar_image_enc: fieldCipher.encryptField(image.toString('base64'), dek.rawDek, avatarCtx(session.uid, dek.keyVersion))
+      }).where('id', '=', session.uid).execute();
+      return reply.send({ avatar: avatarDescriptor({ avatar_mime: info.mime, avatar_updated_at: updatedAt }) });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.delete('/api/v2/users/me/avatar', async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      await app.db.updateTable('users').set({ avatar_preset: null, avatar_image_enc: null, avatar_mime: null, avatar_updated_at: mysqlTimestamp() })
+        .where('id', '=', session.uid).execute();
+      return reply.send({ avatar: avatarDescriptor({}) });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
 
   // GET /api/v2/groups
   app.get('/api/v2/groups', async (req, reply) => {
@@ -1307,7 +1488,6 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           email_blind_idx: emailBlindIdx,
           password_hash,
           role: rowParsed.data.role,
-          department_group_id: null,
           department: rowParsed.data.department || null,
           phone: rowParsed.data.phone ? encryptContactField(rowParsed.data.phone, contactDeks.phone, deps, newId, 'phone') : null,
           mobile: rowParsed.data.mobile ? encryptContactField(rowParsed.data.mobile, contactDeks.mobile, deps, newId, 'mobile') : null,

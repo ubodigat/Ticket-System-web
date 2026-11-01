@@ -66,14 +66,60 @@ export function insertMarkdownText(area, marker) {
     area.selectionEnd = end + marker.length;
 }
 
-// Macht die markierten Zeilen (oder einen neuen Punkt) zur Aufzaehlung bzw. nummerierten Liste.
+// Macht die markierten Zeilen zur Aufzaehlung bzw. nummerierten Liste. Ohne Markierung beginnt
+// an der Cursorposition ein leerer Listenpunkt (in einer eigenen Zeile) -- ohne Platzhaltertext.
 export function insertMarkdownList(area, numbered = false) {
     const start = area.selectionStart;
     const end = area.selectionEnd;
-    const selected = area.value.substring(start, end) || 'Punkt';
-    const listText = selected.split('\n').map((line, index) => `${numbered ? `${index + 1}.` : '-'} ${line}`).join('\n');
-    area.value = area.value.substring(0, start) + listText + area.value.substring(end);
+    const selected = area.value.substring(start, end);
+    let insert;
+    if (selected) {
+        insert = selected.split('\n').map((line, index) => `${numbered ? `${index + 1}.` : '-'} ${line}`).join('\n');
+    } else {
+        const lineStart = start === 0 || area.value[start - 1] === '\n';
+        insert = `${lineStart ? '' : '\n'}${numbered ? '1.' : '-'} `;
+    }
+    area.value = area.value.substring(0, start) + insert + area.value.substring(end);
     area.focus();
+    area.selectionStart = area.selectionEnd = start + insert.length;
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Ticketnummer-Vorlagen (gleiche Regeln wie apps/server/src/domain/ticketNumber.ts): {number}
+// genau einmal, am Ende und nicht direkt hinter einer Ziffer oder einem Baustein.
+export const TICKET_NUMBER_TOKENS = ['{prefix}', '{category}', '{year}', '{yy}', '{month}', '{day}', '{number}'];
+export function ticketNumberFormatProblem(format) {
+    const value = String(format || '');
+    if (!value.includes('{number}')) return 'missing_number';
+    if (value.split('{number}').length > 2) return 'number_twice';
+    const literal = value.replace(/\{(prefix|category|year|yy|month|day|number)\}/g, '');
+    if (/[{}]/.test(literal)) return 'unknown_token';
+    if (!/^[A-Za-z0-9 _./#-]*$/.test(literal)) return 'invalid_character';
+    if (!/(^|[^0-9}])\{number\}[^0-9{}]*$/.test(value)) return 'number_position';
+    return null;
+}
+export function ticketCategoryCode(category, custom = '') {
+    const code = String(custom || '').trim();
+    if (/^[A-Za-z0-9]{1,12}$/.test(code)) return code.toUpperCase();
+    return String(category || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toUpperCase() || 'GENERAL';
+}
+export function buildTicketNumberPreview({ format, prefix = '', padding = 5, category = null, code = '', timeZone = 'Europe/Berlin', sequence = 42 }) {
+    let parts;
+    try {
+        parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    } catch {
+        parts = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    }
+    const get = type => parts.find(part => part.type === type)?.value || '';
+    return String(format)
+        .replaceAll('{prefix}', prefix)
+        .replaceAll('{category}', ticketCategoryCode(category, code))
+        .replaceAll('{year}', get('year'))
+        .replaceAll('{yy}', get('year').slice(-2))
+        .replaceAll('{month}', get('month'))
+        .replaceAll('{day}', get('day'))
+        .replaceAll('{number}', String(sequence).padStart(Math.max(1, Math.min(12, padding)), '0'));
 }
 
 export async function insertMarkdownLink(area) {

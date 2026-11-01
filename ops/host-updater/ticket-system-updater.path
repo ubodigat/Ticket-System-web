@@ -1,0 +1,10 @@
+# Security-Audit N-3: startet den Host-Updater, sobald die App eine Anfrage ablegt.
+[Unit]
+Description=Ticket-System: Update-Anfragen der App beobachten
+
+[Path]
+DirectoryNotEmpty=/var/lib/ticket-system-update/requests
+Unit=ticket-system-updater.service
+
+[Install]
+WantedBy=multi-user.target

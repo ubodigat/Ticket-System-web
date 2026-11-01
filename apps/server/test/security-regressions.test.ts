@@ -16,11 +16,12 @@ function database(owner: string | null = 'owner') {
       const filters: any[] = [];
       const chain: any = {
         select: () => chain, selectAll: () => chain, forUpdate: () => chain,
-        orderBy: () => chain, limit: () => chain,
+        orderBy: () => chain, limit: () => chain, innerJoin: () => chain,
         where: (...args: any[]) => { filters.push(args); operations.push({ table, where: args }); return chain; },
         executeTakeFirst: async () => table === 'tickets' ? { id: filters[0]?.[2], ticket_number: '1',
           created_by_user_id: filters[0]?.[2] === 'source' ? owner : owner === null ? null : 'owner', merged_into_ticket_id: null }
-          : table === 'users' ? undefined : {},
+          : table === 'users' ? undefined
+          : table === 'app_settings' ? { config_json: JSON.stringify({ modules: { outlook: true }, outlookConfig: { externalDomains: ['partner.example'] } }) } : {},
         execute: async () => []
       }; return chain;
     },
@@ -81,13 +82,26 @@ describe('audit authorization regressions', () => {
     }
     expect((await request('user', 'PATCH', '/api/v2/recurring-rules/r1', { title: 'X' })).response.statusCode).toBe(403);
   });
-  it.each(['admin', 'superadmin'] as const)('allows external recipients past validation but still requires Outlook configuration for %s', async role => {
+  it.each(['admin', 'superadmin'] as const)('rejects invitations from the company mailbox to unknown external domains for %s', async role => {
     const result = await request(role, 'POST', '/api/v2/tickets/source/calendar-event', {
       subject: 'Spam', start_at: '2026-11-01T10:00:00Z', end_at: '2026-11-01T11:00:00Z', attendee_emails: ['outsider@example.org']
     });
+    expect(result.response.statusCode).toBe(403);
+    expect(result.response.json()).toEqual({ error: 'attendee_domain_not_allowed', domains: ['example.org'] });
+    expect(result.operations.some(op => op.values)).toBe(false);
+  });
+  it('accepts only active admin accounts as participants, since only they can read the ticket (R-28)', async () => {
+    const result = await request('admin', 'PUT' as any, '/api/v2/tickets/source/participants', { user_ids: ['ordinary-user'] });
+    expect(result.response.statusCode).toBe(400);
+    expect(result.response.json().error).toBe('invalid_participant');
+    expect(result.operations.some(op => op.table === 'ticket_participants' && op.values)).toBe(false);
+  });
+  it('lets allowlisted partner domains pass validation but still requires the Outlook configuration', async () => {
+    const result = await request('admin', 'POST', '/api/v2/tickets/source/calendar-event', {
+      subject: 'Termin', start_at: '2026-11-01T10:00:00Z', end_at: '2026-11-01T11:00:00Z', attendee_emails: ['Kontakt@Partner.example']
+    });
     expect(result.response.statusCode).toBe(409);
     expect(result.response.json().error).toBe('outlook_not_configured');
-    expect(result.operations.some(op => op.values)).toBe(false);
   });
   it.each([['GET', '/api/v2/notifications'], ['POST', '/api/v2/notifications/read-all'],
     ['POST', '/api/v2/notifications/one/read'], ['DELETE', '/api/v2/notifications/one'], ['DELETE', '/api/v2/notifications']] as const)

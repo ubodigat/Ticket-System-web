@@ -1,0 +1,24 @@
+# Security-Audit R-24: ONLYOFFICE Document Server unter einer EIGENEN Subdomain (eigene Herkunft).
+# Unter /office/ der Hauptdomain haette eine XSS-Luecke im Document Server das CSRF-Cookie lesen und
+# im Namen der angemeldeten Person API-Aufrufe ausfuehren koennen. Cookies der Hauptdomain sind ohne
+# Domain-Attribut gesetzt und deshalb fuer diese Subdomain nicht sichtbar.
+# install.sh kopiert diese Datei nach caddy-sites/ (nur mit --enable-office-viewer).
+{$OFFICE_DOMAIN} {
+	tls {$TLS_POLICY:internal}
+	encode gzip
+
+	# Verwaltungs-, Beispiel- und Diagnosepfade sowie die interne Quelle der App sind nicht oeffentlich.
+	@blocked path /info* /example* /admin* /healthcheck* /api/v2/* /internal/*
+	respond @blocked 404
+
+	reverse_proxy documentserver:80 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

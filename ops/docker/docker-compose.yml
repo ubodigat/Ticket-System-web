@@ -15,17 +15,17 @@ networks:
   office:
     driver: bridge
     internal: true
-  # Eigenes, NICHT isoliertes Netz nur für den Updater (git fetch gegen GitHub braucht
-  # Internetzugang, "internal: true" bei "internal" würde das komplett blockieren). Getrennt
-  # von "edge" gehalten, damit der Updater nicht von Caddy aus erreichbar wird.
-  egress:
+  # Security-Audit R-24: nur Caddy <-> ONLYOFFICE; Caddy ist nicht mehr im "office"-Netz
+  # (dort liegen App und Gotenberg).
+  office-edge:
     driver: bridge
+    internal: true
   # Security-Audit B7 (Virenscan): app<->clamav, isoliert wie "office".
   clamav:
     driver: bridge
     internal: true
   # Eigenes, NICHT isoliertes Netz nur für ClamAV (freshclam braucht Internetzugang für
-  # Signatur-Updates) -- getrennt von "egress"/dem Updater gehalten, gleiche Begründung wie oben.
+  # Signatur-Updates) -- getrennt von allen anderen Netzen gehalten.
   clamav-egress:
     driver: bridge
 
@@ -83,7 +83,7 @@ services:
       # Security-Audit N9: der lang laufende App-Container bekommt absichtlich NICHT mehr
       # DB_USER/DB_PASSWORD (volle DDL-Rechte) -- nur noch das eingeschraenkte Laufzeit-Konto.
       # Migrationen laufen separat ueber "docker compose run" mit DB_USER/DB_PASSWORD per -e-Flag
-      # injiziert (siehe install.sh/updater-server.mjs), nie als Teil dieser staendigen Umgebung.
+      # injiziert (siehe install.sh/ops/host-updater), nie als Teil dieser staendigen Umgebung.
       DB_RUNTIME_USER: ${DB_RUNTIME_USER}
       DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
       DB_SSL_CA_PATH: /run/secrets/mariadb-ca.pem
@@ -100,8 +100,10 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_URL:-}
       ONLYOFFICE_ENABLED: ${ONLYOFFICE_ENABLED:-false}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-}
-      UPDATE_SERVICE_URL: ${UPDATE_SERVICE_URL:-}
-      UPDATE_TOKEN: ${UPDATE_TOKEN:-}
+      # Security-Audit R-24: eigene Office-Subdomain (leer = Office-Ansicht aus).
+      ONLYOFFICE_PUBLIC_URL: ${OFFICE_PUBLIC_URL:-}
+      # Security-Audit N-3: Updates ueber den Host-Dienst ops/host-updater, kein Docker-Socket.
+      UPDATE_BRIDGE_DIR: /run/update-bridge
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       # Security-Audit B7 (Virenscan): leer = Scan deaktiviert (Rueckwaertskompatibilitaet /
       # Installationen ohne das optionale "antivirus"-Profil, siehe install.sh --enable-antivirus).
@@ -110,6 +112,9 @@ services:
     volumes:
       - ../secrets/app.kek:/run/secrets/app.kek:ro
       - ../tls/mariadb/ca.pem:/run/secrets/mariadb-ca.pem:ro
+      # Austauschverzeichnis zum Host-Updater (von install.sh angelegt): Anfragen schreiben, Status nur lesen.
+      - ${UPDATE_BRIDGE_HOST_DIR:-/var/lib/ticket-system-update}/requests:/run/update-bridge/requests
+      - ${UPDATE_BRIDGE_HOST_DIR:-/var/lib/ticket-system-update}/state:/run/update-bridge/state:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -157,53 +162,12 @@ services:
       WEBHOOK_DENY_LIST: ".*"
       LIBREOFFICE_MAX_QUEUE_SIZE: "2"
 
-  updater:
-    build:
-      context: ../..
-      dockerfile: ops/docker/Dockerfile.updater
-    restart: unless-stopped
-    profiles: ["dangerous-updater"]
-    # internal: damit "app" den Updater unter dem Namen "updater" erreicht.
-    # egress: damit "git fetch origin" GitHub erreichen kann (siehe Netz-Definition oben).
-    networks: [internal, egress]
-    environment:
-      PORT: "3099"
-      REPO_DIR: ${UPDATE_REPO_DIR:-/opt/ticket-system}
-      UPDATE_BRANCH: main
-      UPDATE_TOKEN: ${UPDATE_TOKEN}
-      # Security-Audit N9: nur fuer die kurzlebigen "docker compose run ... migrate.js"-Aufrufe
-      # nach einem Update (siehe updater-server.mjs) -- der laufende App-Container selbst bekommt
-      # diese Zugangsdaten nicht mehr. Der Updater hat ueber den gemounteten Docker-Socket ohnehin
-      # bereits vollen Host-Zugriff, das ist hier keine zusaetzliche Rechteausweitung.
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      UPDATE_ALLOW_MAIN_DEPLOY: ${UPDATE_ALLOW_MAIN_DEPLOY:-false}
-      # Signature verification cannot be disabled; keys are explicitly operator-installed.
-      UPDATE_REQUIRE_SIGNED_COMMITS: "true"
-      GNUPGHOME: /run/update-keys
-    volumes:
-      - ${UPDATE_REPO_DIR:-/opt/ticket-system}:${UPDATE_REPO_DIR:-/opt/ticket-system}
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./update-keys:/run/update-keys:ro
-      # Security-Audit N3: UPDATE_REQUIRE_SIGNED_COMMITS=true verlangt zusaetzlich einen
-      # importierten GPG-Keyring -- da ein fest einprogrammierter Mount eines nicht vorhandenen
-      # Pfads den Container-Start fuer alle anderen (Standard-)Installationen zum Scheitern
-      # bringen wuerde, wird dieser Mount NICHT hier, sondern ueber eine lokale
-      # docker-compose.override.yml ergaenzt (z.B. "- /pfad/zum/keyring:/home/node/.gnupg:ro"),
-      # siehe CHANGES.md.
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3099/health',{headers:{authorization:'Bearer '+process.env.UPDATE_TOKEN}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-
   # Optional native Office UI; isolated from the Internet and Docker socket.
   documentserver:
     image: onlyoffice/documentserver:10.0.0.1@sha256:ca17889f10b11141cc6441836aebdd2835cf3e1b49681b2fd6e155c94b7850b3
     profiles: ["office-viewer"]
     restart: unless-stopped
-    networks: [office]
+    networks: [office, office-edge]
     mem_limit: 4g
     cpus: 2
     shm_size: 1g
@@ -225,7 +189,7 @@ services:
   caddy:
     image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     restart: unless-stopped
-    networks: [edge, office]
+    networks: [edge, office-edge]
     depends_on: [app]
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:80"
@@ -234,7 +198,9 @@ services:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
       TLS_POLICY: ${TLS_POLICY:-internal}
+      OFFICE_DOMAIN: ${OFFICE_DOMAIN:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-sites:/etc/caddy/sites:ro
       - caddy-data:/data
       - caddy-config:/config

@@ -102,4 +102,24 @@ grep -Fq "Konfiguration  $ENV_FILE" "$fixture/summary.txt"
 TERM=xterm print_installation_summary > "$fixture/summary-default.txt"
 ! grep -q $'\033' "$fixture/summary-default.txt"
 sh -n "$root/ops/docker/provision-db.sh"
+# Host-Updater (Security-Audit N-3): nur gueltige Anfragen, keine Symlinks, Antwort je Anfrage.
+bash -n "$root/ops/host-updater/ticket-system-updater.sh"
+bridge="$fixture/bridge"
+mkdir -p "$bridge/requests" "$bridge/state" "$fixture/updrepo" "$fixture/keys"
+git -C "$fixture/updrepo" init -q
+printf 'REPO_DIR=%q\nBRIDGE_DIR=%q\nALLOW_MAIN_DEPLOY=false\nKEY_DIR=%q\n' "$fixture/updrepo" "$bridge" "$fixture/keys" > "$fixture/updater.conf"
+run_nonce=0123456789abcdef0123456789abcdef
+status_nonce=fedcba9876543210fedcba9876543210
+printf 'run %s %s\n' "$run_nonce" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$bridge/requests/1-a.req"
+printf 'status %s -\n' "$status_nonce" > "$bridge/requests/2-b.req"
+printf 'run %s ; rm -rf /\n' "$run_nonce" > "$bridge/requests/3-c.req"
+printf 'keep me\n' > "$fixture/outside"
+ln -s "$fixture/outside" "$bridge/requests/4-d.req"
+TICKET_SYSTEM_UPDATER_CONF="$fixture/updater.conf" bash "$root/ops/host-updater/ticket-system-updater.sh" dispatch
+grep -q "^nonce=$run_nonce$" "$bridge/state/accepted.env"
+grep -q '^result=update_runner_disabled$' "$bridge/state/accepted.env"
+grep -q "^nonce=$status_nonce$" "$bridge/state/status.env"
+grep -q '^enabled=0$' "$bridge/state/status.env"
+[[ -z "$(ls -A "$bridge/requests")" ]]
+grep -q '^keep me$' "$fixture/outside"
 echo 'Installer credential preservation, root recovery, TLS verification and failure handling: OK'

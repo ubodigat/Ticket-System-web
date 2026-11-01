@@ -21,6 +21,7 @@ import { loadSecurityPolicy, force2faAppliesToRole, type SecurityPolicy } from '
 import { isAccountExpired } from '../../domain/accountValidity.js';
 import { beginAdvancedMfa, registerPasskeyRoutes } from './passkeys.js';
 import { isSourceLocked, recordSourceFailure, clearSourceFailures, accountBackoffSecondsRemaining } from '../../domain/loginThrottle.js';
+import { secondFactorWait, noteSecondFactorFailure, clearSecondFactorFailures } from '../../domain/secondFactorThrottle.js';
 
 const PROD_SESSION_COOKIE = '__Host-ticket_session';
 const DEV_SESSION_COOKIE = 'ticket_session';
@@ -266,6 +267,7 @@ async function recordFailedLogin(app: FastifyInstance, userId: string, ip: strin
 
 async function resetFailedLogins(app: Pick<FastifyInstance, 'db'>, userId: string): Promise<void> {
   await clearSourceFailures(app.db, userId);
+  await clearSecondFactorFailures(app.db, userId);
   await app.db.updateTable('users').set({ failed_login_count: 0, failed_login_last_at: null }).where('id', '=', userId).execute();
 }
 
@@ -361,6 +363,24 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     return reply.redirect('/index.html', 302);
   });
 
+  // Security-Audit R-11: Nach 10 Fehlversuchen antworteten bisher nur existierende Konten mit 429 --
+  // daran liessen sich Benutzernamen erkennen. Unbekannte (und gesperrte) Namen bekommen jetzt einen
+  // gleichartigen Zaehler im Speicher (nur als HMAC des Namens, begrenzte Groesse) und damit dieselbe
+  // Antwortfolge wie ein echtes Konto.
+  const pseudoFailures = new Map<string, { count: number; last: number }>();
+  const pseudoKey = (name: string) => createHmac('sha256', deps.env.COOKIE_SECRET).update(`login-pseudo:${name.trim().toLowerCase()}`).digest('hex');
+  const pseudoBackoff = (name: string) => {
+    const entry = pseudoFailures.get(pseudoKey(name));
+    return entry ? accountBackoffSecondsRemaining(entry.count, new Date(entry.last)) : 0;
+  };
+  const recordPseudoFailure = (name: string) => {
+    const key = pseudoKey(name);
+    const count = (pseudoFailures.get(key)?.count ?? 0) + 1;
+    pseudoFailures.delete(key);
+    pseudoFailures.set(key, { count, last: Date.now() });
+    if (pseudoFailures.size > 20_000) pseudoFailures.delete(pseudoFailures.keys().next().value!);
+  };
+
   app.post('/api/v1/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
     try {
     if (!(await setupCompleted(app))) return authProblem(reply, 409, 'Einrichtung erforderlich', 'Die Einrichtung wurde noch nicht abgeschlossen.');
@@ -381,6 +401,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const sourceLocked = user ? await isSourceLocked(app.db, user.id, req.ip) : false;
     const lockedUntil = timestampMillis(user?.locked_until);
     if (!user || user.account_archived || user.locked_permanent || lockedUntil > Date.now() || sourceLocked || isAccountExpired(user.account_valid_until)) {
+      const pseudoSeconds = pseudoBackoff(input.username);
+      if (pseudoSeconds > 0) {
+        reply.header('retry-after', String(pseudoSeconds));
+        return authProblem(reply, 429, 'Zu viele Fehlversuche', `Bitte in ${pseudoSeconds} Sekunden erneut versuchen.`);
+      }
+      recordPseudoFailure(input.username);
       // Absichtlich dieselbe Fehlermeldung wie bei falschem Passwort (kein Account-Enumeration
       // über unterschiedliche Fehlertexte, siehe Anforderungsliste "Account Enumeration").
       if (user) {
@@ -391,7 +417,9 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         await argon2.verify(user.password_hash, input.password).catch(() => false);
       } else {
         // Gleicher Schreibaufwand wie beim gesperrten Konto oben (kein Timing-Unterschied).
-        await logSecurityEvent(app, 'login.unknown_user', input.username, req.ip);
+        // Security-Audit R-27: der eingegebene Text wird nicht gespeichert -- Personen tippen
+        // gelegentlich ihr Passwort ins Benutzerfeld.
+        await logSecurityEvent(app, 'login.unknown_user', '-', req.ip);
         // Dummy-Verify gegen Timing-basierte Enumeration unbekannter Benutzernamen (siehe oben).
         await argon2.verify(await getDummyPasswordHash(), input.password).catch(() => false);
       }
@@ -481,6 +509,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         return authProblem(reply, 429, 'Zu viele Fehlversuche', `Bitte in ${backoffSeconds} Sekunden erneut versuchen.`);
       }
 
+      // Security-Audit R-23: kontoweite Wartezeit fuer den zweiten Faktor, ohne Geraete-Ausnahme.
+      const secondFactorSeconds = await secondFactorWait(app.db, user.id);
+      if (secondFactorSeconds > 0) {
+        reply.header('retry-after', String(secondFactorSeconds));
+        return authProblem(reply, 429, 'Zu viele Fehlversuche', `Bitte in ${secondFactorSeconds} Sekunden erneut versuchen.`);
+      }
       const totpDek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
       const secret = fieldCipher.decryptField(user.totp_secret_enc, totpDek.rawDek, {
         installationId: deps.env.INSTALLATION_ID,
@@ -492,7 +526,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
       });
 
       if (!(await verifyAndConsumeTotp(app.db, user.id, secret, parsed.data.code))) {
-        await recordFailedLogin(app, user.id, req.ip, policy);
+        await noteSecondFactorFailure({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, user.id, req.ip);
         await logSecurityEvent(app, 'login.wrong_totp_code', user.username, req.ip);
         return authProblem(reply, 401, 'Code ungültig', 'Der eingegebene Code ist falsch, abgelaufen oder wurde bereits verwendet.');
       }

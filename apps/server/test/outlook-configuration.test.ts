@@ -4,13 +4,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerOutlookPersonalRoutes } from '../src/http/routes/outlookPersonal.js';
 import { createMyCalendarEvent } from '../src/domain/graphClient.js';
 
-const state = vi.hoisted(() => ({ credentials: null as any }));
+const state = vi.hoisted(() => ({ credentials: null as any, moduleOn: true }));
 vi.mock('../src/domain/graphClient.js', async original => ({ ...await original<any>(), loadOutlookAppCredentials: async () => state.credentials }));
-afterEach(() => { state.credentials = null; vi.unstubAllGlobals(); });
+afterEach(() => { state.credentials = null; state.moduleOn = true; vi.unstubAllGlobals(); });
 async function request(path: string) {
   const app = Fastify({ trustProxy: '127.0.0.1' }); await app.register(cookie, { secret: 'test-cookie-signing-secret-long-enough' });
   const q: any = { select: () => q, where: () => q, executeTakeFirst: async () => ({ outlook_connected_at: null, outlook_account_email: null }) };
-  app.decorate('db', { selectFrom: () => q } as any);
+  const settings: any = { select: () => settings, where: () => settings,
+    executeTakeFirst: async () => ({ config_json: JSON.stringify({ modules: { outlook: state.moduleOn } }) }) };
+  app.decorate('db', { selectFrom: (table: string) => table === 'app_settings' ? settings : q } as any);
   app.addHook('onRequest', async req => { req.ticketSession = { uid: 'person', username: 'person', role: 'user' }; });
   // Security-Audit R-21: redirect_uri kommt seit der Behebung ausschliesslich aus der festen
   // PUBLIC_BASE_URL-Konfiguration, nicht mehr aus Host/X-Forwarded-Host der Anfrage -- ein
@@ -25,6 +27,15 @@ describe('personal Outlook setup and external invitations', () => {
     const response = await request('/api/v2/outlook/status');
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ configured: false, reason: 'app_not_configured', connected: false, accountEmail: null });
+  });
+  it('is not available while the Outlook module is switched off', async () => {
+    state.moduleOn = false;
+    state.credentials = { tenantId: 'tenant', clientId: 'client', clientSecret: 'private-secret' };
+    for (const path of ['/api/v2/outlook/status', '/api/v2/outlook/connect', '/api/v2/outlook/calendar?from=a&to=b']) {
+      const response = await request(path);
+      expect(response.statusCode).toBe(403);
+      expect(response.json().error).toBe('module_disabled');
+    }
   });
   it('derives redirect_uri from PUBLIC_BASE_URL (not the request host) and constrains OAuth return paths', async () => {
     state.credentials = { tenantId: 'tenant', clientId: 'client', clientSecret: 'private-secret' };

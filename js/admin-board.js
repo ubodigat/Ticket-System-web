@@ -16,7 +16,8 @@ import { renderPdfPreview } from './pdf-preview.js';
 import { UserDash } from './user-dash.js';
 import { WorkTimer } from './work-timer.js';
 import { KbSearch } from './kb-search.js';
-import { getStatusColorClass, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable } from './ticket-helpers.js';
+import { getStatusColorClass, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable, insertMarkdownList,
+    TICKET_NUMBER_TOKENS, ticketNumberFormatProblem, ticketCategoryCode, buildTicketNumberPreview } from './ticket-helpers.js';
 
 // Fragezeichen-Icon neben einem Einstellungs-Label: nutzt UI.initTooltips() (title-Attribut
 // wird app-weit automatisch durch die gestylte Tooltip-Box ersetzt) für eine Kurzerklärung,
@@ -560,23 +561,9 @@ export const AdminBoard = {
             if (noteInput) {
                 q(`#${prefix}-bold`).onclick = () => insertMarkdown(noteInput, '**');
                 q(`#${prefix}-italic`).onclick = () => insertMarkdown(noteInput, '*');
-                q(`#${prefix}-list`).onclick = () => {
-                    const start = noteInput.selectionStart;
-                    const end = noteInput.selectionEnd;
-                    const selected = noteInput.value.substring(start, end) || 'Punkt';
-                    const listText = selected.split('\n').map(line => `- ${line}`).join('\n');
-                    noteInput.value = noteInput.value.substring(0, start) + listText + noteInput.value.substring(end);
-                    noteInput.focus();
-                };
+                q(`#${prefix}-list`).onclick = () => insertMarkdownList(noteInput);
                 const numberedListButton = q(`#${prefix}-numbered`);
-                if (numberedListButton) numberedListButton.onclick = () => {
-                    const start = noteInput.selectionStart;
-                    const end = noteInput.selectionEnd;
-                    const selected = noteInput.value.substring(start, end) || 'Punkt';
-                    const listText = selected.split('\n').map((line, index) => `${index + 1}. ${line}`).join('\n');
-                    noteInput.value = noteInput.value.substring(0, start) + listText + noteInput.value.substring(end);
-                    noteInput.focus();
-                };
+                if (numberedListButton) numberedListButton.onclick = () => insertMarkdownList(noteInput, true);
                 const tableButton = q(`#${prefix}-table`);
                 if (tableButton) tableButton.onclick = () => insertMarkdownTable(noteInput);
                 UI.bindListContinuation(noteInput);
@@ -1234,6 +1221,7 @@ export const AdminBoard = {
                 </div>
                 <div class="user-manager-actions">
                     ${(isSuper || canManage2FA) && u.twoFactorEnabled ? `<button class="btn-ghost btn-sm reset-2fa" title="${Lang.t('reset2FA')}">${Icon('unlock-keyhole', 15)}2FA</button>` : ''}
+                    ${(isSuper || (canManage2FA && u.role === 'user')) && !u.twoFactorEnabled && !u.accountArchived && u.id !== currentUser?.id ? `<button class="btn-ghost btn-icon enroll-2fa" title="${Lang.t('mfaEnrollCodeCreate')}" aria-label="${Lang.t('mfaEnrollCodeCreate')}">${Icon('key-round', 16)}</button>` : ''}
                     ${canManageUsers && u.username !== 'admin' && !u.accountArchived ? `<button class="btn-ghost btn-icon lock-u" title="${u.accountLocked ? Lang.t('unlock') : Lang.t('lock')}" aria-label="${u.accountLocked ? Lang.t('unlock') : Lang.t('lock')}">${Icon(u.accountLocked ? 'lock-open' : 'lock', 16)}</button>` : ''}
                     ${canManageUsers && u.username !== 'admin' ? `<button class="btn-ghost btn-icon archive-u" title="${u.accountArchived ? Lang.t('reactivate') : Lang.t('archiveAction')}" aria-label="${u.accountArchived ? Lang.t('reactivate') : Lang.t('archiveAction')}">${Icon(u.accountArchived ? 'archive-restore' : 'archive', 16)}</button>` : ''}
                     ${view === 'admins' && canManageUsers ? `<button class="btn-ghost btn-icon absence-btn" title="${Lang.t('absenceAndSubstitute')}" aria-label="${Lang.t('absenceAndSubstitute')}">${Icon('plane', 16)}</button>` : ''}
@@ -1275,6 +1263,23 @@ export const AdminBoard = {
                     AdminBoard.renderUserManager(view);
                 });
             };
+
+            const enrollBtn = el.querySelector('.enroll-2fa');
+            if (enrollBtn) enrollBtn.onclick = () => UI.confirm(Lang.format('mfaEnrollCodeConfirm', { username: u.username }), async () => {
+                const res = await fetch(`/api/v2/users/${encodeURIComponent(u.id)}/mfa-enroll-code`, { method: 'POST', credentials: 'same-origin' }).catch(() => null);
+                const payload = await res?.json().catch(() => ({})) || {};
+                if (!res || !res.ok || !payload.code) return UI.toast(Lang.t('mfaEnrollCodeFailed'));
+                const modal = AdminBoard.openDialog({
+                    id: 'mfa-enroll-code-modal',
+                    title: Lang.t('mfaEnrollCodeTitle'),
+                    icon: 'key-round',
+                    size: 'sm',
+                    body: `<p>${Utils.esc(Lang.format('mfaEnrollCodeIntro', { username: u.username, date: Utils.fmtDate(payload.expires_at) }))}</p>
+                        <div class="code-copy"><pre class="update-guide-code backup-hash"><code>${Utils.esc(payload.code)}</code></pre>${AdminBoard.copyButton()}</div>
+                        <p class="hint">${Lang.t('mfaEnrollCodeHint')}</p>`
+                });
+                modal.addEventListener('click', AdminBoard.handleCopyClick);
+            });
 
             if (el.querySelector('.reset-2fa')) {
                 el.querySelector('.reset-2fa').onclick = () => {
@@ -1500,7 +1505,8 @@ export const AdminBoard = {
                 </div>`).join('') : `<div class="empty-state compact">${Lang.t('noMembers')}</div>`;
             modal.querySelectorAll('.gm-remove').forEach(btn => btn.onclick = async () => {
                 const username = btn.closest('[data-username]').dataset.username;
-                await Store.setGroupMembers([username], null);
+                const member = users.find(u => u.username === username);
+                if (!member || !(await Store.updateGroupMembers(group.id, { remove: [member.id] }))) return UI.toast(Lang.t('groupMembersSaveFailed'));
                 await render();
                 AdminBoard.renderUserManager('groups');
             });
@@ -1520,13 +1526,13 @@ export const AdminBoard = {
                 onSave: async (m) => {
                     const chosen = picker.getValue();
                     if (!chosen.length) return UI.toast(Lang.t('selectAtLeastOnePerson'));
-                    await Store.setGroupMembers(chosen, group.id);
+                    if (!(await Store.updateGroupMembers(group.id, { add: chosen }))) return UI.toast(Lang.t('groupMembersSaveFailed'));
                     m.remove();
                     await render();
                     AdminBoard.renderUserManager('groups');
                 }
             });
-            const picker = UI.createMultiSelect(addModal.querySelector('#gma-picker'), candidates.map(u => ({ value: u.username, label: u.name || u.username })), []);
+            const picker = UI.createMultiSelect(addModal.querySelector('#gma-picker'), candidates.map(u => ({ value: u.id, label: u.name || u.username })), []);
         };
         modal.querySelector('#gm-print').onclick = async () => {
             const settings = await Store.getSettings();
@@ -1534,21 +1540,35 @@ export const AdminBoard = {
             const companyLogo = company.logoUrl || settings.companyBrandingConfig?.logoDataUrl || '';
             const actor = await Store.currentUser();
             const users = await Store.getUsers();
-            const members = users.filter(u => (group.members || []).includes(u.username));
-            UI.printHTML(`<!DOCTYPE html><html lang="${Lang.current}"><head><meta charset="UTF-8"><title>${Lang.format('membersOfGroup', { name: Utils.esc(group.name) })}</title>
+            // Gruppe mit vollem Pfad ("IT › Netzwerk") und ihren Untergruppen jeweils als eigener Abschnitt.
+            const groups = await Store.getGroups();
+            const current = groups.find(g => g.id === group.id) || group;
+            const sections = [current, ...groups.filter(g => (current.descendantIds || []).includes(g.id))].map(g => ({
+                group: g,
+                depth: Math.max(0, (g.depth || 0) - (current.depth || 0)),
+                members: users.filter(u => (u.groupIds || []).includes(g.id))
+            }));
+            const memberCount = new Set(sections.flatMap(section => section.members.map(u => u.id))).size;
+            const table = members => members.length
+                ? `<table><thead><tr><th>${Lang.t('name')}</th><th>${Lang.t('username')}</th><th>${Lang.t('email')}</th><th>${Lang.t('role')}</th></tr></thead><tbody>
+                    ${members.map(u => `<tr><td>${Utils.esc(u.name || '-')}</td><td>${Utils.esc(u.username)}</td><td>${Utils.esc(u.email || '-')}</td><td>${Utils.esc(u.role)}</td></tr>`).join('')}
+                    </tbody></table>`
+                : `<p class="meta">${Lang.t('noMembers')}</p>`;
+            UI.printHTML(`<!DOCTYPE html><html lang="${Lang.current}"><head><meta charset="UTF-8"><title>${Lang.format('membersOfGroup', { name: Utils.esc(current.label || current.name) })}</title>
                 <link rel="stylesheet" href="/js/print.css"></head>
-                <body><div class="print-head"><div><h1>${Lang.format('companyGroupHeading', { company: Utils.esc(company.name || 'Support Portal'), group: Utils.esc(group.name) })}</h1>
-                <div class="meta">${Lang.format('membersPrintedByOn', { count: members.length, name: Utils.esc(actor?.name || actor?.username || '-'), date: Utils.esc(Utils.fmtDate(new Date().toISOString())) })}</div></div>
+                <body><div class="print-head"><div><h1>${Lang.format('companyGroupHeading', { company: Utils.esc(company.name || 'Support Portal'), group: Utils.esc(current.label || current.name) })}</h1>
+                <div class="meta">${Lang.format('membersPrintedByOn', { count: memberCount, name: Utils.esc(actor?.name || actor?.username || '-'), date: Utils.esc(Utils.fmtDate(new Date().toISOString())) })}</div></div>
                 ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}</div>
-                <table><thead><tr><th>${Lang.t('name')}</th><th>${Lang.t('username')}</th><th>${Lang.t('email')}</th><th>${Lang.t('role')}</th></tr></thead><tbody>
-                ${members.map(u => `<tr><td>${Utils.esc(u.name || '-')}</td><td>${Utils.esc(u.username)}</td><td>${Utils.esc(u.email || '-')}</td><td>${Utils.esc(u.role)}</td></tr>`).join('')}
-                </tbody></table></body></html>`);
+                ${sections.map((section, index) => `<section class="print-group" style="margin-left:${section.depth * 18}px">
+                    ${index || sections.length > 1 ? `<h2>${section.depth ? '↳ ' : ''}${Utils.esc(section.group.label || section.group.name)} <small>(${section.members.length})</small></h2>` : ''}
+                    ${table(section.members)}</section>`).join('')}
+                </body></html>`);
         };
         await render();
     },
 
-    // Eine Person gehört höchstens einer Gruppe an (department_group_id im Backend) -- Auswahl
-    // hier entfernt eine Person automatisch aus ihrer bisherigen Gruppe.
+    // Eine Person kann mehreren Gruppen angehoeren -- hier werden nur Mitglieder dieser Gruppe
+    // hinzugefuegt oder entfernt, weitere Gruppen der Personen bleiben unveraendert.
     openEditGroupModal: async (group) => {
         const modal = q('#generic-modal') || AdminBoard.createGenericModal();
         const title = modal.querySelector('h3');
@@ -1608,9 +1628,10 @@ export const AdminBoard = {
                 groupId = (await createRes.json()).id;
             }
 
-            const removedMembers = members.filter(m => !selectedMembers.includes(m));
-            if (removedMembers.length) await Store.setGroupMembers(removedMembers, null);
-            if (selectedMembers.length) await Store.setGroupMembers(selectedMembers, groupId);
+            const idOf = username => users.find(u => u.username === username)?.id;
+            const add = selectedMembers.filter(m => !members.includes(m)).map(idOf).filter(Boolean);
+            const remove = members.filter(m => !selectedMembers.includes(m)).map(idOf).filter(Boolean);
+            if ((add.length || remove.length) && !(await Store.updateGroupMembers(groupId, { add, remove }))) return UI.toast(Lang.t('groupMembersSaveFailed'));
 
             modal.classList.remove('open');
             AdminBoard.renderUserManager('groups');
@@ -1657,7 +1678,7 @@ export const AdminBoard = {
                             <div class="hint">${Lang.t('ldapHintText')}</div>
                         </div>
                         <div class="field field-wide" id="ue-groups-box">
-                            <label>${Lang.t('group')}</label>
+                            <label>${Lang.t('userGroupsLabel')}</label>
                             <div id="ue-groups-list"></div>
                         </div>
                         <div class="field field-wide">
@@ -1785,12 +1806,12 @@ export const AdminBoard = {
         updateManBoxVisibility();
         updateLdapBoxVisibility();
 
-        // Gruppe: höchstens eine pro Person (department_group_id im Backend)
+        // Gruppen: eine Person kann beliebig vielen Gruppen angehoeren.
         const groupList = q('#ue-groups-list');
         let groupPicker = null;
         if (groupList) {
             const groups = await Store.getGroups();
-            groupPicker = UI.createMultiSelect(groupList, groups.map(g => ({ value: g.id, label: g.label || g.name })), user?.department_group_id || '', null, { single: true, emptyLabel: Lang.t('none') });
+            groupPicker = UI.createMultiSelect(groupList, groups.map(g => ({ value: g.id, label: g.label || g.name })), user?.groupIds || [], null, { emptyLabel: Lang.t('none') });
         }
         // Vorgesetzte Person -- genutzt vom automatischen Genehmigungsworkflow (Systemeinstellungen).
         const supervisorBox = q('#ue-supervisor');
@@ -1820,7 +1841,7 @@ export const AdminBoard = {
             }
             const validityVal = validityParts ? `${validityParts[3]}-${validityParts[2]}-${validityParts[1]}` : null;
             const rVal = q('#ue-role').value;
-            const groupVal = groupPicker?.getValue() || null;
+            const groupVal = groupPicker?.getValue() || [];
             const supervisorVal = supervisorPicker?.getValue() || null;
             const permissionsVal = rVal === 'admin' ? {
                 ...Object.fromEntries([...editModal.querySelectorAll('#ue-man-box [data-perm]')].map(b => [b.dataset.perm, b.checked])),
@@ -1867,7 +1888,7 @@ export const AdminBoard = {
                     email: eVal,
                     password: pVal,
                     role: rVal,
-                    department_group_id: groupVal,
+                    groupIds: groupVal,
                     supervisorUserId: supervisorVal,
                     phone: phoneVal,
                     mobile: mobileVal,
@@ -1891,7 +1912,7 @@ export const AdminBoard = {
                         target.canViewLogs = canViewLogsVal;
                         target.canManage2FA = canManage2FAVal;
                     }
-                    target.department_group_id = groupVal;
+                    target.groupIds = groupVal;
                     target.supervisorUserId = supervisorVal;
                     target.phone = phoneVal;
                     target.mobile = mobileVal;
@@ -2001,7 +2022,7 @@ export const AdminBoard = {
     // Übersichtlicher Fortschritt statt nur "Schritt: build" als Text -- ein docker build
     // --no-cache kann mehrere Minuten dauern, ohne sichtbaren Fortschritt wirkt das wie ein
     // Haenger. job.step bleibt auch nach einem Fehler auf dem Namen des zuletzt gestarteten
-    // Schritts stehen (updater-server.mjs), job.failed zeigt den Fehlschlag separat an.
+    // Schritts stehen (ops/host-updater), job.failed zeigt den Fehlschlag separat an.
     updateSteps: [
         { key: 'fetch', get label() { return Lang.t('stepFetch'); } },
         { key: 'reset', get label() { return Lang.t('stepUpdate'); } },
@@ -2105,6 +2126,199 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    // Vorschau je Ticketnummer-Vorlage (mit Beispielnummer 42) und Pruefung aller Vorlagen,
+    // Kuerzel und des Praefix. Liefert das erste Problem ({ input, message }) oder null.
+    renderTicketNumberPreviews: (modal) => {
+        const prefixInput = modal.querySelector('#sys-ticket-number-prefix');
+        const prefix = prefixInput.value.trim();
+        const padding = Math.max(1, Math.min(12, parseInt(modal.querySelector('#sys-ticket-number-padding').value, 10) || 5));
+        const timeZone = modal.querySelector('#sys-company-timezone')?.value || 'Europe/Berlin';
+        const defaultInput = modal.querySelector('#sys-ticket-number-format');
+        const defaultFormat = defaultInput.value.trim() || (prefix ? '{prefix}-{number}' : '{number}');
+        let firstIssue = null;
+        const flag = (input, message) => {
+            input.classList.toggle('is-invalid', !!message);
+            if (message) input.setAttribute('aria-invalid', 'true'); else input.removeAttribute('aria-invalid');
+            if (message && !firstIssue) firstIssue = { input, message };
+        };
+        flag(prefixInput, /^[A-Za-z0-9_.-]*$/.test(prefix) ? null : Lang.t('ticketPrefixInvalid'));
+        const codes = {};
+        modal.querySelectorAll('[data-ticket-code]').forEach(input => {
+            const code = input.value.trim();
+            flag(input, !code || /^[A-Za-z0-9]{1,12}$/.test(code) ? null : Lang.t('ticketCodeInvalid'));
+            codes[input.dataset.ticketCode] = code;
+        });
+        modal.querySelectorAll('[data-ticket-format]').forEach(input => {
+            const category = input.dataset.ticketCategory || null;
+            const own = input.value.trim();
+            const format = own || defaultFormat;
+            const preview = modal.querySelector(`[data-preview-for="${input.id}"]`);
+            const problem = own || !category ? ticketNumberFormatProblem(format) : null;
+            const example = problem ? '' : buildTicketNumberPreview({ format, prefix, padding, category, code: category ? codes[category] : '', timeZone });
+            const longest = problem ? '' : buildTicketNumberPreview({ format, prefix, padding, category, code: category ? codes[category] : '', timeZone, sequence: Number('9'.repeat(Math.max(6, padding))) });
+            const message = problem ? Lang.t(`ticketFormat_${problem}`) : longest.length > 32 ? Lang.format('ticketNumberTooLongHint', { max: 32 }) : null;
+            flag(input, message);
+            if (preview) {
+                preview.classList.toggle('is-invalid', !!message);
+                preview.textContent = message || Lang.format(own || !category ? 'ticketNumberPreview' : 'ticketNumberPreviewDefault', { example });
+            }
+        });
+        return firstIssue;
+    },
+
+    // Verstaendliche Meldung zu einer abgelehnten Speicherung der Systemeinstellungen.
+    settingsSaveErrorMessage: (raw) => {
+        let error = {};
+        try { error = JSON.parse(raw || '{}'); } catch { error = {}; }
+        if (error.error === 'ticket_number_too_long') return Lang.format('ticketNumberTooLong', { example: error.example || '', max: error.max || 32 });
+        if (error.error === 'padding_too_low') return Lang.format('ticketPaddingTooLow', { min: error.minRequired || '' });
+        if (error.details?.fieldErrors?.outlookConfig) return Lang.t('outlookExternalDomainsInvalid');
+        const fields = error.details?.fieldErrors || {};
+        const ticketField = ['ticketNumberFormat', 'ticketNumberCategoryFormats', 'ticketNumberCategoryCodes'].find(key => fields[key]);
+        if (ticketField) {
+            const code = String(fields[ticketField][0] || '');
+            return Lang.t(code === 'invalid_code' ? 'ticketCodeInvalid' : code === 'invalid_prefix' ? 'ticketPrefixInvalid' : `ticketFormat_${code}`) || Lang.t('systemSettingsSaveFailed');
+        }
+        return Lang.t('systemSettingsSaveFailed');
+    },
+
+    // Freigegebene Partnerdomains fuer Outlook-Einladungen (eine pro Zeile, ohne "@").
+    outlookDomainList: () => [...new Set((q('#sys-outlook-domains')?.value || '').split(/[\s,;]+/)
+        .map(domain => domain.trim().toLowerCase().replace(/^@/, '')).filter(Boolean))],
+
+    // Klick auf ein Kopier-Symbol (.code-copy-btn) innerhalb eines .code-copy-Blocks.
+    handleCopyClick: async (event) => {
+        const button = event.target.closest('.code-copy-btn');
+        if (!button) return;
+        const text = button.closest('.code-copy')?.querySelector('code')?.textContent || '';
+        if (!text || !(await UI.copyText(text))) return UI.toast(Lang.t('copyFailed'));
+        UI.toast(Lang.t('copiedToClipboard'));
+        button.classList.add('is-copied');
+        button.innerHTML = Icon('check', 14);
+        setTimeout(() => { button.classList.remove('is-copied'); button.innerHTML = Icon('copy', 14); if (window.lucide) lucide.createIcons(); }, 1500);
+        if (window.lucide) lucide.createIcons();
+    },
+
+    // --- 9. Datenbank-Sicherung (nur Superadmin; alle Pruefungen erzwingt der Server) ---
+    backupErrorMessage: (code) => Lang.t({
+        wrong_password: 'wrongPassword', invalid_totp_code: 'invalidMfaCode', totp_code_required: 'backupTotpRequired',
+        step_up_required: 'backupTotpRequired', mfa_required: 'backupMfaRequired', passphrase_too_short: 'backupPassphraseTooShort',
+        backup_hash_mismatch: 'backupHashMismatch', backup_installation_mismatch: 'backupInstallationMismatch',
+        backup_schema_mismatch: 'backupSchemaMismatch', backup_decrypt_failed: 'backupDecryptFailed', backup_invalid_file: 'backupInvalidFile',
+        backup_invalid_content: 'backupInvalidFile', backup_too_large: 'backupTooLarge', backup_busy: 'backupBusy',
+        backup_upload_missing: 'backupUploadMissing', confirmation_required: 'backupConfirmationRequired', rate_limited: 'backupRateLimited'
+    }[code] || 'backupFailed'),
+
+    openBackupCreate: () => {
+        const modal = AdminBoard.openDialog({
+            id: 'backup-create-modal',
+            title: Lang.t('backupCreateTitle'),
+            icon: 'database-backup',
+            size: 'sm',
+            body: `
+                <p class="hint">${Lang.t('backupCreateIntro')}</p>
+                <div class="field"><label for="bk-pass">${Lang.t('backupPassphrase')}</label><input id="bk-pass" type="password" autocomplete="new-password" minlength="16" maxlength="1024"><p class="hint">${Lang.t('backupPassphraseHint')}</p></div>
+                <div class="field"><label for="bk-pass2">${Lang.t('backupPassphraseRepeat')}</label><input id="bk-pass2" type="password" autocomplete="new-password" maxlength="1024"></div>
+                <div class="field"><label for="bk-pw">${Lang.t('yourCurrentPassword')}</label><input id="bk-pw" type="password" autocomplete="current-password"></div>
+                <div class="field"><label for="bk-totp">${Lang.t('backupTotpLabel')}</label><input id="bk-totp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"></div>
+                <div class="button-row backup-actions"><button type="button" class="btn-primary" id="bk-go">${Icon('download', 15)}${Lang.t('backupCreateButton')}</button></div>
+                <p class="hint" id="bk-status" role="status"></p>`
+        });
+        modal.querySelector('#bk-go').onclick = async () => {
+            const passphrase = modal.querySelector('#bk-pass').value;
+            if (passphrase.length < 16) return UI.toast(Lang.t('backupPassphraseTooShort'));
+            if (passphrase !== modal.querySelector('#bk-pass2').value) return UI.toast(Lang.t('backupPassphraseMismatch'));
+            const password = modal.querySelector('#bk-pw').value;
+            if (!password) return UI.toast(Lang.t('passwordRequired'));
+            const button = modal.querySelector('#bk-go');
+            button.disabled = true;
+            modal.querySelector('#bk-status').textContent = Lang.t('backupCreating');
+            const result = await Store.createBackup({ passphrase, password, totp_code: modal.querySelector('#bk-totp').value.trim() || undefined });
+            button.disabled = false;
+            modal.querySelector('#bk-status').textContent = '';
+            if (result.error) return UI.toast(AdminBoard.backupErrorMessage(result.error));
+            const url = URL.createObjectURL(result.blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = result.name;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 30000);
+            modal.remove();
+            AdminBoard.showBackupHash(result.hash, result.name);
+        };
+        modal.querySelector('#bk-pass').focus();
+    },
+
+    showBackupHash: (hash, name) => {
+        const modal = AdminBoard.openDialog({
+            id: 'backup-hash-modal',
+            title: Lang.t('backupCreatedTitle'),
+            icon: 'shield-check',
+            size: 'sm',
+            body: `
+                <div class="callout callout-info">${Utils.esc(Lang.format('backupCreatedIntro', { name }))}</div>
+                <label class="backup-hash-label">${Lang.t('backupHashLabel')}</label>
+                <div class="code-copy"><pre class="update-guide-code backup-hash"><code>${Utils.esc(hash)}</code></pre>${AdminBoard.copyButton()}</div>
+                <p class="hint">${Lang.t('backupHashHint')}</p>`
+        });
+        modal.addEventListener('click', AdminBoard.handleCopyClick);
+    },
+
+    openBackupRestore: () => {
+        const modal = AdminBoard.openDialog({
+            id: 'backup-restore-modal',
+            title: Lang.t('backupRestoreTitle'),
+            icon: 'database-zap',
+            size: 'md',
+            body: `
+                <div class="callout callout-danger">${Lang.t('backupRestoreWarning')}</div>
+                <div class="field"><label for="br-file">${Lang.t('backupFile')}</label><input id="br-file" type="file" accept=".tsbackup,application/octet-stream"></div>
+                <div class="field"><label for="br-hash">${Lang.t('backupHashLabel')}</label><input id="br-hash" type="text" class="mono" spellcheck="false" autocomplete="off" placeholder="${Lang.t('backupHashPlaceholder')}"><p class="hint">${Lang.t('backupHashRestoreHint')}</p></div>
+                <div class="field"><label for="br-pass">${Lang.t('backupPassphrase')}</label><input id="br-pass" type="password" autocomplete="off" maxlength="1024"></div>
+                <div class="field"><label for="br-pw">${Lang.t('yourCurrentPassword')}</label><input id="br-pw" type="password" autocomplete="current-password"></div>
+                <div class="field"><label for="br-totp">${Lang.t('backupTotpLabel')}</label><input id="br-totp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"></div>
+                <div class="field"><label for="br-confirm">${Lang.format('backupConfirmLabel', { word: 'WIEDERHERSTELLEN' })}</label><input id="br-confirm" type="text" autocomplete="off" spellcheck="false"></div>
+                <div class="button-row backup-actions"><button type="button" class="btn-danger" id="br-go">${Icon('database-zap', 15)}${Lang.t('backupRestoreButton')}</button></div>
+                <p class="hint" id="br-status" role="status"></p>`
+        });
+        modal.querySelector('#br-go').onclick = async () => {
+            const file = modal.querySelector('#br-file').files[0];
+            if (!file) return UI.toast(Lang.t('backupChooseFile'));
+            const sha256 = modal.querySelector('#br-hash').value.replace(/[\s:-]/g, '').toLowerCase();
+            if (!/^[0-9a-f]{64}$/.test(sha256)) return UI.toast(Lang.t('backupHashFormat'));
+            const passphrase = modal.querySelector('#br-pass').value;
+            if (passphrase.length < 16) return UI.toast(Lang.t('backupPassphraseTooShort'));
+            const password = modal.querySelector('#br-pw').value;
+            if (!password) return UI.toast(Lang.t('passwordRequired'));
+            const confirm = modal.querySelector('#br-confirm').value.trim();
+            if (confirm !== 'WIEDERHERSTELLEN') return UI.toast(Lang.t('backupConfirmationRequired'));
+            const button = modal.querySelector('#br-go');
+            const status = modal.querySelector('#br-status');
+            button.disabled = true;
+            status.textContent = Lang.t('backupUploading');
+            const upload = await Store.uploadBackup(file);
+            if (upload.error) {
+                button.disabled = false;
+                status.textContent = '';
+                return UI.toast(AdminBoard.backupErrorMessage(upload.error));
+            }
+            status.textContent = Lang.t('backupRestoring');
+            const result = await Store.restoreBackup({ sha256, passphrase, password, totp_code: modal.querySelector('#br-totp').value.trim() || undefined, confirm });
+            if (result.error) {
+                await Store.discardBackupUpload();
+                button.disabled = false;
+                status.textContent = '';
+                return UI.toast(AdminBoard.backupErrorMessage(result.error));
+            }
+            // Alle Sitzungen wurden serverseitig beendet -- zur Anmeldung.
+            status.textContent = Lang.format('backupRestored', { rows: result.rows ?? '–' });
+            UI.toast(Lang.t('backupRestoredToast'));
+            setTimeout(() => { window.location.href = '/'; }, 4000);
+        };
+    },
+
     // Kopier-Symbol fuer Codebloecke/Kennungen; ausgewertet per Delegation in openSystemSettings.
     copyButton: () => `<button type="button" class="btn-ghost btn-icon btn-xs code-copy-btn" title="${Utils.esc(Lang.t('copyToClipboard'))}" aria-label="${Utils.esc(Lang.t('copyToClipboard'))}">${Icon('copy', 14)}</button>`,
 
@@ -2129,7 +2343,7 @@ export const AdminBoard = {
                 ${step('updateGuideEnableStep5')}
             </ol>
             ${p('updateGuideSigningNote')}
-            ${code('git config --global user.signingkey <KEY-ID>\ngit config --global commit.gpgsign true\ngpg --armor --export <KEY-ID> > release-signing-key.asc')}
+            ${code('git config --global user.signingkey <KEY-ID>\ngit config --global commit.gpgsign true\ngpg --armor --export <KEY-ID> > release-signing-key.asc\n# alternativ je Release ein signierter Tag:\ngit tag -s v1.2.3 -m "Release 1.2.3"\ngit push origin v1.2.3')}
             ${p('updateGuideGithubCommitsNote')}
             ${title('updateGuideDisableTitle')}
             ${p('updateGuideDisableText')}
@@ -2241,7 +2455,7 @@ export const AdminBoard = {
             area.insertAdjacentHTML('beforeend', `<div class="callout callout-info">${Lang.t('noNewCommitButFailedRun')}</div>`);
         }
         // Rollback-Button: nur sichtbar, wenn der Updater einen Commit von vor dem letzten
-        // erfolgreichen Update kennt (siehe updater-server.mjs runUpdate -> writeHistory).
+        // erfolgreichen Update kennt (siehe ops/host-updater, run_update).
         if (status.rollbackAvailable && !job?.running) {
             area.insertAdjacentHTML('beforeend', `
                 <div class="setting-row">
@@ -2304,7 +2518,7 @@ export const AdminBoard = {
                         <button class="tab-btn" data-tab="sys-ldap">
                             <i data-lucide="server"></i><span>LDAP</span>
                         </button>
-                        <button class="tab-btn" data-tab="sys-outlook">
+                        <button class="tab-btn" data-tab="sys-outlook" data-module="outlook">
                             <i data-lucide="mail-check"></i><span>${Lang.t('outlookSetupTab')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-company">
@@ -2391,7 +2605,7 @@ export const AdminBoard = {
                         </div>
 
                         <!-- Outlook -->
-                        <div id="sys-outlook" class="tab-content">
+                        <div id="sys-outlook" class="tab-content" data-module="outlook">
                             <div class="callout">${Lang.format('outlookIntegrationCallout', { help: FieldHelp(Lang.t('outlookIntegrationHelp')) })}</div>
                             <div class="callout callout-info">${Lang.format('outlookPersonalCalendarHint', { redirectUri: `<code>${Utils.esc(window.location.origin + '/api/v2/outlook/callback')}</code>` })}</div>
                             <label class="check-row"><input type="checkbox" id="sys-outlook-enabled"><span><strong>${Lang.t('outlookEnableIntegration')}</strong></span></label>
@@ -2401,6 +2615,7 @@ export const AdminBoard = {
                             </div>
                             <div class="field"><label>${Lang.t('clientSecret')} ${FieldHelp(Lang.t('clientSecretHelp'))}</label><input id="sys-outlook-secret" type="password" placeholder="${Lang.t('leaveEmptyUnchanged')}"></div>
                             <div class="field"><label>${Lang.t('supportMailbox')} ${FieldHelp(Lang.t('supportMailboxHelp'))}</label><input id="sys-outlook-mailbox" type="email" placeholder="support@example.com"></div>
+                            <div class="field"><label for="sys-outlook-domains">${Lang.t('outlookExternalDomains')}</label><textarea id="sys-outlook-domains" rows="3" placeholder="partner.example&#10;lieferant.example"></textarea><p class="hint">${Lang.t('outlookExternalDomainsHint')}</p></div>
                             <label class="check-row"><input type="checkbox" id="sys-outlook-sync" disabled><span>${Lang.t('outlookSyncNotAvailable')}</span></label>
                             <label class="check-row"><input type="checkbox" id="sys-outlook-create" disabled><span>${Lang.t('outlookCreateNotAvailable')}</span></label>
                             <div class="setting-row">
@@ -2429,6 +2644,20 @@ export const AdminBoard = {
                                 <span class="hint">${Lang.t('dbBehindCodeHint')}</span>
                                 <div class="button-row">
                                     <button class="btn-secondary btn-sm" id="sys-update-migrate" type="button">${Icon('database', 15)}${Lang.t('runDbMigrations')}</button>
+                                </div>
+                            </div>
+                            <div class="settings-section-title">${Lang.t('backupSectionTitle')}</div>
+                            <div class="callout">${Lang.t('backupSectionCallout')}</div>
+                            <div class="backup-grid">
+                                <div class="backup-card">
+                                    <span class="module-icon">${Icon('database-backup', 20)}</span>
+                                    <div><strong>${Lang.t('backupCreateTitle')}</strong><p class="hint">${Lang.t('backupCreateCardHint')}</p></div>
+                                    <button class="btn-secondary btn-sm" id="sys-backup-create" type="button">${Icon('download', 15)}${Lang.t('backupCreateButton')}</button>
+                                </div>
+                                <div class="backup-card is-danger">
+                                    <span class="module-icon">${Icon('database-zap', 20)}</span>
+                                    <div><strong>${Lang.t('backupRestoreTitle')}</strong><p class="hint">${Lang.t('backupRestoreCardHint')}</p></div>
+                                    <button class="btn-secondary btn-sm" id="sys-backup-restore" type="button">${Icon('upload', 15)}${Lang.t('backupRestoreButton')}</button>
                                 </div>
                             </div>
                             ${AdminBoard.updateGuideMarkup()}
@@ -2567,11 +2796,14 @@ export const AdminBoard = {
                         <!-- Module: optionale Funktionsbereiche, nur aktiv und sichtbar, wenn eingeschaltet -->
                         <div id="sys-modules" class="tab-content">
                             <p class="hint">${Lang.t('modulesHint')}</p>
+                            <div class="module-search">${Icon('search', 16)}<input type="search" id="sys-module-search" class="section-search" placeholder="${Lang.t('moduleSearchPlaceholder')}" aria-label="${Lang.t('moduleSearchPlaceholder')}"></div>
                             <div class="module-list">
                                 <label class="module-card"><input type="checkbox" id="sys-module-sla"><span class="module-icon">${Icon('timer', 20)}</span><span class="module-text"><strong>${Lang.t('moduleSla')}</strong><span>${Lang.t('moduleSlaHint')}</span></span><span class="module-switch" aria-hidden="true"></span></label>
                                 <label class="module-card"><input type="checkbox" id="sys-module-approvals"><span class="module-icon">${Icon('badge-check', 20)}</span><span class="module-text"><strong>${Lang.t('moduleApprovals')}</strong><span>${Lang.t('moduleApprovalsHint')}</span></span><span class="module-switch" aria-hidden="true"></span></label>
+                                <label class="module-card"><input type="checkbox" id="sys-module-outlook"><span class="module-icon">${Icon('calendar-days', 20)}</span><span class="module-text"><strong>${Lang.t('moduleOutlook')}</strong><span>${Lang.t('moduleOutlookHint')}</span></span><span class="module-switch" aria-hidden="true"></span></label>
                                 <div class="module-card is-upcoming" aria-disabled="true"><span class="module-icon">${Icon('monitor-smartphone', 20)}</span><span class="module-text"><strong>${Lang.t('moduleDevices')}</strong><span>${Lang.t('moduleDevicesHint')}</span></span><span class="badge">${Lang.t('comingSoon')}</span></div>
                             </div>
+                            <div class="empty-state compact" id="sys-module-empty" hidden>${Lang.t('noModulesFound')}</div>
                         </div>
 
                         <!-- Unternehmenseinstellungen -->
@@ -2605,13 +2837,21 @@ export const AdminBoard = {
                             <div class="hint">${Lang.t('emailSignatureManagedElsewhere')}</div>
                             <div class="settings-section-title">${Lang.t('ticketNumbersForNewTickets')}</div>
                             <div class="callout">${Lang.format('ticketNumberFormatCallout', {})}</div>
+                            <div class="ticket-token-bar" role="group" aria-label="${Lang.t('ticketTokensLabel')}">
+                                <span class="ticket-token-label">${Lang.t('ticketTokensLabel')}</span>
+                                ${TICKET_NUMBER_TOKENS.map(token => `<button type="button" class="ticket-token${token === '{number}' ? ' is-required' : ''}" data-token="${token}" title="${Utils.esc(Lang.t(`ticketTokenHint_${token.slice(1, -1)}`))}"><span>${Utils.esc(Lang.t(`ticketToken_${token.slice(1, -1)}`))}</span><code>${token}</code></button>`).join('')}
+                                <span class="ticket-token-divider" aria-hidden="true"></span>
+                                ${['-', '/', '_', '.'].map(sep => `<button type="button" class="ticket-token is-separator" data-token="${sep}" title="${Utils.esc(Lang.t('ticketTokenSeparator'))}"><code>${sep}</code></button>`).join('')}
+                            </div>
+                            <p class="hint">${Lang.t('ticketTokenUsageHint')}</p>
                             <div class="form-grid">
-                                <div class="field"><label>${Lang.t('defaultFormat')}</label><input id="sys-ticket-number-format" type="text" placeholder="{prefix}-{number}"></div>
-                                <div class="field"><label>${Lang.t('prefixLabel')}</label><input id="sys-ticket-number-prefix" type="text" placeholder="TS"></div>
+                                <div class="field"><label for="sys-ticket-number-format">${Lang.t('defaultFormat')}</label><input id="sys-ticket-number-format" type="text" maxlength="64" data-ticket-format placeholder="{prefix}-{number}"><div class="ticket-number-preview" data-preview-for="sys-ticket-number-format"></div></div>
+                                <div class="field"><label>${Lang.t('prefixLabel')}</label><input id="sys-ticket-number-prefix" type="text" maxlength="16" placeholder="TS"></div>
                                 <div class="field"><label>${Lang.t('sequenceDigits')}</label><input id="sys-ticket-number-padding" type="number" min="1" max="12" placeholder="5"></div>
                             </div>
                             <div class="field field-wide">
                                 <label>${Lang.t('categoryFormats')}</label>
+                                <p class="hint">${Lang.t('categoryFormatsHint')}</p>
                                 <div id="sys-ticket-category-formats" class="ticket-number-category-formats"></div>
                             </div>
                             <div class="settings-section-title">${Lang.t('supervisorApprovals')}</div>
@@ -2638,17 +2878,9 @@ export const AdminBoard = {
                 </div>`;
             document.body.appendChild(modal);
             modal.querySelector('#sys-save-head').onclick = () => q('#sys-save')?.click();
-            modal.querySelector('#sys-update').addEventListener('click', async event => {
-                const button = event.target.closest('.code-copy-btn');
-                if (!button) return;
-                const text = button.closest('.code-copy')?.querySelector('code')?.textContent || '';
-                if (!text || !(await UI.copyText(text))) return UI.toast(Lang.t('copyFailed'));
-                UI.toast(Lang.t('copiedToClipboard'));
-                button.classList.add('is-copied');
-                button.innerHTML = Icon('check', 14);
-                setTimeout(() => { button.classList.remove('is-copied'); button.innerHTML = Icon('copy', 14); if (window.lucide) lucide.createIcons(); }, 1500);
-                if (window.lucide) lucide.createIcons();
-            });
+            modal.querySelector('#sys-update').addEventListener('click', AdminBoard.handleCopyClick);
+            modal.querySelector('#sys-backup-create').onclick = () => AdminBoard.openBackupCreate();
+            modal.querySelector('#sys-backup-restore').onclick = () => AdminBoard.openBackupRestore();
             const company = modal.querySelector('#sys-company');
             const headings = [...company.querySelectorAll('.settings-section-title')];
             const numbering = headings.find(heading => heading.textContent === Lang.t('ticketNumbersForNewTickets'));
@@ -2843,12 +3075,33 @@ export const AdminBoard = {
         {
             const categoryFormatList = q('#sys-ticket-category-formats');
             const categoryFormatValues = { ...(company.ticketNumberCategoryFormats || {}) };
+            const categoryCodeValues = { ...(company.ticketNumberCategoryCodes || {}) };
             const categories = (await Store.getCategories()).filter(c => !c.archived);
-            categoryFormatList.innerHTML = categories.length ? categories.map(c => `
+            categoryFormatList.innerHTML = categories.length ? `
+                <div class="ticket-number-category-row is-head" aria-hidden="true"><span>${Lang.t('ticketCategoryColumn')}</span><span>${Lang.t('ticketCategoryCode')}</span><span>${Lang.t('ticketCategoryFormat')}</span></div>
+                ${categories.map((c, index) => `
                 <div class="ticket-number-category-row">
-                    <label>${Utils.esc(c.name)}</label>
-                    <input type="text" data-ticket-category="${Utils.esc(c.name)}" placeholder="{prefix}-{number}" value="${Utils.esc(categoryFormatValues[c.name] || '')}">
-                </div>`).join('') : `<div class="empty-state compact">${Lang.t('noCategoriesCreated')}</div>`;
+                    <label for="sys-ticket-cat-format-${index}">${Utils.esc(c.name)}</label>
+                    <input type="text" maxlength="12" data-ticket-code="${Utils.esc(c.name)}" placeholder="${Utils.esc(ticketCategoryCode(c.name))}" value="${Utils.esc(categoryCodeValues[c.name] || '')}" aria-label="${Utils.esc(Lang.format('ticketCategoryCodeFor', { name: c.name }))}">
+                    <div class="ticket-number-category-format">
+                        <input type="text" maxlength="64" id="sys-ticket-cat-format-${index}" data-ticket-format data-ticket-category="${Utils.esc(c.name)}" placeholder="${Utils.esc(Lang.t('ticketUseDefaultFormat'))}" value="${Utils.esc(categoryFormatValues[c.name] || '')}">
+                        <div class="ticket-number-preview" data-preview-for="sys-ticket-cat-format-${index}"></div>
+                    </div>
+                </div>`).join('')}` : `<div class="empty-state compact">${Lang.t('noCategoriesCreated')}</div>`;
+            // Bausteine fuegen an der Cursorposition des zuletzt gewaehlten Formatfelds ein.
+            let tokenTarget = q('#sys-ticket-number-format');
+            modal.querySelectorAll('[data-ticket-format]').forEach(input => input.addEventListener('focus', () => { tokenTarget = input; }));
+            modal.querySelectorAll('.ticket-token').forEach(button => {
+                button.onmousedown = event => event.preventDefault();
+                button.onclick = () => {
+                    AdminBoard.insertTextAtCursor(tokenTarget, button.dataset.token);
+                    AdminBoard.renderTicketNumberPreviews(modal);
+                };
+            });
+            ['#sys-ticket-number-format', '#sys-ticket-number-prefix', '#sys-ticket-number-padding', '#sys-company-timezone'].forEach(selector => q(selector)?.addEventListener('input', () => AdminBoard.renderTicketNumberPreviews(modal)));
+            q('#sys-company-timezone')?.addEventListener('change', () => AdminBoard.renderTicketNumberPreviews(modal));
+            categoryFormatList.addEventListener('input', () => AdminBoard.renderTicketNumberPreviews(modal));
+            AdminBoard.renderTicketNumberPreviews(modal);
         }
 
         q('#sys-2fa-enforce').value = security.force2FA || 'none';
@@ -2888,6 +3141,7 @@ export const AdminBoard = {
         q('#sys-outlook-tenant').value = outlook.tenantId || '';
         q('#sys-outlook-client').value = outlook.clientId || '';
         q('#sys-outlook-mailbox').value = outlook.mailbox || '';
+        q('#sys-outlook-domains').value = (outlook.externalDomains || []).join('\n');
         q('#sys-outlook-sync').checked = !!outlook.syncIncoming;
         q('#sys-outlook-create').checked = !!outlook.createTicketsFromMail;
         const outlookServer = await Store.getOutlookConfig();
@@ -2903,7 +3157,8 @@ export const AdminBoard = {
                         enabled: q('#sys-outlook-enabled').checked,
                         tenantId: q('#sys-outlook-tenant').value.trim(),
                         clientId: q('#sys-outlook-client').value.trim(),
-                        mailbox: q('#sys-outlook-mailbox').value.trim()
+                        mailbox: q('#sys-outlook-mailbox').value.trim(),
+                        externalDomains: AdminBoard.outlookDomainList()
                     }
                 }
             });
@@ -2931,6 +3186,17 @@ export const AdminBoard = {
 
         q('#sys-module-sla').checked = settings.modules?.sla !== false;
         q('#sys-module-approvals').checked = settings.modules?.approvals !== false;
+        q('#sys-module-outlook').checked = settings.modules?.outlook === true;
+        q('#sys-module-search').oninput = () => {
+            const term = q('#sys-module-search').value.trim().toLocaleLowerCase();
+            let visible = 0;
+            qa('#sys-modules .module-card').forEach(card => {
+                const match = !term || card.textContent.toLocaleLowerCase().includes(term);
+                card.hidden = !match;
+                if (match) visible++;
+            });
+            q('#sys-module-empty').hidden = visible > 0;
+        };
         const appr = settings.approvalConfig || {};
         q('#sys-appr-enabled').checked = !!appr.enabled;
         qa('.sys-appr-prio').forEach(cb => { cb.checked = (appr.priorities || []).includes(cb.value); });
@@ -3018,6 +3284,12 @@ export const AdminBoard = {
         });
         q('#sys-save').onclick = async () => {
             const padding = Math.max(1, Math.min(12, parseInt(q('#sys-ticket-number-padding').value, 10) || 5));
+            const ticketNumberIssue = AdminBoard.renderTicketNumberPreviews(modal);
+            if (ticketNumberIssue) {
+                modal.querySelector('.sys-settings-nav [data-tab="sys-general"]')?.click();
+                ticketNumberIssue.input.focus();
+                return UI.toast(ticketNumberIssue.message);
+            }
             const accFieldIdMap = { department: 'dept' };
             const accountSelfServiceFields = ['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation'].filter(f => q(`#sys-acc-${accFieldIdMap[f] || f}`).checked);
             const ok = await Store.updateServerSettings({
@@ -3097,6 +3369,7 @@ export const AdminBoard = {
                         tenantId: q('#sys-outlook-tenant').value.trim(),
                         clientId: q('#sys-outlook-client').value.trim(),
                         mailbox: q('#sys-outlook-mailbox').value.trim(),
+                        externalDomains: AdminBoard.outlookDomainList(),
                         syncIncoming: false,
                         createTicketsFromMail: false
                     },
@@ -3121,8 +3394,13 @@ export const AdminBoard = {
                             .map(input => [input.dataset.ticketCategory, input.value.trim()])
                             .filter(([, format]) => format)
                     ),
+                    ticketNumberCategoryCodes: Object.fromEntries(
+                        qa('#sys-ticket-category-formats [data-ticket-code]')
+                            .map(input => [input.dataset.ticketCode, input.value.trim()])
+                            .filter(([, code]) => code)
+                    ),
                     accountSelfServiceFields,
-                    modules: { sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked },
+                    modules: { sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked, outlook: q('#sys-module-outlook').checked },
                     approvalWorkflow: {
                         enabled: q('#sys-appr-enabled').checked,
                         priorities: qa('.sys-appr-prio:checked').map(cb => cb.value),
@@ -3132,9 +3410,9 @@ export const AdminBoard = {
             });
             if (!ok) {
                 console.error('Systemeinstellungen speichern fehlgeschlagen:', Store.lastError);
-                return UI.toast(Lang.t('systemSettingsSaveFailed'));
+                return UI.toast(AdminBoard.settingsSaveErrorMessage(Store.lastError));
             }
-            Store.applyModules({ sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked });
+            Store.applyModules({ sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked, outlook: q('#sys-module-outlook').checked });
             const outlookSecret = q('#sys-outlook-secret').value;
             if (outlookSecret && !await Store.updateOutlookSecret(outlookSecret)) return UI.toast(Lang.t('saveFailed'));
             q('#sys-outlook-secret').value = '';
@@ -4683,164 +4961,39 @@ export const AdminBoard = {
         await render();
     },
 
-    openKnowledgeBase: async () => {
-        const user = await Store.currentUser();
-        // Wie in der lokalen Version: Superadmin darf immer bearbeiten, ein normaler Admin nur
-        // mit explizit zugewiesenem permissions.kb = 'edit'.
-        const canEdit = user?.role === 'superadmin' || user?.permissions?.kb === 'edit';
-        const modal = AdminBoard.openDialog({
-            id: 'kb-modal',
-            title: Lang.t('knowledgeBase'),
-            icon: 'book-open',
-            size: 'md',
-            body: `${KbSearch.filtersMarkup('kb')}
-                   <div id="kb-list" class="mt-3"></div>
-                   ${canEdit ? `<details class="kb-categories-manage">
-                       <summary>${Icon('tags', 15)} ${Utils.esc(Lang.t('kbManageCategories'))}</summary>
-                       <p class="hint">${Utils.esc(Lang.t('kbCategoryHint'))}</p>
-                       <div id="kb-own-categories" class="file-preview"></div>
-                       <div class="kb-add-category">
-                           <input id="kb-new-category-name" type="text" maxlength="128" placeholder="${Utils.esc(Lang.t('kbNewCategoryPlaceholder'))}" aria-label="${Utils.esc(Lang.t('kbNewCategoryPlaceholder'))}">
-                           <button type="button" class="btn-secondary btn-sm" id="kb-add-category">${Icon('plus', 14)}${Utils.esc(Lang.t('kbAddCategory'))}</button>
-                       </div>
-                   </details>
-                   <div class="kb-editor">
-                       <h4 class="section-title">${Lang.t('newArticle')}</h4>
-                       <div class="field"><label for="kb-new-title">${Lang.t('titleLabel')}</label><input id="kb-new-title" type="text"></div>
-                       <div class="field"><label for="kb-new-category">${Utils.esc(Lang.t('kbFilterCategory'))}</label><select id="kb-new-category"></select></div>
-                       <div class="field">
-                           <label for="kb-new-body">${Lang.t('content')}</label>
-                           <div class="note-toolbar">
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-bold" title="${Lang.t('bold')}" aria-label="${Lang.t('bold')}">${Icon('bold', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-italic" title="${Lang.t('italic')}" aria-label="${Lang.t('italic')}">${Icon('italic', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-list" title="${Lang.t('list')}" aria-label="${Lang.t('list')}">${Icon('list', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-numbered" title="${Lang.t('numberedList')}" aria-label="${Lang.t('numberedList')}">${Icon('list-ordered', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-table" title="${Lang.t('insertTable')}" aria-label="${Lang.t('insertTable')}">${Icon('table', 15)}</button>
-                               <button type="button" class="btn-ghost btn-icon btn-sm" id="kb-fmt-link" title="${Lang.t('insertLink')}" aria-label="${Lang.t('insertLink')}">${Icon('link', 15)}</button>
-                               <label class="btn btn-ghost btn-icon btn-sm" title="${Lang.t('addAttachment')}" aria-label="${Lang.t('addAttachment')}">${Icon('paperclip', 15)}<input type="file" id="kb-file-input" hidden multiple></label>
-                           </div>
-                           <div id="kb-new-body" class="rich-editor" contenteditable="true" data-placeholder="${Lang.t('richEditorPlaceholder')}"></div>
-                           <div id="kb-file-preview" class="file-preview"></div>
-                       </div>
-                   </div>` : ''}`,
-            onSave: canEdit ? async (m) => {
-                const title = m.querySelector('#kb-new-title').value.trim();
-                const bodyEl = m.querySelector('#kb-new-body');
-                const body = Utils.sanitizeRichHtml(bodyEl.innerHTML);
-                if (!title || !bodyEl.textContent.trim()) return UI.toast(Lang.t('enterTitleAndContent'));
-                const articleId = await Store.createKbArticle(title, body, undefined, m.querySelector('#kb-new-category').value || null);
-                if (!articleId) return UI.toast(Lang.t('saveFailed'));
-                if (AdminBoard.kbFiles.length) {
-                    try {
-                        await Promise.all(AdminBoard.kbFiles.map(f => Store.saveKbAttachment(articleId, f)));
-                    } catch (e) {
-                        UI.toast(e.message === 'ATTACHMENT_TOO_LARGE' ? Lang.t('attachmentTooLarge15MB') : Lang.t('articleSavedAttachmentFailed'));
-                    }
-                }
-                m.querySelector('#kb-new-title').value = '';
-                bodyEl.innerHTML = '';
-                AdminBoard.kbFiles = [];
-                renderKbFilePreview();
-                UI.toast(Lang.t('articleSavedToast'));
-                await render();
-            } : null
+    openKnowledgeBase: () => KbSearch.open(),
+
+    // Zugeordnete Wissensdatenbank-Loesungen im Tab "Loesungsdokumentation" (nur mit Leserecht).
+    renderKbLinks: async (ticketId) => {
+        const box = q('#m-kb-links');
+        if (!box) return;
+        const { canRead } = await KbSearch.access();
+        box.hidden = !canRead;
+        if (!canRead) return;
+        const [tickets, links] = await Promise.all([Store.getTickets(), Store.getTicketKbLinks(ticketId)]);
+        if (AdminBoard.currentTicketId !== ticketId) return;
+        const ticket = tickets.find(t => t.id === ticketId);
+        const locked = !ticket || !!ticket.archived;
+        const list = q('#m-kb-links-list');
+        list.innerHTML = links.length ? links.map(link => `
+            <span class="file-chip kb-link-chip">
+                <button type="button" class="kb-link-open" data-id="${Utils.esc(link.articleId)}" title="${Utils.esc(Lang.t('kbOpenSolution'))}">${Icon('lightbulb', 13)}<span>${Utils.esc(link.title)}</span></button>
+                ${locked ? '' : `<button type="button" class="btn-ghost btn-icon btn-xs btn-danger kb-link-remove" data-id="${Utils.esc(link.articleId)}" title="${Utils.esc(Lang.t('kbUnlink'))}" aria-label="${Utils.esc(Lang.t('kbUnlink'))}">${Icon('x', 13)}</button>`}
+            </span>`).join('') : `<span class="hint">${Utils.esc(Lang.t('kbNoLinkedSolutions'))}</span>`;
+        const add = q('#m-kb-link-add');
+        add.hidden = locked;
+        add.onclick = () => KbSearch.open({ ticket });
+        list.querySelectorAll('.kb-link-open').forEach(btn => btn.onclick = async () => {
+            const article = (await Store.getKbArticles()).find(a => a.id === btn.dataset.id);
+            if (!article) return UI.toast(Lang.t('kbArticleMissing'));
+            const { canEdit } = await KbSearch.access();
+            KbSearch.openArticle(article, { canEdit, ticket: locked ? null : ticket, categories: await Store.getKbCategories(), onChange: () => AdminBoard.renderKbLinks(ticketId) });
         });
-        AdminBoard.kbFiles = [];
-        const kbBody = modal.querySelector('.modal-body');
-        const editor = modal.querySelector('.kb-editor');
-        if (editor) kbBody.prepend(editor);
-        const browse = document.createElement('button'); browse.type = 'button'; browse.id = 'kb-browse'; browse.className = 'btn-secondary kb-browse-button';
-        browse.textContent = Lang.current === 'en' ? 'View knowledge base' : 'Wissensdatenbank ansehen';
-        browse.onclick = () => KbSearch.open(); if (editor) editor.after(browse); else kbBody.prepend(browse);
-        const renderKbFilePreview = () => {
-            const preview = modal.querySelector('#kb-file-preview');
-            if (!preview) return;
-            preview.innerHTML = '';
-            AdminBoard.kbFiles.forEach((file, index) => {
-                const chip = document.createElement('div');
-                chip.className = 'file-chip';
-                chip.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" title="${Lang.t('removeFile')}" aria-label="${Utils.esc(Lang.format('removeFileAriaLabel', { name: file.name }))}">${Icon('x', 13)}</button>`;
-                chip.querySelector('button').onclick = () => {
-                    AdminBoard.kbFiles.splice(index, 1);
-                    renderKbFilePreview();
-                };
-                preview.appendChild(chip);
-            });
-            if (window.lucide) lucide.createIcons();
-        };
-        if (canEdit) {
-            const bodyInput = modal.querySelector('#kb-new-body');
-            // Verhindert, dass ein Klick auf die Werkzeugleiste den Fokus/die Auswahl im Editor verliert
-            modal.querySelectorAll('.kb-editor .note-toolbar button').forEach(btn => { btn.onmousedown = e => e.preventDefault(); });
-            modal.querySelector('#kb-fmt-bold').onclick = () => { bodyInput.focus(); document.execCommand('bold'); };
-            modal.querySelector('#kb-fmt-italic').onclick = () => { bodyInput.focus(); document.execCommand('italic'); };
-            modal.querySelector('#kb-fmt-list').onclick = () => { bodyInput.focus(); document.execCommand('insertUnorderedList'); };
-            modal.querySelector('#kb-fmt-numbered').onclick = () => { bodyInput.focus(); document.execCommand('insertOrderedList'); };
-            modal.querySelector('#kb-fmt-table').onclick = () => insertMarkdownTable(bodyInput);
-            modal.querySelector('#kb-fmt-link').onclick = async () => {
-                const sel = window.getSelection();
-                const savedRange = (sel && sel.rangeCount && bodyInput.contains(sel.anchorNode)) ? sel.getRangeAt(0).cloneRange() : null;
-                const selectedText = savedRange ? savedRange.toString() : '';
-                const href = await UI.promptText({ title: Lang.t('insertLink'), label: Lang.t('linkAddress'), value: '', placeholder: Lang.t('linkPlaceholderExample'), saveLabel: Lang.t('insertLink') });
-                if (!href || !href.trim()) return;
-                if (!/^(https?:\/\/|mailto:)/i.test(href.trim())) return UI.toast(Lang.t('onlyHttpMailtoLinksAllowed'));
-                bodyInput.focus();
-                const sel2 = window.getSelection();
-                sel2.removeAllRanges();
-                if (savedRange) sel2.addRange(savedRange);
-                if (selectedText) document.execCommand('createLink', false, href.trim());
-                else document.execCommand('insertHTML', false, `<a href="${Utils.esc(href.trim())}" target="_blank" rel="noopener noreferrer">${Utils.esc(href.trim())}</a>`);
-                bodyInput.dispatchEvent(new Event('input', { bubbles: true }));
-            };
-            const kbFileInput = modal.querySelector('#kb-file-input');
-            kbFileInput.onchange = (e) => {
-                AdminBoard.kbFiles.push(...Array.from(e.target.files || []));
-                renderKbFilePreview();
-                e.target.value = '';
-            };
-            const addKbFiles = files => {
-                AdminBoard.kbFiles.push(...files);
-                renderKbFilePreview();
-            };
-            UI.bindFileDrop(modal.querySelector('.kb-editor'), addKbFiles);
-            UI.bindPasteFiles(bodyInput, addKbFiles);
-        }
-        const view = KbSearch.bind(modal, 'kb', { list: modal.querySelector('#kb-list'), canEdit });
-        // Kategorieauswahl im Editor + Verwaltung der zusaetzlichen, reinen Wissensdatenbank-Kategorien.
-        const renderEditorCategories = () => {
-            if (!canEdit) return;
-            const categories = view.getCategories();
-            const select = modal.querySelector('#kb-new-category');
-            const keep = select.value;
-            select.innerHTML = `<option value="">${Utils.esc(Lang.t('kbNoCategory'))}</option>` + categories.map(c => `<option value="${Utils.esc(c.name)}">${Utils.esc(c.name)}</option>`).join('');
-            if (categories.some(c => c.name === keep)) select.value = keep;
-            const own = categories.filter(c => c.source === 'kb');
-            const box = modal.querySelector('#kb-own-categories');
-            box.innerHTML = own.length ? own.map(c => `<span class="file-chip">${Icon('tag', 13)}<span>${Utils.esc(c.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger kb-cat-del" data-id="${Utils.esc(c.id)}" data-name="${Utils.esc(c.name)}" title="${Utils.esc(Lang.t('kbDeleteCategory'))}" aria-label="${Utils.esc(Lang.t('kbDeleteCategory'))}">${Icon('x', 13)}</button></span>`).join('')
-                : `<span class="hint">${Utils.esc(Lang.t('kbNoOwnCategories'))}</span>`;
-            box.querySelectorAll('.kb-cat-del').forEach(btn => btn.onclick = () => {
-                UI.confirm(Lang.format('kbConfirmDeleteCategory', { name: btn.dataset.name }), async () => {
-                    if (!(await Store.deleteKbCategory(btn.dataset.id))) return UI.toast(Lang.t('saveFailed'));
-                    await render();
-                });
-            });
-            if (window.lucide) lucide.createIcons();
-        };
-        const render = async () => { await view.refresh(); renderEditorCategories(); };
-        if (canEdit) {
-            const addCategory = async () => {
-                const input = modal.querySelector('#kb-new-category-name');
-                const name = input.value.trim();
-                if (!name) return input.focus();
-                const result = await Store.createKbCategory(name);
-                if (!result.ok) return UI.toast(result.error === 'category_exists' ? Lang.t('kbCategoryExists') : Lang.t('saveFailed'));
-                input.value = '';
-                await render();
-            };
-            modal.querySelector('#kb-add-category').onclick = addCategory;
-            modal.querySelector('#kb-new-category-name').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); addCategory(); } };
-        }
-        await render();
+        list.querySelectorAll('.kb-link-remove').forEach(btn => btn.onclick = () => UI.confirm(Lang.t('kbConfirmUnlink'), async () => {
+            if (!(await Store.unlinkKbArticle(ticketId, btn.dataset.id))) return UI.toast(Lang.t('saveFailed'));
+            AdminBoard.renderKbLinks(ticketId);
+        }));
+        if (window.lucide) lucide.createIcons();
     },
 
     // t.comments existiert nicht mehr lokal (immer [], siehe mapApiTicketToLegacy) -- vorher
@@ -5877,7 +6030,8 @@ export const AdminBoard = {
                 const errMap = {
                     outlook_not_configured: Lang.t('outlookNotConfiguredError'),
                     outlook_auth_failed: Lang.t('outlookAuthFailedError'),
-                    outlook_event_create_failed: Lang.t('outlookEventCreateFailedError')
+                    outlook_event_create_failed: Lang.t('outlookEventCreateFailedError'),
+                    attendee_domain_not_allowed: Lang.t('attendeeDomainNotAllowed')
                 };
                 UI.toast(errMap[Store.lastError] || Lang.t('eventCreateFailedGeneric'));
                 return;
@@ -6178,7 +6332,8 @@ export const AdminBoard = {
             const btnArch = q('#btn-archive-ticket');
             const btnLogs = q('#m-logs');
             const btnKb = q('#m-kb-search');
-            if (btnKb) btnKb.onclick = () => KbSearch.open();
+            if (btnKb) btnKb.onclick = () => KbSearch.open({ ticket: t });
+            AdminBoard.renderKbLinks(t.id);
             const btnEditTicket = q('#m-edit-ticket');
             if (btnEditTicket) {
                 btnEditTicket.style.display = t.archived ? 'none' : '';

@@ -23,14 +23,16 @@ describe('user subgroups', () => {
 });
 
 describe('modules', () => {
-  it('treats missing module settings as enabled', () => {
-    expect(modulesFromConfig({})).toEqual({ sla: true, approvals: true });
-    expect(modulesFromConfig({ modules: { sla: false } })).toEqual({ sla: false, approvals: true });
+  it('treats missing module settings as enabled, Outlook only with an enabled integration', () => {
+    expect(modulesFromConfig({})).toEqual({ sla: true, approvals: true, outlook: false });
+    expect(modulesFromConfig({ modules: { sla: false } })).toEqual({ sla: false, approvals: true, outlook: false });
+    expect(modulesFromConfig({ outlookConfig: { enabled: true } }).outlook).toBe(true);
+    expect(modulesFromConfig({ outlookConfig: { enabled: true }, modules: { outlook: false } }).outlook).toBe(false);
   });
   it('removes fields of disabled modules from ticket responses', () => {
     const ticket = { id: 't', sla_due_at: 'x', custom_due_at: 'y', approval_status: 'pending', approval_reviewer_id: 'u', approval_text: 'z', approval_requested_by: 'a' };
-    expect(maskTicketModules(ticket, { sla: true, approvals: true })).toEqual(ticket);
-    expect(maskTicketModules(ticket, { sla: false, approvals: false })).toMatchObject({
+    expect(maskTicketModules(ticket, { sla: true, approvals: true, outlook: true })).toEqual(ticket);
+    expect(maskTicketModules(ticket, { sla: false, approvals: false, outlook: false })).toMatchObject({
       sla_due_at: null, custom_due_at: null, approval_status: null, approval_reviewer_id: null, approval_text: null, approval_requested_by: null });
   });
 });

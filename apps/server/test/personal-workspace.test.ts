@@ -15,6 +15,7 @@ import { jwtVerify } from 'jose';
 import { TOTP } from 'otpauth';
 import { createRequire } from 'node:module';
 import { validateUploadedFile } from '../src/domain/fileValidation.js';
+import { enrollCodeHash } from '../src/domain/mfaEnrollment.js';
 const uid = '11111111-1111-4111-8111-111111111111', tid = '22222222-2222-4222-8222-222222222222';
 const secret = 'test-cookie-secret-'.repeat(4);
 async function fixture() {
@@ -124,6 +125,12 @@ describe('MFA policy enforcement', () => {
     const f = await fixture();
     try {
       const token = (await beginAdvancedMfa(f.app, f.tables.users![0]))!.mfaToken;
+      // Security-Audit R-25: Passwort allein reicht nicht -- erst nach einem Einrichtungscode.
+      expect((await f.post('/api/v2/mfa/login/totp-setup', { token })).statusCode).toBe(403);
+      Object.assign(f.tables.users![0], { mfa_enroll_code_hash: enrollCodeHash(secret, uid, 'ABCD-EFGH-JKLM', 'admin'),
+        mfa_enroll_code_expires_at: new Date(Date.now() + 60_000) });
+      expect((await f.post('/api/v2/mfa/login/enroll-verify', { token, code: 'abcd efgh jklm' })).statusCode).toBe(200);
+      expect(f.tables.users![0].mfa_enroll_code_hash).toBeNull();
       const setup = await f.post('/api/v2/mfa/login/totp-setup', { token }); expect(setup.statusCode).toBe(200);
       const code = new TOTP({ secret: setup.json().secret }).generate();
       expect((await f.post('/api/v2/mfa/login/totp', { token, code })).statusCode).toBe(200);
@@ -232,6 +239,9 @@ describe('read-only Office capabilities', () => {
     const f = await fixture(); const health = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('true'));
     try {
       f.deps.env.ONLYOFFICE_ENABLED = true; f.deps.env.ONLYOFFICE_JWT_SECRET = secret;
+      // Security-Audit R-24: ohne eigene Subdomain bleibt die Office-Oberflaeche aus.
+      expect((await f.app.inject('/api/v2/attachments/missing/office-config')).statusCode).not.toBe(200);
+      f.deps.env.ONLYOFFICE_PUBLIC_URL = 'https://office.example.com';
       const encrypt = async (field: string, content: string) => {
         const dek = await ensureDek(f.db, f.deps.keyProvider, `attachments.${field}`);
         return fieldCipher.encryptField(content, dek.rawDek, { installationId: 'test', schemaVersion: 1, tableName: 'attachments', recordId: 'file', fieldName: field, keyVersion: 1 });
@@ -239,6 +249,10 @@ describe('read-only Office capabilities', () => {
       f.tables.attachments = [{ id: 'file', ticket_id: tid, size_bytes: 6, filename: await encrypt('filename', 'Book.xlsx'), data_b64: await encrypt('data', Buffer.from('Office').toString('base64')) }];
       const config = (await f.app.inject('/api/v2/attachments/file/office-config')).json();
       expect(config.enabled).toBe(true); expect(config.config.editorConfig.mode).toBe('view'); expect(config.config.document.permissions.edit).toBe(false);
+      expect(config.apiUrl).toBe('https://office.example.com/web-apps/apps/api/documents/api.js');
+      const page = await f.app.inject('/api/v2/attachments/file/office-view');
+      expect(page.headers['content-security-policy']).toContain("frame-src https://office.example.com;");
+      expect(page.headers['content-security-policy']).not.toContain("frame-src 'self'");
       const verified = await jwtVerify(config.config.token, Buffer.from(secret), { algorithms: ['HS256'] });
       expect((verified.payload.document as any).permissions.edit).toBe(false);
       const source = new URL(config.config.document.url);

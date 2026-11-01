@@ -167,7 +167,6 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
             email_blind_idx: emailBlindIdx,
             password_hash: passwordHash,
             role: 'superadmin',
-            department_group_id: groupId,
             account_archived: false,
             locked_permanent: false,
             totp_enabled: false,
@@ -175,6 +174,7 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
             installation_id: deps.env.INSTALLATION_ID
           })
           .execute();
+        await trx.insertInto('user_groups').values({ user_id: userId, group_id: groupId }).execute();
 
         await trx
           .updateTable('app_settings')

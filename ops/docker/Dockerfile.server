@@ -43,6 +43,6 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
 # der lang laufende App-Prozess bekommt nur noch das eingeschraenkte DB_RUNTIME_*-Konto (siehe
 # docker-compose.yml), das keine DDL-Rechte (ALTER/CREATE TABLE) hat. Migrationen laufen separat,
 # mit dem vollen DB_USER/DB_PASSWORD-Konto nur fuer den kurzlebigen Migrations-Aufruf (siehe
-# install.sh/updater-server.mjs: "docker compose run --rm -e DB_USER=... -e DB_PASSWORD=... app
+# install.sh/ops/host-updater: "docker compose run --rm -e DB_USER=... -e DB_PASSWORD=... app
 # node dist/db/migrate.js"), bevor dieser Container ueberhaupt startet.
 CMD ["node", "dist/index.js"]

@@ -1,140 +1,127 @@
 import Fastify from 'fastify';
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerUpdateRoutes } from '../src/http/routes/update.js';
 import type { Env } from '../src/config/env.js';
 
-afterEach(() => vi.unstubAllGlobals());
-
-// Step-up (siehe update.ts requireStepUp) prueft das Passwort echt per argon2 -- fuer die Tests
-// reicht ein simpler Mock, der "correct-password" als gueltig behandelt, ohne echtes Hashing.
+// Step-up (siehe stepUp.ts) prueft das Passwort echt per argon2 -- fuer die Tests reicht ein Mock,
+// der "correct-password" als gueltig behandelt.
 vi.mock('argon2', () => ({ verify: async (_hash: string, password: string) => password === 'correct-password' }));
 
-const baseEnv: Partial<Env> = { INSTALLATION_ID: 'test-install', SCHEMA_VERSION: 1 };
+const commit = 'a'.repeat(40);
+const other = 'b'.repeat(40);
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => { while (cleanups.length) await cleanups.pop()!(); });
 
 function buildDb() {
-  const auditLogRows: unknown[] = [];
+  const auditLogRows: any[] = [];
   const db: any = {
-    selectFrom: (table: string) => {
+    selectFrom: () => {
       const chain: any = {
-        select: () => chain,
-        where: () => chain,
-        executeTakeFirst: async () => table === 'users' ? { password_hash: 'irrelevant', totp_enabled: false, totp_secret_enc: null } : undefined,
+        select: () => chain, where: () => chain, forUpdate: () => chain,
+        executeTakeFirst: async () => undefined,
         executeTakeFirstOrThrow: async () => ({ password_hash: 'irrelevant', totp_enabled: false, totp_secret_enc: null })
       };
       return chain;
     },
-    insertInto: (table: string) => ({
-      values: (value: unknown) => ({
-        execute: async () => { if (table === 'global_audit_log') auditLogRows.push(value); }
-      })
-    })
+    insertInto: (table: string) => ({ values: (value: unknown) => ({ execute: async () => { if (table === 'global_audit_log') auditLogRows.push(value); } }) }),
+    updateTable: () => { const update: any = { set: () => update, where: () => update, execute: async () => [] }; return update; },
+    transaction: () => ({ execute: (callback: any) => callback(db) })
   };
   return { db, auditLogRows };
 }
 
-async function requestUpdate(
-  env: Partial<Env>,
-  role: 'user' | 'superadmin' = 'superadmin',
-  method: 'GET' | 'POST' = 'GET',
-  path: 'status' | 'run' | 'migrate' | 'rollback' = method === 'GET' ? 'status' : 'run',
-  payload?: Record<string, unknown>
-) {
+// Simuliert den Host-Dienst (ops/host-updater): beantwortet Anfragen aus requests/ in state/.
+async function fakeHost(options: { remote?: string; accept?: string; silent?: boolean } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), 'update-bridge-'));
+  await mkdir(join(dir, 'requests')); await mkdir(join(dir, 'state'));
+  await writeFile(join(dir, 'state', 'agent.env'), 'enabled=1\n');
+  const handled: string[] = [];
+  const timer = setInterval(async () => {
+    if (options.silent) return;
+    for (const name of (await readdir(join(dir, 'requests'))).filter(file => file.endsWith('.req'))) {
+      const line = (await readFile(join(dir, 'requests', name), 'utf8')).trim();
+      await rm(join(dir, 'requests', name));
+      handled.push(line);
+      const [action, nonce] = line.split(' ');
+      if (action === 'status') {
+        await writeFile(join(dir, 'state', 'status.env'), `nonce=${nonce}\nenabled=1\nsigningKeys=1\nbranch=main\nlocalCommit=${other}\nremoteCommit=${options.remote ?? commit}\ncommitsBehind=1\n`);
+      } else {
+        await writeFile(join(dir, 'state', 'accepted.env'), `nonce=${nonce}\nresult=${options.accept ?? 'started'}\n`);
+        await writeFile(join(dir, 'state', 'job.env'), `nonce=${nonce}\naction=${action}\nrunning=0\nok=1\nfailed=0\nstep=done\n`);
+      }
+    }
+  }, 20);
+  cleanups.push(async () => { clearInterval(timer); await rm(dir, { recursive: true, force: true }); });
+  return { dir, handled };
+}
+
+async function request(dir: string | undefined, role: 'user' | 'superadmin', method: 'GET' | 'POST', path: string, payload?: Record<string, unknown>) {
   const app = Fastify();
-  const { db } = buildDb();
+  const { db, auditLogRows } = buildDb();
   app.decorate('db', db);
-  app.addHook('onRequest', async req => {
-    req.ticketSession = { uid: 'test-user', username: 'test', role };
-  });
-  registerUpdateRoutes(app, { env: { ...baseEnv, ...env } as Env, keyProvider: {} as any });
+  app.addHook('onRequest', async req => { req.ticketSession = { uid: 'test-user', username: 'test', role }; });
+  registerUpdateRoutes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1, UPDATE_BRIDGE_DIR: dir } as Env, keyProvider: {} as any });
   try {
-    return await app.inject({ method, url: `/api/v2/update/${path}`, payload });
+    return { response: await app.inject({ method, url: `/api/v2/update/${path}`, payload }), auditLogRows };
   } finally {
     await app.close();
   }
 }
 
-describe('update routes', () => {
-  const enabledEnv = { UPDATE_SERVICE_URL: 'http://updater:3099', UPDATE_TOKEN: 'test-token' };
+describe('update routes (host updater bridge, Security-Audit N-3)', () => {
   const stepUp = { password: 'correct-password' };
-  const commit = 'a'.repeat(40);
 
-  it('reports an unconfigured updater without treating a status query as an outage', async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    const response = await requestUpdate({});
+  it('reports a missing host updater without failing', async () => {
+    const { response } = await request(undefined, 'superadmin', 'GET', 'status');
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ enabled: false, error: 'update_service_not_configured' });
-    expect(fetchMock).not.toHaveBeenCalled();
-    // /run ohne konfigurierten Updater: Step-up muss trotzdem zuerst durchlaufen (Passwort
-    // stimmt), erst der eigentliche Aufruf scheitert an der fehlenden Konfiguration.
-    const runResponse = await requestUpdate({}, 'superadmin', 'POST', 'run', { ...stepUp, expected_commit: commit });
-    expect(runResponse.statusCode).toBe(503);
-    expect(runResponse.json().error).toBe('update_service_not_configured');
+    const run = await request(undefined, 'superadmin', 'POST', 'run', { ...stepUp, expected_commit: commit });
+    expect(run.response.statusCode).toBe(409);
   });
 
-  it('rejects ordinary users before contacting the privileged updater', async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    expect((await requestUpdate(enabledEnv, 'user')).statusCode).toBe(403);
-    expect((await requestUpdate(enabledEnv, 'user', 'POST', 'run', { ...stepUp, expected_commit: commit })).statusCode).toBe(403);
-    expect(fetchMock).not.toHaveBeenCalled();
+  it('rejects ordinary users before writing any request', async () => {
+    const host = await fakeHost();
+    expect((await request(host.dir, 'user', 'GET', 'status')).response.statusCode).toBe(403);
+    expect((await request(host.dir, 'user', 'POST', 'run', { ...stepUp, expected_commit: commit })).response.statusCode).toBe(403);
+    expect(host.handled).toEqual([]);
   });
 
-  it('forwards an authenticated status response with a signed, non-replayable request', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ enabled: true, updateAvailable: true })));
-    vi.stubGlobal('fetch', fetchMock);
-    const response = await requestUpdate(enabledEnv);
+  it('reads the status the host wrote for exactly this request', async () => {
+    const host = await fakeHost();
+    const { response } = await request(host.dir, 'superadmin', 'GET', 'status');
     expect(response.statusCode).toBe(200);
-    expect(response.json().enabled).toBe(true);
-    expect(fetchMock).toHaveBeenCalledWith('http://updater:3099/status', expect.objectContaining({
-      headers: expect.objectContaining({
-        authorization: 'Bearer test-token',
-        'x-update-timestamp': expect.any(String),
-        'x-update-nonce': expect.any(String),
-        'x-update-signature': expect.any(String)
-      })
-    }));
+    expect(response.json()).toMatchObject({ enabled: true, remoteCommit: commit, localCommit: other, updateAvailable: true, commitsBehind: 1 });
+    expect(host.handled[0]).toMatch(/^status [0-9a-f]{32} -$/);
   });
 
-  it('distinguishes an unreachable configured updater from disabled updates', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connection refused')));
-    const response = await requestUpdate(enabledEnv);
-    expect(response.statusCode).toBe(503);
-    expect(response.json().error).toBe('update_service_unreachable');
-  });
-
-  it('rejects /run without a correct password (step-up)', async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    const response = await requestUpdate(enabledEnv, 'superadmin', 'POST', 'run', { password: 'wrong', expected_commit: commit });
+  it('requires the step-up password before anything reaches the host', async () => {
+    const host = await fakeHost();
+    const { response } = await request(host.dir, 'superadmin', 'POST', 'run', { password: 'wrong', expected_commit: commit });
     expect(response.statusCode).toBe(401);
     expect(response.json().error).toBe('wrong_password');
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(host.handled).toEqual([]);
   });
 
-  it('rejects /run when the target commit no longer matches what GitHub reports (commit pinning)', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ remoteCommit: 'b'.repeat(40) })));
-    vi.stubGlobal('fetch', fetchMock);
-    const response = await requestUpdate(enabledEnv, 'superadmin', 'POST', 'run', { ...stepUp, expected_commit: commit });
-    expect(response.statusCode).toBe(409);
-    expect(response.json().error).toBe('commit_mismatch');
+  it('pins the confirmed commit and only then asks the host to update', async () => {
+    const moved = await fakeHost({ remote: other });
+    const mismatch = await request(moved.dir, 'superadmin', 'POST', 'run', { ...stepUp, expected_commit: commit });
+    expect(mismatch.response.statusCode).toBe(409);
+    expect(mismatch.response.json().error).toBe('commit_mismatch');
+    expect(moved.handled.some(line => line.startsWith('run '))).toBe(false);
+
+    const host = await fakeHost();
+    const run = await request(host.dir, 'superadmin', 'POST', 'run', { ...stepUp, expected_commit: commit });
+    expect(run.response.statusCode).toBe(202);
+    expect(host.handled.find(line => line.startsWith('run '))).toMatch(new RegExp(`^run [0-9a-f]{32} ${commit}$`));
+    expect(run.auditLogRows.map(row => row.action)).toContain('update.run_triggered');
   });
 
-  it('runs the update once password and matching commit are confirmed', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ remoteCommit: commit })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, job: { running: true } }), { status: 202 }));
-    vi.stubGlobal('fetch', fetchMock);
-    const response = await requestUpdate(enabledEnv, 'superadmin', 'POST', 'run', { ...stepUp, expected_commit: commit });
-    expect(response.statusCode).toBe(202);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('requires a password for /migrate and /rollback too', async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    expect((await requestUpdate(enabledEnv, 'superadmin', 'POST', 'migrate', {})).statusCode).toBe(401);
-    expect((await requestUpdate(enabledEnv, 'superadmin', 'POST', 'rollback', { expected_commit: commit })).statusCode).toBe(401);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
+  it('passes on a refusal of the host', async () => {
+    const busy = await fakeHost({ accept: 'update_already_running' });
+    expect((await request(busy.dir, 'superadmin', 'POST', 'rollback', { ...stepUp, expected_commit: commit })).response.json().error).toBe('update_already_running');
+    expect((await request(busy.dir, 'superadmin', 'POST', 'rollback', stepUp)).response.statusCode).toBe(400);
+  }, 20_000);
 });

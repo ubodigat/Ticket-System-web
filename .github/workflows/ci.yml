@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           # Security-Audit R-22: muss die Node-Version aus den Produktions-Images spiegeln
-          # (ops/docker/Dockerfile.server, Dockerfile.updater) -- sonst wird eine Laufzeit
+          # (ops/docker/Dockerfile.server) -- sonst wird eine Laufzeit
           # ausgeliefert, auf der nie ein Test lief (TLS-/Crypto-/fetch-Verhalten kann sich bei
           # Major-Versionen aendern, ohne dass ein Test es bemerkt).
           node-version: '26'

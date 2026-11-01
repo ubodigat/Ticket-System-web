@@ -4,13 +4,24 @@ import type { Database } from '../db/types.js';
 // Optionale Funktionsbereiche (Systemeinstellungen > Module). Ein deaktiviertes Modul ist fuer die
 // Oberflaeche nicht vorhanden: seine Felder fehlen in den Antworten, seine Endpunkte lehnen ab.
 // Fehlt ein Eintrag, gilt das Modul als aktiv -- bestehende Installationen verhalten sich wie bisher.
-export const MODULE_KEYS = ['sla', 'approvals'] as const;
+export const MODULE_KEYS = ['sla', 'approvals', 'outlook'] as const;
 export type ModuleKey = typeof MODULE_KEYS[number];
 export type ModuleState = Record<ModuleKey, boolean>;
 
+// Outlook ist nur mit eingerichteter Microsoft-Anbindung sinnvoll: ohne ausdrueckliche Auswahl
+// gilt das Modul deshalb nur als aktiv, wenn die Integration bereits eingeschaltet ist.
 export function modulesFromConfig(config: Record<string, any> | null | undefined): ModuleState {
   const stored = config?.modules ?? {};
-  return { sla: stored.sla !== false, approvals: stored.approvals !== false };
+  return {
+    sla: stored.sla !== false,
+    approvals: stored.approvals !== false,
+    outlook: typeof stored.outlook === 'boolean' ? stored.outlook : config?.outlookConfig?.enabled === true
+  };
+}
+
+// Wirft 403 module_disabled, wenn das Modul ausgeschaltet ist (fuer Routen eines Moduls).
+export async function requireModule(db: Kysely<Database>, key: ModuleKey): Promise<void> {
+  if (!(await loadModules(db))[key]) throw { statusCode: 403, message: 'module_disabled' };
 }
 
 export async function loadModules(db: Kysely<Database>): Promise<ModuleState> {

@@ -2,11 +2,25 @@ import { UI } from './ui.js';
 import { Lang } from './lang.js';
 import { Store } from './store.js';
 const text = (de, en) => Lang.current === 'en' ? en : de;
+const ERRORS = {
+    too_many_attempts: ['Zu viele Fehlversuche. Bitte warte einen Moment und versuche es dann erneut.', 'Too many failed attempts. Please wait a moment and try again.'],
+    invalid_code: ['Der Code ist falsch oder abgelaufen.', 'The code is wrong or has expired.'],
+    invalid_recovery_code: ['Der Wiederherstellungscode ist ungültig.', 'The recovery code is invalid.'],
+    invalid_enroll_code: ['Der Bestätigungs- bzw. Einrichtungscode ist falsch oder abgelaufen.', 'The confirmation or enrollment code is wrong or has expired.'],
+    enroll_mail_unavailable: ['Es ist kein E-Mail-Versand eingerichtet. Bitte lass dir von deiner Admin-Person einen Einrichtungscode geben.', 'Email delivery is not configured. Please ask your administrator for an enrollment code.'],
+    enroll_code_recently_sent: ['Ein Code wurde gerade erst verschickt. Bitte prüfe dein Postfach.', 'A code was sent just now. Please check your inbox.'],
+    enrollment_verification_required: ['Bitte bestätige die Einrichtung zuerst mit einem Code.', 'Please confirm the setup with a code first.']
+};
 async function api(path, body) {
     const response = await fetch('/api/v2/mfa/' + path, { method: 'POST', credentials: 'same-origin',
         headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.detail || result.message || result.error || text('MFA-Anfrage fehlgeschlagen', 'MFA request failed'));
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const known = ERRORS[result.error];
+        const error = new Error(known ? text(...known) : (result.detail || result.message || result.error || text('MFA-Anfrage fehlgeschlagen', 'MFA request failed')));
+        error.code = result.error;
+        throw error;
+    }
     return result;
 }
 async function browserLibrary() {
@@ -17,6 +31,23 @@ async function browserLibrary() {
     return window.SimpleWebAuthnBrowser;
 }
 export const MFA = {
+    // Security-Audit R-25: vor der Ersteinrichtung ein Bestaetigungscode per E-Mail oder ein
+    // Einrichtungscode der Admin-Person -- das Passwort allein reicht nicht.
+    async verifyEnrollment(token, status) {
+        let label = text('Zur Sicherheit brauchst du einen Einrichtungscode. Du erhältst ihn von deiner Admin-Person.', 'For security you need an enrollment code. Your administrator can give you one.');
+        if (status.enrollMailAvailable) {
+            try {
+                await api('login/enroll-code', { token });
+                label = text('Wir haben dir einen Bestätigungscode per E-Mail geschickt. Alternativ funktioniert auch ein Einrichtungscode deiner Admin-Person.', 'We have emailed you a confirmation code. An enrollment code from your administrator works as well.');
+            } catch (error) {
+                if (error.code !== 'enroll_code_recently_sent') throw error;
+                label = text('Ein Bestätigungscode wurde bereits per E-Mail verschickt. Alternativ funktioniert auch ein Einrichtungscode deiner Admin-Person.', 'A confirmation code has already been emailed. An enrollment code from your administrator works as well.');
+            }
+        }
+        const code = await UI.promptText({ title: text('Einrichtung bestätigen', 'Confirm setup'), label, placeholder: '12345678' });
+        if (!code) throw new Error(text('Abgebrochen.', 'Cancelled.'));
+        await api('login/enroll-verify', { token, code: code.trim() });
+    },
     async passkey(token, register = false) {
         const library = await browserLibrary();
         const { options } = await api('passkeys/options', { token, register });
@@ -52,6 +83,7 @@ export const MFA = {
                     status.hasTotp ? text('Authenticator-Code eingeben', 'Enter authenticator code') : text('Authenticator einrichten', 'Set up authenticator'), async () => {
                         let setup;
                         if (!status.hasTotp) {
+                            if (status.enrollmentRequired) await MFA.verifyEnrollment(token, status);
                             setup = await api('login/totp-setup', { token });
                         }
                         const input = UI.promptText({ title: 'TOTP', label: text('Sechsstelliger Authenticator-Code', 'Six-digit authenticator code'), placeholder: '123456' });

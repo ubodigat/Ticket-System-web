@@ -33,6 +33,7 @@ import { registerWorkTimerRoutes } from './routes/workTimers.js';
 import { registerOfficeViewerRoutes } from './routes/officeViewer.js';
 import { registerStaticAssetRoutes } from './routes/staticAssets.js';
 import { registerSystemInfoRoutes } from './routes/systemInfo.js';
+import { registerBackupRoutes } from './routes/backup.js';
 import { loadSecurityPolicy } from '../domain/securityPolicy.js';
 import { isAccountExpired } from '../domain/accountValidity.js';
 import { recordActivity } from '../domain/activityLog.js';
@@ -247,6 +248,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerMfaRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerUpdateRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerSystemInfoRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerBackupRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerStaticAssetRoutes(app);
 
   return app;

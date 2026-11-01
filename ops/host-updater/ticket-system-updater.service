@@ -1,0 +1,17 @@
+# Security-Audit N-3: verarbeitet Update-Anfragen auf dem Host. Lange Laeufe (Update, Rollback,
+# Migration) startet das Skript als eigene, kurzlebige systemd-Unit; diese Unit endet sofort wieder.
+[Unit]
+Description=Ticket-System: Update-Anfragen verarbeiten
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/ticket-system-updater dispatch
+TimeoutStartSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true

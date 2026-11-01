@@ -20,6 +20,8 @@ import { sendMail, isSmtpConfigured } from '../../mail/mailer.js';
 import { authenticateLdap, isLdapEnabled } from '../../auth/ldap.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { MAIL_SECRET_KEYS, readMailSecrets, encryptMailSecrets } from '../../mail/secrets.js';
+import { buildTicketNumber, ticketNumberFormatProblem, TICKET_CATEGORY_CODE_PATTERN, TICKET_NUMBER_MAX_LENGTH } from '../../domain/ticketNumber.js';
+import { modulesFromConfig } from '../../domain/modules.js';
 
 export interface SettingsRouteDeps {
   env: Env;
@@ -74,25 +76,26 @@ const settingsConfigSchema = z.object({
     perDay: z.record(z.string(), businessHoursDaySchema).optional(),
     holidays: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(366).optional()
   }).optional(),
-  // format: Vorlage mit {prefix}/{category}/{number}. {number} MUSS enthalten sein, sonst wären
-  // Ticketnummern nicht mehr eindeutig unterscheidbar (buildTicketNumber in tickets.ts fiel
-  // bisher nur beim tatsächlichen Erzeugen still auf die reine Zahl zurück -- das Problem war in
-  // den Systemeinstellungen selbst nie sichtbar). Jetzt bereits hier beim Speichern hart
-  // abgelehnt, damit die Person sofort merkt, dass die Vorlage so nicht funktioniert.
+  // format: Vorlage aus Bausteinen ({prefix}, {category}, {year}, {yy}, {month}, {day}, {number})
+  // und einfachen Trennzeichen. {number} MUSS enthalten sein und am Ende stehen (siehe
+  // ticketNumberFormatProblem) -- sonst waeren Nummern nicht eindeutig oder der Zaehler liefe falsch.
+  // Fehlercodes statt Saetzen, die Oberflaeche zeigt dazu einen passenden Hinweis.
   ticketNumberFormat: z.object({
-    prefix: z.string().max(16).default(''),
+    prefix: z.string().trim().max(16).regex(/^[A-Za-z0-9_.-]*$/, 'invalid_prefix').default(''),
     padding: z.number().int().min(1).max(12).default(5),
-    format: z.string().trim().max(64).optional().refine(
-      value => !value || value.includes('{number}'),
-      'Das Format muss den Platzhalter {number} enthalten, sonst sind Ticketnummern nicht mehr eindeutig.'
-    )
+    format: z.string().trim().max(64).optional().superRefine((value, ctx) => {
+      const problem = value ? ticketNumberFormatProblem(value) : null;
+      if (problem) ctx.addIssue({ code: 'custom', message: problem });
+    })
   }).optional(),
   // Pro Kategorie ein eigenes Format (überschreibt ticketNumberFormat.format für diese Kategorie)
-  // -- derselbe {number}-Zwang wie oben gilt hier genauso.
-  ticketNumberCategoryFormats: z.record(
-    z.string(),
-    z.string().trim().max(64).refine(value => value.includes('{number}'), 'Das Format muss den Platzhalter {number} enthalten.')
-  ).optional(),
+  // -- dieselben Regeln wie oben.
+  ticketNumberCategoryFormats: z.record(z.string().max(128), z.string().trim().max(64).superRefine((value, ctx) => {
+    const problem = ticketNumberFormatProblem(value);
+    if (problem) ctx.addIssue({ code: 'custom', message: problem });
+  })).optional(),
+  // Eigenes Kuerzel je Kategorie fuer {category} (z.B. "HW" statt "HARDWARE").
+  ticketNumberCategoryCodes: z.record(z.string().max(128), z.string().trim().regex(TICKET_CATEGORY_CODE_PATTERN, 'invalid_code')).optional(),
   accountSelfServiceFields: z.array(z.enum(['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation'])).optional(),
   autoArchiveClosedAfterDays: z.number().int().min(0).max(3650).optional(),
   waitingReminderDays: z.number().int().min(1).max(365).optional(),
@@ -100,7 +103,7 @@ const settingsConfigSchema = z.object({
   waitingAfterAction: z.enum(['close', 'keep_open']).optional(),
   waitingReminderEnabled: z.boolean().optional(),
   // Systemeinstellungen > Module (siehe domain/modules.ts); fehlende Eintraege gelten als aktiv.
-  modules: z.object({ sla: z.boolean().optional(), approvals: z.boolean().optional() }).strict().optional(),
+  modules: z.object({ sla: z.boolean().optional(), approvals: z.boolean().optional(), outlook: z.boolean().optional() }).strict().optional(),
   approvalWorkflow: z.object({
     enabled: z.boolean().default(false),
     priorities: z.array(z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch'])).default([]),
@@ -163,6 +166,8 @@ const settingsConfigSchema = z.object({
     tenantId: z.string().trim().max(255).optional(),
     clientId: z.string().trim().max(255).optional(),
     mailbox: z.string().trim().max(255).optional(),
+    // Security-Audit R-7: Partnerdomains, an die Einladungen aus dem Firmenpostfach gehen duerfen.
+    externalDomains: z.array(z.string().trim().toLowerCase().regex(/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, 'invalid_domain')).max(100).optional(),
     syncIncoming: z.boolean().optional(),
     createTicketsFromMail: z.boolean().optional()
   }).optional(),
@@ -215,7 +220,7 @@ const ldapConfigSchema = z.object({
 // Allowlist: nur ausdruecklich fuer Benutzeroberflaechen gedachte Schluessel. Neue oder alte
 // (Legacy-)Schluessel in config_json gelangen so nie versehentlich an normale Konten.
 const USER_VISIBLE_CONFIG_KEYS = ['slaHoursByPriority', 'showSlaToUsers', 'defaultPrio', 'businessHours', 'ticketNumberFormat',
-  'ticketNumberCategoryFormats', 'accountSelfServiceFields', 'autoArchiveClosedAfterDays', 'waitingReminderDays',
+  'ticketNumberCategoryFormats', 'ticketNumberCategoryCodes', 'accountSelfServiceFields', 'autoArchiveClosedAfterDays', 'waitingReminderDays',
   'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig', 'modules'] as const;
 function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any> {
   const source = config || {};
@@ -266,7 +271,11 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
         .executeTakeFirstOrThrow();
       let config = removeWriteOnlyMailSecrets(row.config_json ? JSON.parse(row.config_json) : {});
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      // Aufgeloester Modulstand fuer alle Rollen (Outlook haengt ohne ausdrueckliche Auswahl an
+      // outlookConfig, das normale Konten nicht sehen).
+      const modules = modulesFromConfig(config);
       if (!isAdmin) config = removeAdminOnlyConfig(config);
+      config.modules = modules;
       return reply.send({ companyName: row.company_name, portalName: row.portal_name, config });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -316,7 +325,23 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
         }
 
         const existing = await app.db.selectFrom('app_settings').select(['config_json', 'mail_secrets_enc']).where('id', '=', 1).executeTakeFirstOrThrow();
-        const merged = mergeSettingsConfig(existing.config_json ? JSON.parse(existing.config_json) : {}, parsed.data);
+        const previousConfig = existing.config_json ? JSON.parse(existing.config_json) : {};
+        const merged = mergeSettingsConfig(previousConfig, parsed.data);
+        // Die Spalte ticket_number fasst 32 Zeichen: jede Vorlage mit einer realistisch langen
+        // Nummer und jeder Kategorie durchrechnen, bevor gespeichert wird.
+        if (parsed.data.ticketNumberFormat || parsed.data.ticketNumberCategoryFormats || parsed.data.ticketNumberCategoryCodes) {
+          const categories = (await app.db.selectFrom('categories').select('name').where('archived', '=', false).execute()).map(row => row.name);
+          const sample = Number('9'.repeat(Math.max(6, Number(merged.ticketNumberFormat?.padding) || 5)));
+          const example = [null, ...categories].map(category => buildTicketNumber(sample, category, merged))
+            .find(number => number.length > TICKET_NUMBER_MAX_LENGTH);
+          if (example) return reply.code(400).send({ error: 'ticket_number_too_long', example, max: TICKET_NUMBER_MAX_LENGTH });
+        }
+        // Outlook-Modul ausgeschaltet: persoenliche Kalender-Freigaben (Refresh-Tokens) nicht
+        // ungenutzt liegen lassen, sondern sofort verwerfen.
+        if (modulesFromConfig(previousConfig).outlook && !modulesFromConfig(merged).outlook) {
+          await app.db.updateTable('users').set({ outlook_refresh_token_enc: null, outlook_account_email: null, outlook_connected_at: null })
+            .where('outlook_connected_at', 'is not', null).execute();
+        }
         const mailDeps = { db: app.db, ...deps };
         if (merged.emailAdvancedConfig) {
           const secrets = await readMailSecrets(mailDeps, existing.mail_secrets_enc);

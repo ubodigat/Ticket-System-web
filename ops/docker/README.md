@@ -31,11 +31,11 @@ Für eine lokale Entwicklungsumgebung ohne öffentliches TLS: `./install.sh --de
 ## Update
 
 Am einfachsten über die Oberfläche: Systemeinstellungen > Update (nur Superadmin) zeigt den
-Versionsstand gegen GitHub und führt die folgenden Schritte automatisch aus. Details zum
-`updater`-Sidecar-Container (Docker-Socket-Zugriff, Netzwerkisolation): siehe
-[README.md#updates](../../README.md#updates).
+Versionsstand gegen GitHub und lässt die folgenden Schritte vom Host-Dienst `ops/host-updater`
+(systemd, kein Docker-Socket in einem Container) ausführen. Details: siehe
+[README.md](../../README.md#online-updater-bewusst-aktivieren).
 
-Manuell (falls die Oberfläche nicht erreichbar ist oder kein `UPDATE_TOKEN` konfiguriert wurde):
+Manuell (falls die Oberfläche nicht erreichbar ist oder In-App-Updates nicht eingerichtet sind):
 
 ```bash
 git pull

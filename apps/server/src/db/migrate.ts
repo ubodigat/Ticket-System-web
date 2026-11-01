@@ -26,6 +26,10 @@ import { migration_0054_kb_categories } from './migrations/0054_kb_categories.js
 import { migration_0055_admin_todo_done_at } from './migrations/0055_admin_todo_done_at.js';
 import { migration_0056_message_edited_at } from './migrations/0056_message_edited_at.js';
 import { migration_0057_group_parent } from './migrations/0057_group_parent.js';
+import { migration_0058_user_groups } from './migrations/0058_user_groups.js';
+import { migration_0059_user_avatar } from './migrations/0059_user_avatar.js';
+import { migration_0060_ticket_kb_links } from './migrations/0060_ticket_kb_links.js';
+import { migration_0061_audit_hardening } from './migrations/0061_audit_hardening.js';
 import { migration_0001_installations } from './migrations/0001_installations.js';
 import { migration_0002_key_management } from './migrations/0002_key_management.js';
 import { migration_0003_users_and_groups } from './migrations/0003_users_and_groups.js';
@@ -125,7 +129,11 @@ const migrations: Record<string, Migration> = {
   '0054_kb_categories': migration_0054_kb_categories,
   '0055_admin_todo_done_at': migration_0055_admin_todo_done_at,
   '0056_message_edited_at': migration_0056_message_edited_at,
-  '0057_group_parent': migration_0057_group_parent
+  '0057_group_parent': migration_0057_group_parent,
+  '0058_user_groups': migration_0058_user_groups,
+  '0059_user_avatar': migration_0059_user_avatar,
+  '0060_ticket_kb_links': migration_0060_ticket_kb_links,
+  '0061_audit_hardening': migration_0061_audit_hardening
 };
 
 const provider: MigrationProvider = {

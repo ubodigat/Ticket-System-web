@@ -56,8 +56,11 @@ const envSchema = z.object({
   WEBAUTHN_ORIGIN: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   ONLYOFFICE_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   ONLYOFFICE_JWT_SECRET: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
-  UPDATE_SERVICE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
-  UPDATE_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
+  // Security-Audit N-3: Austauschverzeichnis zum Host-Updater (ops/host-updater) statt eines
+  // Updater-Containers mit Docker-Socket. Leer = In-App-Updates nicht eingerichtet.
+  UPDATE_BRIDGE_DIR: z.preprocess(value => value === '' ? undefined : value, z.string().startsWith('/').optional()),
+  // Security-Audit R-24: ONLYOFFICE laeuft unter einer eigenen Subdomain (eigene Herkunft).
+  ONLYOFFICE_PUBLIC_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().refine(value => value.startsWith('https://'), 'https_required').optional()),
   SETUP_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(16).optional()),
   // Security-Audit R-21: Feste Basis-URL der Anwendung fuer den Outlook-OAuth-Callback -- verhindert,
   // dass ein manipulierter Host-Header eine abweichende redirect_uri erzeugt. Leer/fehlend = OAuth-

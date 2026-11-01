@@ -46,9 +46,9 @@ describe('loadEnv', () => {
       DB_HOST: 'localhost', DB_NAME: 'ticketsystem', DB_USER: 'app', DB_PASSWORD: 'secret',
       KEK_FILE_PATH: '/run/secrets/kek', COOKIE_SECRET: 'x'.repeat(32),
       INSTALLATION_ID: '123e4567-e89b-12d3-a456-426614174000', DB_SSL_CA_PATH: '/run/secrets/mariadb-ca.pem',
-      UPDATE_SERVICE_URL: '', UPDATE_TOKEN: ''
+      UPDATE_BRIDGE_DIR: '', ONLYOFFICE_PUBLIC_URL: ''
     });
-    expect(env.UPDATE_SERVICE_URL).toBeUndefined();
-    expect(env.UPDATE_TOKEN).toBeUndefined();
+    expect(env.UPDATE_BRIDGE_DIR).toBeUndefined();
+    expect(env.ONLYOFFICE_PUBLIC_URL).toBeUndefined();
   });
 });

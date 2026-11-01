@@ -57,7 +57,11 @@ export interface UsersTable {
   email_blind_idx: string;
   password_hash: string;
   role: 'user' | 'admin' | 'superadmin';
-  department_group_id: string | null;
+  // Profilbild (Migration 0059): Vorlage 1..6 oder eigenes, verschluesseltes Bild.
+  avatar_preset: Nullable<number>;
+  avatar_image_enc: Buffer | null;
+  avatar_mime: Nullable<string>;
+  avatar_updated_at: NullableTimestamp;
   department: Nullable<string>;
   // Security-Audit N7: LDAP ist standardmäßig AUS für jedes Konto (Opt-in durch einen
   // Superadmin), nicht mehr pauschal für alle lokal existierenden Konten erreichbar.
@@ -92,6 +96,12 @@ export interface UsersTable {
   // laeuft jetzt pro (Konto, Quellnetz) ueber login_failure_sources.
   failed_login_count: Generated<number>;
   failed_login_last_at: NullableTimestamp;
+  // Security-Audit R-23/R-25 (Migration 0061): Zaehler fuer falsche Zwei-Faktor-Codes und
+  // einmaliger Einrichtungscode (nur als HMAC).
+  mfa_failed_count: Generated<number>;
+  mfa_failed_last_at: NullableTimestamp;
+  mfa_enroll_code_hash: Nullable<string>;
+  mfa_enroll_code_expires_at: NullableTimestamp;
   // Persönlicher Outlook-Kalender (delegierte OAuth-Berechtigung, siehe domain/graphClient.ts) --
   // getrennt von der App-only-Integration in app_settings. outlook_connected_at = null bedeutet
   // nicht verbunden; outlook_account_email ist reiner Anzeigetext (kein Secret), der Refresh-
@@ -507,6 +517,10 @@ export interface Database {
   key_rotation_log: KeyRotationLogTable;
   groups: GroupsTable;
   users: UsersTable;
+  // Gruppenmitgliedschaften (Migration 0058) -- eine Person kann mehreren Gruppen angehoeren.
+  user_groups: { user_id: string; group_id: string; created_at: CreatedAt };
+  // Wissensdatenbank-Loesungen, die einem Ticket zugeordnet sind (Migration 0060).
+  ticket_kb_links: { ticket_id: string; article_id: string; linked_by_user_id: Nullable<string>; created_at: CreatedAt };
   login_failure_sources: LoginFailureSourcesTable;
   sessions: SessionsTable;
   jobs: JobsTable;

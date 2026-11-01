@@ -281,7 +281,11 @@ export const Settings = {
             </div>
             ${anyEditable ? `<div class="setting-row"><span class="hint">${Lang.t('onlyEditableFieldsHint')}</span>
                 <button class="btn-primary btn-sm" id="btn-save-account">${Icon('save', 15)}${Lang.t('saveAccountButton')}</button>
-            </div>` : ''}`;
+            </div>` : ''}
+            <div class="setting-row"><span class="hint">${Lang.t('dataExportHint')}</span>
+                <button class="btn-secondary btn-sm" id="btn-export-my-data" type="button">${Icon('download', 15)}${Lang.t('dataExportButton')}</button>
+            </div>`;
+        q('#btn-export-my-data')?.addEventListener('click', event => Settings.exportMyData(event.currentTarget));
         q('#btn-save-account')?.addEventListener('click', async () => {
             const users = await Store.getUsers();
             const target = users.find(u => u.id === user.id);
@@ -349,6 +353,12 @@ export const Settings = {
                                 <!-- Rendered by renderBgGrid -->
                             </div>
                             <input type="file" id="s-bg-file" accept="image/*">
+                        </div>
+                        <div class="field field-wide" id="s-avatar-field" hidden>
+                            <label>${Lang.t('avatarLabel')}</label>
+                            <div id="s-avatar-grid" class="avatar-picker" role="group" aria-label="${Lang.t('avatarLabel')}"></div>
+                            <input type="file" id="s-avatar-file" accept="image/png,image/jpeg,image/webp" hidden>
+                            <p class="hint">${Lang.t('avatarHint')}</p>
                         </div>
                         <div class="field field-wide" id="s-sec-field">
                             <label>${Lang.t('security')}</label>
@@ -433,6 +443,7 @@ export const Settings = {
         q('#s-notif-field').hidden = !user;
         Settings.renderAccountArea(user, s);
         Settings.renderAbsenceArea(user);
+        Settings.renderAvatarPicker(modal, user);
         const secArea = q('#s-sec-area');
         if (user && secArea) {
             const isEnabled = user.twoFactorEnabled;
@@ -670,5 +681,109 @@ export const Settings = {
     save: async (s) => {
         await Store.saveSettings(s);
         Settings.apply(s);
+    },
+
+    // DSGVO Art. 15/20: eigene Daten als JSON-Datei. Nutzt ausschliesslich die normalen,
+    // rechtegeprueften Schnittstellen -- enthalten ist nur, was die Person ohnehin sehen darf:
+    // Profil, persoenliche Einstellungen, Benachrichtigungen und die selbst erstellten Tickets samt
+    // Nachrichtenverlauf. Interne Notizen des Supports gehoeren nicht dazu.
+    exportMyData: async (button) => {
+        if (button) button.disabled = true;
+        try {
+            const get = async url => {
+                const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store' }).catch(() => null);
+                return res && res.ok ? res.json() : null;
+            };
+            const me = (await get('/api/v2/users/me'))?.user;
+            if (!me) throw new Error('profile');
+            const [active, archived, preferences, notifications, absences] = await Promise.all([
+                get('/api/v2/tickets'), get('/api/v2/tickets/archived'), get('/api/v2/users/me/preferences'),
+                get('/api/v2/notifications'), get('/api/v2/users/me/absences')
+            ]);
+            const own = [...(active?.tickets || []), ...(archived?.tickets || [])].filter(ticket => ticket.created_by_user_id === me.id);
+            const tickets = [];
+            for (const ticket of own) tickets.push({ ...ticket, messages: (await get(`/api/v2/tickets/${encodeURIComponent(ticket.id)}/messages`))?.messages || [] });
+            const data = {
+                exportedAt: new Date().toISOString(),
+                profile: me,
+                preferences: preferences?.preferences || {},
+                absences: absences?.absences || [],
+                notifications: notifications?.notifications || [],
+                tickets
+            };
+            const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `meine-daten-${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 30000);
+            UI.toast(Lang.t('dataExportDone'));
+        } catch {
+            UI.toast(Lang.t('dataExportFailed'));
+        } finally {
+            if (button) button.disabled = false;
+        }
+    },
+
+    // Profilbild: automatische Vorlage, eine der sechs Vorlagen oder ein eigenes Bild.
+    renderAvatarPicker: (modal, user) => {
+        const field = modal.querySelector('#s-avatar-field');
+        if (!field) return;
+        field.hidden = !user;
+        if (!user) return;
+        const avatar = user.avatar || { preset: null, custom: null };
+        const tiles = [
+            { kind: 'auto', url: Utils.avatarFallbackUrl(user.id), label: Lang.t('avatarAutomatic'), active: !avatar.preset && !avatar.custom },
+            ...[1, 2, 3, 4, 5, 6].map(preset => ({ kind: 'preset', preset, url: `picture/avatars/avatar-${preset}.png`, label: Lang.format('avatarPresetLabel', { n: preset }), active: avatar.preset === preset })),
+            { kind: 'upload', url: avatar.custom ? `/api/v2/users/${encodeURIComponent(user.id)}/avatar?v=${encodeURIComponent(avatar.custom)}` : null, label: Lang.t('avatarUpload'), active: !!avatar.custom }
+        ];
+        const grid = modal.querySelector('#s-avatar-grid');
+        grid.innerHTML = tiles.map((tile, index) => `<button type="button" class="avatar-choice${tile.active ? ' active' : ''}${tile.kind === 'upload' ? ' is-upload' : ''}" data-index="${index}" aria-pressed="${tile.active}" title="${Utils.esc(tile.label)}" aria-label="${Utils.esc(tile.label)}">${tile.url ? `<img src="${Utils.esc(tile.url)}" alt="">` : Icon('image-plus', 20)}${tile.kind === 'upload' && tile.url ? `<span class="avatar-choice-badge">${Icon('upload', 12)}</span>` : ''}${tile.kind === 'auto' ? `<span class="avatar-choice-badge">${Icon('sparkles', 12)}</span>` : ''}</button>`).join('');
+        const applied = result => {
+            if (!result) return UI.toast(Lang.t('avatarUploadFailed'));
+            user.avatar = result;
+            Utils.setAvatar(user, result);
+            Settings.renderAvatarPicker(modal, user);
+            UI.toast(Lang.t('avatarSavedToast'));
+        };
+        grid.querySelectorAll('.avatar-choice').forEach(btn => btn.onclick = async () => {
+            const tile = tiles[Number(btn.dataset.index)];
+            if (tile.kind === 'upload') return modal.querySelector('#s-avatar-file').click();
+            applied(tile.kind === 'auto' ? await Store.resetAvatar() : await Store.setAvatarPreset(tile.preset));
+        });
+        modal.querySelector('#s-avatar-file').onchange = async event => {
+            const file = event.target.files[0];
+            event.target.value = '';
+            if (!file) return;
+            if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return UI.toast(Lang.t('avatarInvalidType'));
+            if (file.size > 15 * 1024 * 1024) return UI.toast(Lang.t('avatarTooLarge'));
+            const data = await Settings.resizeAvatar(file).catch(() => null);
+            if (!data) return UI.toast(Lang.t('avatarInvalidType'));
+            applied(await Store.uploadAvatar(data));
+        };
+        if (window.lucide) lucide.createIcons();
+    },
+
+    // Verkleinert ein eigenes Profilbild auf 256 x 256 (mittig zugeschnitten). Das Neuzeichnen
+    // entfernt dabei auch Metadaten wie Kamera- oder GPS-Angaben.
+    resizeAvatar: async (file) => {
+        const url = URL.createObjectURL(file);
+        try {
+            const img = await new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = reject; image.src = url; });
+            const side = Math.min(img.naturalWidth, img.naturalHeight);
+            if (!side) throw new Error('empty_image');
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 256;
+            canvas.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 256, 256);
+            for (const [type, quality] of [['image/webp', 0.9], ['image/jpeg', 0.88]]) {
+                const blob = await new Promise(resolve => canvas.toBlob(resolve, type, quality));
+                if (blob && blob.type === type && blob.size <= 280 * 1024) return String(await Store.readFile(blob)).split(',').pop();
+            }
+            throw new Error('image_too_large');
+        } finally {
+            URL.revokeObjectURL(url);
+        }
     }
 };

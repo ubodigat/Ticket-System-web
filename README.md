@@ -12,7 +12,7 @@ für den optionalen Virenscanner zusätzlich 1-2 GB, für die Office-Oberfläche
 `--enable-office-viewer` aktiviert (Anleitung unten).
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=81b6c5328f1bf7901fc61fa76baa34147847ad1b472330486cc5ea8241f37500 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=8405ed6ff45c94fe13254e5c0963b2a082216cc511e444642d8cc8a957c1a8f0 bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -39,7 +39,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=81b6c5328f1bf7901fc61fa76baa34147847ad1b472330486cc5ea8241f37500 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=8405ed6ff45c94fe13254e5c0963b2a082216cc511e444642d8cc8a957c1a8f0 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist
@@ -62,22 +62,30 @@ besondere Office-Funktionen können weiterhin zu Abweichungen von Microsoft Offi
 Neue Office-Uploads sind für DOCX, XLSX, PPTX und ODT/ODS/ODP freigegeben; die zusätzlichen
 Formate müssen zur erkannten Dateistruktur passen. Makroformate bleiben gesperrt.
 
-Bei der Erstinstallation diesen verifizierten Befehl verwenden; mit einer eigenen Domain
-zusätzlich `--domain=… --acme-email=…` hinter `--enable-office-viewer` ergänzen:
+Die Office-Oberfläche läuft aus Sicherheitsgründen unter einer **eigenen Subdomain**
+(Standard: `office.<deine-domain>`, abweichend mit `--office-domain=…`). So kann eine
+Schwachstelle im Office-Dienst nicht auf die Anmeldung im Ticketsystem zugreifen. Deshalb ist
+eine echte Domain nötig (`--domain=… --acme-email=…`), und für die Subdomain muss ein DNS-Eintrag
+(A/AAAA) auf denselben Server zeigen. Mit einer reinen IP-Adresse lässt sich die Office-Oberfläche
+nicht aktivieren; die PDF-Vorschau funktioniert weiterhin.
+
+Bei der Erstinstallation diesen verifizierten Befehl verwenden und `--domain=… --acme-email=…`
+hinter `--enable-office-viewer` ergänzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7e4cbc53239b8a6dfecde933fbb85e89feee51e21cfcb0f3dc2898e8cbd48dbd" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=81b6c5328f1bf7901fc61fa76baa34147847ad1b472330486cc5ea8241f37500 bash "$f" --enable-office-viewer'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=8405ed6ff45c94fe13254e5c0963b2a082216cc511e444642d8cc8a957c1a8f0 bash "$f" --enable-office-viewer'
 ```
 
 Bei einem bereits aktualisierten Checkout auf dem Server:
 
 ```bash
 cd /opt/ticket-system
-bash install.sh --enable-office-viewer
+bash install.sh --enable-office-viewer --domain=support.example.com --acme-email=it@example.com
 ```
 
 Der Installer aktiviert das Compose-Profil `office-viewer`, erstellt ein dauerhaftes
-JWT-Geheimnis und startet den Dienst ohne öffentliche Zusatzports. Beim ersten Start
+JWT-Geheimnis, legt die Caddy-Site für die Office-Subdomain an (`ops/docker/caddy-sites/office.caddy`)
+und startet den Dienst ohne öffentliche Zusatzports in einem eigenen Netz. Beim ersten Start
 braucht ONLYOFFICE einige Minuten. Bis er bereit ist, bleibt die PDF-Vorschau verfügbar.
 Mindestens etwa **7 GB RAM für den gesamten Stack** vorsehen, mit Virenscanner entsprechend
 mehr. Dateien über 15 MiB bleiben auf den Download beschränkt. Die Dokumentendienste halten
@@ -259,8 +267,8 @@ bash ops/verify-and-pull.sh
 bash install.sh
 ```
 
-`verify-and-pull.sh` holt neue Commits und bricht ab, falls der neue Stand nicht mit einem
-bekannten Schlüssel signiert ist (Security-Audit R-14) -- bis ein öffentlicher
+`verify-and-pull.sh` holt neue Commits und bricht ab, falls weder der neue Stand noch ein darauf
+zeigender Release-Tag mit einem bekannten Schlüssel signiert ist (Security-Audit R-14) -- bis ein öffentlicher
 Signaturschlüssel importiert ist (`gpg --import ...`), muss die Änderung dann bewusst manuell
 geprüft werden, statt ungeprüft übernommen zu werden.
 
@@ -271,10 +279,10 @@ die App bis zur Fehlerbehebung angehalten. Keine Volumes löschen und keine neue
 Schlüssel schreiben. Migrationen dürfen nicht im dauerhaft laufenden App-Container
 ausgeführt werden: Dieser besitzt absichtlich keine DDL-Zugangsdaten.
 
-**Online-Updates:** Standardmäßig deaktiviert. Der optionale Updater benötigt privilegierten
-Docker-Host-Zugriff und akzeptiert ausschließlich signierte Commits mit einem vom Betreiber
-hinterlegten Schlüssel. Ohne Schlüssel bleiben Updates gesperrt, auch mit
-`UPDATE_REQUIRE_SIGNED_COMMITS=false`. Details unten.
+**Online-Updates:** Standardmäßig deaktiviert. Der optionale Updater läuft als systemd-Dienst
+direkt auf dem Server; kein Container erhält Zugriff auf den Docker-Socket. Er übernimmt
+ausschließlich Stände, deren Commit oder Release-Tag mit einem vom Betreiber hinterlegten
+Schlüssel signiert ist. Ohne Schlüssel bleiben Updates gesperrt. Details unten.
 
 <details>
 <summary>Betrieb, Fehlersuche, optionale Dienste und Entwicklung</summary>
@@ -323,8 +331,11 @@ rekonstruieren und bricht dann ab, ohne Daten oder Volumes zu löschen.
 
 ### Online-Updater bewusst aktivieren
 
-Nur einsetzen, wenn der Docker-Host-Zugriff ausdrücklich akzeptiert wird. Ein kompromittierter
-Updater besitzt Host-Rechte. Die sichere Standardinstallation startet diesen Dienst nicht.
+Der Updater ist ein systemd-Dienst auf dem Host (`ops/host-updater`). Die App legt lediglich
+eng begrenzte Anfragen (Status, Update auf den angezeigten Commit, Migration, Rollback) in
+`/var/lib/ticket-system-update/requests` ab; der Dienst prüft vor jedem Update die Signatur des
+Ziel-Commits bzw. eines darauf zeigenden Release-Tags (`v…` oder `release-…`). Kein Container
+hat Zugriff auf den Docker-Socket.
 
 Den öffentlichen Release-Signaturschlüssel über einen vertrauenswürdigen Kanal beziehen und
 seinen Fingerprint unabhängig prüfen. Anschließend auf dem Host importieren:
@@ -336,21 +347,26 @@ gpg --homedir "$PWD/ops/docker/update-keys" --import /root/release-signing-key.a
 bash install.sh --enable-updates
 ```
 
-Der Schlüsselbund wird nur lesend eingebunden. Nach Schlüsseländerungen den Updater neu
-starten. Unsignierte Commits und unbekannte Signaturen werden abgelehnt; der Entwickler
-muss Release-Commits entsprechend signieren. Rollbacks mit Schemaänderungen sind gesperrt
-und erfordern eine Wiederherstellung mit passendem Datenbank-Backup.
+Der Installer kopiert den Schlüsselbund nach `/etc/ticket-system-updater/keys` (nur für root
+lesbar). Nach Schlüsseländerungen `bash install.sh` erneut ausführen. Unsignierte Stände und
+unbekannte Signaturen werden abgelehnt. Rollbacks mit Schemaänderungen sind gesperrt und
+erfordern eine Wiederherstellung mit passendem Datenbank-Backup.
 
 Den Fingerprint vor dem Import mit `gpg --show-keys --with-fingerprint /root/release-signing-key.asc`
 anzeigen und über einen zweiten, unabhängigen Kanal vergleichen. Commits, die direkt auf GitHub
 entstehen (Copilot Autofix, Merge-Button), sind mit GitHubs eigenem Schlüssel signiert und werden
-vom Updater abgelehnt; solche Änderungen lokal übernehmen und signiert erneut pushen.
+abgelehnt, solange kein signierter Release-Tag darauf zeigt.
+
+**Releases signieren (Maintainer):** entweder jeden Commit signieren
+(`git config commit.gpgsign true`) oder Releases als signierten Tag veröffentlichen
+(`git tag -s v1.2.3 -m "Release 1.2.3" && git push origin v1.2.3`). Den Fingerprint des
+Signaturschlüssels an einer zweiten, unabhängigen Stelle veröffentlichen.
 
 ### Online-Updater wieder deaktivieren
 
-Empfohlen direkt nach jedem Update. Entfernt den Updater-Container samt Docker-Zugriff, leert
-`UPDATE_SERVICE_URL`, setzt `UPDATE_ALLOW_MAIN_DEPLOY=false`, nimmt `dangerous-updater` aus
-`COMPOSE_PROFILES` und erneuert `UPDATE_TOKEN`. Daten und Einstellungen bleiben erhalten:
+Entfernt den systemd-Dienst samt Konfiguration und setzt `UPDATE_ALLOW_MAIN_DEPLOY=false`.
+Daten und Einstellungen bleiben erhalten. Ein noch vorhandener Updater-Container älterer
+Versionen wird bei jedem Installer-Lauf entfernt:
 
 ```bash
 cd /opt/ticket-system
@@ -361,7 +377,8 @@ Ein Lauf von `install.sh` ohne diese Optionen behält den jeweiligen Zustand bei
 
 ### Weitere Optionen
 
-- `--enable-updates` / `--disable-updates`: Online-Updater (Docker-Hostrechte) ein- bzw. vollständig wieder ausschalten, siehe oben.
+- `--enable-updates` / `--disable-updates`: Online-Updater (systemd-Dienst auf dem Host) ein- bzw. vollständig wieder ausschalten, siehe oben.
+- `--enable-office-viewer` und optional `--office-domain=office.example.com`: Office-Oberfläche unter eigener Subdomain, siehe oben.
 - `--enable-antivirus`: ClamAV aktivieren; ohne funktionierenden Scanner schlagen Uploads bei aktivierter Prüfung fehl.
 - `--dev`: lokale Testkonfiguration, nicht für öffentliche Produktionsinstallationen.
 - `--domain=... --acme-email=...`: öffentlich vertrauenswürdiges HTTPS über ACME.

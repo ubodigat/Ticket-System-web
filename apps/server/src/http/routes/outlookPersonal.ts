@@ -20,6 +20,7 @@ import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
 import { mysqlTimestamp } from '../../db/date.js';
+import { requireModule } from '../../domain/modules.js';
 import {
   loadOutlookAppCredentials, getAuthorizationUrl, exchangeAuthCodeForTokens,
   refreshDelegatedAccessToken, getMyProfile, getMyCalendarView, createMyCalendarEvent,
@@ -92,6 +93,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
   app.get('/api/v2/outlook/status', async (req, reply) => {
     try {
       const session = requireSession(req);
+      await requireModule(app.db, 'outlook');
       const row = await app.db.selectFrom('users').select(['outlook_account_email', 'outlook_connected_at']).where('id', '=', session.uid).executeTakeFirst();
       const hasCredentials = !!await loadOutlookAppCredentials(app.db, deps.env, deps.keyProvider);
       // Konkreter Grund statt eines stumm gesperrten Buttons: fehlende App-Registrierung in den
@@ -108,6 +110,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
   } } }, async (req, reply) => {
     try {
       const session = requireSession(req);
+      await requireModule(app.db, 'outlook');
       const creds = await loadOutlookAppCredentials(app.db, deps.env, deps.keyProvider);
       if (!creds) return reply.code(409).send({ error: 'outlook_not_configured' });
       if (!deps.env.PUBLIC_BASE_URL) return reply.code(409).send({ error: 'outlook_base_url_missing' });
@@ -136,6 +139,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
 
     try {
       const session = requireSession(req);
+      await requireModule(app.db, 'outlook');
       if (query.error || !query.code || !query.state) return reply.redirect(`${safeReturnTo}?outlook=failed`);
       const [stateNonce, stateUserId] = query.state.split(':', 2);
       if (!cookieNonce || stateNonce !== cookieNonce || stateUserId !== session.uid) {
@@ -180,6 +184,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
   app.get('/api/v2/outlook/calendar', async (req, reply) => {
     try {
       const session = requireSession(req);
+      await requireModule(app.db, 'outlook');
       const parsed = calendarQuerySchema.safeParse(req.query);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_query' });
 
@@ -211,6 +216,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
   } } }, async (req, reply) => {
     try {
       const session = requireSession(req);
+      await requireModule(app.db, 'outlook');
       const parsed = createEventSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
 

@@ -24,6 +24,7 @@ export const OutlookCalendar = {
         if (!q('.topbar-right') || q('#btn-outlook-calendar')) return;
         const button = document.createElement('button');
         button.id = 'btn-outlook-calendar';
+        button.dataset.module = 'outlook';
         button.className = 'btn-ghost btn-icon notification-button';
         button.title = Lang.t('myCalendar');
         button.setAttribute('aria-label', Lang.t('myCalendar'));

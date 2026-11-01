@@ -15,7 +15,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 // mehreren gleichzeitig laufenden Instanzen zu doppelter Ausführung führen kann (keine
 // Sperre zwischen Instanzen). Für eine horizontal skalierte Installation müsste das durch die
 // in docs/JOBS.md vorgesehene DB-Queue ersetzt werden.
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 import type { Database } from '../db/types.js';
 import type { Env } from '../config/env.js';
 import type { KeyProvider } from '../crypto/keyProvider.js';
@@ -234,6 +234,29 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
   return { reminded, closed };
 }
 
+// Security-Audit R-27 / DSGVO (Speicherbegrenzung): technische Anfrage-Eintraege 90 Tage, fachliche
+// Ereignisse im Systemprotokoll 1 Jahr, technische Eintraege im Ticket-Protokoll 1 Jahr (der fachliche
+// Verlauf eines Tickets bleibt so lange wie das Ticket), IP-Adressen werden nach 30 Tagen entfernt,
+// abgelaufene Sitzungen (mit IP-Adresse und Browserkennung) nach 30 Tagen geloescht.
+export const RETENTION_DAYS = { requests: 90, audit: 365, ticketActivity: 365, ipAddresses: 30, sessions: 30 } as const;
+
+export async function runLogRetention(deps: MaintenanceDeps, now = Date.now()): Promise<{ deleted: number; anonymized: number }> {
+  const before = (days: number) => new Date(now - days * 86_400_000);
+  const results = [
+    await deps.db.deleteFrom('global_audit_log').where('action', 'like', 'request:%').where('created_at', '<', before(RETENTION_DAYS.requests)).executeTakeFirst(),
+    await deps.db.deleteFrom('global_audit_log').where('created_at', '<', before(RETENTION_DAYS.audit)).executeTakeFirst(),
+    await deps.db.deleteFrom('ticket_audit_log').where('action', 'like', 'activity:%').where('created_at', '<', before(RETENTION_DAYS.ticketActivity)).executeTakeFirst(),
+    await deps.db.deleteFrom('sessions').where('expires_at', '<', before(RETENTION_DAYS.sessions)).executeTakeFirst()
+  ];
+  const anonymized = await sql`UPDATE global_audit_log SET detail_json = JSON_REMOVE(detail_json, '$.ip')
+    WHERE created_at < ${before(RETENTION_DAYS.ipAddresses)} AND detail_json IS NOT NULL AND JSON_VALID(detail_json)
+      AND JSON_EXISTS(detail_json, '$.ip')`.execute(deps.db);
+  return {
+    deleted: results.reduce((sum, result) => sum + Number(result.numDeletedRows ?? 0), 0),
+    anonymized: Number(anonymized.numAffectedRows ?? 0)
+  };
+}
+
 async function logSystemAction(deps: MaintenanceDeps, action: string, detail: Record<string, unknown>): Promise<void> {
   await deps.db.insertInto('global_audit_log').values({
     id: randomUUID(), actor_user_id: null, actor_username: 'System', action, target_type: 'system', target_id: null,
@@ -242,6 +265,7 @@ async function logSystemAction(deps: MaintenanceDeps, action: string, detail: Re
 }
 
 export function startMaintenanceScheduler(deps: MaintenanceDeps, intervalMs = 5 * 60 * 1000): NodeJS.Timeout {
+  let lastRetentionRun = 0;
   const tick = async () => {
     // Automatische Aktionen erscheinen im Systemprotokoll (nur wenn tatsaechlich etwas passiert ist),
     // ebenso jeder Fehlschlag eines Jobs.
@@ -250,7 +274,13 @@ export function startMaintenanceScheduler(deps: MaintenanceDeps, intervalMs = 5 
       ['Auto-Archivierung', 'system.auto_archived', async () => ({ count: await runAutoArchive(deps) })],
       ['Wiederkehrende Tickets', 'system.recurring_tickets_created', async () => ({ count: await runRecurringTickets(deps) })],
       ['Wiederkehrende Aufgaben', 'system.recurring_todos_created', async () => ({ count: Number(await runRecurringAdminTodos(deps)) || 0 })],
-      ['Warten-auf-Benutzer', 'system.waiting_processed', async () => await runWaitingTickets(deps)]
+      ['Warten-auf-Benutzer', 'system.waiting_processed', async () => await runWaitingTickets(deps)],
+      // Loeschfristen einmal pro Stunde.
+      ['Löschfristen', 'system.retention_applied', async () => {
+        if (Date.now() - lastRetentionRun < 3_600_000) return {};
+        lastRetentionRun = Date.now();
+        return runLogRetention(deps);
+      }]
     ];
     for (const [name, action, job] of jobs) {
       try {

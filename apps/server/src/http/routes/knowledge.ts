@@ -65,6 +65,16 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
     return permissions[key] === true;
   }
 
+  // Voller Name der erstellenden Person (verschluesselt gespeichert); null, falls nicht lesbar.
+  function displayName(nameEnc: Buffer | null | undefined, userId: string | null, dek: { rawDek: Buffer; keyVersion: number }): string | null {
+    if (!nameEnc || !userId) return null;
+    try {
+      return fieldCipher.decryptField(nameEnc, dek.rawDek, ctx(deps, 'users', userId, 'name', dek.keyVersion));
+    } catch {
+      return null;
+    }
+  }
+
   // Erlaubte Kategorien: aktive Ticket-Kategorien plus eigene Wissensdatenbank-Kategorien.
   async function categoryExists(name: string): Promise<boolean> {
     const ticketCategory = await app.db.selectFrom('categories').select('id').where('name', '=', name).where('archived', '=', false).executeTakeFirst();
@@ -80,13 +90,19 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const session = requireSession(req);
       if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('kb_articles').leftJoin('users', 'users.id', 'kb_articles.created_by_user_id')
-        .selectAll('kb_articles').select('users.username as created_by_username').orderBy('kb_articles.updated_at', 'desc').execute();
+        .selectAll('kb_articles').select(['users.username as created_by_username', 'users.name_enc as created_by_name_enc'])
+        .orderBy('kb_articles.updated_at', 'desc').execute();
       const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
       const contentDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.content');
-      const articles = rows.map(row => ({
+      const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
+      const linkCounts = new Map((await app.db.selectFrom('ticket_kb_links').select(['article_id', eb => eb.fn.countAll<string>().as('n')])
+        .groupBy('article_id').execute()).map(row => [row.article_id, Number(row.n)]));
+      const articles = rows.map(({ created_by_name_enc, ...row }) => ({
         ...row,
         title: fieldCipher.decryptField(row.title, titleDek.rawDek, ctx(deps, 'kb_articles', row.id, 'title', titleDek.keyVersion)),
-        content: fieldCipher.decryptField(row.content, contentDek.rawDek, ctx(deps, 'kb_articles', row.id, 'content', contentDek.keyVersion))
+        content: fieldCipher.decryptField(row.content, contentDek.rawDek, ctx(deps, 'kb_articles', row.id, 'content', contentDek.keyVersion)),
+        created_by_name: displayName(created_by_name_enc, row.created_by_user_id, nameDek) ?? row.created_by_username,
+        linked_ticket_count: linkCounts.get(row.id) ?? 0
       }));
       return reply.send({ articles });
     } catch (e: any) {
@@ -162,6 +178,94 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const { id } = req.params as { id: string };
       await app.db.deleteFrom('kb_articles').where('id', '=', id).execute();
       return reply.send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // --- Wissensdatenbank-Loesungen einem Ticket zuordnen ---
+  // Nur Admins mit Lesezugriff auf die Wissensdatenbank; archivierte Tickets bleiben unveraendert.
+
+  async function linkableTicket(ticketId: string) {
+    const ticket = await app.db.selectFrom('tickets').select(['id', 'archived_at']).where('id', '=', ticketId).executeTakeFirst();
+    if (!ticket) throw { statusCode: 404, message: 'not_found' };
+    return ticket;
+  }
+
+  app.get('/api/v2/tickets/:id/kb-links', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      const { id } = req.params as { id: string };
+      await linkableTicket(id);
+      const rows = await app.db.selectFrom('ticket_kb_links').innerJoin('kb_articles', 'kb_articles.id', 'ticket_kb_links.article_id')
+        .select(['kb_articles.id', 'kb_articles.title', 'kb_articles.category', 'ticket_kb_links.created_at as linked_at'])
+        .where('ticket_kb_links.ticket_id', '=', id).orderBy('ticket_kb_links.created_at', 'asc').execute();
+      const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
+      return reply.send({ links: rows.map(row => ({
+        article_id: row.id, category: row.category, linked_at: row.linked_at,
+        title: fieldCipher.decryptField(row.title, titleDek.rawDek, ctx(deps, 'kb_articles', row.id, 'title', titleDek.keyVersion))
+      })) });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.post('/api/v2/tickets/:id/kb-links', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      const { id } = req.params as { id: string };
+      const parsed = z.object({ article_id: z.string().trim().min(1).max(36) }).strict().safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      const ticket = await linkableTicket(id);
+      if (ticket.archived_at) return reply.code(409).send({ error: 'ticket_archived' });
+      const article = await app.db.selectFrom('kb_articles').select('id').where('id', '=', parsed.data.article_id).executeTakeFirst();
+      if (!article) return reply.code(404).send({ error: 'article_not_found' });
+      const existing = await app.db.selectFrom('ticket_kb_links').select('article_id')
+        .where('ticket_id', '=', id).where('article_id', '=', article.id).executeTakeFirst();
+      if (existing) return reply.send({ success: true, already: true });
+      await app.db.insertInto('ticket_kb_links').values({ ticket_id: id, article_id: article.id, linked_by_user_id: session.uid }).execute();
+      await app.db.insertInto('ticket_audit_log').values({
+        id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
+        action: 'kb_linked', field: 'kb_article', old_value: null, new_value: article.id
+      }).execute();
+      return reply.code(201).send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.delete('/api/v2/tickets/:id/kb-links/:articleId', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      const { id, articleId } = req.params as { id: string; articleId: string };
+      const ticket = await linkableTicket(id);
+      if (ticket.archived_at) return reply.code(409).send({ error: 'ticket_archived' });
+      const result = await app.db.deleteFrom('ticket_kb_links').where('ticket_id', '=', id).where('article_id', '=', articleId).executeTakeFirst();
+      if (Number(result.numDeletedRows) > 0) {
+        await app.db.insertInto('ticket_audit_log').values({
+          id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
+          action: 'kb_unlinked', field: 'kb_article', old_value: articleId, new_value: null
+        }).execute();
+      }
+      return reply.send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // Tickets, denen ein Artikel zugeordnet ist (Ticketnummer und Status, ohne Inhalte).
+  app.get('/api/v2/kb/articles/:id/tickets', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
+      const { id } = req.params as { id: string };
+      const tickets = await app.db.selectFrom('ticket_kb_links').innerJoin('tickets', 'tickets.id', 'ticket_kb_links.ticket_id')
+        .select(['tickets.id', 'tickets.ticket_number', 'tickets.status', 'tickets.archived_at'])
+        .where('ticket_kb_links.article_id', '=', id).orderBy('ticket_kb_links.created_at', 'desc').limit(200).execute();
+      return reply.send({ tickets: tickets.map(t => ({ id: t.id, ticket_number: t.ticket_number, status: t.status, archived: !!t.archived_at })) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }

@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 // daher hier über die openssl-CLI (RFC 8551 "multipart/signed" via `openssl smime -sign`) statt
 // über ein zusätzliches npm-Paket -- zum Prüfzeitpunkt hatte das einzige verbreitete reine-JS-CMS-
 // Paket (node-forge) einen offenen, ungepatchten High-Schwachstellen-Eintrag (GHSA-86w9-cpqp-85rv).
-// openssl läuft wie beim Updater (ops/docker/updater-server.mjs) mit shell:false und
+// openssl läuft mit shell:false und
 // Array-Argumenten -- kein Shell-Injection-Risiko, auch wenn Betreff/Text spaeter einmal
 // Sonderzeichen enthalten.
 export interface SmimeSignParams {

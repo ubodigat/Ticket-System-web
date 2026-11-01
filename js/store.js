@@ -103,6 +103,7 @@ export const Store = {
             if (!res.ok) { Store._meCache = null; return null; }
             const payload = await res.json();
             const user = payload.user ? Store.mapApiUserToLegacy(payload.user) : null;
+            if (user) Utils.setAvatar(user, user.avatar);
             Store._meCache = user;
             Store._meCacheAt = Date.now();
             return user;
@@ -125,6 +126,7 @@ export const Store = {
         }
         const payload = await res.json();
         const users = (payload.users || []).map(Store.mapApiUserToLegacy);
+        users.forEach(u => Utils.setAvatar(u, u.avatar));
         Store._directoryCache = users;
         return users;
     },
@@ -134,7 +136,8 @@ export const Store = {
         name: u.name,
         email: u.email,
         role: u.role,
-        department_group_id: u.department_group_id ?? null,
+        groupIds: Array.isArray(u.group_ids) ? u.group_ids : [],
+        avatar: u.avatar || null,
         department: u.department || '',
         phone: u.phone || '',
         mobile: u.mobile || '',
@@ -180,6 +183,7 @@ export const Store = {
         }
         const payload = await res.json();
         const users = (payload.users || []).map(Store.mapApiUserToLegacy);
+        users.forEach(u => Utils.setAvatar(u, u.avatar));
         Store._usersCache = users;
         Store._usersSnapshot = Store.cloneUserList(users);
         return users;
@@ -231,7 +235,7 @@ export const Store = {
                         name: u.name || u.username,
                         email: u.email || '',
                         role: u.role === 'superadmin' ? 'superadmin' : (u.role === 'admin' ? 'admin' : 'user'),
-                        department_group_id: u.department_group_id ?? null,
+                        group_ids: u.groupIds || [],
                         department: u.department || '',
                         phone: u.phone || '',
                         mobile: u.mobile || '',
@@ -253,7 +257,7 @@ export const Store = {
             if (u.name !== prev.name) patch.name = u.name;
             if (u.email !== prev.email) patch.email = u.email;
             if (u.role !== prev.role && (u.role === 'user' || u.role === 'admin')) patch.role = u.role;
-            if (u.department_group_id !== prev.department_group_id) patch.department_group_id = u.department_group_id ?? null;
+            if (JSON.stringify([...(u.groupIds || [])].sort()) !== JSON.stringify([...(prev.groupIds || [])].sort())) patch.group_ids = u.groupIds || [];
             if ((u.department || '') !== (prev.department || '')) patch.department = u.department || '';
             if ((u.phone || '') !== (prev.phone || '')) patch.phone = u.phone || '';
             if ((u.mobile || '') !== (prev.mobile || '')) patch.mobile = u.mobile || '';
@@ -338,9 +342,8 @@ export const Store = {
         if (!res || !res.ok) return [];
         return (await res.json()).ticketIds || [];
     },
-    // Gruppen laufen über die echte /api/v2/groups-API. Mitgliedschaft gibt es im Backend NICHT
-    // als Array auf der Gruppe, sondern als department_group_id auf dem Benutzer (eine Gruppe pro
-    // Person) -- "members" wird hier nur zur Anzeige aus den Benutzern abgeleitet.
+    // Gruppen laufen über die echte /api/v2/groups-API. Eine Person kann mehreren Gruppen
+    // angehoeren (group_ids am Benutzer) -- "members" wird hier zur Anzeige daraus abgeleitet.
     getGroups: async () => {
         const res = await fetch('/api/v2/groups', { credentials: 'same-origin' });
         if (!res.ok) return [];
@@ -351,7 +354,7 @@ export const Store = {
             name: g.name,
             isDefault: !!g.is_default,
             parentId: g.parent_id || null,
-            members: users.filter(u => u.department_group_id === g.id).map(u => u.username)
+            members: users.filter(u => (u.groupIds || []).includes(g.id)).map(u => u.username)
         })));
     },
     // Gruppen in Baumreihenfolge (Eltern vor Untergruppen) mit Ebene, Pfadbezeichnung
@@ -413,11 +416,16 @@ export const Store = {
         }).catch(() => null);
         return !!res && res.ok;
     },
-    // Setzt die Abteilungsgruppe der angegebenen Benutzer (eine Gruppe pro Person, siehe getGroups).
-    setGroupMembers: async (usernames, groupId) => {
-        const users = await Store.getUsers();
-        users.forEach(u => { if (usernames.includes(u.username)) u.department_group_id = groupId; });
-        await Store.saveUsers(users);
+    // Personen (IDs) einer Gruppe hinzufuegen/entfernen; weitere Gruppen der Personen bleiben.
+    updateGroupMembers: async (groupId, { add = [], remove = [] } = {}) => {
+        const res = await fetch(`/api/v2/groups/${encodeURIComponent(groupId)}/members`, {
+            method: 'PATCH', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ add, remove })
+        }).catch(() => null);
+        Store._usersCache = null;
+        Store._usersSnapshot = null;
+        return !!res && res.ok;
     },
     // Gespeicherte Listenansichten: echte /api/v2/list-views-API statt der entfernten Alt-Brücke.
     getListViews: async () => {
@@ -562,6 +570,8 @@ export const Store = {
         created_on_behalf: ['Im Auftrag angelegt', 'Created on behalf'], participants_updated: ['Beteiligte geändert', 'Participants changed'],
         related_linked: ['Ticketverknüpfung hinzugefügt', 'Ticket link added'],
         calendar_event_created: ['Outlook-Termin angelegt', 'Outlook appointment created'],
+        kb_linked: ['Lösung aus der Wissensdatenbank zugeordnet', 'Knowledge base solution linked'],
+        kb_unlinked: ['Zuordnung einer Wissensdatenbank-Lösung entfernt', 'Knowledge base solution unlinked'],
         work_time_adjusted: ['Erfasste Zeit angepasst', 'Recorded time adjusted'],
         merged_into: ['In anderes Ticket zusammengeführt', 'Merged into another ticket'],
         merged_from: ['Anderes Ticket hierher zusammengeführt', 'Another ticket merged into this one'],
@@ -798,7 +808,8 @@ export const Store = {
     // Oberflaeche nicht vorhanden; Elemente mit data-module blendet style.css ueber diese Klassen aus.
     modules: { sla: true, approvals: true },
     applyModules: (raw = {}) => {
-        Store.modules = { sla: raw?.sla !== false, approvals: raw?.approvals !== false };
+        // Der Server liefert den aufgeloesten Stand; Outlook gilt nur als aktiv, wenn ausdruecklich eingeschaltet.
+        Store.modules = { sla: raw?.sla !== false, approvals: raw?.approvals !== false, outlook: raw?.outlook === true };
         Object.entries(Store.modules).forEach(([key, on]) => document.documentElement.classList.toggle(`module-off-${key}`, !on));
         return Store.modules;
     },
@@ -872,7 +883,8 @@ export const Store = {
                 ticketNumberFormat: cfg.ticketNumberFormat?.format || (cfg.ticketNumberFormat?.prefix ? '{prefix}-{number}' : '{number}'),
                 ticketNumberPrefix: cfg.ticketNumberFormat?.prefix || '',
                 ticketNumberPadding: cfg.ticketNumberFormat?.padding || 5,
-                ticketNumberCategoryFormats: cfg.ticketNumberCategoryFormats || {}
+                ticketNumberCategoryFormats: cfg.ticketNumberCategoryFormats || {},
+                ticketNumberCategoryCodes: cfg.ticketNumberCategoryCodes || {}
             };
             settings.accountConfig = {
                 editable: {
@@ -1083,7 +1095,7 @@ export const Store = {
         return { ...body, httpStatus: res.status };
     },
     // Rollback auf den Commit, der vor dem letzten erfolgreichen In-App-Update aktiv war (siehe
-    // updater-server.mjs runRollback) -- ebenfalls mit Step-up + Commit-Pinning.
+    // ops/host-updater run_rollback) -- ebenfalls mit Step-up + Commit-Pinning.
     runRollback: async (expectedCommit, password, totpCode) => {
         const res = await fetch('/api/v2/update/rollback', {
             method: 'POST', credentials: 'same-origin',
@@ -1126,8 +1138,86 @@ export const Store = {
         if (!res.ok) return [];
         return ((await res.json()).articles || []).map(a => ({
             id: a.id, title: a.title, body: a.content, source: a.source_ticket_id, createdAt: a.created_at, updatedAt: a.updated_at,
-            category: a.category || null, createdByUserId: a.created_by_user_id || null, createdByName: a.created_by_username || null
+            category: a.category || null, createdByUserId: a.created_by_user_id || null, createdByName: a.created_by_name || a.created_by_username || null,
+            linkedTicketCount: Number(a.linked_ticket_count) || 0
         }));
+    },
+    // Wissensdatenbank-Loesungen, die einem Ticket zugeordnet sind (und umgekehrt).
+    getTicketKbLinks: async (ticketId) => {
+        const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticketId)}/kb-links`, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return [];
+        return ((await res.json()).links || []).map(l => ({ articleId: l.article_id, title: l.title, category: l.category || null, linkedAt: l.linked_at }));
+    },
+    linkKbArticle: async (ticketId, articleId) => {
+        const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticketId)}/kb-links`, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ article_id: articleId })
+        }).catch(() => null);
+        const payload = await res?.json().catch(() => ({})) || {};
+        return res && res.ok ? { ok: true, already: !!payload.already } : { ok: false, error: payload.error || 'failed' };
+    },
+    unlinkKbArticle: async (ticketId, articleId) => {
+        const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticketId)}/kb-links/${encodeURIComponent(articleId)}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
+        return !!res && res.ok;
+    },
+    getKbArticleTickets: async (articleId) => {
+        const res = await fetch(`/api/v2/kb/articles/${encodeURIComponent(articleId)}/tickets`, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return [];
+        return ((await res.json()).tickets || []).map(t => ({ id: t.id, ticketNumber: t.ticket_number, status: t.status, archived: !!t.archived }));
+    },
+    // Eigenes Profilbild: Vorlage waehlen, eigenes Bild hochladen (Base64) oder zuruecksetzen.
+    setAvatarPreset: async (preset) => Store.avatarRequest('PUT', '/api/v2/users/me/avatar', { preset }),
+    uploadAvatar: async (dataB64) => Store.avatarRequest('POST', '/api/v2/users/me/avatar/image', { data_b64: dataB64 }),
+    resetAvatar: async () => Store.avatarRequest('DELETE', '/api/v2/users/me/avatar'),
+    avatarRequest: async (method, url, body) => {
+        const res = await fetch(url, {
+            method, credentials: 'same-origin',
+            ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {})
+        }).catch(() => null);
+        if (!res || !res.ok) return null;
+        Store._meCache = null;
+        Store._usersCache = null;
+        Store._directoryCache = null;
+        return (await res.json()).avatar || null;
+    },
+    // Datenbank-Sicherung (nur Superadmin, siehe apps/server/src/http/routes/backup.ts).
+    createBackup: async (body) => {
+        const res = await fetch('/api/v2/system/backup', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body)
+        }).catch(() => null);
+        if (!res) return { error: 'network' };
+        if (res.status === 429) return { error: 'rate_limited' };
+        if (!res.ok) return { error: (await res.json().catch(() => ({}))).error || 'failed' };
+        const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '')?.[1] || 'ticketsystem-sicherung.tsbackup';
+        return { blob: await res.blob(), name, hash: res.headers.get('x-backup-sha256') || '' };
+    },
+    uploadBackup: async (file) => {
+        const res = await fetch('/api/v2/system/backup/upload', {
+            method: 'PUT', credentials: 'same-origin',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: file
+        }).catch(() => null);
+        if (!res) return { error: 'network' };
+        if (res.status === 429) return { error: 'rate_limited' };
+        if (res.status === 413) return { error: 'backup_too_large' };
+        return res.ok ? { ok: true } : { error: (await res.json().catch(() => ({}))).error || 'failed' };
+    },
+    restoreBackup: async (body) => {
+        const res = await fetch('/api/v2/system/backup/restore', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body)
+        }).catch(() => null);
+        if (!res) return { error: 'network' };
+        if (res.status === 429) return { error: 'rate_limited' };
+        const payload = await res.json().catch(() => ({}));
+        return res.ok ? { ok: true, ...payload } : { error: payload.error || 'failed' };
+    },
+    discardBackupUpload: async () => {
+        await fetch('/api/v2/system/backup/upload', { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
     },
     createKbArticle: async (title, content, sourceTicketId, category = null) => {
         const res = await fetch('/api/v2/kb/articles', {

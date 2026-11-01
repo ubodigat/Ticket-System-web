@@ -7,7 +7,8 @@
         const result = await response.json();
         if (!result.enabled) throw new Error('Office-Dienst ist noch nicht bereit. Bitte erneut öffnen oder die PDF-Vorschau verwenden.');
         await new Promise((resolve, reject) => {
-            const script = document.createElement('script'); script.src = '/office/web-apps/apps/api/documents/api.js'; script.onload = resolve;
+            if (!/^https:\/\/[^/]+\/web-apps\/apps\/api\/documents\/api\.js$/.test(result.apiUrl || '')) throw new Error('Office-Dienst ist nicht eingerichtet.');
+            const script = document.createElement('script'); script.src = result.apiUrl; script.onload = resolve;
             script.onerror = () => reject(new Error('Office-Dienst ist nicht erreichbar.')); document.head.appendChild(script);
         });
         editor = new window.DocsAPI.DocEditor('office-editor', { ...result.config, events: { onError: event => {

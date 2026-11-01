@@ -11,6 +11,11 @@ import { validateUploadedFile } from '../../domain/fileValidation.js';
 import { scanIfConfigured } from '../../domain/antivirus.js';
 
 export const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+// Security-Audit R-26: Tageskontingent je Rolle (normale Konten deutlich kleiner) und fuer die gesamte
+// Installation, damit einzelne Konten die Datenbank-Platte nicht fuellen koennen.
+export const DAILY_UPLOAD_QUOTA = { user: 500 * 1024 ** 2, admin: 2 * 1024 ** 3, superadmin: 2 * 1024 ** 3 } as const;
+export const INSTALLATION_DAILY_UPLOAD_QUOTA = 20 * 1024 ** 3;
+const MAX_PARALLEL_COMPLETIONS = 2;
 export const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 export const uploadRequestSchema = z.object({ ticket_id: z.string().uuid().optional(), article_id: z.string().uuid().optional(),
   filename: z.string().min(1).max(255), mime_type: z.string().max(255), size_bytes: z.number().int().min(1).max(MAX_UPLOAD_BYTES)
@@ -46,7 +51,10 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
         await trx.selectFrom('users').select('id').where('id', '=', actor.uid).forUpdate().executeTakeFirstOrThrow();
         const used = await trx.selectFrom('file_uploads').select(eb => eb.fn.sum<number>('size_bytes').as('total'))
           .where('owner_user_id', '=', actor.uid).where('created_at', '>=', new Date(Date.now() - 86400000)).executeTakeFirst();
-        if (Number(used?.total || 0) + data.size_bytes > 2 * 1024 * 1024 * 1024) throw { statusCode: 429, message: 'upload_quota_exceeded' };
+        if (Number(used?.total || 0) + data.size_bytes > DAILY_UPLOAD_QUOTA[actor.role]) throw { statusCode: 429, message: 'upload_quota_exceeded' };
+        const total = await trx.selectFrom('file_uploads').select(eb => eb.fn.sum<number>('size_bytes').as('total'))
+          .where('created_at', '>=', new Date(Date.now() - 86400000)).executeTakeFirst();
+        if (Number(total?.total || 0) + data.size_bytes > INSTALLATION_DAILY_UPLOAD_QUOTA) throw { statusCode: 429, message: 'upload_capacity_exceeded' };
         await trx.insertInto('file_uploads').values({ id, owner_user_id: actor.uid, ticket_id: data.ticket_id || null,
           article_id: data.article_id || null, filename: fieldCipher.encryptField(data.filename, dek.rawDek, ctx(id, 'filename', dek.keyVersion)),
           mime_type: data.mime_type, size_bytes: data.size_bytes }).execute();
@@ -86,13 +94,15 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
       } catch (error) { return routeError(app, reply, error); }
     });
   });
-  let completing = false;
+  // Pruefung und Virenscan laufen je Konto einzeln und insgesamt hoechstens zweimal gleichzeitig --
+  // vorher blockierte ein einziger Abschluss alle anderen Konten.
+  const completing = new Set<string>();
   app.post('/api/v2/uploads/:id/complete', { config: { rateLimit: { max: 12, timeWindow: '10 minutes', keyGenerator: req => req.ticketSession?.uid ?? req.ip } } }, async (req, reply) => {
-    let acquired = false;
+    let acquiredBy: string | null = null;
     try {
       const actor = requireSession(req); const { id } = req.params as { id: string };
-      if (completing) return reply.header('retry-after', '3').code(429).send({ error: 'upload_validation_busy' });
-      completing = true; acquired = true;
+      if (completing.has(actor.uid) || completing.size >= MAX_PARALLEL_COMPLETIONS) return reply.header('retry-after', '3').code(429).send({ error: 'upload_validation_busy' });
+      completing.add(actor.uid); acquiredBy = actor.uid;
       const result = await app.db.transaction().execute(async trx => {
         const upload = await trx.selectFrom('file_uploads').selectAll().where('id', '=', id).where('owner_user_id', '=', actor.uid).forUpdate().executeTakeFirst();
         if (!upload || upload.completed) throw { statusCode: 404, message: 'upload_not_found' };
@@ -127,7 +137,7 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
       });
       return reply.code(201).send(result);
     } catch (error) { return routeError(app, reply, error); }
-    finally { if (acquired) completing = false; }
+    finally { if (acquiredBy) completing.delete(acquiredBy); }
   });
   app.delete('/api/v2/uploads/:id', async (req, reply) => {
     try {
