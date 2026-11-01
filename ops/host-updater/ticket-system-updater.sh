@@ -170,16 +170,18 @@ run_job() {
 
 dispatch() {
   mkdir -p "$WORK_DIR"; chmod 0700 "$WORK_DIR"
-  local file name line action nonce commit count=0
+  local file name entry="$WORK_DIR/entry" line action nonce commit count=0
+  # Jeder Eintrag (auch Symlinks, Verzeichnisse oder falsch benannte Dateien) wird erst atomar in das
+  # root-eigene Verzeichnis verschoben, dort geprueft und danach immer entfernt. So bleibt nichts liegen,
+  # was den systemd-Pfad-Trigger (DirectoryNotEmpty) dauerhaft erneut ausloesen wuerde.
   while IFS= read -r -d '' file; do
     count=$((count + 1)); [[ $count -le 20 ]] || break
-    name="$(basename "$file")"
-    [[ "$name" =~ ^[0-9A-Za-z._-]{1,80}\.req$ ]] || { rm -f -- "$file"; continue; }
-    # Erst in ein root-eigenes Verzeichnis verschieben, dann pruefen und lesen.
-    mv -f -- "$file" "$WORK_DIR/$name" 2>/dev/null || continue
-    if [[ -L "$WORK_DIR/$name" || ! -f "$WORK_DIR/$name" ]]; then rm -f -- "$WORK_DIR/$name"; continue; fi
-    line="$(head -c 200 "$WORK_DIR/$name" | head -n 1)"
-    rm -f -- "$WORK_DIR/$name"
+    name="$(basename -- "$file")"
+    rm -rf -- "$entry"
+    mv -fT -- "$file" "$entry" 2>/dev/null || continue
+    if [[ ! "$name" =~ ^[0-9A-Za-z._-]{1,80}\.req$ || -L "$entry" || ! -f "$entry" ]]; then rm -rf -- "$entry"; continue; fi
+    line="$(head -c 200 "$entry" | head -n 1)"
+    rm -f -- "$entry"
     [[ "$line" =~ ^(status|run|migrate|rollback)\ ([0-9a-f]{32})\ ([0-9a-f]{40}|-)$ ]] || continue
     action="${BASH_REMATCH[1]}"; nonce="${BASH_REMATCH[2]}"; commit="${BASH_REMATCH[3]}"
     if [[ "$action" == status ]]; then do_status "$nonce"; continue; fi
@@ -189,7 +191,7 @@ dispatch() {
     systemd-run --quiet --collect --unit "ticket-system-update-job-${nonce:0:12}" --property=TimeoutStartSec=3600 \
       "$SELF" job "$action" "$nonce" "$commit"
     write_state accepted.env "nonce=$nonce" "result=started"
-  done < <(find "$REQ_DIR" -maxdepth 1 -type f -name '*.req' -print0 2>/dev/null | sort -z)
+  done < <(find "$REQ_DIR" -mindepth 1 -maxdepth 1 -print0 2>/dev/null | sort -z)
 }
 
 case "${1:-dispatch}" in

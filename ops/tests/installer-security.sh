@@ -115,11 +115,19 @@ printf 'status %s -\n' "$status_nonce" > "$bridge/requests/2-b.req"
 printf 'run %s ; rm -rf /\n' "$run_nonce" > "$bridge/requests/3-c.req"
 printf 'keep me\n' > "$fixture/outside"
 ln -s "$fixture/outside" "$bridge/requests/4-d.req"
+ln -s "$fixture/outside" "$bridge/requests/5-e.txt"
+printf 'junk\n' > "$bridge/requests/6-f.tmp"
+mkdir "$bridge/requests/7-g.req" "$bridge/requests/8-h"
+printf 'keep me too\n' > "$fixture/outside2"
+ln -s "$fixture/outside2" "$bridge/requests/8-h/link"
+# Unter Linux (CI, Server) muss ln -s einen echten Symlink anlegen; Git Bash unter Windows kopiert nur.
+if [[ "$(uname -s)" == Linux && ! -L "$bridge/requests/4-d.req" ]]; then echo 'Symlink fixture was not created' >&2; exit 1; fi
 TICKET_SYSTEM_UPDATER_CONF="$fixture/updater.conf" bash "$root/ops/host-updater/ticket-system-updater.sh" dispatch
 grep -q "^nonce=$run_nonce$" "$bridge/state/accepted.env"
 grep -q '^result=update_runner_disabled$' "$bridge/state/accepted.env"
 grep -q "^nonce=$status_nonce$" "$bridge/state/status.env"
 grep -q '^enabled=0$' "$bridge/state/status.env"
-[[ -z "$(ls -A "$bridge/requests")" ]]
+[[ -z "$(ls -A "$bridge/requests")" ]] || { echo "Updater left request entries behind: $(ls -A "$bridge/requests")" >&2; exit 1; }
 grep -q '^keep me$' "$fixture/outside"
+grep -q '^keep me too$' "$fixture/outside2"
 echo 'Installer credential preservation, root recovery, TLS verification and failure handling: OK'
