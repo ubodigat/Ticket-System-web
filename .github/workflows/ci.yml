@@ -25,9 +25,15 @@ jobs:
           --health-cmd="healthcheck.sh --connect --innodb_initialized"
           --health-interval=5s --health-timeout=5s --health-retries=20
     steps:
+<<<<<<< HEAD
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+=======
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+>>>>>>> 4f443a12016d374e1e529df455fe1c7322d846fe
         with:
           # Security-Audit R-22: muss die Node-Version aus den Produktions-Images spiegeln
           # (ops/docker/Dockerfile.server) -- sonst wird eine Laufzeit
