@@ -1,14 +1,8 @@
 74682f5065a91cd69569b331ae42292e5ddb7aef7fa424b92bd0d058a8239fa3  .gitattributes
 a6c5ee15b2baa0f9c79f1fcb6c9a2c92c406011ac4caa6f9a86acf2d8c6b518a  .github/dependabot.yml
-<<<<<<< HEAD
 4c21ab1b62995b1a00d4d8409318c1c7eaefdf82fe9977bc9d8ee8dcdd7b4da6  .github/workflows/ci.yml
 acaa8a9384174aba2b982c8f338ebb1949a114f95dc9325876cf862adbb1430e  .github/workflows/dependabot-manifest-apply.yml
 39aa2805551f409c252239e9d4f7964383c8337c43793c9d70a610d9f685f967  .github/workflows/dependabot-manifest.yml
-=======
-4aa10c9d61f7dd481ed7bc69b961911e30d203cf785d7970acf03de17b4344db  .github/workflows/ci.yml
-3b7ab8cd2870d1e2ea1bc7e13578c4398980699356e86fd7af9dccc6f16dc4cc  .github/workflows/dependabot-manifest-apply.yml
-7a2a11aaeed267184c98495b5cf2471d7c53791a19ce8b0a3e897773ab212f42  .github/workflows/dependabot-manifest.yml
->>>>>>> 4f443a12016d374e1e529df455fe1c7322d846fe
 be5e0af53b213a72d66c0b5c904dd3fd4297a660c928c9a3a0eb8cbbefcb484a  .gitignore
 d892b3e4f2bd19293fa1ea1220bb6c90f7ba30c349cd7533ea6e8c0942ee3039  CHANGES.md
 52d036fda9044976574078ac0ce3362fdba1d2081a7f71280d3861ecdf48fd6b  CONTRIBUTORS.md
