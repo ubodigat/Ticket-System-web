@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { secondFactorBackoffSeconds, shouldWarnAboutSecondFactor } from '../src/domain/secondFactorThrottle.js';
 import { enrollCodeHash, enrollCodeMatches, generateAdminEnrollCode, generateMailEnrollCode } from '../src/domain/mfaEnrollment.js';
 import { anonymousWithinBudget, shouldRecord } from '../src/domain/activityLog.js';
-import { DAILY_UPLOAD_QUOTA, INSTALLATION_DAILY_UPLOAD_QUOTA } from '../src/http/routes/uploads.js';
+import { dailyUploadQuota, installationDailyUploadQuota, uploadLimitBytesFromConfig, MB } from '../src/domain/uploadLimits.js';
 import { RETENTION_DAYS } from '../src/jobs/maintenance.js';
 
 describe('second factor throttle (Security-Audit R-23)', () => {
@@ -61,8 +61,10 @@ describe('system log limits (Security-Audit R-27)', () => {
 
 describe('upload quotas (Security-Audit R-26)', () => {
   it('gives ordinary accounts a smaller daily quota and caps the whole installation', () => {
-    expect(DAILY_UPLOAD_QUOTA.user).toBe(500 * 1024 ** 2);
-    expect(DAILY_UPLOAD_QUOTA.admin).toBeGreaterThan(DAILY_UPLOAD_QUOTA.user);
-    expect(INSTALLATION_DAILY_UPLOAD_QUOTA).toBeGreaterThan(DAILY_UPLOAD_QUOTA.admin);
+    const limit = uploadLimitBytesFromConfig({});
+    expect(limit).toBe(1024 * MB);
+    expect(dailyUploadQuota('user', limit)).toBe(limit);
+    expect(dailyUploadQuota('admin', limit)).toBeGreaterThan(dailyUploadQuota('user', limit));
+    expect(installationDailyUploadQuota(limit)).toBeGreaterThan(dailyUploadQuota('admin', limit));
   });
 });

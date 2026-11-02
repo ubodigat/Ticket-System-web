@@ -11,7 +11,7 @@ import { Lang } from './lang.js';
 import { Store, Notifications } from './store.js';
 import { UI } from './ui.js';
 import { AdminBoard } from './admin-board.js';
-import { getStatusColorClass, isPendingApprover, insertMarkdownText, insertMarkdownLink } from './ticket-helpers.js';
+import { getStatusColorClass, insertMarkdownText, insertMarkdownLink } from './ticket-helpers.js';
 
 // --- User Dashboard Logic ---
 export const UserDash = {
@@ -25,7 +25,7 @@ export const UserDash = {
     refreshApprovalBadge: async () => {
         const user = await Store.currentUser();
         if (!user) return;
-        const pending = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => isPendingApprover(a, user.id)));
+        const pending = Store.modules.approvals === false ? [] : await Store.getPendingApprovals();
         const rightNav = q('.topbar-right');
         if (!rightNav) return;
         let btn = q('#btn-user-approvals');
@@ -89,11 +89,15 @@ export const UserDash = {
                 return;
             }
 
-            if (UserDash.createFiles.some(file => file.size > 500 * 1024 * 1024)) {
-                UI.toast(Lang.t('attachmentsTooLarge'));
+            const invalidFiles = [];
+            UserDash.createFiles.forEach(file => { try { Store.assertUploadAllowed(file); } catch (error) { invalidFiles.push(Store.uploadErrorMessage(error)); } });
+            if (invalidFiles.length) {
+                UI.toast(invalidFiles.join(' '));
                 return;
             }
-            const activeIncidents = (await Store.getTickets()).filter(t => t.isMajorIncident && t.status !== 'Geschlossen' && !t.archived);
+            // Aktive Grossstoerungen kommen aus einem eigenen Endpunkt: normale Konten sehen in
+            // getTickets() nur eigene Tickets und damit nie die Stoerung eines Admins.
+            const activeIncidents = await Store.getActiveIncidents();
             let linkedIncidentId = null;
             if (activeIncidents.length) {
                 const choice = await UI.askIncidentLink(activeIncidents);
@@ -107,12 +111,8 @@ export const UserDash = {
                 return;
             }
             if (UserDash.createFiles.length) {
-                try {
-                    for (const file of UserDash.createFiles) await Store.saveAttachment(file, { ticketId: newTicket.id });
-                } catch (error) {
-                    console.error(error);
-                    UI.toast(Lang.t('ticketCreatedAttachmentsFailed'));
-                }
+                const { errors } = await Store.uploadFiles(UserDash.createFiles, file => Store.saveAttachment(file, { ticketId: newTicket.id }));
+                if (errors.length) UI.toast(`${Lang.t('ticketCreatedAttachmentsFailed')} ${errors.join(' ')}`);
             }
             if (linkedIncidentId) {
                 await fetch(`/api/v2/tickets/${encodeURIComponent(newTicket.id)}/link-incident`, {
@@ -202,6 +202,7 @@ export const UserDash = {
 
             // File Handling
             const fileIn = q('#u-chat-file');
+            fileIn.accept = Store.uploadAccept();
             fileIn.onchange = () => {
                 Array.from(fileIn.files).forEach(f => UserDash.selectedFiles.push(f));
                 UserDash.renderFilePreview();
@@ -293,16 +294,10 @@ export const UserDash = {
         pan.innerHTML = '';
         if (UserDash.selectedFiles.length > 0) {
             pan.style.display = 'flex';
-            UserDash.selectedFiles.forEach((f, idx) => {
-                const tag = document.createElement('div');
-                tag.className = 'file-chip';
-                tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('removeFile')}" aria-label="${Lang.t('removeFile')}">${Icon('x', 13)}</button>`;
-                tag.querySelector('.remove-file').onclick = () => {
-                    UserDash.selectedFiles.splice(idx, 1);
-                    UserDash.renderFilePreview();
-                };
-                pan.appendChild(tag);
-            });
+            UserDash.selectedFiles.forEach((f, idx) => pan.appendChild(AdminBoard.stagedFileChip(f, () => {
+                UserDash.selectedFiles.splice(idx, 1);
+                UserDash.renderFilePreview();
+            })));
             if (window.lucide) lucide.createIcons();
         } else {
             pan.style.display = 'none';
@@ -398,12 +393,17 @@ export const UserDash = {
             q('#u-waiting-message').textContent = showRequest ? t.waitingMessage : '';
         }
         const pendingApproval = (t.approvals || []).find(a => a.status === 'pending');
+        const approvalHistory = await AdminBoard.renderApprovalHistory(t, '#u-approval-history');
+        const latestApproval = approvalHistory[0];
+        t.rejectedApproval = latestApproval?.status === 'rejected' && !pendingApproval
+            ? { byName: latestApproval.decided_by || latestApproval.approver, reason: latestApproval.decision_text }
+            : null;
         const pendingBox = q('#u-approval-pending');
         if (pendingBox) {
             pendingBox.hidden = !pendingApproval;
             if (pendingApproval) {
-                const approverName = await Store.describeApprover(pendingApproval);
-                q('#u-approval-pending-text').textContent = Lang.format('awaitingApprovalBy', { name: approverName, date: Utils.fmtDate(pendingApproval.requestedAt) });
+                const approverName = latestApproval?.status === 'pending' ? latestApproval.approver : await Store.describeApprover(pendingApproval);
+                q('#u-approval-pending-text').textContent = Lang.format('awaitingApprovalBy', { name: approverName, date: Utils.fmtDate(latestApproval?.requested_at || pendingApproval.requestedAt) });
             }
         }
         const rejectedBox = q('#u-approval-rejected');

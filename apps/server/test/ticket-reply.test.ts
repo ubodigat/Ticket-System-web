@@ -5,7 +5,8 @@ import { registerTicketsV2Routes } from '../src/http/routes/tickets.js';
 vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
 vi.mock('../src/http/routes/extras.js', () => ({ createNotification: vi.fn().mockResolvedValue(undefined) }));
 
-async function sendReply(status: string, role: 'user' | 'admin' = 'user', foreign = false, archived = false) {
+async function sendReply(status: string, role: 'user' | 'admin' = 'user', foreign = false, archived = false,
+  payload: Record<string, unknown> = { content: 'Here are the details you requested.' }) {
   const ticket = { id: 'ticket-1', ticket_number: 'TS-1', status, archived_at: archived ? new Date() : null,
     created_by_user_id: foreign ? 'other' : 'user-1', created_by_username: 'user', assigned_to_user_id: null, assigned_to_username: null };
   let message: any;
@@ -29,10 +30,26 @@ async function sendReply(status: string, role: 'user' | 'admin' = 'user', foreig
   app.addHook('onRequest', async req => { req.ticketSession = { uid: 'user-1', username: 'user', role }; });
   registerTicketsV2Routes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
   try {
-    const response = await app.inject({ method: 'POST', url: '/api/v2/tickets/ticket-1/messages', payload: { content: 'Here are the details you requested.' } });
+    const response = await app.inject({ method: 'POST', url: '/api/v2/tickets/ticket-1/messages', payload });
     return { response, changes, audits, message };
   } finally { await app.close(); }
 }
+
+describe('chat messages with attachments', () => {
+  it('accepts a message that consists only of attachments and marks it', async () => {
+    const { response, message } = await sendReply('In Bearbeitung', 'user', false, false, { content: '', has_attachments: true });
+    expect(response.statusCode).toBe(201);
+    expect(message.has_attachments).toBe(true);
+  });
+
+  it('still rejects an empty message without attachments', async () => {
+    for (const payload of [{ content: '' }, { content: '   ', has_attachments: false }]) {
+      const { response, message } = await sendReply('In Bearbeitung', 'user', false, false, payload);
+      expect(response.statusCode).toBe(400);
+      expect(message).toBeUndefined();
+    }
+  });
+});
 
 describe('user replies to pending ticket requests', () => {
   it('resumes the ticket and clears reminders when the owner answers', async () => {

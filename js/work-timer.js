@@ -184,6 +184,7 @@ export const WorkTimer = {
         const background = [...document.body.children].filter(node => node instanceof HTMLElement && !node.inert && node.tagName !== 'SCRIPT');
         background.forEach(node => { node.inert = true; });
         document.body.appendChild(overlay);
+        if (window.lucide) window.lucide.createIcons();
         WorkTimer.activityTimerId = timer.id;
         WorkTimer.activityCleanup = () => { overlay.remove(); document.removeEventListener('keydown', guard, true); background.forEach(node => { node.inert = false; }); };
         overlay.querySelector('form').onsubmit = async event => {

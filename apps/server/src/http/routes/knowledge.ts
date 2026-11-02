@@ -21,6 +21,7 @@ import { mysqlTimestamp } from '../../db/date.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
 import { scanIfConfigured } from '../../domain/antivirus.js';
 import { sanitizeServerHtml } from '../../domain/sanitizer.js';
+import { loadTicketScope, scopeAllowsTicket } from '../../domain/ticketAccess.js';
 
 const createKbAttachmentSchema = z.object({
   filename: z.string().trim().min(1).max(255).refine(
@@ -262,9 +263,12 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const session = requireAdmin(req);
       if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
-      const tickets = await app.db.selectFrom('ticket_kb_links').innerJoin('tickets', 'tickets.id', 'ticket_kb_links.ticket_id')
-        .select(['tickets.id', 'tickets.ticket_number', 'tickets.status', 'tickets.archived_at'])
+      const rows = await app.db.selectFrom('ticket_kb_links').innerJoin('tickets', 'tickets.id', 'ticket_kb_links.ticket_id')
+        .select(['tickets.id', 'tickets.ticket_number', 'tickets.status', 'tickets.archived_at', 'tickets.created_by_user_id',
+          'tickets.assigned_to_user_id', 'tickets.assigned_group_id', 'tickets.category'])
         .where('ticket_kb_links.article_id', '=', id).orderBy('ticket_kb_links.created_at', 'desc').limit(200).execute();
+      const scope = await loadTicketScope(app.db, session);
+      const tickets = rows.filter(t => scopeAllowsTicket(scope, t));
       return reply.send({ tickets: tickets.map(t => ({ id: t.id, ticket_number: t.ticket_number, status: t.status, archived: !!t.archived_at })) });
     } catch (e: any) {
       return routeError(app, reply, e);

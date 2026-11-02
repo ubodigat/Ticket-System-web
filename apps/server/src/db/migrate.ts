@@ -30,6 +30,9 @@ import { migration_0058_user_groups } from './migrations/0058_user_groups.js';
 import { migration_0059_user_avatar } from './migrations/0059_user_avatar.js';
 import { migration_0060_ticket_kb_links } from './migrations/0060_ticket_kb_links.js';
 import { migration_0061_audit_hardening } from './migrations/0061_audit_hardening.js';
+import { migration_0062_upload_message_links } from './migrations/0062_upload_message_links.js';
+import { migration_0063_ticket_approvals } from './migrations/0063_ticket_approvals.js';
+import { migration_0064_user_profile } from './migrations/0064_user_profile.js';
 import { migration_0001_installations } from './migrations/0001_installations.js';
 import { migration_0002_key_management } from './migrations/0002_key_management.js';
 import { migration_0003_users_and_groups } from './migrations/0003_users_and_groups.js';
@@ -133,7 +136,10 @@ const migrations: Record<string, Migration> = {
   '0058_user_groups': migration_0058_user_groups,
   '0059_user_avatar': migration_0059_user_avatar,
   '0060_ticket_kb_links': migration_0060_ticket_kb_links,
-  '0061_audit_hardening': migration_0061_audit_hardening
+  '0061_audit_hardening': migration_0061_audit_hardening,
+  '0062_upload_message_links': migration_0062_upload_message_links,
+  '0063_ticket_approvals': migration_0063_ticket_approvals,
+  '0064_user_profile': migration_0064_user_profile
 };
 
 const provider: MigrationProvider = {

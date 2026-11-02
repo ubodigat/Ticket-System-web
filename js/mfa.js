@@ -1,6 +1,7 @@
 import { UI } from './ui.js';
 import { Lang } from './lang.js';
 import { Store } from './store.js';
+import { Icon, Utils } from './utils.js';
 const text = (de, en) => Lang.current === 'en' ? en : de;
 const ERRORS = {
     too_many_attempts: ['Zu viele Fehlversuche. Bitte warte einen Moment und versuche es dann erneut.', 'Too many failed attempts. Please wait a moment and try again.'],
@@ -116,14 +117,26 @@ export const MFA = {
         if (!response.ok) throw new Error(text('Passkeys konnten nicht geladen werden.', 'Could not load passkeys.'));
         const { keys } = await response.json();
         const overlay = document.createElement('div'); overlay.className = 'modal-overlay open';
-        overlay.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><div class="modal-header"><h3>MFA / Passkeys</h3></div><div class="modal-body"><p>${text('Handy, Computer oder Sicherheitsschlüssel. Weitere Geräte lassen sich über den Browserdialog auswählen.', 'Phone, computer or security key. Additional devices can be selected in the browser dialog.')}</p><div data-list></div><div class="mfa-methods"><button class="btn-primary" data-add>${text('Passkey hinzufügen', 'Add passkey')}</button><button class="btn-secondary" data-close>${text('Schließen', 'Close')}</button></div><p role="alert"></p></div></div>`;
-        document.body.appendChild(overlay); overlay.querySelector('[data-close]').onclick = () => overlay.remove();
+        const closeLabel = Lang.t('close');
+        overlay.innerHTML = `<div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="mfa-manage-title">
+            <div class="modal-header"><h3 id="mfa-manage-title">${Icon('key-round', 18)}MFA / Passkeys</h3>
+                <div class="modal-actions"><button type="button" class="btn-ghost btn-icon" data-close title="${Utils.esc(closeLabel)}" aria-label="${Utils.esc(closeLabel)}">${Icon('x', 16)}</button></div></div>
+            <div class="modal-body"><p class="hint">${text('Handy, Computer oder Sicherheitsschlüssel. Weitere Geräte lassen sich über den Browserdialog auswählen.', 'Phone, computer or security key. Additional devices can be selected in the browser dialog.')}</p>
+                <div data-list class="mfa-passkey-list"></div>
+                <div class="mfa-methods"><button type="button" class="btn-primary" data-add>${Icon('plus', 15)}${text('Passkey hinzufügen', 'Add passkey')}</button></div>
+                <p role="alert"></p></div></div>`;
+        document.body.appendChild(overlay);
+        const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+        const onKey = event => { if (event.key === 'Escape') close(); };
+        document.addEventListener('keydown', onKey);
+        overlay.querySelector('[data-close]').onclick = close;
+        overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
         const recoveryButton = document.createElement('button'); recoveryButton.type = 'button'; recoveryButton.className = 'btn-secondary';
-        recoveryButton.textContent = text('10 Wiederherstellungscodes erzeugen', 'Generate 10 recovery codes');
+        recoveryButton.innerHTML = `${Icon('life-buoy', 15)}${Utils.esc(text('10 Wiederherstellungscodes erzeugen', 'Generate 10 recovery codes'))}`;
         recoveryButton.onclick = async () => {
             try {
                 const result = await api('recovery/generate', { token });
-                overlay.querySelector('.mfa-methods').replaceChildren(overlay.querySelector('[data-close]'));
+                overlay.querySelector('.mfa-methods').replaceChildren();
                 const info = document.createElement('p'); info.textContent = text('Jetzt sicher offline aufbewahren. Nur einmal sichtbar. Vorherige Codes sind ungültig.', 'Store securely offline now. Shown once only. Previous codes are invalid.');
                 const codes = document.createElement('pre'); codes.className = 'mfa-recovery-codes'; codes.textContent = result.codes.join('\n'); overlay.querySelector('[data-list]').replaceChildren(info, codes);
             } catch (error) { overlay.querySelector('[role="alert"]').textContent = error.message; }
@@ -131,17 +144,21 @@ export const MFA = {
         overlay.querySelector('.mfa-methods').appendChild(recoveryButton);
         overlay.querySelector('[data-add]').onclick = async event => {
             event.currentTarget.disabled = true;
-            try { await MFA.passkey(token, true); overlay.remove(); UI.toast(text('Passkey gespeichert.', 'Passkey saved.')); }
+            try { await MFA.passkey(token, true); close(); UI.toast(text('Passkey gespeichert.', 'Passkey saved.')); }
             catch (error) { overlay.querySelector('[role="alert"]').textContent = error.message; event.target.disabled = false; }
         };
         for (const key of keys) {
-            const row = document.createElement('p'); const label = document.createElement('span'); label.textContent = key.label + ' ';
-            const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-secondary'; remove.textContent = text('Entfernen', 'Remove');
+            const row = document.createElement('div'); row.className = 'mfa-passkey-row';
+            const label = document.createElement('span'); label.innerHTML = `${Icon('key-round', 14)}`; label.append(document.createTextNode(key.label));
+            const removeLabel = text('Passkey entfernen', 'Remove passkey');
+            const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-ghost btn-icon btn-sm btn-danger';
+            remove.title = removeLabel; remove.setAttribute('aria-label', `${removeLabel}: ${key.label}`); remove.innerHTML = Icon('trash-2', 15);
             remove.onclick = () => UI.confirm(text('Passkey entfernen? Danach erneut anmelden.', 'Remove passkey? Sign in again afterwards.'), async () => {
                 try { await api('passkeys/remove', { token, id: key.id }); location.href = '/index.html'; }
                 catch (error) { overlay.querySelector('[role="alert"]').textContent = error.message; }
             });
             row.append(label, remove); overlay.querySelector('[data-list]').appendChild(row);
         }
+        if (window.lucide) lucide.createIcons();
     }
 };

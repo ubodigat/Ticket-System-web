@@ -21,6 +21,30 @@ const option = (value, label, selected = false) => `<option value="${Utils.esc(v
 const plainText = html => (new DOMParser().parseFromString(String(html || ''), 'text/html').body.textContent || '').replace(/\s+/g, ' ').trim();
 const time = value => new Date(value || 0).getTime() || 0;
 const excerpt = text => text.length > 180 ? `${text.slice(0, 177).trimEnd()} …` : text;
+// Ausschnitt rund um den ersten Suchtreffer statt immer des Textanfangs.
+const snippet = (text, words) => {
+    const lower = text.toLocaleLowerCase();
+    const hit = words.map(word => lower.indexOf(word)).filter(index => index >= 0).sort((a, b) => a - b)[0];
+    if (hit === undefined || hit < 120) return excerpt(text);
+    const start = Math.max(0, hit - 60);
+    return `… ${excerpt(text.slice(start))}`;
+};
+const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Suchbegriffe hervorheben (Text wird vorher maskiert).
+const highlight = (text, words) => {
+    let html = Utils.esc(text);
+    for (const word of words) html = html.replace(new RegExp(escapeRegExp(Utils.esc(word)), 'gi'), match => `<mark>${match}</mark>`);
+    return html;
+};
+const readingMinutes = text => Math.max(1, Math.round(text.split(/\s+/).filter(Boolean).length / 200));
+const relative = ms => {
+    if (!ms) return '–';
+    const days = Math.floor((Date.now() - ms) / 86400000);
+    if (days < 1) return Lang.t('kbToday');
+    if (days === 1) return Lang.t('kbYesterday');
+    if (days < 30) return Lang.format('kbDaysAgo', { count: days });
+    return Utils.fmtDateOnly(ms);
+};
 
 export const KbSearch = {
     // Leserecht wie serverseitig: Superadmin immer, Admin mit Lese- oder Schreibrecht.
@@ -33,43 +57,75 @@ export const KbSearch = {
 
     filtersMarkup: prefix => `
         <div class="kb-filters">
-            <div class="kb-search-row">
-                <span class="kb-search-icon">${Icon('search', 16)}</span>
+            <div class="kb-search-row kb-search-hero">
+                <span class="kb-search-icon">${Icon('search', 18)}</span>
                 <input type="search" id="${prefix}-q" class="section-search" placeholder="${Utils.esc(Lang.t('kbSearchPlaceholder'))}" aria-label="${Utils.esc(Lang.t('kbSearchPlaceholder'))}">
             </div>
             <div class="kb-filter-row">
-                <label><span>${Utils.esc(Lang.t('kbFilterCategory'))}</span><select id="${prefix}-category"></select></label>
+                <select id="${prefix}-category" class="kb-hidden-select" aria-label="${Utils.esc(Lang.t('kbFilterCategory'))}"></select>
                 <label><span>${Utils.esc(Lang.t('kbFilterCreator'))}</span><select id="${prefix}-creator"></select></label>
                 <label><span>${Utils.esc(Lang.t('kbFilterPeriod'))}</span><select id="${prefix}-period">
                     ${option('all', Lang.t('kbPeriodAll'))}${option('d7', Lang.t('kbPeriod7'))}${option('d30', Lang.t('kbPeriod30'))}${option('d90', Lang.t('kbPeriod90'))}${option('y1', Lang.t('kbPeriod365'))}
                 </select></label>
                 <label><span>${Utils.esc(Lang.t('kbFilterSort'))}</span><select id="${prefix}-sort">
-                    ${option('updated', Lang.t('kbSortUpdated'))}${option('newest', Lang.t('kbSortNewest'))}${option('oldest', Lang.t('kbSortOldest'))}${option('title', Lang.t('kbSortTitle'))}
+                    ${option('updated', Lang.t('kbSortUpdated'))}${option('newest', Lang.t('kbSortNewest'))}${option('oldest', Lang.t('kbSortOldest'))}${option('title', Lang.t('kbSortTitle'))}${option('linked', Lang.t('kbSortLinked'))}
                 </select></label>
+                <div class="kb-view-toggle" role="group" aria-label="${Utils.esc(Lang.t('kbViewLabel'))}">
+                    <button type="button" class="btn-ghost btn-icon btn-sm" data-view="grid" title="${Utils.esc(Lang.t('kbViewGrid'))}" aria-label="${Utils.esc(Lang.t('kbViewGrid'))}">${Icon('layout-grid', 16)}</button>
+                    <button type="button" class="btn-ghost btn-icon btn-sm" data-view="list" title="${Utils.esc(Lang.t('kbViewList'))}" aria-label="${Utils.esc(Lang.t('kbViewList'))}">${Icon('list', 16)}</button>
+                </div>
                 <button type="button" class="btn-ghost btn-sm" id="${prefix}-reset">${Icon('rotate-ccw', 14)}${Utils.esc(Lang.t('kbFilterReset'))}</button>
             </div>
             <div class="hint kb-result-count" id="${prefix}-count" role="status"></div>
         </div>`,
 
-    // Verdrahtet Filter und Kachelraster innerhalb von root. ticket: Ticket, dem Loesungen direkt
-    // zugeordnet werden koennen (Suche aus einem Ticket heraus).
-    bind: (root, prefix, { list, canEdit = false, ticket = null } = {}) => {
+    // Verdrahtet Filter, Kategorienleiste, Kennzahlen und Artikelliste innerhalb von root. ticket:
+    // Ticket, dem Loesungen direkt zugeordnet werden koennen (Suche aus einem Ticket heraus).
+    bind: (root, prefix, { list, canEdit = false, ticket = null, categoryNav = null, stats = null } = {}) => {
         let articles = [];
         let categories = [];
+        let view = 'grid';
+        try { view = localStorage.getItem('kb-view') === 'list' ? 'list' : 'grid'; } catch { view = 'grid'; }
         const el = id => root.querySelector(`#${prefix}-${id}`);
+        const words = () => el('q').value.trim().toLocaleLowerCase().split(/\s+/).filter(word => word.length > 1);
         const fillSelects = () => {
             const keepCategory = el('category').value;
             const keepCreator = el('creator').value;
             el('category').innerHTML = option('', Lang.t('kbAllCategories')) + option('__none__', Lang.t('kbNoCategory'))
-                + categories.map(c => option(c.name, c.source === 'kb' ? `${c.name} (${Lang.t('kbOwnCategory')})` : c.name)).join('');
+                + categories.map(c => option(c.name, c.name)).join('');
             const creators = [...new Map(articles.filter(a => a.createdByUserId).map(a => [a.createdByUserId, a.createdByName || '–'])).entries()]
                 .sort((a, b) => a[1].localeCompare(b[1], Lang.current));
             el('creator').innerHTML = option('', Lang.t('kbAllCreators')) + creators.map(([id, name]) => option(id, name)).join('');
             if ([...el('category').options].some(o => o.value === keepCategory)) el('category').value = keepCategory;
             if ([...el('creator').options].some(o => o.value === keepCreator)) el('creator').value = keepCreator;
         };
+        // Kategorienleiste mit Anzahl je Kategorie; leere Kategorien erscheinen gedimmt am Ende.
+        const renderCategoryNav = () => {
+            if (!categoryNav) return;
+            const active = el('category').value;
+            const count = name => articles.filter(a => name === '__none__' ? !a.category : a.category === name).length;
+            const names = [...new Set([...categories.map(c => c.name), ...articles.map(a => a.category).filter(Boolean)])]
+                .sort((a, b) => (count(b) > 0) - (count(a) > 0) || a.localeCompare(b, Lang.current));
+            const entry = (value, label, n, icon) => `<button type="button" class="kb-cat${active === value ? ' is-active' : ''}${n ? '' : ' is-empty'}" data-category="${Utils.esc(value)}">${Icon(icon, 15)}<span>${Utils.esc(label)}</span><span class="kb-cat-count">${n}</span></button>`;
+            categoryNav.innerHTML = entry('', Lang.t('kbAllCategories'), articles.length, 'library')
+                + names.map(name => entry(name, name, count(name), 'folder')).join('')
+                + (count('__none__') ? entry('__none__', Lang.t('kbNoCategory'), count('__none__'), 'folder-x') : '');
+            categoryNav.querySelectorAll('.kb-cat').forEach(btn => btn.onclick = () => { el('category').value = btn.dataset.category; render(); });
+        };
+        const renderStats = () => {
+            if (!stats) return;
+            const recent = articles.filter(a => time(a.createdAt) >= Date.now() - 30 * 86400000).length;
+            const linked = articles.filter(a => a.linkedTicketCount > 0).length;
+            const latest = articles.reduce((max, a) => Math.max(max, time(a.updatedAt || a.createdAt)), 0);
+            const stat = (icon, label, value) => `<div class="kb-stat">${Icon(icon, 16)}<div><dt>${Utils.esc(label)}</dt><dd>${Utils.esc(String(value))}</dd></div></div>`;
+            stats.innerHTML = stat('book-open', Lang.t('kbStatArticles'), articles.length)
+                + stat('folder', Lang.t('kbStatCategories'), new Set(articles.map(a => a.category).filter(Boolean)).size)
+                + stat('ticket', Lang.t('kbStatLinked'), linked)
+                + stat('sparkles', Lang.t('kbStatNew'), recent)
+                + stat('history', Lang.t('kbStatLatest'), latest ? relative(latest) : '–');
+        };
         const filtered = () => {
-            const query = el('q').value.trim().toLocaleLowerCase();
+            const query = words();
             const category = el('category').value;
             const creator = el('creator').value;
             const days = PERIOD_DAYS[el('period').value] || 0;
@@ -78,32 +134,46 @@ export const KbSearch = {
                 updated: (a, b) => time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt),
                 newest: (a, b) => time(b.createdAt) - time(a.createdAt),
                 oldest: (a, b) => time(a.createdAt) - time(b.createdAt),
-                title: (a, b) => a.title.localeCompare(b.title, Lang.current)
+                title: (a, b) => a.title.localeCompare(b.title, Lang.current),
+                linked: (a, b) => b.linkedTicketCount - a.linkedTicketCount || time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt)
             };
-            return articles.filter(a => (!query || query.split(/\s+/).every(word => a.searchText.includes(word)))
+            // Bei einer Suche zuerst Treffer im Titel.
+            const score = a => query.reduce((sum, word) => sum + (a.title.toLocaleLowerCase().includes(word) ? 2 : 0), 0);
+            return articles.filter(a => (!query.length || query.every(word => a.searchText.includes(word)))
                 && (!category || (category === '__none__' ? !a.category : a.category === category))
                 && (!creator || a.createdByUserId === creator)
                 && (!since || time(a.createdAt) >= since))
-                .sort(sorters[el('sort').value] || sorters.updated);
+                .sort((a, b) => (query.length ? score(b) - score(a) : 0) || (sorters[el('sort').value] || sorters.updated)(a, b));
         };
         const render = () => {
             const items = filtered();
+            const query = words();
             el('count').textContent = Lang.format('kbResultCount', { count: items.length, total: articles.length });
-            list.className = 'kb-grid';
+            root.querySelectorAll('.kb-view-toggle [data-view]').forEach(btn => btn.classList.toggle('is-active', btn.dataset.view === view));
+            renderCategoryNav();
+            list.className = view === 'list' ? 'kb-list-view' : 'kb-grid';
+            const badges = a => {
+                const created = time(a.createdAt); const updated = time(a.updatedAt);
+                const out = [];
+                if (created >= Date.now() - 14 * 86400000) out.push(`<span class="kb-badge is-new">${Utils.esc(Lang.t('kbBadgeNew'))}</span>`);
+                else if (updated && updated - created > 60000 && updated >= Date.now() - 14 * 86400000) out.push(`<span class="kb-badge is-updated">${Utils.esc(Lang.t('kbBadgeUpdated'))}</span>`);
+                return out.join('');
+            };
             list.innerHTML = items.length ? items.map(a => `
                 <button type="button" class="kb-tile" data-id="${Utils.esc(a.id)}">
                     <span class="kb-tile-head">
                         <span class="kb-tile-icon">${Icon('lightbulb', 18)}</span>
-                        ${a.category ? `<span class="t-category">${Utils.esc(a.category)}</span>` : `<span class="kb-tile-nocat">${Utils.esc(Lang.t('kbNoCategory'))}</span>`}
+                        <span class="kb-tile-tags">${badges(a)}${a.category ? `<span class="t-category">${Utils.esc(a.category)}</span>` : `<span class="kb-tile-nocat">${Utils.esc(Lang.t('kbNoCategory'))}</span>`}</span>
                     </span>
-                    <strong class="kb-tile-title">${Utils.esc(a.title)}</strong>
-                    <span class="kb-tile-excerpt">${Utils.esc(excerpt(a.plain))}</span>
+                    <strong class="kb-tile-title">${highlight(a.title, query)}</strong>
+                    <span class="kb-tile-excerpt">${highlight(snippet(a.plain, query), query)}</span>
                     <span class="kb-tile-meta">
-                        <span>${Icon('user-round', 13)}${Utils.esc(a.createdByName || '–')}</span>
-                        <span>${Icon('calendar', 13)}${Utils.esc(Utils.fmtDate(a.updatedAt || a.createdAt))}</span>
+                        <span title="${Utils.esc(Lang.t('kbCreatedBy'))}">${Icon('user-round', 13)}${Utils.esc(a.createdByName || '–')}</span>
+                        <span title="${Utils.esc(Lang.format('kbUpdatedOn', { date: Utils.fmtDate(a.updatedAt || a.createdAt) }))}">${Icon('history', 13)}${Utils.esc(relative(time(a.updatedAt || a.createdAt)))}</span>
+                        <span title="${Utils.esc(Lang.t('kbReadingTime'))}">${Icon('clock', 13)}${Utils.esc(Lang.format('kbMinutes', { count: readingMinutes(a.plain) }))}</span>
                         ${a.linkedTicketCount ? `<span title="${Utils.esc(Lang.t('kbLinkedTickets'))}">${Icon('ticket', 13)}${a.linkedTicketCount}</span>` : ''}
                     </span>
-                </button>`).join('') : `<div class="empty-state compact kb-empty">${Icon('book-open', 20)}<span>${Utils.esc(Lang.t('noArticlesFound'))}</span></div>`;
+                </button>`).join('') : `<div class="empty-state compact kb-empty">${Icon('search-x', 22)}<strong>${Utils.esc(Lang.t('noArticlesFound'))}</strong><span>${Utils.esc(Lang.t('kbNoResultsHint'))}</span></div>`;
             list.querySelectorAll('.kb-tile').forEach(tile => tile.onclick = () => {
                 const article = articles.find(a => a.id === tile.dataset.id);
                 if (article) KbSearch.openArticle(article, { canEdit, ticket, categories, onChange: refresh });
@@ -118,10 +188,16 @@ export const KbSearch = {
                 return { ...a, plain, searchText: `${a.title} ${plain} ${a.category || ''} ${a.createdByName || ''}`.toLocaleLowerCase() };
             });
             fillSelects();
+            renderStats();
             render();
         };
         el('q').oninput = render;
         ['category', 'creator', 'period', 'sort'].forEach(id => { el(id).onchange = render; });
+        root.querySelectorAll('.kb-view-toggle [data-view]').forEach(btn => btn.onclick = () => {
+            view = btn.dataset.view;
+            try { localStorage.setItem('kb-view', view); } catch { /* nur Komfort */ }
+            render();
+        });
         el('reset').onclick = () => {
             el('q').value = ''; el('category').value = ''; el('creator').value = ''; el('period').value = 'all'; el('sort').value = 'updated';
             render();
@@ -136,41 +212,59 @@ export const KbSearch = {
             id: 'kb-article-modal',
             title: article.title,
             icon: 'lightbulb',
-            size: 'lg',
+            size: 'xl',
             headerButtons: canEdit ? [
                 { id: 'kba-edit', icon: 'pencil', title: Lang.t('edit') },
                 { id: 'kba-delete', icon: 'trash-2', title: Lang.t('delete') }
             ] : [],
             body: `
-                <div class="kb-article-view">
-                    <div class="kb-article-meta-bar">
-                        ${article.category ? `<span class="t-category">${Utils.esc(article.category)}</span>` : `<span class="kb-tile-nocat">${Utils.esc(Lang.t('kbNoCategory'))}</span>`}
-                        <span class="hint">${Icon('user-round', 13)} ${Utils.esc(article.createdByName || '–')}</span>
-                        <span class="hint">${Icon('calendar', 13)} ${Utils.esc(Lang.format('kbUpdatedOn', { date: Utils.fmtDate(article.updatedAt || article.createdAt) }))}</span>
-                    </div>
-                    <div class="kb-link-action">
-                        ${ticket
-                            ? `<button type="button" class="btn-primary btn-sm" id="kba-link-current">${Icon('link', 15)}${Utils.esc(Lang.format('kbLinkToThisTicket', { number: ticket.ticketNumber || '' }))}</button>`
-                            : `<button type="button" class="btn-secondary btn-sm" id="kba-link-pick">${Icon('link', 15)}${Utils.esc(Lang.t('kbLinkToTicket'))}</button>`}
-                    </div>
-                    <div class="desc-text rich-content kb-article-body">${Utils.sanitizeRichHtml(article.body)}</div>
-                    <div class="kb-article-section" id="kba-attachments-box" hidden>
-                        <h4 class="section-title">${Icon('paperclip', 14)}${Utils.esc(Lang.t('attachments'))}</h4>
-                        <div class="file-preview" id="kba-attachments"></div>
-                    </div>
-                    <div class="kb-article-section">
-                        <h4 class="section-title">${Icon('ticket', 14)}${Utils.esc(Lang.t('kbLinkedTickets'))}</h4>
-                        <div class="file-preview" id="kba-tickets"><span class="hint">${Utils.esc(Lang.t('kbLoading'))}</span></div>
-                    </div>
-                    ${canEdit ? `<div class="kb-article-section kb-article-category">
-                        <label for="kba-category">${Utils.esc(Lang.t('kbFilterCategory'))}</label>
-                        <select id="kba-category">${option('', Lang.t('kbNoCategory'), !article.category)}${[...new Set([...categories.map(c => c.name), ...(article.category ? [article.category] : [])])].map(name => option(name, name, name === article.category)).join('')}</select>
-                    </div>` : ''}
+                <div class="kb-article-view kb-article-layout">
+                    <article class="kb-article-main">
+                        <div class="kb-article-meta-bar">
+                            ${article.category ? `<span class="t-category">${Utils.esc(article.category)}</span>` : `<span class="kb-tile-nocat">${Utils.esc(Lang.t('kbNoCategory'))}</span>`}
+                            <span class="hint">${Icon('history', 13)} ${Utils.esc(Lang.format('kbUpdatedOn', { date: Utils.fmtDate(article.updatedAt || article.createdAt) }))}</span>
+                            <span class="hint">${Icon('clock', 13)} ${Utils.esc(Lang.format('kbReadingTimeValue', { count: readingMinutes(plainText(article.body)) }))}</span>
+                        </div>
+                        <div class="desc-text rich-content kb-article-body">${Utils.sanitizeRichHtml(article.body)}</div>
+                    </article>
+                    <aside class="kb-article-aside">
+                        <div class="kb-info-card">
+                            <h4 class="section-title">${Icon('info', 14)}${Utils.esc(Lang.t('kbArticleInfo'))}</h4>
+                            <dl class="kb-info-list">
+                                <div><dt>${Utils.esc(Lang.t('kbCreatedBy'))}</dt><dd>${Utils.esc(article.createdByName || '–')}</dd></div>
+                                <div><dt>${Utils.esc(Lang.t('kbCreatedAt'))}</dt><dd>${Utils.esc(Utils.fmtDate(article.createdAt))}</dd></div>
+                                <div><dt>${Utils.esc(Lang.t('kbUpdatedAt'))}</dt><dd>${Utils.esc(Utils.fmtDate(article.updatedAt || article.createdAt))}</dd></div>
+                                <div><dt>${Utils.esc(Lang.t('kbLinkedTickets'))}</dt><dd id="kba-ticket-count">${article.linkedTicketCount || 0}</dd></div>
+                            </dl>
+                            ${canEdit ? `<div class="kb-article-category">
+                                <label for="kba-category">${Utils.esc(Lang.t('kbFilterCategory'))}</label>
+                                <select id="kba-category">${option('', Lang.t('kbNoCategory'), !article.category)}${[...new Set([...categories.map(c => c.name), ...(article.category ? [article.category] : [])])].map(name => option(name, name, name === article.category)).join('')}</select>
+                            </div>` : ''}
+                            <div class="kb-link-action">
+                                ${ticket
+                                    ? `<button type="button" class="btn-primary btn-sm" id="kba-link-current">${Icon('link', 15)}${Utils.esc(Lang.format('kbLinkToThisTicket', { number: ticket.ticketNumber || '' }))}</button>`
+                                    : `<button type="button" class="btn-secondary btn-sm" id="kba-link-pick">${Icon('link', 15)}${Utils.esc(Lang.t('kbLinkToTicket'))}</button>`}
+                            </div>
+                        </div>
+                        <div class="kb-article-section" id="kba-attachments-box" hidden>
+                            <div class="kb-section-head">
+                                <h4 class="section-title">${Icon('paperclip', 14)}${Utils.esc(Lang.t('attachments'))}</h4>
+                                ${canEdit ? `<label class="btn btn-secondary btn-sm" id="kba-add-files" tabindex="0">${Icon('upload', 15)}${Utils.esc(Lang.t('kbAddAttachments'))}<input type="file" id="kba-file" hidden multiple></label>` : ''}
+                            </div>
+                            <div class="file-preview" id="kba-attachments"></div>
+                        </div>
+                        <div class="kb-article-section">
+                            <h4 class="section-title">${Icon('ticket', 14)}${Utils.esc(Lang.t('kbLinkedTickets'))}</h4>
+                            <div class="file-preview" id="kba-tickets"><span class="hint">${Utils.esc(Lang.t('kbLoading'))}</span></div>
+                        </div>
+                    </aside>
                 </div>`
         });
         const renderTickets = async () => {
             const box = modal.querySelector('#kba-tickets');
             const tickets = await Store.getKbArticleTickets(article.id);
+            const countEl = modal.querySelector('#kba-ticket-count');
+            if (countEl) countEl.textContent = String(tickets.length);
             box.innerHTML = tickets.length ? tickets.map(t => `<button type="button" class="file-chip kba-ticket" data-id="${Utils.esc(t.id)}">${Icon('ticket', 13)}<span>${Utils.esc(t.ticketNumber)}</span>${t.archived ? `<small>${Utils.esc(Lang.t('archivedState'))}</small>` : ''}</button>`).join('')
                 : `<span class="hint">${Utils.esc(Lang.t('kbNoLinkedTickets'))}</span>`;
             box.querySelectorAll('.kba-ticket').forEach(btn => btn.onclick = () => { modal.remove(); AdminBoard.openModal(btn.dataset.id); });
@@ -201,14 +295,39 @@ export const KbSearch = {
                 if (onChange) onChange();
             };
         }
-        const attachments = await Store.getKbArticleAttachments(article.id);
-        const box = modal.querySelector('#kba-attachments');
-        modal.querySelector('#kba-attachments-box').hidden = !attachments.length;
-        box.innerHTML = attachments.map(file => `<button type="button" class="file-chip kb-att" data-id="${Utils.esc(file.id)}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('');
-        box.querySelectorAll('.kb-att').forEach(btn => btn.onclick = async () => {
-            const full = await Store.getKbAttachment(btn.dataset.id);
-            if (full) AdminBoard.openAttachmentPreview(full);
-        });
+        const renderAttachments = async () => {
+            const attachments = await Store.getKbArticleAttachments(article.id);
+            const box = modal.querySelector('#kba-attachments');
+            modal.querySelector('#kba-attachments-box').hidden = !attachments.length && !canEdit;
+            box.innerHTML = attachments.length
+                ? attachments.map(file => `<button type="button" class="file-chip kb-att" data-id="${Utils.esc(file.id)}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('')
+                : `<span class="hint">${Utils.esc(Lang.t('kbNoAttachments'))}</span>`;
+            box.querySelectorAll('.kb-att').forEach(btn => btn.onclick = async () => {
+                const full = await Store.getKbAttachment(btn.dataset.id);
+                if (!full) return UI.toast(Lang.t('saveFailed'));
+                // Kleine Dateien ohne ID: die Server-Vorschau gilt nur fuer Ticket-Anhaenge.
+                const { id, ...local } = full;
+                AdminBoard.openAttachmentPreview(full.size > 15 * 1024 * 1024 ? full : local);
+            });
+            if (window.lucide) lucide.createIcons();
+        };
+        const uploadToArticle = async (list) => {
+            const chosen = Array.from(list || []);
+            if (!chosen.length) return;
+            const { saved, errors } = await Store.uploadFiles(chosen, file => Store.saveKbAttachment(article.id, file));
+            if (errors.length) UI.toast(errors.join(' '));
+            else UI.toast(Lang.format('kbAttachmentsAdded', { count: saved.length }));
+            await renderAttachments();
+            if (onChange) onChange();
+        };
+        const fileInput = modal.querySelector('#kba-file');
+        if (fileInput) {
+            fileInput.accept = Store.uploadAccept();
+            fileInput.onchange = async () => { const list = Array.from(fileInput.files || []); fileInput.value = ''; await uploadToArticle(list); };
+            modal.querySelector('#kba-add-files').onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); fileInput.click(); } };
+            UI.bindFileDrop(modal.querySelector('#kba-attachments-box'), uploadToArticle);
+        }
+        await renderAttachments();
         await renderTickets();
     },
 
@@ -240,9 +359,77 @@ export const KbSearch = {
         modal.querySelector('#kbp-q').focus();
     }),
 
+    // Mehrere Loesungen mit Suche auswaehlen und gemeinsam einem Ticket zuordnen.
+    pickArticles: async ({ ticket, linkedIds = [], onDone = null }) => {
+        const [articles, categories] = await Promise.all([Store.getKbArticles(), Store.getKbCategories()]);
+        const linked = new Set(linkedIds);
+        const chosen = new Set();
+        const modal = AdminBoard.openDialog({
+            id: 'kb-article-picker',
+            title: Lang.t('kbPickSolutions'),
+            icon: 'book-open-check',
+            size: 'md',
+            body: `<p class="hint">${Utils.esc(Lang.t('kbPickHint'))}</p>
+                <div class="kb-pick-filters">
+                    <input type="search" id="kbm-q" class="section-search" placeholder="${Utils.esc(Lang.t('kbPickSearch'))}" aria-label="${Utils.esc(Lang.t('kbPickSearch'))}">
+                    <select id="kbm-category" aria-label="${Utils.esc(Lang.t('kbFilterCategory'))}">${option('', Lang.t('kbFilterCategory'))}${categories.map(c => option(c.name, c.name)).join('')}</select>
+                </div>
+                <div id="kbm-list" class="kb-article-pick-list"></div>
+                <div class="modal-footer modal-footer-visible">
+                    <button type="button" class="btn-secondary" id="kbm-cancel">${Utils.esc(Lang.t('cancel'))}</button>
+                    <button type="button" class="btn-primary" id="kbm-confirm" disabled></button>
+                </div>`
+        });
+        const confirm = modal.querySelector('#kbm-confirm');
+        const updateConfirm = () => {
+            confirm.disabled = !chosen.size;
+            confirm.innerHTML = `${Icon('link', 15)}${Utils.esc(Lang.format('kbPickConfirm', { count: chosen.size }))}`;
+            if (window.lucide) lucide.createIcons();
+        };
+        const render = () => {
+            const term = modal.querySelector('#kbm-q').value.trim().toLocaleLowerCase();
+            const category = modal.querySelector('#kbm-category').value;
+            const hits = articles.filter(a => (!category || a.category === category)
+                && (!term || `${a.title} ${a.category || ''} ${plainText(a.body)}`.toLocaleLowerCase().includes(term))).slice(0, 100);
+            const list = modal.querySelector('#kbm-list');
+            list.innerHTML = hits.length ? hits.map(a => {
+                const isLinked = linked.has(a.id);
+                return `<label class="check-row kb-article-pick${isLinked ? ' is-linked' : ''}">
+                    <input type="checkbox" value="${Utils.esc(a.id)}"${isLinked ? ' checked disabled' : chosen.has(a.id) ? ' checked' : ''}>
+                    <span class="check-text"><strong>${Utils.esc(a.title)}</strong><span>${Utils.esc(a.category || Lang.t('kbNoCategory'))}${isLinked ? ` · ${Utils.esc(Lang.t('kbPickAlreadyLinked'))}` : ''}</span></span>
+                </label>`;
+            }).join('') : `<div class="empty-state compact">${Utils.esc(Lang.t('kbPickNone'))}</div>`;
+            list.querySelectorAll('input[type="checkbox"]:not(:disabled)').forEach(box => box.onchange = () => {
+                if (box.checked) chosen.add(box.value); else chosen.delete(box.value);
+                updateConfirm();
+            });
+        };
+        modal.querySelector('#kbm-q').oninput = render;
+        modal.querySelector('#kbm-category').onchange = render;
+        modal.querySelector('#kbm-cancel').onclick = () => modal.remove();
+        confirm.onclick = async () => {
+            confirm.disabled = true;
+            let count = 0; let failed = false;
+            for (const articleId of chosen) {
+                const result = await Store.linkKbArticle(ticket.id, articleId);
+                if (result.ok) count++;
+                else { failed = true; if (result.error === 'ticket_archived') break; }
+            }
+            modal.remove();
+            UI.toast(failed ? `${Lang.format('kbPickedToast', { count })} ${Lang.t('saveFailed')}` : Lang.format('kbPickedToast', { count }));
+            if (onDone) await onDone();
+        };
+        updateConfirm();
+        render();
+        modal.querySelector('#kbm-q').focus();
+    },
+
     // Artikel anlegen oder bearbeiten -- eigenes Popup mit Formatierung und Anhaengen.
-    openEditor: async ({ article = null, categories = null, onSaved = null } = {}) => {
+    // draft: Vorbefuellung fuer einen neuen Artikel (z.B. aus der Loesungsdokumentation eines
+    // Tickets, sourceTicketId ordnet den Artikel diesem Ticket nach dem Speichern zu).
+    openEditor: async ({ article = null, categories = null, onSaved = null, draft = null, sourceTicketId = null } = {}) => {
         const allCategories = categories || await Store.getKbCategories();
+        const initialCategory = article ? article.category : draft?.category || null;
         const files = [];
         const modal = AdminBoard.openDialog({
             id: 'kb-editor-modal',
@@ -251,9 +438,10 @@ export const KbSearch = {
             size: 'lg',
             body: `
                 <div class="kb-editor-form">
-                    <div class="field"><label for="kbe-title">${Lang.t('titleLabel')}</label><input id="kbe-title" type="text" maxlength="500" value="${Utils.esc(article?.title || '')}"></div>
+                    ${draft ? `<p class="hint">${Utils.esc(Lang.t('kbDraftFromTicketHint'))}</p>` : ''}
+                    <div class="field"><label for="kbe-title">${Lang.t('titleLabel')}</label><input id="kbe-title" type="text" maxlength="500" value="${Utils.esc(article?.title || draft?.title || '')}"></div>
                     <div class="field"><label for="kbe-category">${Utils.esc(Lang.t('kbFilterCategory'))}</label>
-                        <select id="kbe-category">${option('', Lang.t('kbNoCategory'), !article?.category)}${allCategories.map(c => option(c.name, c.name, c.name === article?.category)).join('')}</select></div>
+                        <select id="kbe-category">${option('', Lang.t('kbNoCategory'), !initialCategory)}${allCategories.map(c => option(c.name, c.name, c.name === initialCategory)).join('')}</select></div>
                     <div class="field">
                         <label for="kbe-body">${Lang.t('content')}</label>
                         <div class="note-toolbar">
@@ -263,9 +451,9 @@ export const KbSearch = {
                             <button type="button" class="btn-ghost btn-icon btn-sm" data-fmt="insertOrderedList" title="${Lang.t('numberedList')}" aria-label="${Lang.t('numberedList')}">${Icon('list-ordered', 15)}</button>
                             <button type="button" class="btn-ghost btn-icon btn-sm" id="kbe-table" title="${Lang.t('insertTable')}" aria-label="${Lang.t('insertTable')}">${Icon('table', 15)}</button>
                             <button type="button" class="btn-ghost btn-icon btn-sm" id="kbe-link" title="${Lang.t('insertLink')}" aria-label="${Lang.t('insertLink')}">${Icon('link', 15)}</button>
-                            <label class="btn btn-ghost btn-icon btn-sm" title="${Lang.t('addAttachment')}" aria-label="${Lang.t('addAttachment')}">${Icon('paperclip', 15)}<input type="file" id="kbe-file" hidden multiple></label>
+                            <label class="btn btn-ghost btn-icon btn-sm" title="${Lang.t('addAttachment')}" aria-label="${Lang.t('addAttachment')}">${Icon('paperclip', 15)}<input type="file" id="kbe-file" hidden multiple accept="${Utils.esc(Store.uploadAccept())}"></label>
                         </div>
-                        <div id="kbe-body" class="rich-editor kb-rich-editor" contenteditable="true" data-placeholder="${Lang.t('richEditorPlaceholder')}">${article ? Utils.sanitizeRichHtml(article.body) : ''}</div>
+                        <div id="kbe-body" class="rich-editor kb-rich-editor" contenteditable="true" data-placeholder="${Lang.t('richEditorPlaceholder')}">${article ? Utils.sanitizeRichHtml(article.body) : draft ? Utils.sanitizeRichHtml(draft.body || '') : ''}</div>
                         <div id="kbe-existing" class="file-preview"></div>
                         <div id="kbe-files" class="file-preview"></div>
                     </div>
@@ -280,18 +468,15 @@ export const KbSearch = {
                 if (article) {
                     if (!(await Store.updateKbArticle(article.id, { title, content: body, category }))) return UI.toast(Lang.t('saveFailed'));
                 } else {
-                    articleId = await Store.createKbArticle(title, body, undefined, category);
+                    articleId = await Store.createKbArticle(title, body, sourceTicketId || undefined, category);
                     if (!articleId) return UI.toast(Lang.t('saveFailed'));
+                    if (sourceTicketId) await Store.linkKbArticle(sourceTicketId, articleId);
                 }
-                if (files.length) {
-                    try {
-                        await Promise.all(files.map(f => Store.saveKbAttachment(articleId, f)));
-                    } catch (e) {
-                        UI.toast(e.message === 'ATTACHMENT_TOO_LARGE' ? Lang.t('attachmentTooLarge15MB') : Lang.t('articleSavedAttachmentFailed'));
-                    }
-                }
+                // Nacheinander hochladen; eine Fehlermeldung ersetzt die Erfolgsmeldung statt von ihr
+                // sofort ueberdeckt zu werden.
+                const { errors } = await Store.uploadFiles(files, file => Store.saveKbAttachment(articleId, file));
                 m.remove();
-                UI.toast(Lang.t('articleSavedToast'));
+                UI.toast(errors.length ? Lang.format('articleSavedAttachmentsFailed', { details: errors.join(' ') }) : Lang.t('articleSavedToast'));
                 if (onSaved) await onSaved();
             }
         });
@@ -316,11 +501,16 @@ export const KbSearch = {
         };
         const renderFiles = () => {
             const preview = modal.querySelector('#kbe-files');
-            preview.innerHTML = files.map((file, index) => `<div class="file-chip">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger" data-index="${index}" title="${Lang.t('removeFile')}" aria-label="${Utils.esc(Lang.format('removeFileAriaLabel', { name: file.name }))}">${Icon('x', 13)}</button></div>`).join('');
-            preview.querySelectorAll('button').forEach(btn => btn.onclick = () => { files.splice(Number(btn.dataset.index), 1); renderFiles(); });
+            preview.replaceChildren(...files.map((file, index) => AdminBoard.stagedFileChip(file, () => { files.splice(index, 1); renderFiles(); })));
             if (window.lucide) lucide.createIcons();
         };
-        const addFiles = list => { files.push(...list); renderFiles(); };
+        // Unpassende Dateien sofort mit Grund ablehnen (Typ, Groesse), statt erst beim Speichern.
+        const addFiles = list => {
+            const errors = [];
+            list.forEach(file => { try { Store.assertUploadAllowed(file); files.push(file); } catch (error) { errors.push(Store.uploadErrorMessage(error)); } });
+            if (errors.length) UI.toast(errors.join(' '));
+            renderFiles();
+        };
         modal.querySelector('#kbe-file').onchange = event => { addFiles(Array.from(event.target.files || [])); event.target.value = ''; };
         UI.bindFileDrop(modal.querySelector('.kb-editor-form'), addFiles);
         UI.bindPasteFiles(bodyInput, addFiles);
@@ -387,15 +577,28 @@ export const KbSearch = {
             id: 'kb-modal',
             title: ticket ? Lang.format('kbForTicket', { number: ticket.ticketNumber || '' }) : Lang.t('knowledgeBase'),
             icon: 'book-open',
-            size: 'xl',
+            size: 'full',
             headerButtons: canEdit ? [
                 { id: 'kb-new', icon: 'file-plus-2', title: Lang.t('newArticle'), onClick: () => KbSearch.openEditor({ categories: view.getCategories(), onSaved: () => view.refresh() }) },
                 { id: 'kb-cats', icon: 'tags', title: Lang.t('kbManageCategories'), onClick: () => KbSearch.openCategories(() => view.refresh()) }
             ] : [],
-            body: `${ticket ? `<div class="callout callout-info">${Utils.esc(Lang.t('kbForTicketHint'))}</div>` : ''}${KbSearch.filtersMarkup('kb')}<div id="kb-list" class="kb-grid"></div>`
+            body: `
+                <div class="kb-shell">
+                    <aside class="kb-sidebar">
+                        <div class="kb-sidebar-title">${Utils.esc(Lang.t('kbStatsTitle'))}</div>
+                        <dl class="kb-stats" id="kb-stats"></dl>
+                        <div class="kb-sidebar-title">${Utils.esc(Lang.t('kbCategoriesTitle'))}</div>
+                        <nav class="kb-cat-nav" id="kb-cat-nav" aria-label="${Utils.esc(Lang.t('kbCategoriesTitle'))}"></nav>
+                    </aside>
+                    <div class="kb-main">
+                        ${ticket ? `<div class="callout callout-info">${Utils.esc(Lang.t('kbForTicketHint'))}</div>` : ''}
+                        ${KbSearch.filtersMarkup('kb')}
+                        <div id="kb-list" class="kb-grid"></div>
+                    </div>
+                </div>`
         });
         modal.classList.add('kb-library');
-        view = KbSearch.bind(modal, 'kb', { list: modal.querySelector('#kb-list'), canEdit, ticket });
+        view = KbSearch.bind(modal, 'kb', { list: modal.querySelector('#kb-list'), canEdit, ticket, categoryNav: modal.querySelector('#kb-cat-nav'), stats: modal.querySelector('#kb-stats') });
         await view.refresh();
         modal.querySelector('#kb-q').focus();
     }

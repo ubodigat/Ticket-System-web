@@ -22,6 +22,7 @@ import { mysqlTimestamp } from '../../db/date.js';
 import { MAIL_SECRET_KEYS, readMailSecrets, encryptMailSecrets } from '../../mail/secrets.js';
 import { buildTicketNumber, ticketNumberFormatProblem, TICKET_CATEGORY_CODE_PATTERN, TICKET_NUMBER_MAX_LENGTH } from '../../domain/ticketNumber.js';
 import { modulesFromConfig } from '../../domain/modules.js';
+import { MAX_UPLOAD_LIMIT_MB, MIN_UPLOAD_LIMIT_MB, uploadLimitBytesFromConfig } from '../../domain/uploadLimits.js';
 
 export interface SettingsRouteDeps {
   env: Env;
@@ -104,10 +105,21 @@ const settingsConfigSchema = z.object({
   waitingReminderEnabled: z.boolean().optional(),
   // Systemeinstellungen > Module (siehe domain/modules.ts); fehlende Eintraege gelten als aktiv.
   modules: z.object({ sla: z.boolean().optional(), approvals: z.boolean().optional(), outlook: z.boolean().optional() }).strict().optional(),
+  // Maximale Dateigroesse je Anhang in MB (siehe domain/uploadLimits.ts).
+  uploadConfig: z.object({ maxFileMb: z.number().int().min(MIN_UPLOAD_LIMIT_MB).max(MAX_UPLOAD_LIMIT_MB) }).strict().optional(),
+  // Profilbilder aktiv (anpassbar) oder ganz aus (siehe domain/avatar.ts).
+  avatarConfig: z.object({ enabled: z.boolean() }).strict().optional(),
   approvalWorkflow: z.object({
     enabled: z.boolean().default(false),
     priorities: z.array(z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch'])).default([]),
-    fallbackApproverUserId: z.string().nullable().optional()
+    fallbackApproverUserId: z.string().nullable().optional(),
+    // Ersatzperson je Kategorie bzw. Gruppe (Abteilung), vor der allgemeinen Ersatzperson
+    // (Reihenfolge siehe domain/approvalRouting.ts).
+    fallbackRules: z.array(z.object({
+      type: z.enum(['group', 'category']),
+      target: z.string().trim().min(1).max(128),
+      userId: z.string().trim().min(1).max(64)
+    }).strict()).max(300).optional()
   }).optional(),
   // Feldnamen/-werte entsprechen exakt der lokalen Version vom 07.10.2026 (vorher ein eigenes,
   // abweichendes Feldset) -- 0 bei sessionTimeout/maxLoginAttempts bedeutet bewusst "kein
@@ -221,7 +233,7 @@ const ldapConfigSchema = z.object({
 // (Legacy-)Schluessel in config_json gelangen so nie versehentlich an normale Konten.
 const USER_VISIBLE_CONFIG_KEYS = ['slaHoursByPriority', 'showSlaToUsers', 'defaultPrio', 'businessHours', 'ticketNumberFormat',
   'ticketNumberCategoryFormats', 'ticketNumberCategoryCodes', 'accountSelfServiceFields', 'autoArchiveClosedAfterDays', 'waitingReminderDays',
-  'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig', 'modules'] as const;
+  'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig', 'modules', 'avatarConfig'] as const;
 function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any> {
   const source = config || {};
   const clone: Record<string, any> = {};
@@ -274,8 +286,10 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       // Aufgeloester Modulstand fuer alle Rollen (Outlook haengt ohne ausdrueckliche Auswahl an
       // outlookConfig, das normale Konten nicht sehen).
       const modules = modulesFromConfig(config);
+      const uploadLimitBytes = uploadLimitBytesFromConfig(config);
       if (!isAdmin) config = removeAdminOnlyConfig(config);
       config.modules = modules;
+      config.uploadLimitBytes = uploadLimitBytes;
       return reply.send({ companyName: row.company_name, portalName: row.portal_name, config });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -315,7 +329,11 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
             return Math.max(max, digits ? parseInt(digits[1]!, 10) : 0);
           }, 0);
           const minRequiredDigits = String(highestSequence).length;
-          if (parsed.data.ticketNumberFormat.padding < minRequiredDigits) {
+          const stored = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+          let storedPadding = 5;
+          try { storedPadding = Number(JSON.parse(stored?.config_json || '{}').ticketNumberFormat?.padding) || 5; } catch { storedPadding = 5; }
+          const requested = parsed.data.ticketNumberFormat.padding;
+          if (requested < minRequiredDigits && requested < storedPadding) {
             return reply.code(400).send({
               error: 'padding_too_low',
               minRequired: minRequiredDigits,

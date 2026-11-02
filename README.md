@@ -12,7 +12,7 @@ für den optionalen Virenscanner zusätzlich 1-2 GB, für die Office-Oberfläche
 `--enable-office-viewer` aktiviert (Anleitung unten).
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=3ffa34b4d8bed356661b62181a0c8e33b9a1b9c1cd1665e75d16852beada24d2 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=13e9750cc7fadd3217ac29df282ad5dca549fd01d6e985937465161fe2cd20c9 bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -39,7 +39,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=3ffa34b4d8bed356661b62181a0c8e33b9a1b9c1cd1665e75d16852beada24d2 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=13e9750cc7fadd3217ac29df282ad5dca549fd01d6e985937465161fe2cd20c9 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist
@@ -47,6 +47,15 @@ bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update
 - Benutzerkontoanfragen, optionale Kontogültigkeit, Rollen und serverseitige Berechtigungsprüfung.
 - Ticket-Board und Listenansicht, Prioritäten, Fristen, Geschäftszeiten, Archiv und Störungen.
 - Nachrichten, Anhänge, Teilaufgaben, eigene/geteilte/wiederkehrende Aufgaben und Genehmigungen.
+- Ticket-Sichtbarkeit wird serverseitig durchgesetzt: normale Konten sehen eigene Tickets, Admins
+  nicht zugewiesene, eigene, beteiligte und Tickets ihrer Gruppe (inklusive Ober- und Untergruppen)
+  sowie die Kategorie „Allgemein“, Superadmins alles. Genehmigen kann jedes aktive Konto; die
+  prüfende Person sieht dabei nur Ticketkopf, Zusatzfelder, direkte Anhänge und die Begründung.
+  Anfrage und Entscheidung bleiben als Verlauf am Ticket (Migration 0063). Ohne vorgesetzte Person
+  greift zuerst die Ersatzperson der Ticket-Kategorie, dann die der Gruppe, dann die allgemeine.
+- Benutzer werden über einen Assistenten angelegt (Konto, Organisation, Kontakt und Arbeitszeiten,
+  Rechte, Übersicht) – identisch beim Annehmen einer Kontoanfrage. Zusatzangaben wie Personalnummer,
+  Kostenstelle, Gebäude/Raum, Eintrittsdatum und Arbeitstage liegen verschlüsselt (Migration 0064).
 - PDF-Vorschau und optionale, schreibgeschützte Office-Oberfläche über isolierte Dokumentendienste.
 - SMTP mit verschlüsselter, dauerhafter Versandqueue; LDAP und Outlook nach Einrichtung.
 - Argon2id, widerrufbare Sitzungen, MFA mit TOTP/Passkeys, CSRF-Schutz und Feldverschlüsselung.
@@ -73,7 +82,7 @@ Bei der Erstinstallation diesen verifizierten Befehl verwenden und `--domain=…
 hinter `--enable-office-viewer` ergänzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=3ffa34b4d8bed356661b62181a0c8e33b9a1b9c1cd1665e75d16852beada24d2 bash "$f" --enable-office-viewer'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=13e9750cc7fadd3217ac29df282ad5dca549fd01d6e985937465161fe2cd20c9 bash "$f" --enable-office-viewer'
 ```
 
 Bei einem bereits aktualisierten Checkout auf dem Server:
@@ -174,14 +183,18 @@ dem App-Start aus; eine reine Ersetzung von Frontend-Dateien reicht für dieses 
 festlegen. Sie gelten beim Anlegen und Ändern von Passwörtern; bestehende Passwörter
 werden nicht rückwirkend ungültig. Für das erste Setup gelten mindestens 14 Zeichen.
 
-**Anhänge:** Bis zu 500 MiB pro Datei in der Ticket-Anhangsliste und Wissensdatenbank.
-Große Dateien werden blockweise übertragen und verschlüsselt in MariaDB gespeichert
-(Migration 0049); die Freigabe erfolgt erst nach vollständiger Prüfung. Pro Konto sind
-für diesen Uploadweg 2 GiB innerhalb von 24 Stunden reservierbar. Dateien über 15 MiB
-werden heruntergeladen statt vorgerendert. Große Dateien direkt an das Ticket anhängen,
-nicht an private Notizen oder Chat-Nachrichten. Für 500-MiB-Dateien entsprechend RAM,
-Datenbank-/Backup-Speicher und Uploadzeit einplanen; empfohlen sind mindestens 6 GB RAM.
-Die endgültige Inhaltsprüfung verarbeitet pro App-Instanz nur eine große Datei gleichzeitig.
+**Anhänge:** Die maximale Dateigröße stellt der Superadmin unter Systemeinstellungen >
+Allgemein ein (500 bis 2000 MB, Standard 1 GB). Sie gilt für Ticket-Anhänge, Chat-Nachrichten,
+interne Kommunikation und die Wissensdatenbank. Erlaubt sind PDF, PNG, JPG, DOCX, XLSX, PPTX,
+ODT, ODS, ODP, TXT, CSV und LOG; die Oberfläche lehnt andere Typen sofort mit Begründung ab.
+Dateien über 15 MB werden blockweise übertragen und verschlüsselt in MariaDB gespeichert
+(Migrationen 0049 und 0062); die Freigabe erfolgt erst nach vollständiger Prüfung. Das
+Tageskontingent beträgt für normale Konten einmal, für Admins viermal die eingestellte
+Dateigröße, für die gesamte Installation mindestens 20 GB. Dateien über 15 MB werden
+heruntergeladen statt vorgerendert. Die abschließende Prüfung hält jede Datei einmal im
+Arbeitsspeicher, höchstens zwei gleichzeitig: Bei 1 GB mindestens 6 GB RAM einplanen, bei
+2000 MB mindestens 8 GB. Die In-App-Datenbanksicherung (Systeminfo) ist auf 512 MB begrenzt;
+Installationen mit großen Anhängen zusätzlich auf Datenbankebene sichern (`mariadb-dump`).
 
 Optionaler vollständiger 500-MiB-Test (isolierte Datenbank-Nachbildung, ca. 1–2 GB RAM):
 

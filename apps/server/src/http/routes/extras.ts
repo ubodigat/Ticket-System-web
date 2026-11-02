@@ -18,6 +18,7 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
 import { queueMail as sendMail, queueMailIfConfigured as sendMailSafe } from '../../mail/queue.js';
 import { notifyUser } from '../../domain/notifications.js';
+import { canAccessTicket, canReadAttachment } from '../../domain/ticketAccess.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { convertOfficePreview, discardOfficePreview } from '../../documents/officePreview.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
@@ -392,19 +393,9 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const attachment = await app.db.selectFrom('attachments').selectAll().where('id', '=', id).executeTakeFirst();
       if (!attachment) return reply.code(404).send({ error: 'not_found' });
 
-      // IDOR, fail-closed: ohne zugehoeriges Ticket (ticket_id NULL oder Ticket geloescht) darf nur
-      // die hochladende Person den Anhang lesen -- vorher war er dann fuer jede angemeldete Person
-      // abrufbar.
-      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
-      // Anhaenge interner Notizen sind wie die Notizen selbst nur fuer Admins sichtbar.
-      if (!isAdmin && attachment.note_id) return reply.code(403).send({ error: 'forbidden' });
-      if (!isAdmin) {
-        const ticket = attachment.ticket_id
-          ? await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst()
-          : undefined;
-        const allowed = ticket ? ticket.created_by_user_id === session.uid : attachment.uploaded_by_user_id === session.uid;
-        if (!allowed) return reply.code(403).send({ error: 'forbidden' });
-      }
+      // IDOR, fail-closed: Ticketzugriff wie bei den Ticketrouten (domain/ticketAccess.ts); ohne
+      // zugehoeriges Ticket nur die hochladende Person; interne Notizen nur Admins.
+      if (!(await canReadAttachment(app.db, session, attachment))) return reply.code(403).send({ error: 'forbidden' });
 
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'attachments.data');
@@ -440,10 +431,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const { id } = req.params as { id: string };
       const attachment = await app.db.selectFrom('attachments').selectAll().where('id', '=', id).executeTakeFirst();
       if (!attachment || !attachment.ticket_id) return reply.code(404).send({ error: 'not_found' });
-      const ticket = await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst();
-      if (!ticket) return reply.code(404).send({ error: 'not_found' });
-      const previewIsAdmin = ['admin', 'superadmin'].includes(actor.role);
-      if (!previewIsAdmin && (attachment.note_id || ticket.created_by_user_id !== actor.uid)) return reply.code(403).send({ error: 'forbidden' });
+      if (!(await canReadAttachment(app.db, actor, attachment))) return reply.code(403).send({ error: 'forbidden' });
       if (attachment.size_bytes > 15 * 1024 * 1024) return reply.code(413).send({ error: 'preview_too_large' });
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'attachments.data');
@@ -478,7 +466,7 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const ticket = await app.db.selectFrom('tickets').select(['id', 'created_by_user_id']).where('id', '=', parsed.data.ticket_id).executeTakeFirst();
       if (!ticket) return reply.code(404).send({ error: 'ticket_not_found' });
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
-      if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
+      if (!(await canAccessTicket(app.db, session, ticket.id))) return reply.code(403).send({ error: 'forbidden' });
       // message_id/note_id muessen zum selben Ticket gehoeren; interne Notizen sind Admins vorbehalten.
       if (parsed.data.note_id && !isAdmin) return reply.code(403).send({ error: 'forbidden' });
       if (parsed.data.message_id) {

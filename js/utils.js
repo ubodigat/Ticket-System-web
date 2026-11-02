@@ -76,6 +76,11 @@ export const Utils = {
     // Gewaehlte Profilbilder (Benutzer-ID bzw. Benutzername -> { id, preset, custom }), befuellt
     // vom Store beim Laden des Personenverzeichnisses.
     avatars: new Map(),
+    // Systemeinstellungen > Allgemein: Profilbilder aktiv oder ganz aus (Store.getSettings setzt das).
+    avatarsEnabled: true,
+    avatarImg: (key, cls) => Utils.avatarsEnabled
+        ? `<img class="${cls}" src="${Utils.esc(Utils.avatarUrl(key))}" alt="" aria-hidden="true">`
+        : '',
     setAvatar: (user, avatar) => {
         if (!user?.id) return;
         const entry = { id: user.id, preset: avatar?.preset || null, custom: avatar?.custom || null };
@@ -108,7 +113,7 @@ export const Utils = {
         return d.toLocaleDateString(locale, {
                 day: '2-digit',
                 month: '2-digit',
-                year: '2-digit'
+                year: 'numeric'
             }) +
             ' ' + d.toLocaleTimeString(locale, {
                 hour: '2-digit',

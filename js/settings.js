@@ -282,10 +282,7 @@ export const Settings = {
             ${anyEditable ? `<div class="setting-row"><span class="hint">${Lang.t('onlyEditableFieldsHint')}</span>
                 <button class="btn-primary btn-sm" id="btn-save-account">${Icon('save', 15)}${Lang.t('saveAccountButton')}</button>
             </div>` : ''}
-            <div class="setting-row"><span class="hint">${Lang.t('dataExportHint')}</span>
-                <button class="btn-secondary btn-sm" id="btn-export-my-data" type="button">${Icon('download', 15)}${Lang.t('dataExportButton')}</button>
-            </div>`;
-        q('#btn-export-my-data')?.addEventListener('click', event => Settings.exportMyData(event.currentTarget));
+`;
         q('#btn-save-account')?.addEventListener('click', async () => {
             const users = await Store.getUsers();
             const target = users.find(u => u.id === user.id);
@@ -377,10 +374,17 @@ export const Settings = {
                             <label class="check-row"><input id="s-browser-notifications" type="checkbox"><span id="s-browser-notifications-label"></span></label>
                             <p class="hint" id="s-browser-notifications-status" role="status"></p>
                         </div>
+                        <div class="field field-wide" id="s-privacy-field">
+                            <label>${Lang.t('privacyLabel')}</label>
+                            <div class="setting-row"><span class="hint">${Lang.t('dataExportHint')} ${Lang.t('dataExportWhy')}</span>
+                                <button class="btn-secondary btn-sm" id="btn-export-my-data" type="button">${Icon('download', 15)}${Lang.t('dataExportButton')}</button>
+                            </div>
+                        </div>
                     </div>
                 </div>`;
             document.body.appendChild(modal);
             modal.querySelectorAll('.close-m').forEach(x => x.onclick = () => modal.classList.remove('open'));
+            modal.querySelector('#btn-export-my-data').addEventListener('click', event => Settings.exportMyData(event.currentTarget));
 
             // Listeners
             modal.querySelectorAll('.s-theme-btn').forEach(b => {
@@ -731,8 +735,8 @@ export const Settings = {
     renderAvatarPicker: (modal, user) => {
         const field = modal.querySelector('#s-avatar-field');
         if (!field) return;
-        field.hidden = !user;
-        if (!user) return;
+        field.hidden = !user || !Utils.avatarsEnabled;
+        if (field.hidden) return;
         const avatar = user.avatar || { preset: null, custom: null };
         const tiles = [
             { kind: 'auto', url: Utils.avatarFallbackUrl(user.id), label: Lang.t('avatarAutomatic'), active: !avatar.preset && !avatar.custom },

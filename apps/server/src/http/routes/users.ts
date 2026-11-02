@@ -9,7 +9,8 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 // V2 Users & Groups API - Sichere Benutzerverwaltung mit RBAC
 import type { FastifyInstance } from 'fastify';
 import { validateGroupParent } from '../../domain/groups.js';
-import { AVATAR_MAX_BYTES, AVATAR_PRESET_COUNT, avatarDescriptor, inspectAvatarImage } from '../../domain/avatar.js';
+import { AVATAR_MAX_BYTES, AVATAR_PRESET_COUNT, avatarDescriptor, inspectAvatarImage, loadAvatarsEnabled } from '../../domain/avatar.js';
+import { decryptUserProfile, encryptUserProfile, userProfileSchema } from '../../domain/userProfile.js';
 import { ADMIN_CODE_TTL_MS, enrollCodeHash, generateAdminEnrollCode } from '../../domain/mfaEnrollment.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -140,7 +141,9 @@ const createUserSchema = z.object({
   supervisor_user_id: z.string().nullable().optional(),
   permissions: userPermissionsSchema.optional(),
   // Security-Audit N7: LDAP-Login ist Opt-in je Konto, Standard false (siehe migration 0033).
-  ldap_login_enabled: z.boolean().optional()
+  ldap_login_enabled: z.boolean().optional(),
+  // Weitere Angaben inkl. Arbeitstage/-zeiten (domain/userProfile.ts).
+  profile: userProfileSchema.optional()
 });
 
 const updateUserSchema = z.object({
@@ -166,6 +169,7 @@ const updateUserSchema = z.object({
   // umschalten (siehe PATCH-Handler unten).
   ldap_login_enabled: z.boolean().optional(),
   permissions: userPermissionsSchema.optional(),
+  profile: userProfileSchema.optional(),
   notif_prefs: z.record(z.string(), z.object({
     app: z.boolean().optional(),
     email: z.boolean().optional()
@@ -394,7 +398,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManageUsers')) && !(await hasAdminPermission(session, 'canManage2FA'))) return reply.code(403).send({ error: 'forbidden' });
       const rows = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'avatar_preset', 'avatar_mime', 'avatar_updated_at', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'avatar_preset', 'avatar_mime', 'avatar_updated_at', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until', 'profile_enc',
           ...absenceSelects(eb)
         ])
         .orderBy('created_at', 'asc')
@@ -403,10 +407,12 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
       const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const groupIds = await loadGroupIds();
-      const users = rows.map(({ avatar_preset, avatar_mime, avatar_updated_at, ...row }) => {
+      const profileDek = await ensureDek(app.db, deps.keyProvider, 'users.profile');
+      const users = rows.map(({ avatar_preset, avatar_mime, avatar_updated_at, profile_enc, ...row }) => {
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
         return {
           ...row,
+          profile: decryptUserProfile(profile_enc, { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION, recordId: row.id, dek: profileDek }),
           group_ids: groupIds.get(row.id) ?? [],
           avatar: avatarDescriptor({ avatar_preset, avatar_mime, avatar_updated_at }),
           name_enc: undefined,
@@ -425,6 +431,11 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     } catch (e: any) {
       return routeError(app, reply, e);
     }
+  });
+
+  const profileCipher = async (recordId: string) => ({
+    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION, recordId,
+    dek: await ensureDek(app.db, deps.keyProvider, 'users.profile')
   });
 
   // GET /api/v2/users/directory - schlankes Personenverzeichnis fuer alle angemeldeten Rollen.
@@ -492,7 +503,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const session = requireSession(req);
       const row = await app.db.selectFrom('users')
         .select(eb => [
-          'id', 'username', 'name_enc', 'email_enc', 'role', 'avatar_preset', 'avatar_mime', 'avatar_updated_at', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until',
+          'id', 'username', 'name_enc', 'email_enc', 'role', 'avatar_preset', 'avatar_mime', 'avatar_updated_at', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'locked_permanent', 'locked_until', 'totp_enabled', 'created_at', 'updated_at', 'permissions_json', 'notif_prefs_json', 'ldap_login_enabled', 'account_valid_until', 'profile_enc',
           ...absenceSelects(eb)
         ])
         .where('id', '=', session.uid)
@@ -502,9 +513,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
       const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
-      const { avatar_preset, avatar_mime, avatar_updated_at, ...ownRow } = row;
+      const { avatar_preset, avatar_mime, avatar_updated_at, profile_enc, ...ownRow } = row;
       const user = {
         ...ownRow,
+        profile: decryptUserProfile(profile_enc, await profileCipher(row.id)),
         group_ids: (await loadGroupIds()).get(row.id) ?? [],
         avatar: avatarDescriptor({ avatar_preset, avatar_mime, avatar_updated_at }),
         name_enc: undefined,
@@ -630,6 +642,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         mobile: mobile_enc,
         job_title: job_title_enc,
         office_location: office_location_enc,
+        profile_enc: encryptUserProfile(parsed.data.profile, await profileCipher(newId)),
         supervisor_user_id: parsed.data.supervisor_user_id ?? null,
         // Zusatzrechte nur bei role='admin' sinnvoll (fuer 'user' zeigt der Editor das Feld gar
         // nicht an), trotzdem hier nicht erzwungen -- ein leeres Objekt bei 'user' ist harmlos.
@@ -693,7 +706,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           parsed.data.account_archived !== undefined ||
           parsed.data.locked_permanent !== undefined ||
           parsed.data.account_valid_until !== undefined ||
-          parsed.data.permissions !== undefined
+          parsed.data.permissions !== undefined ||
+          parsed.data.profile !== undefined
         ) {
           return reply.code(403).send({ error: 'forbidden' });
         }
@@ -753,6 +767,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         if (parsed.data.office_location !== undefined) updates.office_location = parsed.data.office_location ? encryptContactField(parsed.data.office_location, contactDeks.officeLocation, deps, id, 'office_location') : null;
       }
       if (parsed.data.notif_prefs !== undefined) updates.notif_prefs_json = JSON.stringify(parsed.data.notif_prefs);
+      if (parsed.data.profile !== undefined) updates.profile_enc = encryptUserProfile(parsed.data.profile, await profileCipher(id));
 
       // Nur Admin darf Rolle, Gruppe, Vorgesetzte Person, Archivierung und Sperrung ändern
       if (canManageUsers) {
@@ -1066,6 +1081,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     try {
       requireSession(req);
       const { id } = req.params as { id: string };
+      if (!(await loadAvatarsEnabled(app.db))) return reply.code(404).send({ error: 'not_found' });
       const row = await app.db.selectFrom('users').select(['avatar_image_enc', 'avatar_mime']).where('id', '=', id).executeTakeFirst();
       if (!row?.avatar_image_enc || !row.avatar_mime) return reply.code(404).send({ error: 'not_found' });
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.avatar_image');
@@ -1087,6 +1103,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   app.put('/api/v2/users/me/avatar', async (req, reply) => {
     try {
       const session = requireSession(req);
+      if (!(await loadAvatarsEnabled(app.db))) return reply.code(403).send({ error: 'avatars_disabled' });
       const parsed = z.object({ preset: z.number().int().min(1).max(AVATAR_PRESET_COUNT).nullable() }).strict().safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
       await app.db.updateTable('users').set({
@@ -1104,6 +1121,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   }, async (req, reply) => {
     try {
       const session = requireSession(req);
+      if (!(await loadAvatarsEnabled(app.db))) return reply.code(403).send({ error: 'avatars_disabled' });
       const parsed = z.object({ data_b64: z.string().min(1).max(Math.ceil(AVATAR_MAX_BYTES / 3) * 4).regex(/^[A-Za-z0-9+/]+={0,2}$/) }).strict().safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_image' });
       const image = Buffer.from(parsed.data.data_b64, 'base64');

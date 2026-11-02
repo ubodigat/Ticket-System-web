@@ -57,7 +57,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                 <label for="t-files" class="dropzone" id="t-files-dropzone">
                     <i data-lucide="upload-cloud"></i>
                     <span class="dropzone-text"><strong data-i18n="dragFilesHere">Dateien hierher ziehen</strong> <span data-i18n="orClickToSelect">oder klicken zum Auswählen</span></span>
-                    <input id="t-files" type="file" multiple>
+                    <input id="t-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.pptx,.odt,.ods,.odp,.txt,.csv,.log">
                 </label>
                 <div id="t-files-preview" class="file-preview"></div>
             </div>
@@ -138,6 +138,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         <p id="u-approval-rejected-text"></p>
                         <button type="button" class="btn-secondary btn-sm" id="u-approval-reuse" data-i18n="reuseAsNewRequest">Als neue Anfrage übernehmen</button>
                     </div>
+                    <div id="u-approval-history" class="approval-history" hidden></div>
                     <h4 class="section-title" data-i18n="description">Beschreibung</h4>
                     <p id="u-m-desc" class="desc-text"></p>
                     <div id="u-m-incident" class="incident-notice" hidden></div>
@@ -155,7 +156,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                                 <button class="btn-ghost btn-icon btn-sm" data-i18n-title="insertLink" data-i18n-aria-label="insertLink" title="Link einfügen" aria-label="Link einfügen" id="u-chat-link"><i data-lucide="link"></i></button>
                                 <label class="btn btn-ghost btn-icon btn-sm" data-i18n-title="attachFile" data-i18n-aria-label="attachFile" title="Datei anhängen" aria-label="Datei anhängen">
                                     <i data-lucide="paperclip"></i>
-                                    <input type="file" id="u-chat-file" multiple>
+                                    <input type="file" id="u-chat-file" multiple accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.pptx,.odt,.ods,.odp,.txt,.csv,.log">
                                 </label>
                             </div>
                             <div id="u-chat-file-preview" class="file-preview"></div>

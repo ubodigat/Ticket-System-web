@@ -144,6 +144,7 @@ export const Store = {
         jobTitle: u.job_title || '',
         officeLocation: u.office_location || '',
         ldapLoginEnabled: !!u.ldap_login_enabled,
+        profile: u.profile || {},
         supervisorUserId: u.supervisor_user_id ?? null,
         accountArchived: !!u.account_archived,
         accountValidUntil: u.account_valid_until ? String(u.account_valid_until).slice(0, 10) : null,
@@ -217,6 +218,17 @@ export const Store = {
         for (let i = chars.length - 1; i > 0; i--) { const j = pick(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
         return chars.join('');
     },
+    // Profilangaben ohne leere Werte, Schluessel sortiert -- fuer Vergleich und Versand.
+    cleanProfile: (profile) => {
+        const out = {};
+        Object.keys(profile || {}).sort().forEach(key => {
+            const value = profile[key];
+            if (value === undefined || value === null || value === '') return;
+            if (key === 'work_days' && !Object.keys(value).length) return;
+            out[key] = key === 'work_days' ? Object.fromEntries(Object.keys(value).sort().map(day => [day, { start: value[day].start, end: value[day].end }])) : value;
+        });
+        return out;
+    },
     saveUsers: async (users) => {
         const before = Store._usersSnapshot || Store.cloneUserList(await Store.getUsers());
         const beforeById = new Map(before.map(u => [u.id, u]));
@@ -243,7 +255,9 @@ export const Store = {
                         office_location: u.officeLocation || '',
                         supervisor_user_id: u.supervisorUserId ?? null,
                         account_valid_until: u.accountValidUntil ?? null,
-                        permissions: u.permissions ?? undefined
+                        permissions: u.permissions ?? undefined,
+                        ldap_login_enabled: !!u.ldapLoginEnabled,
+                        profile: Store.cleanProfile(u.profile)
                     })
                 }).catch(() => null);
                 if (!res || !res.ok) {
@@ -268,6 +282,8 @@ export const Store = {
             if (!!u.accountLocked !== prev.accountLocked) patch.locked_permanent = !!u.accountLocked;
             if ((u.accountValidUntil ?? null) !== (prev.accountValidUntil ?? null)) patch.account_valid_until = u.accountValidUntil ?? null;
             if (JSON.stringify(u.notifPrefs || {}) !== JSON.stringify(prev.notifPrefs || {})) patch.notif_prefs = u.notifPrefs || {};
+            if (JSON.stringify(Store.cleanProfile(u.profile)) !== JSON.stringify(Store.cleanProfile(prev.profile))) patch.profile = Store.cleanProfile(u.profile);
+            if (!!u.ldapLoginEnabled !== !!prev.ldapLoginEnabled) patch.ldap_login_enabled = !!u.ldapLoginEnabled;
             // Die vier "Verwaltung"-Schalter (canManageRequests/-Users/canViewLogs/canManage2FA)
             // kommen serverseitig im selben permissions-Objekt an wie die "Zusatzfunktionen"
             // (textBlocks/reports/approvals/recurring/kb) -- hier zu einem Patch zusammengeführt,
@@ -344,12 +360,13 @@ export const Store = {
     },
     // Gruppen laufen über die echte /api/v2/groups-API. Eine Person kann mehreren Gruppen
     // angehoeren (group_ids am Benutzer) -- "members" wird hier zur Anzeige daraus abgeleitet.
+    _groupTree: [],
     getGroups: async () => {
         const res = await fetch('/api/v2/groups', { credentials: 'same-origin' });
         if (!res.ok) return [];
         const payload = await res.json();
         const users = await Store.getUsers();
-        return Store.orderGroupTree((payload.groups || []).map(g => ({
+        return Store._groupTree = Store.orderGroupTree((payload.groups || []).map(g => ({
             id: g.id,
             name: g.name,
             isDefault: !!g.is_default,
@@ -484,6 +501,7 @@ export const Store = {
         createdAt: t.created_at,
         owner: t.assigned_to_username || null,
         ownerUserId: t.assigned_to_user_id || null,
+        team: t.assigned_group_id || null,
         assignees: t.assigned_to_username ? [t.assigned_to_username] : [],
         participants: [],
         todos: [],
@@ -517,6 +535,7 @@ export const Store = {
             status: t.approval_status,
             approver: t.approval_reviewer_id,
             requestedByName: t.approval_requested_by,
+            requestedAt: t.approval_requested_at || null,
             reason: t.approval_text
         }] : []
     }),
@@ -737,7 +756,7 @@ export const Store = {
     // Kontoanfragen laufen über die echte /api/v2/account-requests-API. Die Entscheidung
     // (annehmen/ablehnen) wird dort vermerkt (status/reviewed_by_user_id) -- das tatsächliche
     // Anlegen des Benutzerkontos bei Annahme läuft weiterhin über Store.saveUsers (neuer
-    // Eintrag im Array -> POST /api/v2/users, siehe AdminBoard.confirmApprove).
+    // Eintrag im Array -> POST /api/v2/users, siehe AdminBoard.openUserWizard).
     getRequests: async () => {
         const user = Store._sessionUserCache || Store._meCache || await Store.fetchSessionUser();
         if (location.protocol.startsWith('http') && !(user?.role === 'superadmin' || user?.canManageRequests)) return [];
@@ -872,10 +891,15 @@ export const Store = {
                 }
             };
             settings.modules = Store.applyModules(cfg.modules);
+            if (Number(cfg.uploadLimitBytes) > 0) Store.uploadLimitBytes = Number(cfg.uploadLimitBytes);
+            Store.applyAvatarSetting(cfg.avatarConfig?.enabled !== false);
+            settings.avatarConfig = { enabled: Utils.avatarsEnabled };
+            settings.uploadConfig = { maxFileMb: Math.round(Store.uploadLimitBytes / (1024 * 1024)) };
             settings.approvalConfig = {
                 enabled: !!cfg.approvalWorkflow?.enabled,
                 priorities: cfg.approvalWorkflow?.priorities || [],
-                fallbackApproverUserId: cfg.approvalWorkflow?.fallbackApproverUserId || null
+                fallbackApproverUserId: cfg.approvalWorkflow?.fallbackApproverUserId || null,
+                fallbackRules: Array.isArray(cfg.approvalWorkflow?.fallbackRules) ? cfg.approvalWorkflow.fallbackRules : []
             };
             settings.companyConfig = {
                 ...(settings.companyConfig || {}),
@@ -1143,6 +1167,11 @@ export const Store = {
         }));
     },
     // Wissensdatenbank-Loesungen, die einem Ticket zugeordnet sind (und umgekehrt).
+    getActiveIncidents: async () => {
+        const res = await fetch('/api/v2/incidents/active', { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return [];
+        return ((await res.json()).incidents || []).map(i => ({ id: i.id, ticketNumber: i.ticket_number, title: i.title, incidentNotice: i.incident_notice || '' }));
+    },
     getTicketKbLinks: async (ticketId) => {
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticketId)}/kb-links`, { credentials: 'same-origin' }).catch(() => null);
         if (!res || !res.ok) return [];
@@ -1269,9 +1298,7 @@ export const Store = {
         }));
     },
     saveKbAttachment: async (articleId, fileLike) => {
-        if (fileLike.size && fileLike.size > 500 * 1024 * 1024) {
-            throw new Error('ATTACHMENT_TOO_LARGE');
-        }
+        Store.assertUploadAllowed(fileLike);
         if (fileLike.size > 15 * 1024 * 1024 && fileLike instanceof Blob) return Store.saveChunkedAttachment(fileLike, { article_id: articleId });
         const dataUrl = fileLike.data || await Store.readFile(fileLike);
         const data_b64 = String(dataUrl).split(',').pop();
@@ -1283,7 +1310,7 @@ export const Store = {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ filename: name, mime_type: type, size_bytes: size, data_b64 })
         }).catch(() => null);
-        if (!res || !res.ok) throw new Error('ATTACHMENT_UPLOAD_FAILED');
+        if (!res || !res.ok) throw Store.uploadError(res ? (await res.json().catch(() => ({}))).error : 'network', name);
         const saved = await res.json();
         return { id: saved.id, attachmentId: saved.id, name: saved.filename, type: saved.mime_type, size: saved.size_bytes };
     },
@@ -1513,11 +1540,25 @@ export const Store = {
                 .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ') : (l.target_id || '');
         }
         const method = isRequest ? key.split(' ')[0] : '';
+        const path = isRequest ? (key.split(' ')[1] || '') : '';
+        const area = key.startsWith('login.') || key.startsWith('mfa.') || /\/(auth|mfa|passkeys|step-up|session)/.test(path) ? 'auth'
+            : /^(ticket|attachment|approval)/.test(key) || /\/(tickets|attachments|uploads|incidents|approvals|work-timers)/.test(path) ? 'tickets'
+            : /^(user|group|account)/.test(key) || /\/(users|groups|account-requests|absences)/.test(path) ? 'users'
+            : key.startsWith('kb.') || /\/(kb|text-blocks)/.test(path) ? 'kb'
+            : /^(update|settings|backup|system)/.test(key) || /\/(settings|system|update|backup)/.test(path) ? 'system'
+            : 'other';
+        const kind = key.startsWith('login.') || key.startsWith('mfa.') || /\/(auth|mfa|passkeys)/.test(path) ? 'auth'
+            : method === 'GET' ? 'read'
+            : method === 'DELETE' || key.endsWith('.deleted') ? 'delete'
+            : method === 'POST' || key.endsWith('.created') ? 'create'
+            : method === 'PATCH' || method === 'PUT' || /updated|changed/.test(key) ? 'update'
+            : 'other';
+        const failedEntry = failed || /fail|denied|locked|blocked/.test(key);
         const icon = failed ? 'shield-alert' : key.startsWith('login.') ? 'log-in' : key === 'POST /api/v1/auth/logout' ? 'log-out'
             : method === 'DELETE' || key.endsWith('.deleted') ? 'trash-2' : method === 'GET' ? 'eye'
             : method === 'POST' || key.endsWith('.created') ? 'plus-circle' : 'refresh-cw';
         return {
-            id: l.id, raw: l, icon, failed,
+            id: l.id, raw: l, icon, failed: failedEntry, area, kind,
             user: l.actor_username === '-' ? (en ? 'Not signed in' : 'Nicht angemeldet') : l.actor_username,
             action: Store.logLabels[key]?.[en ? 1 : 0] || key,
             details,
@@ -1784,6 +1825,26 @@ export const Store = {
     // gelb = letztes Viertel der Frist oder unter 2 Std., rot = überschritten.
     // Menschenlesbarer Name der genehmigenden Person/Gruppe einer offenen Genehmigung
     // (gemeinsam genutzt von Admin- und Benutzer-Ticketansicht).
+    // Aktuell abwesende Personen (sichtbar eingetragen, Beginn erreicht, Ende nicht ueberschritten).
+    getCurrentAbsences: async () => {
+        const res = await fetch('/api/v2/absences/overview', { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return [];
+        const now = Date.now();
+        return ((await res.json()).absences || []).map(a => ({
+            userId: a.user_id, username: a.username, substituteUserId: a.substitute_user_id || null,
+            fromMs: a.from_at ? new Date(a.from_at).getTime() : null, untilMs: a.until_at ? new Date(a.until_at).getTime() : null
+        })).filter(a => (!a.fromMs || a.fromMs <= now) && (!a.untilMs || a.untilMs >= now));
+    },
+    getPendingApprovals: async () => {
+        const res = await fetch('/api/v2/approvals', { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return [];
+        return (await res.json()).approvals || [];
+    },
+    getTicketApprovals: async (ticketId) => {
+        const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticketId)}/approvals`, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return [];
+        return (await res.json()).approvals || [];
+    },
     describeApprover: async (approval) => {
         const users = await Store.getUsers();
         const u = users.find(x => x.id === approval.approver);
@@ -1841,6 +1902,9 @@ export const Store = {
             q('#notification-modal')?.classList.remove('open');
             await Notifications.refresh();
             if (selected.type === 'todo_assigned') document.dispatchEvent(new Event('open-todos'));
+            // Genehmigungsanfragen fuehren in die Genehmigungsansicht: die pruefende Person darf das
+            // Ticket selbst oft nicht oeffnen (z.B. normale Konten als Vorgesetzte).
+            if (selected.type === 'approvalRequested') return AdminBoard.openApprovals();
             if (selected.ticketId) {
                 if (q('.kanban-board')) await AdminBoard.openModal(selected.ticketId);
                 else await UserDash.openModal(selected.ticketId);
@@ -1939,22 +2003,57 @@ export const Store = {
             });
         }
     },
-    // Anhänge laufen über die echte, verschlüsselte /api/v2/attachments-API -- vorher zeigte
-    // dieser Code auf einen nie existierenden /api/v1/attachments/*-Endpunkt und landete deshalb
-    // unbemerkt immer im lokalen IndexedDB-Fallback (pro Browser, nicht in der Datenbank).
-    // ticketId ist Pflicht (Backend-Schema), messageId/noteId optional -- Chat-/Notiz-Anhänge sind
-    // in der Oberfläche noch nicht angebunden, siehe README.
+    // Erlaubte Dateitypen und Groesse -- dieselbe Liste wie der Server (domain/fileValidation.ts),
+    // damit eine unpassende Datei sofort mit Grund abgelehnt wird statt erst nach dem Hochladen.
+    uploadLimitBytes: 1024 * 1024 * 1024,
+    // Profilbilder aus: keine Bilder laden, Platz dafuer im Layout freigeben (body.no-avatars).
+    applyAvatarSetting: (enabled) => {
+        Utils.avatarsEnabled = !!enabled;
+        document.body?.classList.toggle('no-avatars', !enabled);
+    },
+    ALLOWED_UPLOAD_EXTENSIONS: ['.pdf', '.png', '.jpg', '.jpeg', '.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp', '.txt', '.csv', '.log'],
+    uploadAccept: () => Store.ALLOWED_UPLOAD_EXTENSIONS.join(','),
+    uploadError: (code, name) => Object.assign(new Error(code || 'upload_failed'), { code: code || 'upload_failed', fileName: name || '' }),
+    assertUploadAllowed: (file) => {
+        const name = file?.name || '';
+        const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
+        if (!Store.ALLOWED_UPLOAD_EXTENSIONS.includes(ext)) throw Store.uploadError('extension_not_allowed', name);
+        if (file?.size > Store.uploadLimitBytes) throw Store.uploadError('file_too_large', name);
+        if (file?.size === 0) throw Store.uploadError('file_empty', name);
+    },
+    uploadErrorMessage: (error) => {
+        const name = error?.fileName || '';
+        const code = error?.code || error?.message || 'upload_failed';
+        const max = `${Math.round(Store.uploadLimitBytes / (1024 * 1024))} MB`;
+        const byCode = {
+            extension_not_allowed: 'uploadTypeNotAllowed', blocked_extension: 'uploadTypeNotAllowed', blocked_detected_mime: 'uploadTypeNotAllowed',
+            blocked_executable_content: 'uploadErrBlocked', blocked_script_content: 'uploadErrBlocked', content_mismatch: 'uploadErrMismatch',
+            file_empty: 'uploadErrEmpty', invalid_filename: 'uploadErrName', invalid_filename_characters: 'uploadErrName',
+            upload_quota_exceeded: 'uploadErrQuota', upload_capacity_exceeded: 'uploadErrCapacity', infected_file: 'uploadErrVirus',
+            antivirus_unavailable: 'uploadErrScanner', upload_validation_busy: 'uploadErrBusy', file_too_large: 'uploadFileTooLarge'
+        };
+        return Lang.format(byCode[code] || 'uploadErrGeneric', { name, max, code });
+    },
+    // Laedt mehrere Dateien nacheinander; liefert gespeicherte Anhaenge und Fehlermeldungen je Datei.
+    uploadFiles: async (files, save) => {
+        const saved = []; const errors = [];
+        for (const file of files) {
+            try { saved.push(await save(file)); } catch (error) { errors.push(Store.uploadErrorMessage(error.fileName ? error : Object.assign(error, { fileName: file.name }))); }
+        }
+        return { saved, errors };
+    },
     saveChunkedAttachment: async (file, parent) => {
-        if (!(file instanceof Blob) || file.size > 500 * 1024 * 1024) throw new Error('ATTACHMENT_TOO_LARGE');
+        if (!(file instanceof Blob)) throw Store.uploadError('upload_failed', file?.name);
+        Store.assertUploadAllowed(file);
         const request = async (path, options) => {
             for (let attempt = 0; attempt < 105; attempt++) {
                 const response = await fetch(`/api/v2/uploads${path}`, { credentials: 'same-origin', ...options });
                 if (response.ok) return response.json();
-                const error = (await response.json().catch(() => ({}))).error || 'ATTACHMENT_UPLOAD_FAILED';
-                if (response.status !== 429 || error !== 'upload_validation_busy') throw new Error(error);
+                const error = (await response.json().catch(() => ({}))).error || 'upload_failed';
+                if (response.status !== 429 || error !== 'upload_validation_busy') throw Store.uploadError(error, file.name);
                 await new Promise(resolve => setTimeout(resolve, 3000));
             }
-            throw new Error('upload_validation_busy');
+            throw Store.uploadError('upload_validation_busy', file.name);
         };
         const upload = await request('', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...parent, filename: file.name || 'Anhang', mime_type: file.type || 'application/octet-stream', size_bytes: file.size }) });
         try {
@@ -1965,13 +2064,15 @@ export const Store = {
             return { id: saved.id, attachmentId: saved.id, name: saved.filename, type: saved.mime_type, size: saved.size_bytes };
         } catch (error) { await fetch(`/api/v2/uploads/${upload.id}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => {}); throw error; }
     },
+    // Anhänge laufen über die verschlüsselte /api/v2/attachments-API (bis 15 MB als JSON) bzw. den
+    // gestückelten Upload (/api/v2/uploads) -- jeweils am Ticket, optional an einer Chat-Nachricht
+    // (messageId) oder internen Notiz (noteId).
     saveAttachment: async (fileLike, { ticketId, messageId, noteId } = {}) => {
-        if (fileLike.size && fileLike.size > 500 * 1024 * 1024) {
-            throw new Error('ATTACHMENT_TOO_LARGE');
+        if (!ticketId) throw Store.uploadError('ticket_not_found', fileLike?.name);
+        Store.assertUploadAllowed(fileLike);
+        if (fileLike.size > 15 * 1024 * 1024 && fileLike instanceof Blob) {
+            return Store.saveChunkedAttachment(fileLike, { ticket_id: ticketId, message_id: messageId || undefined, note_id: noteId || undefined });
         }
-        if (!ticketId) throw new Error('ATTACHMENT_NEEDS_TICKET');
-        if (fileLike.size > 15 * 1024 * 1024 && (messageId || noteId)) throw new Error('Large files must be uploaded to the ticket attachment list.');
-        if (fileLike.size > 15 * 1024 * 1024 && fileLike instanceof Blob) return Store.saveChunkedAttachment(fileLike, { ticket_id: ticketId });
         const dataUrl = fileLike.data || await Store.readFile(fileLike);
         const data_b64 = String(dataUrl).split(',').pop();
         const name = fileLike.name || 'Anhang';
@@ -1985,7 +2086,7 @@ export const Store = {
                 filename: name, mime_type: type, size_bytes: size, data_b64
             })
         }).catch(() => null);
-        if (!res || !res.ok) throw new Error('ATTACHMENT_UPLOAD_FAILED');
+        if (!res || !res.ok) throw Store.uploadError(res ? (await res.json().catch(() => ({}))).error : 'network', name);
         const saved = await res.json();
         return { id: saved.id, attachmentId: saved.id, name: saved.filename, type: saved.mime_type, size: saved.size_bytes };
     },

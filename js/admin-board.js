@@ -45,10 +45,39 @@ export const AdminBoard = {
         if (!user || !ticket || !['admin', 'superadmin'].includes(user.role)) return false;
         if (user.role === 'superadmin') return true;
         if (!ticket.owner && !(ticket.assignees || []).length) return true;
+        const assignedUsers = [ticket.owner, ticket.assignee, ...(ticket.assignees || []), ...(ticket.participants || [])];
+        if (assignedUsers.includes(user.username)) return true;
+        if (ticket.team && AdminBoard.inTicketGroup(user, ticket.team)) return true;
         const departments = Array.isArray(user.dept) ? user.dept : [user.dept || 'Allgemein'];
         const categories = Array.isArray(ticket.category) ? ticket.category : [ticket.category || 'Allgemein'];
-        const assignedUsers = [ticket.owner, ticket.assignee, ...(ticket.assignees || []), ...(ticket.participants || [])];
-        return departments.includes('All') || categories.some(category => departments.includes(category)) || assignedUsers.includes(user.username);
+        return departments.includes('All') || categories.some(category => departments.includes(category));
+    },
+    // Mitglieder der zustaendigen Gruppe sehen das Ticket -- ebenso Mitglieder einer uebergeordneten
+    // Gruppe ("IT" umfasst "IT › Netzwerk") und, wie bei den Server-Benachrichtigungen, Mitglieder
+    // ihrer Untergruppen. Vorher zaehlten nur Abteilung/Kategorie und die zustaendige Person.
+    inTicketGroup: (user, teamId) => {
+        const own = user?.groupIds || [];
+        if (!own.length || !teamId) return false;
+        if (own.includes(teamId)) return true;
+        const tree = Store._groupTree || [];
+        const team = tree.find(g => g.id === teamId);
+        return tree.some(g => own.includes(g.id) && (g.descendantIds || []).includes(teamId))
+            || (team?.descendantIds || []).some(id => own.includes(id));
+    },
+    // Lokal ausgewaehlte Datei vor dem Senden ansehen (Chat, interne Kommunikation, Wissensdatenbank).
+    previewLocalFile: async (file) => {
+        if (file.size > 15 * 1024 * 1024) return UI.toast(Lang.t('largeLocalFileNoPreview'));
+        AdminBoard.openAttachmentPreview({ name: file.name, type: file.type, data: await Store.readFile(file) });
+    },
+    // Dateichip mit Vorschau (Klick auf den Namen) und Entfernen-Knopf.
+    stagedFileChip: (file, onRemove) => {
+        const tag = document.createElement('div');
+        tag.className = 'file-chip file-chip-clickable';
+        tag.title = Lang.t('showPreview');
+        tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('removeFile')}" aria-label="${Utils.esc(Lang.format('removeFileAriaLabel', { name: file.name }))}">${Icon('x', 13)}</button>`;
+        tag.querySelector('span').onclick = () => AdminBoard.previewLocalFile(file);
+        tag.querySelector('.remove-file').onclick = onRemove;
+        return tag;
     },
 
     // SLA-Felder: intern wird immer in Stunden gespeichert, angezeigt wird in der
@@ -276,16 +305,10 @@ export const AdminBoard = {
         pan.innerHTML = '';
         if (AdminBoard.selectedFiles.length > 0) {
             pan.style.display = 'flex';
-            AdminBoard.selectedFiles.forEach((f, idx) => {
-                const tag = document.createElement('div');
-                tag.className = 'file-chip';
-                tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
-                tag.querySelector('.remove-file').onclick = () => {
-                    AdminBoard.selectedFiles.splice(idx, 1);
-                    AdminBoard.renderFilePreview();
-                };
-                pan.appendChild(tag);
-            });
+            AdminBoard.selectedFiles.forEach((f, idx) => pan.appendChild(AdminBoard.stagedFileChip(f, () => {
+                AdminBoard.selectedFiles.splice(idx, 1);
+                AdminBoard.renderFilePreview();
+            })));
             if (window.lucide) lucide.createIcons();
         } else {
             pan.style.display = 'none';
@@ -335,9 +358,11 @@ export const AdminBoard = {
             add.innerHTML = `${Icon('paperclip', 16)}<input type="file" multiple hidden>`;
             const input = add.querySelector('input');
             add.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } };
+            input.accept = Store.uploadAccept();
             input.onchange = async () => {
-                try { for (const file of input.files) await Store.saveAttachment(file, { ticketId: ticket.id }); }
-                catch { UI.toast(Lang.t('attachmentUploadFailed')); }
+                const { errors } = await Store.uploadFiles(Array.from(input.files), file => Store.saveAttachment(file, { ticketId: ticket.id }));
+                input.value = '';
+                if (errors.length) UI.toast(errors.join(' '));
                 await AdminBoard.renderTicketAttachments(ticket, container, { manage });
             };
             container.appendChild(add);
@@ -365,14 +390,15 @@ export const AdminBoard = {
         if (actionsForAbsence && !q('#btn-absence-overview')) {
             const btn = document.createElement('button');
             btn.id = 'btn-absence-overview';
-            btn.className = 'btn-ghost';
-            btn.title = 'Abwesenheiten';
-            btn.setAttribute('aria-label', 'Abwesenheiten');
-            btn.innerHTML = `${Icon('plane', 16)}Abwesend`;
+            btn.type = 'button';
+            btn.className = 'btn-ghost btn-icon notification-button';
+            btn.hidden = true;
+            btn.innerHTML = `${Icon('plane', 18)}<span class="notification-count is-neutral"></span>`;
             btn.onclick = () => AdminBoard.openAbsenceOverview();
             actionsForAbsence.insertBefore(btn, q('#theme-toggle') || q('#btn-settings') || q('#logout'));
         }
         await AdminBoard.processAbsences();
+        await AdminBoard.refreshAbsenceBadge();
         // Erinnerung/Auto-Schließen bei "Warten auf Benutzer" und wiederkehrende Tickets laufen
         // serverseitig per Timer (jobs/maintenance.ts), kein Client-Trigger mehr noetig.
         AdminBoard.renderAbsenceBanner(user);
@@ -706,10 +732,12 @@ export const AdminBoard = {
         const rawTickets = await Store.getTickets();
         let tickets = rawTickets.filter(t => !t.archived);
 
-        // Filter by Department (if not Superadmin)
+        // Sichtbarkeit fuer normale Admins (Gruppe, Zuweisung, Abteilung) -- braucht den Gruppenbaum.
+        if (user?.role === 'admin' && !Store._groupTree.length) await Store.getGroups().catch(() => []);
         if (user?.role === 'admin') tickets = tickets.filter(ticket => AdminBoard.canAccessTicket(user, ticket));
         const slaSettings = await Store.getSettings();
         await AdminBoard.refreshOverdueIndicator(tickets, user, slaSettings);
+        AdminBoard.refreshAbsenceBadge().catch(() => {});
         const query = q('#admin-ticket-search')?.value || '';
         if (query.trim()) tickets = tickets.filter(ticket => Utils.matchesSearch(query, ticket));
         // Superadmin sees all (no filter)
@@ -790,7 +818,8 @@ export const AdminBoard = {
             const categoryText = catList.length ? catList.slice(0, 2).join(', ') + (catList.length > 2 ? ` +${catList.length - 2}` : '') : '-';
             const sla = Store.formatSlaCountdown(t, slaSettings);
             const attachmentCount = t.attachmentCount || 0;
-            const pendingApproval = (t.approvals || []).some(a => a.status === 'pending');
+            const pendingApprovalEntry = (t.approvals || []).find(a => a.status === 'pending');
+            const pendingApproval = !!pendingApprovalEntry;
             const tone = pendingApproval ? 'approval' : isOverdue ? 'overdue' : t.isMajorIncident ? 'incident' : t.prio === 'Kritisch' ? 'critical' : '';
             card.classList.add('card-v2');
             if (tone) card.classList.add(`card-tone-${tone}`);
@@ -800,7 +829,7 @@ export const AdminBoard = {
                 </div>
                 <div class="card-title">${Utils.esc(t.title)}</div>
                 <div class="card-line card-deadline-row">
-                    ${pendingApproval ? `<span class="card-deadline approval-badge" title="Wartet auf Genehmigung">${Icon('hourglass', 11)}Genehmigung</span>` : sla ? `<span class="card-deadline sla-text-${sla.tone}" title="Frist: ${Utils.esc(sla.dueDateLabel)}">${Icon(sla.overdue ? 'triangle-alert' : 'timer', 11)}${Utils.esc(sla.label)}</span>` : '<span></span>'}
+                    ${pendingApproval ? `<span class="card-deadline approval-badge" title="${Utils.esc(pendingApprovalEntry.requestedAt ? Lang.format('awaitingApprovalSince', { date: Utils.fmtDate(pendingApprovalEntry.requestedAt) }) : Lang.t('awaitingApproval'))}">${Icon('hourglass', 11)}${Utils.esc(Lang.t('approvals'))}</span>` : sla ? `<span class="card-deadline sla-text-${sla.tone}" title="Frist: ${Utils.esc(sla.dueDateLabel)}">${Icon(sla.overdue ? 'triangle-alert' : 'timer', 11)}${Utils.esc(sla.label)}</span>` : '<span></span>'}
                     <span class="card-prio-outline prio-${t.prio}">${Lang.prio(t.prio)}</span>
                 </div>
                 <div class="card-line card-owner-line${ownerUsername ? '' : ' is-unassigned'}">
@@ -878,41 +907,76 @@ export const AdminBoard = {
         });
     },
 
+    // Systemprotokoll mit Filterleiste wie in der Listenansicht: Suche, Person, Bereich, Aktion,
+    // Ergebnis und Zeitraum; weitere Filter (eigener Zeitraum, enthaelt/enthaelt nicht) aufklappbar.
     openGlobalLogsModal: async () => {
         let modal = q('#global-logs-modal');
         if (!modal) {
             modal = document.createElement('div');
             modal.id = 'global-logs-modal';
             modal.className = 'modal-overlay';
+            const opt = (value, key) => `<option value="${value}">${Utils.esc(Lang.t(key))}</option>`;
             modal.innerHTML = `
                 <div class="modal modal-xl">
                     <div class="modal-header">
-                        <h3>${Icon('bell', 18)} ${Lang.t('systemLog')}</h3>
+                        <h3>${Icon('scroll-text', 18)} ${Lang.t('systemLog')}</h3>
                         <div class="modal-actions">
-                            <input type="text" id="gl-search" placeholder="${Lang.t('searchLogsPlaceholder')}">
                             <button class="btn-ghost btn-icon" id="btn-gl-print" title="${Lang.t('printLog')}" aria-label="${Lang.t('printLog')}">${Icon('printer', 16)}</button>
                             <button class="btn-ghost btn-icon" id="global-logs-modal-close" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
-                    <div class="log-datetime-filters">
-                        <label>${Lang.t('from')} ${UI.dateTimePickerMarkup('gl-from')}</label>
-                        <label>${Lang.t('until')} ${UI.dateTimePickerMarkup('gl-to')}</label>
-                    </div>
-                    <div class="log-term-filters">
-                        <label><span>${Lang.t('contains')}</span><input type="text" id="gl-include" placeholder="${Lang.t('termsCommaSeparated')}"></label>
-                        <label><span>${Lang.t('doesNotContain')}</span><input type="text" id="gl-exclude" placeholder="${Lang.t('termsCommaSeparated')}"></label>
+                    <div class="list-view-toolbar log-toolbar">
+                        <input type="search" id="gl-search" class="section-search" placeholder="${Lang.t('searchLogsPlaceholder')}" aria-label="${Lang.t('searchLogsPlaceholder')}">
+                        <select id="gl-user" aria-label="${Utils.esc(Lang.t('logFilterUser'))}"><option value="">${Utils.esc(Lang.t('logAllUsers'))}</option></select>
+                        <select id="gl-area" aria-label="${Utils.esc(Lang.t('logFilterArea'))}">${opt('', 'logAllAreas')}${opt('auth', 'logAreaAuth')}${opt('tickets', 'logAreaTickets')}${opt('users', 'logAreaUsers')}${opt('kb', 'logAreaKb')}${opt('system', 'logAreaSystem')}${opt('other', 'logAreaOther')}</select>
+                        <select id="gl-kind" aria-label="${Utils.esc(Lang.t('logFilterKind'))}">${opt('', 'logAllKinds')}${opt('read', 'logKindRead')}${opt('create', 'logKindCreate')}${opt('update', 'logKindUpdate')}${opt('delete', 'logKindDelete')}${opt('auth', 'logKindAuth')}</select>
+                        <select id="gl-result" aria-label="${Utils.esc(Lang.t('logFilterResult'))}">${opt('', 'logAllResults')}${opt('ok', 'logResultOk')}${opt('failed', 'logResultFailed')}</select>
+                        <select id="gl-range" aria-label="${Utils.esc(Lang.t('logFilterRange'))}">${opt('', 'logRangeAll')}${opt('1h', 'logRangeHour')}${opt('today', 'logRangeToday')}${opt('7d', 'logRange7')}${opt('30d', 'logRange30')}${opt('custom', 'logRangeCustom')}</select>
+                        <details class="lv-more" id="gl-more">
+                            <summary class="btn-secondary btn-sm">${Icon('sliders-horizontal', 15)}${Lang.t('logMoreFilters')}</summary>
+                            <div class="lv-more-body log-more-body">
+                                <label>${Lang.t('from')} ${UI.dateTimePickerMarkup('gl-from')}</label>
+                                <label>${Lang.t('until')} ${UI.dateTimePickerMarkup('gl-to')}</label>
+                                <label><span>${Lang.t('contains')}</span><input type="text" id="gl-include" placeholder="${Lang.t('termsCommaSeparated')}"></label>
+                                <label><span>${Lang.t('doesNotContain')}</span><input type="text" id="gl-exclude" placeholder="${Lang.t('termsCommaSeparated')}"></label>
+                            </div>
+                        </details>
+                        <button type="button" class="btn-ghost btn-sm" id="gl-reset">${Icon('rotate-ccw', 14)}${Lang.t('kbFilterReset')}</button>
+                        <span class="hint log-count" id="gl-count" role="status"></span>
                     </div>
                     <div class="modal-body flush" id="gl-body"></div>
                 </div>`;
             document.body.appendChild(modal);
 
-            q('#gl-search').oninput = () => AdminBoard.renderGlobalLogs();
-            q('#gl-include').oninput = () => AdminBoard.renderGlobalLogs();
-            q('#gl-exclude').oninput = () => AdminBoard.renderGlobalLogs();
+            const rerender = () => AdminBoard.renderGlobalLogs();
+            ['#gl-search', '#gl-include', '#gl-exclude'].forEach(selector => { q(selector).oninput = rerender; });
+            ['#gl-user', '#gl-area', '#gl-kind', '#gl-result'].forEach(selector => { q(selector).onchange = rerender; });
             AdminBoard.glFromMs = null;
             AdminBoard.glToMs = null;
-            UI.createDateTimePicker(q('#gl-from'), { onChange: async (ms) => { AdminBoard.glFromMs = ms; await AdminBoard.loadGlobalLogs(); AdminBoard.renderGlobalLogs(); } });
-            UI.createDateTimePicker(q('#gl-to'), { onChange: async (ms) => { AdminBoard.glToMs = ms; await AdminBoard.loadGlobalLogs(); AdminBoard.renderGlobalLogs(); } });
+            const reload = async () => { await AdminBoard.loadGlobalLogs(); AdminBoard.renderGlobalLogs(); };
+            const fromPicker = UI.createDateTimePicker(q('#gl-from'), { onChange: async (ms) => { AdminBoard.glFromMs = ms; q('#gl-range').value = 'custom'; await reload(); } });
+            const toPicker = UI.createDateTimePicker(q('#gl-to'), { onChange: async (ms) => { AdminBoard.glToMs = ms; q('#gl-range').value = 'custom'; await reload(); } });
+            // Schnellauswahl Zeitraum: setzt den Beginn und laedt die Eintraege dieses Zeitraums vom Server.
+            q('#gl-range').onchange = async () => {
+                const range = q('#gl-range').value;
+                if (range === 'custom') { q('#gl-more').open = true; return; }
+                const now = Date.now();
+                const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+                AdminBoard.glFromMs = { '1h': now - 3600000, today: startOfDay.getTime(), '7d': now - 7 * 86400000, '30d': now - 30 * 86400000 }[range] ?? null;
+                AdminBoard.glToMs = null;
+                fromPicker?.setValue?.(AdminBoard.glFromMs);
+                toPicker?.setValue?.(null);
+                await reload();
+            };
+            q('#gl-reset').onclick = async () => {
+                ['#gl-search', '#gl-include', '#gl-exclude'].forEach(selector => { q(selector).value = ''; });
+                ['#gl-user', '#gl-area', '#gl-kind', '#gl-result', '#gl-range'].forEach(selector => { q(selector).value = ''; });
+                const reloadNeeded = AdminBoard.glFromMs || AdminBoard.glToMs;
+                AdminBoard.glFromMs = null; AdminBoard.glToMs = null;
+                fromPicker?.setValue?.(null); toPicker?.setValue?.(null);
+                if (reloadNeeded) await AdminBoard.loadGlobalLogs();
+                AdminBoard.renderGlobalLogs();
+            };
             q('#btn-gl-print').onclick = () => AdminBoard.printGlobalLogs();
             q('#global-logs-modal-close').onclick = () => modal.classList.remove('open');
         }
@@ -946,15 +1010,22 @@ export const AdminBoard = {
         const terms = value => String(value || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
         const include = terms(q('#gl-include')?.value);
         const exclude = terms(q('#gl-exclude')?.value);
-        const filtered = logs.filter(log => {
+        const user = q('#gl-user')?.value || '';
+        const area = q('#gl-area')?.value || '';
+        const kind = q('#gl-kind')?.value || '';
+        const result = q('#gl-result')?.value || '';
+        return logs.filter(log => {
             const timestamp = new Date(log.date).getTime();
             const text = `${log.user || ''} ${log.action || ''} ${log.details || ''}`.toLowerCase();
             return Utils.matchesSearch(search, log)
                 && timestamp >= from && timestamp <= to
+                && (!user || log.user === user)
+                && (!area || log.area === area)
+                && (!kind || log.kind === kind)
+                && (!result || (result === 'failed') === !!log.failed)
                 && include.every(term => text.includes(term))
                 && !exclude.some(term => text.includes(term));
         });
-        return filtered;
     },
 
     printGlobalLogs: async () => {
@@ -989,7 +1060,16 @@ export const AdminBoard = {
         const body = q('#gl-body');
         if (!body) return;
 
+        const userSelect = q('#gl-user');
+        if (userSelect) {
+            const keep = userSelect.value;
+            const people = [...new Set((AdminBoard.glEntries || []).map(log => log.user).filter(Boolean))].sort((a, b) => a.localeCompare(b, Lang.current));
+            userSelect.innerHTML = `<option value="">${Utils.esc(Lang.t('logAllUsers'))}</option>` + people.map(name => `<option value="${Utils.esc(name)}">${Utils.esc(name)}</option>`).join('');
+            if (people.includes(keep)) userSelect.value = keep;
+        }
         const visibleLogs = await AdminBoard.getFilteredGlobalLogs();
+        const countEl = q('#gl-count');
+        if (countEl) countEl.textContent = Lang.format(AdminBoard.glHasMore ? 'logCountMore' : 'logCount', { count: visibleLogs.length, total: (AdminBoard.glEntries || []).length });
         const iconForLog = (action = '') => {
             const text = action.toLowerCase();
             if (text.includes('geloescht') || text.includes('geaendert')) return text.includes('geloescht') ? 'trash-2' : 'refresh-cw';
@@ -1641,301 +1721,414 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    openEditUserModal: async (user, viewContext) => {
-        let editModal = q('#user-edit-modal');
-        if (!editModal) {
-            editModal = document.createElement('div');
-            editModal.id = 'user-edit-modal';
-            editModal.className = 'modal-overlay';
-            editModal.innerHTML = `
-                <div class="modal modal-lg">
-                    <div class="modal-header">
-                        <h3>${Lang.t('editUser')}</h3>
-                        <div class="modal-actions">
-                            <button class="btn-ghost btn-icon" id="ue-save-head" title="${Lang.t('save')}" aria-label="${Lang.t('save')}">${Icon('save', 16)}</button>
-                            <button class="btn-ghost btn-icon close-m" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
-                        </div>
-                    </div>
-                    <div class="modal-body form-grid">
-                        <div class="field"><label>${Lang.t('username')}</label><input id="ue-user" type="text"></div>
-                        <div class="field"><label>${Lang.t('name')}</label><input id="ue-name" type="text"></div>
-                        <div class="field"><label>${Lang.t('email')}</label><input id="ue-email" type="email"></div>
-                        <div class="field field-wide" id="ue-similar-hint" hidden></div>
-                        <div class="field"><label>${Lang.t('passwordLeaveEmptyUnchanged')}</label><input id="ue-pass" type="password"></div>
-                        <div class="field field-wide" id="ue-validity-box"><label for="ue-valid-until">${Lang.t('validUntilInclusiveOptional')}</label>${UI.dateFieldMarkup('ue-valid-until')}</div>
-                        <div class="field field-wide" id="ue-contact-box">
-                            <label>${Lang.t('contactData')}</label>
-                            <div class="perm-grid">
-                                <div class="field"><label>${Lang.t('phone')}</label><input id="ue-phone" type="text"></div>
-                                <div class="field"><label>${Lang.t('mobile')}</label><input id="ue-mobile" type="text"></div>
-                                <div class="field"><label>${Lang.t('jobTitle')}</label><input id="ue-job-title" type="text"></div>
-                                <div class="field"><label>${Lang.t('location')}</label><input id="ue-office-location" type="text"></div>
-                            </div>
-                        </div>
-                        <div class="field field-wide" id="ue-role-box"><label>${Lang.t('role')}</label><select id="ue-role"><option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>
-                        <div class="field field-wide" id="ue-ldap-box" hidden>
-                            <label class="check-row"><input type="checkbox" id="ue-ldap-enabled"><span>${Lang.t('allowLdapLoginForAccount')}</span></label>
-                            <div class="hint">${Lang.t('ldapHintText')}</div>
-                        </div>
-                        <div class="field field-wide" id="ue-groups-box">
-                            <label>${Lang.t('userGroupsLabel')}</label>
-                            <div id="ue-groups-list"></div>
-                        </div>
-                        <div class="field field-wide">
-                            <label>${Lang.t('supervisor')}</label>
-                            <div id="ue-supervisor"></div>
-                        </div>
-                        <div class="field field-wide" id="ue-man-box" hidden>
-                            <label>${Lang.t('administration')}</label>
-                            <div class="perm-grid">
-                                <label class="check-row"><input type="checkbox" id="ue-can-manage-req"><span>${Lang.t('manageAccountRequests')}</span></label>
-                                <label class="check-row"><input type="checkbox" id="ue-can-manage-users"><span>${Lang.t('userManagementUsersOnly')}</span></label>
-                                <label class="check-row"><input type="checkbox" id="ue-can-view-logs"><span>${Lang.t('viewSystemLogs')}</span></label>
-                                <label class="check-row"><input type="checkbox" id="ue-can-manage-2fa"><span>${Lang.t('resetUsersMfaPermission')}</span></label>
-                            </div>
-                            <label>${Lang.t('additionalFeatures')}</label>
-                            <div class="perm-grid">
-                                <label class="check-row"><input type="checkbox" data-perm="textBlocks"><span>${Lang.t('manageTextBlocks')}</span></label>
-                                <label class="check-row"><input type="checkbox" data-perm="reports"><span>${Lang.t('viewReports')}</span></label>
-                                <label class="check-row" data-module="approvals"><input type="checkbox" data-perm="approvals"><span>${Lang.t('decideApprovals')}</span></label>
-                                <label class="check-row"><input type="checkbox" data-perm="recurring"><span>${Lang.t('manageRecurringTickets')}</span></label>
-                            </div>
-                            <label for="ue-kb">${Lang.t('knowledgeBase')}</label>
-                            <select id="ue-kb">
-                                <option value="none">${Lang.t('noAccess')}</option>
-                                <option value="read">${Lang.t('readOnly')}</option>
-                                <option value="edit">${Lang.t('readAndEdit')}</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="modal-footer action-footer">
-                        <button class="btn-secondary close-m footer-cancel">${Lang.t('cancel')}</button>
-                        <button class="btn-primary" id="ue-save">${Lang.t('save')}</button>
-                    </div>
-                </div>`;
-            document.body.appendChild(editModal);
-            editModal.querySelectorAll('.close-m').forEach(b => b.onclick = () => editModal.classList.remove('open'));
-            editModal.querySelector('#ue-save-head').onclick = () => q('#ue-save')?.click();
-            if (window.lucide) lucide.createIcons();
-        }
+    openEditUserModal: async (user, viewContext) => AdminBoard.openUserWizard({ user, viewContext }),
 
-        // Fill Data
+    // Vorschlag fuer einen freien Benutzernamen aus dem Namen ("Max Muster" -> "max.muster").
+    suggestUsername: (name, users) => {
+        const base = String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+            .replace(/ß/g, 'ss').trim().replace(/\s+/g, '.').replace(/[^a-z0-9_.-]/g, '').slice(0, 56) || 'benutzer';
+        const taken = new Set(users.map(u => String(u.username || '').toLowerCase()));
+        let candidate = base;
+        for (let n = 2; taken.has(candidate); n++) candidate = `${base}${n}`;
+        return candidate;
+    },
+
+    // Benutzer anlegen oder bearbeiten als Assistent: Konto -> Organisation -> Kontakt & Arbeitszeiten
+    // -> (Rechte, nur fuer Admin-Konten) -> Uebersicht. Dieselbe Oberflaeche fuer neue Konten, fuer das
+    // Bearbeiten (Schritte frei anwaehlbar, jederzeit speicherbar) und fuer das Annehmen einer
+    // Kontoanfrage (vorbefuellt; die Anfrage gilt erst nach erfolgreichem Anlegen als genehmigt).
+    openUserWizard: async ({ user = null, viewContext = 'users', request = null } = {}) => {
         const isNew = !user;
         const currentUser = await Store.currentUser();
-        const isSuper = currentUser && currentUser.role === 'superadmin';
+        const isSuper = currentUser?.role === 'superadmin';
         const canSetValidity = isSuper || !!currentUser?.canManageUsers;
-        editModal._validityPicker?.destroy();
-        q('#ue-validity-box').innerHTML = `<label for="ue-valid-until">${Lang.t('validUntilInclusiveOptional')}</label>${UI.dateFieldMarkup('ue-valid-until')}`;
-        q('#ue-validity-box').hidden = !canSetValidity;
-        const validUntil = user?.accountValidUntil || null;
-        q('#ue-valid-until').value = validUntil ? validUntil.split('-').reverse().join('.') : '';
-        editModal._validityPicker = UI.bindDateField('ue-valid-until', { initialMs: validUntil ? new Date(validUntil + 'T12:00:00').getTime() : null });
-        if (window.lucide) lucide.createIcons();
+        const [allUsers, groups] = await Promise.all([Store.getUsers(), Store.getGroups()]);
+        const profile = user?.profile || {};
+        const workDays = profile.work_days || {};
+        const DAYS = [1, 2, 3, 4, 5, 6, 0];
+        const dayName = day => Lang.t(`uwDay${day}`);
+        const field = (id, labelKey, value = '', attrs = '') => `<div class="field"><label for="${id}">${Utils.esc(Lang.t(labelKey))}</label><input id="${id}" type="text" value="${Utils.esc(value)}" ${attrs}></div>`;
+        const steps = [
+            { key: 'account', icon: 'user-round', label: 'uwStepAccount' },
+            { key: 'org', icon: 'building-2', label: 'uwStepOrg' },
+            { key: 'contact', icon: 'clock', label: 'uwStepContact' },
+            { key: 'rights', icon: 'shield-check', label: 'uwStepRights' },
+            { key: 'review', icon: 'list-checks', label: 'uwStepReview' }
+        ];
+        const title = request ? Lang.format('uwTitleRequest', { name: request.name }) : isNew ? Lang.t('createNewUser') : Lang.format('editUserName', { username: user.username });
+        const modal = AdminBoard.openDialog({
+            id: 'user-wizard',
+            title,
+            icon: isNew ? 'user-plus' : 'user-cog',
+            size: 'lg',
+            body: `
+                <ol class="wizard-steps" role="tablist">${steps.map((step, index) => `
+                    <li><button type="button" class="wizard-step" data-step="${step.key}" role="tab">
+                        <span class="wizard-step-no">${index + 1}</span>${Icon(step.icon, 15)}<span class="wizard-step-label">${Utils.esc(Lang.t(step.label))}</span>
+                    </button></li>`).join('')}</ol>
+                <section class="wizard-page" data-page="account">
+                    ${request ? `<div class="callout callout-info uw-request-info">
+                        <strong>${Utils.esc(Lang.t('uwFromRequest'))}</strong>
+                        <dl class="uw-review-list">
+                            <div><dt>${Utils.esc(Lang.t('name'))}</dt><dd>${Utils.esc(request.name)}</dd></div>
+                            <div><dt>${Utils.esc(Lang.t('email'))}</dt><dd>${Utils.esc(request.email)}</dd></div>
+                            ${request.company ? `<div><dt>${Utils.esc(Lang.t('uwRequestCompany'))}</dt><dd>${Utils.esc(request.company)}</dd></div>` : ''}
+                            ${request.reason ? `<div><dt>${Utils.esc(Lang.t('uwRequestReason'))}</dt><dd>${Utils.esc(request.reason)}</dd></div>` : ''}
+                        </dl></div>` : ''}
+                    <div class="form-grid">
+                        ${field('uw-name', 'uwFullName', user?.name || request?.name || '', 'maxlength="255" autocomplete="off"')}
+                        <div class="field"><label for="uw-email">${Utils.esc(Lang.t('email'))}</label><input id="uw-email" type="email" maxlength="255" value="${Utils.esc(user?.email || request?.email || '')}"></div>
+                        ${field('uw-user', 'username', user?.username || (request ? AdminBoard.suggestUsername(request.name, allUsers) : ''), `maxlength="64" autocomplete="off"${isNew ? '' : ' disabled'}`)}
+                        <div class="field">
+                            <label for="uw-pass">${Utils.esc(Lang.t(isNew ? 'uwPassword' : 'passwordLeaveEmptyUnchanged'))}</label>
+                            <div class="uw-password-row">
+                                <input id="uw-pass" type="password" autocomplete="new-password">
+                                <button type="button" class="btn-ghost btn-icon btn-sm" id="uw-pass-toggle" title="${Utils.esc(Lang.t('uwShowPassword'))}" aria-label="${Utils.esc(Lang.t('uwShowPassword'))}">${Icon('eye', 15)}</button>
+                                <button type="button" class="btn-secondary btn-sm" id="uw-pass-generate">${Icon('wand-sparkles', 15)}${Utils.esc(Lang.t('uwGeneratePassword'))}</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="uw-similar" class="callout" hidden></div>
+                    <div class="form-grid">
+                        ${isSuper ? `<div class="field"><label for="uw-role">${Utils.esc(Lang.t('role'))}</label><select id="uw-role">
+                            <option value="user">User</option><option value="admin">Admin</option><option value="superadmin">Superadmin</option></select></div>` : ''}
+                        ${canSetValidity ? `<div class="field"><label for="uw-valid-until">${Utils.esc(Lang.t('validUntilInclusiveOptional'))}</label>${UI.dateFieldMarkup('uw-valid-until')}</div>` : ''}
+                    </div>
+                    ${isSuper ? `<div class="field" id="uw-ldap-box">
+                        <label class="check-row"><input type="checkbox" id="uw-ldap"${user?.ldapLoginEnabled ? ' checked' : ''}><span>${Lang.t('allowLdapLoginForAccount')}</span></label>
+                        <div class="hint">${Lang.t('ldapHintText')}</div>
+                    </div>` : ''}
+                </section>
+                <section class="wizard-page" data-page="org" hidden>
+                    <div class="form-grid">
+                        ${field('uw-department', 'uwDepartment', user?.department || '', 'maxlength="255"')}
+                        ${field('uw-job-title', 'jobTitle', user?.jobTitle || '', 'maxlength="255"')}
+                        ${field('uw-office', 'uwOffice', user?.officeLocation || '', 'maxlength="255"')}
+                        ${field('uw-building', 'uwBuilding', profile.building || '', 'maxlength="128"')}
+                        ${field('uw-room', 'uwRoom', profile.room || '', 'maxlength="64"')}
+                        ${field('uw-employee-no', 'uwEmployeeNumber', profile.employee_number || '', 'maxlength="64"')}
+                        ${field('uw-cost-center', 'uwCostCenter', profile.cost_center || '', 'maxlength="64"')}
+                        <div class="field"><label for="uw-entry-date">${Utils.esc(Lang.t('uwEntryDate'))}</label>${UI.dateFieldMarkup('uw-entry-date')}</div>
+                    </div>
+                    <div class="field"><label>${Utils.esc(Lang.t('supervisor'))}</label><div id="uw-supervisor"></div><p class="hint">${Utils.esc(Lang.t('uwSupervisorHint'))}</p></div>
+                    <div class="field"><label>${Utils.esc(Lang.t('userGroupsLabel'))}</label><div id="uw-groups"></div></div>
+                </section>
+                <section class="wizard-page" data-page="contact" hidden>
+                    <div class="form-grid">
+                        ${field('uw-phone', 'phone', user?.phone || '', 'maxlength="64" inputmode="tel"')}
+                        ${field('uw-mobile', 'mobile', user?.mobile || '', 'maxlength="64" inputmode="tel"')}
+                    </div>
+                    <div class="field">
+                        <div class="uw-schedule-head">
+                            <label>${Utils.esc(Lang.t('uwWorkDays'))}</label>
+                            <span class="uw-schedule-presets">
+                                <button type="button" class="btn-ghost btn-sm" data-preset="week">${Utils.esc(Lang.t('uwPresetWeek'))}</button>
+                                <button type="button" class="btn-ghost btn-sm" data-preset="clear">${Utils.esc(Lang.t('uwPresetClear'))}</button>
+                            </span>
+                        </div>
+                        <p class="hint">${Utils.esc(Lang.t('uwWorkDaysHint'))}</p>
+                        <div class="uw-schedule">${DAYS.map(day => {
+                            const entry = workDays[day];
+                            return `<div class="uw-day${entry ? ' is-on' : ''}" data-day="${day}">
+                                <label class="check-row"><input type="checkbox" class="uw-day-on"${entry ? ' checked' : ''}><span>${Utils.esc(dayName(day))}</span></label>
+                                <input type="time" class="uw-day-start" value="${Utils.esc(entry?.start || '08:00')}" aria-label="${Utils.esc(Lang.format('uwStartOf', { day: dayName(day) }))}"${entry ? '' : ' disabled'}>
+                                <span aria-hidden="true">–</span>
+                                <input type="time" class="uw-day-end" value="${Utils.esc(entry?.end || '17:00')}" aria-label="${Utils.esc(Lang.format('uwEndOf', { day: dayName(day) }))}"${entry ? '' : ' disabled'}>
+                            </div>`;
+                        }).join('')}</div>
+                    </div>
+                    <div class="field"><label for="uw-availability">${Utils.esc(Lang.t('uwAvailability'))}</label><textarea id="uw-availability" rows="2" maxlength="500" placeholder="${Utils.esc(Lang.t('uwAvailabilityPlaceholder'))}">${Utils.esc(profile.availability_note || '')}</textarea></div>
+                </section>
+                <section class="wizard-page" data-page="rights" hidden>
+                    <p class="hint">${Utils.esc(Lang.t('uwRightsHint'))}</p>
+                    <div class="settings-section-title">${Lang.t('administration')}</div>
+                    <div class="perm-grid">
+                        <label class="check-row"><input type="checkbox" id="uw-can-manage-req"${user?.canManageRequests ? ' checked' : ''}><span>${Lang.t('manageAccountRequests')}</span></label>
+                        <label class="check-row"><input type="checkbox" id="uw-can-manage-users"${user?.canManageUsers ? ' checked' : ''}><span>${Lang.t('userManagementUsersOnly')}</span></label>
+                        <label class="check-row"><input type="checkbox" id="uw-can-view-logs"${user?.canViewLogs ? ' checked' : ''}><span>${Lang.t('viewSystemLogs')}</span></label>
+                        <label class="check-row"><input type="checkbox" id="uw-can-manage-2fa"${user?.canManage2FA ? ' checked' : ''}><span>${Lang.t('resetUsersMfaPermission')}</span></label>
+                    </div>
+                    <div class="settings-section-title">${Lang.t('additionalFeatures')}</div>
+                    <div class="perm-grid">${[['textBlocks', 'manageTextBlocks'], ['reports', 'viewReports'], ['approvals', 'decideApprovals'], ['recurring', 'manageRecurringTickets']].map(([key, label]) =>
+                        `<label class="check-row"${key === 'approvals' ? ' data-module="approvals"' : ''}><input type="checkbox" data-perm="${key}"${user?.permissions?.[key] ? ' checked' : ''}><span>${Lang.t(label)}</span></label>`).join('')}</div>
+                    <div class="field"><label for="uw-kb">${Lang.t('knowledgeBase')}</label><select id="uw-kb">
+                        <option value="none">${Lang.t('noAccess')}</option><option value="read">${Lang.t('readOnly')}</option><option value="edit">${Lang.t('readAndEdit')}</option></select></div>
+                </section>
+                <section class="wizard-page" data-page="review" hidden><div id="uw-review"></div></section>
+                <div class="wizard-footer">
+                    <button type="button" class="btn-secondary" id="uw-back">${Icon('arrow-left', 15)}${Utils.esc(Lang.t('uwBack'))}</button>
+                    <span class="wizard-footer-spacer"></span>
+                    ${isNew ? '' : `<button type="button" class="btn-secondary" id="uw-save-now">${Icon('save', 15)}${Utils.esc(Lang.t('save'))}</button>`}
+                    <button type="button" class="btn-primary" id="uw-next">${Utils.esc(Lang.t('uwNext'))}${Icon('arrow-right', 15)}</button>
+                </div>`
+        });
+        const $ = selector => modal.querySelector(selector);
+        if ($('#uw-role')) $('#uw-role').value = user?.role || (viewContext === 'admins' ? 'admin' : 'user');
+        if ($('#uw-kb')) $('#uw-kb').value = user?.permissions?.kb || 'none';
+        UI.bindPasswordRequirements($('#uw-pass'));
+        const validityPicker = canSetValidity ? UI.bindDateField('uw-valid-until', { initialMs: user?.accountValidUntil ? new Date(`${user.accountValidUntil}T12:00:00`).getTime() : null }) : null;
+        if (canSetValidity && user?.accountValidUntil) $('#uw-valid-until').value = user.accountValidUntil.split('-').reverse().join('.');
+        UI.bindDateField('uw-entry-date', { initialMs: profile.entry_date ? new Date(`${profile.entry_date}T12:00:00`).getTime() : null });
+        if (profile.entry_date) $('#uw-entry-date').value = profile.entry_date.split('-').reverse().join('.');
+        void validityPicker;
+        const supervisorPicker = UI.createMultiSelect($('#uw-supervisor'),
+            allUsers.filter(u => u.id !== user?.id && !u.accountArchived).map(u => ({ value: u.id, label: u.name || u.username })),
+            user?.supervisorUserId || '', null, { single: true, emptyLabel: Lang.t('none') });
+        const groupPicker = UI.createMultiSelect($('#uw-groups'), groups.map(g => ({ value: g.id, label: g.label || g.name })), user?.groupIds || [], null, { emptyLabel: Lang.t('none') });
 
-        q('#ue-user').value = isNew ? '' : user.username;
-        q('#ue-user').disabled = !isNew;
-        q('#ue-name').value = isNew ? '' : (user.name || '');
-        q('#ue-email').value = isNew ? '' : (user.email || '');
-        q('#ue-pass').value = '';
-        UI.bindPasswordRequirements(q('#ue-pass'));
-        q('#ue-phone').value = isNew ? '' : (user.phone || '');
-        q('#ue-mobile').value = isNew ? '' : (user.mobile || '');
-        q('#ue-job-title').value = isNew ? '' : (user.jobTitle || '');
-        q('#ue-office-location').value = isNew ? '' : (user.officeLocation || '');
+        // Passwort: erzeugen (sichtbar, damit es weitergegeben werden kann) und ein-/ausblenden.
+        $('#uw-pass-generate').onclick = async () => {
+            $('#uw-pass').value = await Store.generatePassword();
+            $('#uw-pass').type = 'text';
+            $('#uw-pass').dispatchEvent(new Event('input'));
+        };
+        $('#uw-pass-toggle').onclick = () => { $('#uw-pass').type = $('#uw-pass').type === 'password' ? 'text' : 'password'; };
+        if (isNew) $('#uw-pass-generate').click();
+        if (isNew && !request) $('#uw-name').addEventListener('input', () => {
+            if (!$('#uw-user').dataset.touched) $('#uw-user').value = $('#uw-name').value.trim() ? AdminBoard.suggestUsername($('#uw-name').value, allUsers) : '';
+        });
+        $('#uw-user').addEventListener('input', () => { $('#uw-user').dataset.touched = '1'; });
 
-        // Prüfung auf bestehende/ähnliche Benutzer -- nur beim Neuanlegen sinnvoll (beim
-        // Bearbeiten würde die Person immer "sich selbst" als Treffer bekommen). Bei exakter
-        // Übereinstimmung (Name UND E-Mail gleich, oder E-Mail bereits vergeben) wird das
-        // Anlegen blockiert; bei nur ähnlichem Namen gibt es lediglich einen Hinweis.
-        const hintBox = q('#ue-similar-hint');
+        // Arbeitstage
+        const syncDay = row => {
+            const on = row.querySelector('.uw-day-on').checked;
+            row.classList.toggle('is-on', on);
+            row.querySelectorAll('input[type="time"]').forEach(input => { input.disabled = !on; });
+        };
+        modal.querySelectorAll('.uw-day').forEach(row => { row.querySelector('.uw-day-on').onchange = () => syncDay(row); });
+        modal.querySelectorAll('[data-preset]').forEach(btn => btn.onclick = () => {
+            modal.querySelectorAll('.uw-day').forEach(row => {
+                const day = Number(row.dataset.day);
+                row.querySelector('.uw-day-on').checked = btn.dataset.preset === 'week' && day >= 1 && day <= 5;
+                if (btn.dataset.preset === 'week') { row.querySelector('.uw-day-start').value = '08:00'; row.querySelector('.uw-day-end').value = '17:00'; }
+                syncDay(row);
+            });
+        });
+
+        // Bestehende oder aehnliche Konten (nur beim Anlegen): exakte Treffer blockieren.
         let hasExactDuplicate = false;
-        if (isNew && hintBox) {
-            hintBox.hidden = true;
-            hintBox.innerHTML = '';
-            let similarCheckTimer = null;
-            const runSimilarCheck = () => {
-                clearTimeout(similarCheckTimer);
-                similarCheckTimer = setTimeout(async () => {
-                    const name = q('#ue-name').value.trim();
-                    const email = q('#ue-email').value.trim();
-                    if (!name && !email) { hintBox.hidden = true; hasExactDuplicate = false; return; }
+        if (isNew) {
+            let timer = null;
+            const check = () => {
+                clearTimeout(timer);
+                timer = setTimeout(async () => {
+                    const name = $('#uw-name').value.trim();
+                    const email = $('#uw-email').value.trim();
+                    const box = $('#uw-similar');
+                    if (!name && !email) { box.hidden = true; hasExactDuplicate = false; return; }
                     const result = await Store.checkSimilarUser(name, email);
                     hasExactDuplicate = !!result.exact;
-                    if (!result.similar || !result.similar.length) { hintBox.hidden = true; return; }
-                    const describe = (s) => `${Utils.esc(s.name)} (${Utils.esc(s.username)}, ${Utils.esc(s.email)})`;
-                    hintBox.hidden = false;
-                    hintBox.className = `field field-wide callout ${result.exact ? 'callout-danger' : ''}`;
-                    hintBox.innerHTML = result.exact
-                        ? Lang.format('userAlreadyExistsBlocked', { list: result.similar.map(describe).join(', ') })
-                        : Lang.format('similarUsersFound', { list: result.similar.map(describe).join(', ') });
+                    if (!result.similar?.length) { box.hidden = true; return; }
+                    const describe = s => `${Utils.esc(s.name)} (${Utils.esc(s.username)}, ${Utils.esc(s.email)})`;
+                    box.hidden = false;
+                    box.className = `callout ${result.exact ? 'callout-danger' : ''}`;
+                    box.innerHTML = Lang.format(result.exact ? 'userAlreadyExistsBlocked' : 'similarUsersFound', { list: result.similar.map(describe).join(', ') });
                 }, 350);
             };
-            q('#ue-name').oninput = runSimilarCheck;
-            q('#ue-email').oninput = runSimilarCheck;
-        } else if (hintBox) {
-            hintBox.hidden = true;
-            q('#ue-name').oninput = null;
-            q('#ue-email').oninput = null;
+            $('#uw-name').addEventListener('input', check);
+            $('#uw-email').addEventListener('input', check);
+            check();
         }
 
-        const roleSel = q('#ue-role');
-        roleSel.value = isNew ? (viewContext === 'admins' ? 'admin' : 'user') : user.role;
-
-        // Permissions check for roles
-        if (!isSuper) {
-            q('#ue-role-box').style.display = 'none'; // Admins cannot change roles
-        }
-
-        // Zusatzrechte: nur Superadmin darf sie vergeben, nur bei Rolle "admin" sinnvoll.
-        const manBox = q('#ue-man-box');
-        const updateManBoxVisibility = () => { if (manBox) manBox.hidden = !(isSuper && q('#ue-role').value === 'admin'); };
-        q('#ue-can-manage-req').checked = user ? !!user.canManageRequests : false;
-        q('#ue-can-manage-users').checked = user ? !!user.canManageUsers : false;
-        q('#ue-can-view-logs').checked = user ? !!user.canViewLogs : false;
-        q('#ue-can-manage-2fa').checked = user ? !!user.canManage2FA : false;
-        editModal.querySelectorAll('#ue-man-box [data-perm]').forEach(box => { box.checked = !!user?.permissions?.[box.dataset.perm]; });
-        q('#ue-kb').value = user?.permissions?.kb || 'none';
-
-        // Security-Audit N7: LDAP-Login ist Opt-in je Konto und nur fuer Nicht-Superadmin-Ziele
-        // relevant (Superadmins sind serverseitig ohnehin hart ausgeschlossen).
-        const ldapBox = q('#ue-ldap-box');
-        const updateLdapBoxVisibility = () => { if (ldapBox) ldapBox.hidden = !(isSuper && q('#ue-role').value !== 'superadmin'); };
-        q('#ue-ldap-enabled').checked = user ? !!user.ldapLoginEnabled : false;
-
-        roleSel.onchange = () => { updateManBoxVisibility(); updateLdapBoxVisibility(); };
-        updateManBoxVisibility();
-        updateLdapBoxVisibility();
-
-        // Gruppen: eine Person kann beliebig vielen Gruppen angehoeren.
-        const groupList = q('#ue-groups-list');
-        let groupPicker = null;
-        if (groupList) {
-            const groups = await Store.getGroups();
-            groupPicker = UI.createMultiSelect(groupList, groups.map(g => ({ value: g.id, label: g.label || g.name })), user?.groupIds || [], null, { emptyLabel: Lang.t('none') });
-        }
-        // Vorgesetzte Person -- genutzt vom automatischen Genehmigungsworkflow (Systemeinstellungen).
-        const supervisorBox = q('#ue-supervisor');
-        let supervisorPicker = null;
-        if (supervisorBox) {
-            const allUsers = await Store.getUsers();
-            const choices = allUsers.filter(u => u.id !== user?.id && !u.accountArchived).map(u => ({ value: u.id, label: u.name || u.username }));
-            supervisorPicker = UI.createMultiSelect(supervisorBox, choices, user?.supervisorUserId || '', null, { single: true, emptyLabel: Lang.t('none') });
-        }
-
-        editModal.querySelector('h3').textContent = isNew ? Lang.t('createNewUser') : Lang.format('editUserName', { username: user.username });
-        editModal.classList.add('open');
-
-        q('#ue-save').onclick = async () => {
-            const uVal = q('#ue-user').value.trim();
-            const nVal = q('#ue-name').value.trim();
-            const eVal = q('#ue-email').value.trim();
-            const pVal = q('#ue-pass').value.trim();
-            const phoneVal = q('#ue-phone').value.trim();
-            const mobileVal = q('#ue-mobile').value.trim();
-            const jobTitleVal = q('#ue-job-title').value.trim();
-            const officeLocationVal = q('#ue-office-location').value.trim();
-            const validityText = q('#ue-valid-until').value.trim();
-            const validityParts = validityText.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-            if (canSetValidity && validityText && (!validityParts || !Number.isFinite(Utils.parseGermanDateTime(validityText, '12:00')))) {
-                return UI.toast(Lang.t('validityDateFormatHint'));
-            }
-            const validityVal = validityParts ? `${validityParts[3]}-${validityParts[2]}-${validityParts[1]}` : null;
-            const rVal = q('#ue-role').value;
-            const groupVal = groupPicker?.getValue() || [];
-            const supervisorVal = supervisorPicker?.getValue() || null;
-            const permissionsVal = rVal === 'admin' ? {
-                ...Object.fromEntries([...editModal.querySelectorAll('#ue-man-box [data-perm]')].map(b => [b.dataset.perm, b.checked])),
-                kb: q('#ue-kb').value
+        const parseDate = value => {
+            const match = String(value || '').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+            return match && Number.isFinite(Utils.parseGermanDateTime(value.trim(), '12:00')) ? `${match[3]}-${match[2]}-${match[1]}` : null;
+        };
+        const role = () => isSuper ? $('#uw-role').value : (user?.role || 'user');
+        const activeSteps = () => steps.filter(step => step.key !== 'rights' || (isSuper && role() === 'admin'));
+        const collect = () => {
+            const days = {};
+            modal.querySelectorAll('.uw-day').forEach(row => {
+                if (row.querySelector('.uw-day-on').checked) days[row.dataset.day] = { start: row.querySelector('.uw-day-start').value, end: row.querySelector('.uw-day-end').value };
+            });
+            const permissions = role() === 'admin' && isSuper ? {
+                ...Object.fromEntries([...modal.querySelectorAll('[data-page="rights"] [data-perm]')].map(box => [box.dataset.perm, box.checked])),
+                kb: $('#uw-kb').value
             } : {};
-            const canManageReqVal = rVal === 'admin' ? q('#ue-can-manage-req').checked : false;
-            const canManageUsersVal = rVal === 'admin' ? q('#ue-can-manage-users').checked : false;
-            const canViewLogsVal = rVal === 'admin' ? q('#ue-can-view-logs').checked : false;
-            const canManage2FAVal = rVal === 'admin' ? q('#ue-can-manage-2fa').checked : false;
-            const ldapLoginEnabledVal = (isSuper && rVal !== 'superadmin') ? q('#ue-ldap-enabled').checked : false;
+            return {
+                username: $('#uw-user').value.trim(), name: $('#uw-name').value.trim(), email: $('#uw-email').value.trim(), password: $('#uw-pass').value.trim(),
+                role: role(), validityText: canSetValidity ? $('#uw-valid-until').value.trim() : '', ldap: isSuper && role() !== 'superadmin' ? !!$('#uw-ldap')?.checked : !!user?.ldapLoginEnabled,
+                department: $('#uw-department').value.trim(), jobTitle: $('#uw-job-title').value.trim(), officeLocation: $('#uw-office').value.trim(),
+                phone: $('#uw-phone').value.trim(), mobile: $('#uw-mobile').value.trim(),
+                supervisorUserId: supervisorPicker.getValue() || null, groupIds: groupPicker.getValue() || [],
+                entryDateText: $('#uw-entry-date').value.trim(),
+                profile: {
+                    building: $('#uw-building').value.trim(), room: $('#uw-room').value.trim(),
+                    employee_number: $('#uw-employee-no').value.trim(), cost_center: $('#uw-cost-center').value.trim(),
+                    entry_date: parseDate($('#uw-entry-date').value) || undefined,
+                    work_days: days, availability_note: $('#uw-availability').value.trim()
+                },
+                permissions,
+                canManageRequests: role() === 'admin' && !!$('#uw-can-manage-req')?.checked,
+                canManageUsers: role() === 'admin' && !!$('#uw-can-manage-users')?.checked,
+                canViewLogs: role() === 'admin' && !!$('#uw-can-view-logs')?.checked,
+                canManage2FA: role() === 'admin' && !!$('#uw-can-manage-2fa')?.checked
+            };
+        };
+        // Prueft einen Schritt; liefert eine Meldung samt Feld oder null.
+        const validate = stepKey => {
+            const data = collect();
+            if (stepKey === 'account') {
+                if (!data.name) return { message: Lang.t('uwNameMissing'), input: $('#uw-name') };
+                if (!data.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) return { message: Lang.t('validEmailMissing'), input: $('#uw-email') };
+                if (isNew && !/^[\p{L}\p{N}_.-]{1,64}$/u.test(data.username)) return { message: Lang.t('uwUsernameInvalid'), input: $('#uw-user') };
+                if (isNew && allUsers.some(u => String(u.username).toLowerCase() === data.username.toLowerCase())) return { message: Lang.t('userAlreadyExists'), input: $('#uw-user') };
+                if (isNew && hasExactDuplicate) return { message: Lang.t('userExistsCreateAborted'), input: $('#uw-email') };
+                if ((isNew || data.password) && data.password.length < 14) return { message: Lang.t('passwordMinLength'), input: $('#uw-pass') };
+                if (data.validityText && !parseDate(data.validityText)) return { message: Lang.t('validityDateFormatHint'), input: $('#uw-valid-until') };
+            }
+            if (stepKey === 'org' && data.entryDateText && !parseDate(data.entryDateText)) return { message: Lang.t('validityDateFormatHint'), input: $('#uw-entry-date') };
+            if (stepKey === 'contact') {
+                const invalid = [...modal.querySelectorAll('.uw-day')].find(row => row.querySelector('.uw-day-on').checked
+                    && !(row.querySelector('.uw-day-start').value && row.querySelector('.uw-day-end').value && row.querySelector('.uw-day-start').value < row.querySelector('.uw-day-end').value));
+                if (invalid) return { message: Lang.t('uwWorkTimeInvalid'), input: invalid.querySelector('.uw-day-start') };
+            }
+            return null;
+        };
 
-            if (!uVal) {
-                UI.toast(Lang.t('usernameMissing'));
-                return;
-            }
-            if (!eVal || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(eVal)) {
-                UI.toast(Lang.t('validEmailMissing'));
-                return;
-            }
-            if (isNew && hasExactDuplicate) {
-                UI.toast(Lang.t('userExistsCreateAborted'));
-                return;
-            }
+        const valueOrDash = value => value ? Utils.esc(value) : '<span class="hint">–</span>';
+        const renderReview = () => {
+            const data = collect();
+            const nameOf = id => { const u = allUsers.find(x => x.id === id); return u ? (u.name || u.username) : ''; };
+            const groupNames = data.groupIds.map(id => groups.find(g => g.id === id)).filter(Boolean).map(g => g.label || g.name).join(', ');
+            const schedule = DAYS.filter(day => data.profile.work_days[day]).map(day => `${dayName(day)} ${data.profile.work_days[day].start}–${data.profile.work_days[day].end}`).join(', ');
+            const rights = data.role === 'admin' && isSuper ? [
+                data.canManageRequests && Lang.t('manageAccountRequests'), data.canManageUsers && Lang.t('userManagementUsersOnly'),
+                data.canViewLogs && Lang.t('viewSystemLogs'), data.canManage2FA && Lang.t('resetUsersMfaPermission'),
+                ...['textBlocks', 'reports', 'approvals', 'recurring'].filter(key => data.permissions[key]).map(key => Lang.t({ textBlocks: 'manageTextBlocks', reports: 'viewReports', approvals: 'decideApprovals', recurring: 'manageRecurringTickets' }[key])),
+                `${Lang.t('knowledgeBase')}: ${Lang.t({ none: 'noAccess', read: 'readOnly', edit: 'readAndEdit' }[data.permissions.kb] || 'noAccess')}`
+            ].filter(Boolean).join(', ') : '';
+            const section = (stepKey, labelKey, rows) => `
+                <div class="uw-review-section">
+                    <div class="uw-review-head"><strong>${Utils.esc(Lang.t(labelKey))}</strong><button type="button" class="btn-ghost btn-sm" data-goto="${stepKey}">${Icon('pencil', 14)}${Utils.esc(Lang.t('edit'))}</button></div>
+                    <dl class="uw-review-list">${rows.map(([label, value]) => `<div><dt>${Utils.esc(Lang.t(label))}</dt><dd>${valueOrDash(value)}</dd></div>`).join('')}</dl>
+                </div>`;
+            $('#uw-review').innerHTML = `
+                <p class="hint">${Utils.esc(Lang.t(isNew ? 'uwReviewHintNew' : 'uwReviewHintEdit'))}</p>
+                ${section('account', 'uwStepAccount', [
+                    ['uwFullName', data.name], ['email', data.email], ['username', data.username],
+                    ['role', { user: 'User', admin: 'Admin', superadmin: 'Superadmin' }[data.role]],
+                    ['uwPasswordState', data.password ? Lang.t(isNew ? 'uwPasswordSet' : 'uwPasswordChanged') : (isNew ? '' : Lang.t('uwPasswordUnchanged'))],
+                    ...(canSetValidity ? [['validUntilInclusiveOptional', data.validityText]] : []),
+                    ...(isSuper && data.role !== 'superadmin' ? [['uwLdapLogin', Lang.t(data.ldap ? 'uwYes' : 'uwNo')]] : [])
+                ])}
+                ${section('org', 'uwStepOrg', [
+                    ['uwDepartment', data.department], ['jobTitle', data.jobTitle], ['uwOffice', data.officeLocation],
+                    ['uwBuilding', data.profile.building], ['uwRoom', data.profile.room], ['uwEmployeeNumber', data.profile.employee_number],
+                    ['uwCostCenter', data.profile.cost_center], ['uwEntryDate', data.entryDateText], ['supervisor', nameOf(data.supervisorUserId)], ['userGroupsLabel', groupNames]
+                ])}
+                ${section('contact', 'uwStepContact', [
+                    ['phone', data.phone], ['mobile', data.mobile], ['uwWorkDays', schedule], ['uwAvailability', data.profile.availability_note]
+                ])}
+                ${rights ? section('rights', 'uwStepRights', [['adminRights', rights]]) : ''}`;
+            modal.querySelectorAll('[data-goto]').forEach(btn => btn.onclick = () => show(btn.dataset.goto));
+            if (window.lucide) lucide.createIcons();
+        };
 
+        let current = 'account';
+        const visited = new Set(['account']);
+        const show = stepKey => {
+            const list = activeSteps();
+            if (!list.some(step => step.key === stepKey)) stepKey = 'review';
+            current = stepKey;
+            visited.add(stepKey);
+            const index = list.findIndex(step => step.key === stepKey);
+            modal.querySelectorAll('.wizard-page').forEach(page => { page.hidden = page.dataset.page !== stepKey; });
+            modal.querySelectorAll('.wizard-step').forEach(btn => {
+                const position = list.findIndex(step => step.key === btn.dataset.step);
+                btn.closest('li').hidden = position < 0;
+                btn.classList.toggle('is-active', btn.dataset.step === stepKey);
+                btn.classList.toggle('is-done', position >= 0 && position < index);
+                btn.disabled = isNew && !visited.has(btn.dataset.step);
+                btn.setAttribute('aria-selected', String(btn.dataset.step === stepKey));
+                const no = btn.querySelector('.wizard-step-no');
+                if (no && position >= 0) no.textContent = String(position + 1);
+            });
+            if (stepKey === 'review') renderReview();
+            $('#uw-back').disabled = index === 0;
+            $('#uw-next').innerHTML = stepKey === 'review'
+                ? `${Icon(isNew ? 'user-plus' : 'save', 15)}${Utils.esc(Lang.t(isNew ? (request ? 'uwCreateAndApprove' : 'createButton') : 'save'))}`
+                : `${Utils.esc(Lang.t('uwNext'))}${Icon('arrow-right', 15)}`;
+            if (window.lucide) lucide.createIcons();
+        };
+        const fail = (issue, stepKey) => {
+            show(stepKey);
+            issue.input?.focus();
+            UI.toast(issue.message);
+        };
+        modal.querySelectorAll('.wizard-step').forEach(btn => btn.onclick = () => {
+            // Vorwaerts nur ueber gepruefte Schritte (beim Anlegen); zurueck und beim Bearbeiten frei.
+            const list = activeSteps();
+            const target = list.findIndex(step => step.key === btn.dataset.step);
+            const from = list.findIndex(step => step.key === current);
+            if (isNew && target > from) {
+                for (const step of list.slice(from, target)) { const issue = validate(step.key); if (issue) return fail(issue, step.key); }
+            }
+            show(btn.dataset.step);
+        });
+        $('#uw-role')?.addEventListener('change', () => show(current));
+        $('#uw-back').onclick = () => { const list = activeSteps(); const index = list.findIndex(step => step.key === current); if (index > 0) show(list[index - 1].key); };
+
+        const save = async () => {
+            for (const step of activeSteps()) { const issue = validate(step.key); if (issue) return fail(issue, step.key); }
+            const data = collect();
+            const validityVal = parseDate(data.validityText);
             const users = await Store.getUsers();
-
+            const fields = {
+                name: data.name, email: data.email, groupIds: data.groupIds, supervisorUserId: data.supervisorUserId,
+                department: data.department, phone: data.phone, mobile: data.mobile, jobTitle: data.jobTitle, officeLocation: data.officeLocation,
+                profile: data.profile
+            };
             if (isNew) {
-                if (users.find(x => x.username === uVal)) {
-                    UI.toast(Lang.t('userAlreadyExists'));
-                    return;
-                }
-                if (!pVal) {
-                    UI.toast(Lang.t('passwordMissing'));
-                    return;
-                }
-                if (pVal.length < 14) {
-                    UI.toast(Lang.t('passwordMinLength'));
-                    return;
-                }
                 users.push({
-                    id: Utils.uid(),
-                    username: uVal,
-                    name: nVal,
-                    email: eVal,
-                    password: pVal,
-                    role: rVal,
-                    groupIds: groupVal,
-                    supervisorUserId: supervisorVal,
-                    phone: phoneVal,
-                    mobile: mobileVal,
-                    jobTitle: jobTitleVal,
-                    officeLocation: officeLocationVal,
+                    id: Utils.uid(), username: data.username, password: data.password, role: data.role, ...fields,
                     accountValidUntil: canSetValidity ? validityVal : null,
-                    ldapLoginEnabled: ldapLoginEnabledVal,
-                    permissions: isSuper ? { ...permissionsVal, canManageRequests: canManageReqVal, canManageUsers: canManageUsersVal, canViewLogs: canViewLogsVal, canManage2FA: canManage2FAVal } : undefined
+                    ldapLoginEnabled: data.ldap,
+                    permissions: isSuper ? { ...data.permissions, canManageRequests: data.canManageRequests, canManageUsers: data.canManageUsers, canViewLogs: data.canViewLogs, canManage2FA: data.canManage2FA } : undefined
                 });
             } else {
                 const target = users.find(x => x.id === user.id);
-                if (target) {
-                    target.name = nVal;
-                    target.email = eVal;
-                    if (pVal) target.password = pVal;
-                    if (isSuper) {
-                        target.role = rVal;
-                        target.permissions = permissionsVal;
-                        target.canManageRequests = canManageReqVal;
-                        target.canManageUsers = canManageUsersVal;
-                        target.canViewLogs = canViewLogsVal;
-                        target.canManage2FA = canManage2FAVal;
-                    }
-                    target.groupIds = groupVal;
-                    target.supervisorUserId = supervisorVal;
-                    target.phone = phoneVal;
-                    target.mobile = mobileVal;
-                    target.jobTitle = jobTitleVal;
-                    target.officeLocation = officeLocationVal;
-                    if (canSetValidity) target.accountValidUntil = validityVal;
-                    if (isSuper) target.ldapLoginEnabled = ldapLoginEnabledVal;
-                }
+                if (!target) return UI.toast(Lang.t('saveFailedGeneric'));
+                Object.assign(target, fields);
+                if (data.password) target.password = data.password;
+                if (isSuper) Object.assign(target, {
+                    role: data.role, permissions: data.permissions, ldapLoginEnabled: data.ldap,
+                    canManageRequests: data.canManageRequests, canManageUsers: data.canManageUsers, canViewLogs: data.canViewLogs, canManage2FA: data.canManage2FA
+                });
+                if (canSetValidity) target.accountValidUntil = validityVal;
             }
+            const buttons = [$('#uw-next'), $('#uw-save-now')].filter(Boolean);
+            buttons.forEach(btn => { btn.disabled = true; });
             const ok = await Store.saveUsers(users);
+            buttons.forEach(btn => { btn.disabled = false; });
             if (!ok) {
                 const errText = Store.lastError || '';
-                const friendly = errText.includes('email_taken') ? Lang.t('emailTakenError')
+                return UI.toast(errText.includes('email_taken') ? Lang.t('emailTakenError')
                     : errText.includes('last_superadmin') ? Lang.t('lastSuperadminError')
                     : errText.includes('username_taken') ? Lang.t('usernameTakenError')
-                    : Lang.t('saveFailedGeneric');
-                UI.toast(friendly);
-                return;
+                    : errText.includes('password_policy_failed') ? Lang.t('uwPasswordPolicyFailed')
+                    : Lang.t('saveFailedGeneric'));
             }
-            editModal.classList.remove('open');
-            AdminBoard.renderUserManager(viewContext);
-            UI.toast(Lang.t('savedToast'));
+            if (request && !(await Store.decideAccountRequest(request.id, 'approved'))) {
+                modal.remove();
+                await AdminBoard.renderRequests();
+                return UI.toast(Lang.t('uwRequestNotUpdated'));
+            }
+            modal.remove();
+            if (request) await AdminBoard.renderRequests();
+            else if (q('#user-man-modal.open')) AdminBoard.renderUserManager(viewContext);
+            UI.toast(Lang.t(request ? 'uwRequestApprovedToast' : isNew ? 'uwCreatedToast' : 'savedToast'));
         };
+        $('#uw-next').onclick = () => {
+            if (current === 'review') return save();
+            const issue = validate(current);
+            if (issue) return fail(issue, current);
+            const list = activeSteps();
+            show(list[list.findIndex(step => step.key === current) + 1].key);
+        };
+        if ($('#uw-save-now')) $('#uw-save-now').onclick = save;
+        show('account');
+        $('#uw-name').focus();
     },
 
     createGenericModal: () => {
@@ -2500,12 +2693,24 @@ export const AdminBoard = {
                     </div>
                     <div class="sys-settings-shell">
                     <nav class="sys-settings-nav" aria-label="${Lang.t('systemSettings')}">
+                        <div class="sys-settings-search">${Icon('search', 15)}<input type="search" id="sys-settings-search" placeholder="${Utils.esc(Lang.t('settingsSearchPlaceholder'))}" aria-label="${Utils.esc(Lang.t('settingsSearchPlaceholder'))}"></div>
                         <button class="tab-btn active" data-tab="sys-general">
                             <i data-lucide="sliders"></i><span>${Lang.t('general')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-modules">
                             <i data-lucide="blocks"></i><span>${Lang.t('modulesTab')}</span>
                         </button>
+                        <div class="sys-nav-group-label">${Lang.t('settingsModuleGroup')}</div>
+                        <button class="tab-btn is-module" data-tab="sys-sla" data-module="sla">
+                            <i data-lucide="timer"></i><span>${Lang.t('moduleSla')}</span>
+                        </button>
+                        <button class="tab-btn is-module" data-tab="sys-approvals" data-module="approvals">
+                            <i data-lucide="badge-check"></i><span>${Lang.t('moduleApprovals')}</span>
+                        </button>
+                        <button class="tab-btn is-module" data-tab="sys-outlook" data-module="outlook">
+                            <i data-lucide="calendar-days"></i><span>${Lang.t('moduleOutlook')}</span>
+                        </button>
+                        <div class="sys-nav-group-label">${Lang.t('settingsSystemGroup')}</div>
                         <button class="tab-btn" data-tab="sys-security">
                             <i data-lucide="shield"></i><span>Sicherheit</span>
                         </button>
@@ -2517,9 +2722,6 @@ export const AdminBoard = {
                         </button>
                         <button class="tab-btn" data-tab="sys-ldap">
                             <i data-lucide="server"></i><span>LDAP</span>
-                        </button>
-                        <button class="tab-btn" data-tab="sys-outlook" data-module="outlook">
-                            <i data-lucide="mail-check"></i><span>${Lang.t('outlookSetupTab')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-company">
                             <i data-lucide="building-2"></i><span>${Lang.t('companySettingsTab')}</span>
@@ -2534,22 +2736,15 @@ export const AdminBoard = {
                             (Benutzerverwaltung → Kategorien → „Automatische Zuweisung an Gruppe").</div>
                         <!-- Sicherheit -->
                         <div id="sys-security" class="tab-content">
-                            <div class="settings-section-title">${Lang.current === 'en' ? 'MFA methods' : 'MFA-Methoden'}</div>
-                            <div class="field"><label for="sys-mfa-mode">${Lang.current === 'en' ? 'Required combination (after password)' : 'Erforderliche Kombination (nach Passwort)'}</label>
-                                <select id="sys-mfa-mode"><option value="disabled">${Lang.current === 'en' ? 'Existing individual settings' : 'Bisherige individuelle Einstellungen'}</option><option value="totp">TOTP</option><option value="passkey">Passkey</option><option value="either">TOTP / Passkey</option><option value="both">TOTP + Passkey</option></select></div>
-                            <div class="field"><label for="sys-mfa-roles">${Lang.current === 'en' ? 'Applies to' : 'Gilt für'}</label><select id="sys-mfa-roles"><option value="all">${Lang.current === 'en' ? 'All accounts' : 'Alle Konten'}</option><option value="admin">Admins / Superadmins</option><option value="user">${Lang.current === 'en' ? 'Users' : 'Benutzer'}</option></select></div>
+                            <div class="settings-section-title">${Lang.t('mfaPolicyTitle')}</div>
+                            <div class="form-grid">
+                                <div class="field"><label for="sys-mfa-mode">${Lang.t('mfaPolicyModeLabel')}</label>
+                                    <select id="sys-mfa-mode"><option value="disabled">${Lang.t('mfaPolicyNone')}</option><option value="totp">${Lang.t('mfaPolicyTotp')}</option><option value="passkey">${Lang.t('mfaPolicyPasskey')}</option><option value="either">${Lang.t('mfaPolicyEither')}</option><option value="both">${Lang.t('mfaPolicyBoth')}</option></select></div>
+                                <div class="field"><label for="sys-mfa-roles">${Lang.t('mfaPolicyRolesLabel')}</label><select id="sys-mfa-roles"><option value="all">${Lang.t('mfaPolicyRolesAll')}</option><option value="admin">${Lang.t('mfaPolicyRolesAdmin')}</option><option value="user">${Lang.t('mfaPolicyRolesUser')}</option></select></div>
+                            </div>
+                            <p class="hint">${Lang.t('mfaPolicyHint')}</p>
                             <div class="field"><label for="sys-passkey-days">${Lang.current === 'en' ? 'TOTP + passkey: verify passkey again after days (0 = every login)' : 'TOTP + Passkey: erneuter Passkey-Nachweis nach Tagen (0 = jede Anmeldung)'}</label><input id="sys-passkey-days" type="number" min="0" max="365"><p class="hint">${Lang.current === 'en' ? 'Passkeys need a trusted HTTPS domain. Phones and security keys are supported by the browser. First enroll an authenticator as a recovery method. SMS / push require an external provider.' : 'Passkeys benötigen einen vertrauenswürdigen HTTPS-Domainnamen. Handy und Sicherheitsschlüssel werden über den Browser unterstützt. Zuerst einen Authenticator als Wiederherstellungsweg einrichten. SMS / Push benötigen einen externen Anbieter.'}</p></div>
                             <div class="settings-section-title">${Lang.current === 'en' ? 'Login and sessions' : 'Anmeldung und Sitzungen'}</div>
-                            <div class="field" hidden>
-                                <label>${Lang.t('enforce2FA')}</label>
-                                <select id="sys-2fa-enforce">
-                                    <option value="none">${Lang.t('enforceNone')}</option>
-                                    <option value="all">${Lang.t('enforceAll')}</option>
-                                    <option value="admin">${Lang.t('enforceAdminOnly')}</option>
-                                    <option value="user">${Lang.t('enforceUserOnly')}</option>
-                                </select>
-                                <div class="hint">${Lang.t('enforce2FAHint')}</div>
-                            </div>
                             <div class="field">
                                 <label>${Lang.t('sessionTimeoutMinutes')}</label>
                                 <input id="sys-session-timeout" type="number" placeholder="480" min="5">
@@ -2744,6 +2939,19 @@ export const AdminBoard = {
                                 <input id="sys-auto-archive" type="number" placeholder="0" min="0">
                             </div>
                             <div class="field">
+                                <label for="sys-upload-limit">${Lang.t('uploadLimitLabel')}</label>
+                                <input id="sys-upload-limit" type="number" min="500" max="2000" step="1" placeholder="1024">
+                                <div class="hint">${Lang.t('uploadLimitHint')}</div>
+                            </div>
+                            <div class="field">
+                                <label for="sys-avatars">${Lang.t('avatarModeLabel')}</label>
+                                <select id="sys-avatars">
+                                    <option value="on">${Lang.t('avatarModeOn')}</option>
+                                    <option value="off">${Lang.t('avatarModeOff')}</option>
+                                </select>
+                                <div class="hint">${Lang.t('avatarModeHint')}</div>
+                            </div>
+                            <div class="field">
                                 <label>${Lang.t('defaultPriorityForNewTickets')}</label>
                                 <select id="sys-default-prio">
                                     <option value="Normal">${Lang.t('normal')}</option>
@@ -2805,6 +3013,11 @@ export const AdminBoard = {
                             </div>
                             <div class="empty-state compact" id="sys-module-empty" hidden>${Lang.t('noModulesFound')}</div>
                         </div>
+
+                        <!-- Modul-Kacheln: Inhalte werden nach dem Aufbau aus Allgemein/Unternehmen hierher verschoben -->
+                        <div id="sys-sla" class="tab-content"></div>
+                        <div id="sys-approvals" class="tab-content"></div>
+                        <div class="empty-state" id="sys-search-empty" hidden>${Lang.t('settingsSearchNoResults')}</div>
 
                         <!-- Unternehmenseinstellungen -->
                         <div id="sys-company" class="tab-content">
@@ -2868,6 +3081,12 @@ export const AdminBoard = {
                                 <p class="hint">${Lang.t('fallbackApproverHint')}</p>
                                 <div id="sys-appr-fallback"></div>
                             </div>
+                            <div class="field field-wide">
+                                <label>${Lang.t('fallbackRulesLabel')}</label>
+                                <p class="hint">${Lang.t('fallbackRulesHint')}</p>
+                                <div id="sys-appr-rules" class="appr-rule-list"></div>
+                                <button type="button" class="btn-secondary btn-sm" id="sys-appr-rule-add">${Icon('plus', 15)}${Lang.t('fallbackRuleAdd')}</button>
+                            </div>
                         </div>
                     </div>
                     </div>
@@ -2885,14 +3104,14 @@ export const AdminBoard = {
             const headings = [...company.querySelectorAll('.settings-section-title')];
             const numbering = headings.find(heading => heading.textContent === Lang.t('ticketNumbersForNewTickets'));
             const approval = headings.find(heading => heading.textContent === Lang.t('supervisorApprovals'));
-            if (numbering && approval) {
-                const nodes = []; for (let node = approval; node; node = node.nextSibling) nodes.push(node);
-                nodes.forEach(node => company.insertBefore(node, numbering));
-            }
-            // Modul-Abschnitte kennzeichnen: ausgeblendet, solange das jeweilige Modul deaktiviert ist.
-            if (approval) for (let node = approval; node && node !== numbering; node = node.nextElementSibling) node.dataset.module = 'approvals';
+            const moveFrom = (start, target) => {
+                const nodes = []; for (let node = start; node; node = node.nextSibling) nodes.push(node);
+                nodes.forEach(node => target.appendChild(node));
+            };
+            if (approval) moveFrom(approval, modal.querySelector('#sys-approvals'));
             const slaHeading = [...modal.querySelectorAll('#sys-general .settings-section-title')].find(heading => heading.textContent === Lang.t('resolutionDeadlinePerPriority'));
-            for (let node = slaHeading; node; node = node.nextElementSibling) node.dataset.module = 'sla';
+            if (slaHeading) moveFrom(slaHeading, modal.querySelector('#sys-sla'));
+            void numbering;
             const updatePanel = modal.querySelector('#sys-update');
             const preferences = await Store.getPersonalPreferences(true);
             modal.querySelectorAll('.tab-content').forEach(panel => {
@@ -2927,9 +3146,44 @@ export const AdminBoard = {
             const rolesInfo = updatePanel.querySelector('#sys-update-run').closest('.setting-row').querySelector('.hint');
             for (const info of [rolesInfo, migrationInfo]) { const p = document.createElement('p'); p.textContent = info.textContent; updateInfo.appendChild(p); info.remove(); }
 
+            // Einstellungssuche: zeigt alle passenden Abschnitte aller Bereiche untereinander; aufgeklappt
+            // wird nur fuer die Suche (der gespeicherte Auf-/Zuklapp-Zustand bleibt unveraendert).
+            const searchInput = modal.querySelector('#sys-settings-search');
+            const content = modal.querySelector('.sys-settings-content');
+            const panels = [...content.querySelectorAll(':scope > .tab-content')];
+            panels.forEach(panel => { panel.dataset.searchTitle = modal.querySelector(`.sys-settings-nav [data-tab="${panel.id}"]`)?.textContent.trim() || ''; });
+            const runSettingsSearch = () => {
+                const term = searchInput.value.trim().toLocaleLowerCase();
+                content.classList.toggle('is-searching', !!term);
+                let total = 0;
+                panels.forEach(panel => {
+                    const nav = modal.querySelector(`.sys-settings-nav [data-tab="${panel.id}"]`);
+                    const moduleOff = nav?.dataset.module && Store.modules[nav.dataset.module] === false;
+                    let hits = 0;
+                    panel.querySelectorAll('details.settings-section').forEach(section => {
+                        if (term && !('searchOpen' in section.dataset)) section.dataset.searchOpen = section.open ? '1' : '0';
+                        const match = !!term && !moduleOff && `${panel.dataset.searchTitle} ${section.textContent}`.toLocaleLowerCase().includes(term);
+                        section.classList.toggle('search-miss', !!term && !match);
+                        if (match) { hits++; section._preferenceOpen = true; section.open = true; }
+                        if (!term && 'searchOpen' in section.dataset) {
+                            const wasOpen = section.dataset.searchOpen === '1';
+                            delete section.dataset.searchOpen;
+                            section._preferenceOpen = wasOpen; section.open = wasOpen;
+                        }
+                    });
+                    panel.classList.toggle('search-hit', hits > 0);
+                    nav?.classList.toggle('has-search-hits', hits > 0);
+                    total += hits;
+                });
+                modal.querySelector('#sys-search-empty').hidden = !term || total > 0;
+            };
+            searchInput.addEventListener('input', runSettingsSearch);
+            searchInput.addEventListener('keydown', event => { if (event.key === 'Escape' && searchInput.value) { event.stopPropagation(); searchInput.value = ''; runSettingsSearch(); } });
+
             // Tab Logic
             modal.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.onclick = () => {
+                    if (searchInput.value) { searchInput.value = ''; runSettingsSearch(); }
                     modal.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     modal.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -3000,6 +3254,8 @@ export const AdminBoard = {
 
         q('#sys-portal-name').value = general.portalName || 'Support Portal';
         q('#sys-auto-archive').value = general.autoArchiveDays || 0;
+        q('#sys-upload-limit').value = settings.uploadConfig?.maxFileMb || 1024;
+        q('#sys-avatars').value = settings.avatarConfig?.enabled === false ? 'off' : 'on';
         q('#sys-default-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(general.defaultPrio) ? general.defaultPrio : 'Normal';
         q('#sys-wait-remind').value = general.waitingReminderDays ?? 2;
         q('#sys-wait-close').value = general.waitingAutoCloseDays ?? 7;
@@ -3104,7 +3360,6 @@ export const AdminBoard = {
             AdminBoard.renderTicketNumberPreviews(modal);
         }
 
-        q('#sys-2fa-enforce').value = security.force2FA || 'none';
         q('#sys-mfa-mode').value = security.mfaMode || (security.force2FA && security.force2FA !== 'none' ? 'totp' : 'disabled');
         q('#sys-mfa-roles').value = security.mfaRoles || (security.force2FA !== 'none' ? security.force2FA : 'all') || 'all';
         q('#sys-passkey-days').value = security.passkeyEveryDays ?? 14;
@@ -3206,6 +3461,40 @@ export const AdminBoard = {
             apprFallbackUsers.map(u => ({ value: u.id, label: u.name || u.username })),
             appr.fallbackApproverUserId || '', null, { single: true, emptyLabel: Lang.t('noneAutoSuperadmin') }
         );
+        {
+            // Ersatzperson je Gruppe oder Kategorie: greift vor der allgemeinen Ersatzperson.
+            const [ruleGroups, ruleCategories] = await Promise.all([Store.getGroups(), Store.getCategories()]);
+            const targets = {
+                group: ruleGroups.map(g => ({ value: g.id, label: g.label || g.name })),
+                category: ruleCategories.filter(c => !c.archived).map(c => ({ value: c.name, label: c.name }))
+            };
+            const options = (list, selected, empty) => `<option value="">${Utils.esc(empty)}</option>` + list.map(o => `<option value="${Utils.esc(o.value)}"${o.value === selected ? ' selected' : ''}>${Utils.esc(o.label)}</option>`).join('');
+            const rules = (appr.fallbackRules || []).map(rule => ({ ...rule }));
+            const list = q('#sys-appr-rules');
+            const renderRules = () => {
+                list.innerHTML = rules.length ? rules.map((rule, index) => `
+                    <div class="appr-rule-row" data-index="${index}">
+                        <select class="appr-rule-type" aria-label="${Utils.esc(Lang.t('fallbackRuleType'))}">
+                            <option value="group"${rule.type === 'group' ? ' selected' : ''}>${Utils.esc(Lang.t('fallbackRuleGroup'))}</option>
+                            <option value="category"${rule.type === 'category' ? ' selected' : ''}>${Utils.esc(Lang.t('fallbackRuleCategory'))}</option>
+                        </select>
+                        <select class="appr-rule-target" aria-label="${Utils.esc(Lang.t('fallbackRuleTarget'))}">${options(targets[rule.type] || [], rule.target, Lang.t('pleaseChoose'))}</select>
+                        <select class="appr-rule-user" aria-label="${Utils.esc(Lang.t('fallbackRuleUser'))}">${options(apprFallbackUsers.map(u => ({ value: u.id, label: u.name || u.username })), rule.userId, Lang.t('pleaseChoose'))}</select>
+                        <button type="button" class="btn-ghost btn-icon btn-sm btn-danger appr-rule-remove" title="${Utils.esc(Lang.t('fallbackRuleRemove'))}" aria-label="${Utils.esc(Lang.t('fallbackRuleRemove'))}">${Icon('trash-2', 15)}</button>
+                    </div>`).join('') : `<p class="hint">${Utils.esc(Lang.t('fallbackRulesEmpty'))}</p>`;
+                list.querySelectorAll('.appr-rule-row').forEach(row => {
+                    const rule = rules[Number(row.dataset.index)];
+                    row.querySelector('.appr-rule-type').onchange = event => { rule.type = event.target.value; rule.target = ''; renderRules(); };
+                    row.querySelector('.appr-rule-target').onchange = event => { rule.target = event.target.value; };
+                    row.querySelector('.appr-rule-user').onchange = event => { rule.userId = event.target.value; };
+                    row.querySelector('.appr-rule-remove').onclick = () => { rules.splice(Number(row.dataset.index), 1); renderRules(); };
+                });
+                if (window.lucide) lucide.createIcons();
+            };
+            q('#sys-appr-rule-add').onclick = () => { rules.push({ type: 'group', target: '', userId: '' }); renderRules(); };
+            renderRules();
+            modal._approvalRules = rules;
+        }
 
         const smtp = await Store.getSmtpConfig();
         q('#sys-smtp-host').value = smtp?.host || '';
@@ -3284,11 +3573,24 @@ export const AdminBoard = {
         });
         q('#sys-save').onclick = async () => {
             const padding = Math.max(1, Math.min(12, parseInt(q('#sys-ticket-number-padding').value, 10) || 5));
+            q('#sys-ticket-number-padding').classList.remove('is-invalid');
+            q('#sys-ticket-number-padding').removeAttribute('aria-invalid');
             const ticketNumberIssue = AdminBoard.renderTicketNumberPreviews(modal);
             if (ticketNumberIssue) {
-                modal.querySelector('.sys-settings-nav [data-tab="sys-general"]')?.click();
+                modal.querySelector(`.sys-settings-nav [data-tab="${ticketNumberIssue.input.closest('.tab-content')?.id || 'sys-company'}"]`)?.click();
                 ticketNumberIssue.input.focus();
                 return UI.toast(ticketNumberIssue.message);
+            }
+            const approvalRules = modal._approvalRules || [];
+            const ruleKeys = approvalRules.map(rule => `${rule.type}:${rule.target}`);
+            if (approvalRules.some(rule => !rule.target || !rule.userId) || new Set(ruleKeys).size !== ruleKeys.length) {
+                modal.querySelector('.sys-settings-nav [data-tab="sys-approvals"]')?.click();
+                return UI.toast(Lang.t('fallbackRulesInvalid'));
+            }
+            const uploadLimitMb = Number(q('#sys-upload-limit').value);
+            if (!Number.isInteger(uploadLimitMb) || uploadLimitMb < 500 || uploadLimitMb > 2000) {
+                q('#sys-upload-limit').focus();
+                return UI.toast(Lang.t('uploadLimitInvalid'));
             }
             const accFieldIdMap = { department: 'dept' };
             const accountSelfServiceFields = ['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation'].filter(f => q(`#sys-acc-${accFieldIdMap[f] || f}`).checked);
@@ -3297,6 +3599,8 @@ export const AdminBoard = {
                 portalName: q('#sys-portal-name').value.trim() || 'Support Portal',
                 config: {
                     autoArchiveClosedAfterDays: Math.max(0, parseInt(q('#sys-auto-archive').value, 10) || 0),
+                    uploadConfig: { maxFileMb: uploadLimitMb },
+                    avatarConfig: { enabled: q('#sys-avatars').value !== 'off' },
                     waitingReminderDays: Math.max(1, parseInt(q('#sys-wait-remind').value, 10) || 2),
                     waitingAfterAction: q('#sys-wait-action').value,
                     waitingReminderEnabled: q('#sys-wait-reminder-enabled').checked,
@@ -3404,14 +3708,28 @@ export const AdminBoard = {
                     approvalWorkflow: {
                         enabled: q('#sys-appr-enabled').checked,
                         priorities: qa('.sys-appr-prio:checked').map(cb => cb.value),
-                        fallbackApproverUserId: apprFallbackPicker?.getValue() || null
+                        fallbackApproverUserId: apprFallbackPicker?.getValue() || null,
+                        fallbackRules: approvalRules.map(rule => ({ type: rule.type, target: rule.target, userId: rule.userId }))
                     }
                 }
             });
             if (!ok) {
-                console.error('Systemeinstellungen speichern fehlgeschlagen:', Store.lastError);
-                return UI.toast(AdminBoard.settingsSaveErrorMessage(Store.lastError));
+                const message = AdminBoard.settingsSaveErrorMessage(Store.lastError);
+                let error = {};
+                try { error = JSON.parse(Store.lastError || '{}'); } catch { error = {}; }
+                if (error.error === 'padding_too_low') {
+                    modal.querySelector('.sys-settings-nav [data-tab="sys-company"]')?.click();
+                    const paddingInput = q('#sys-ticket-number-padding');
+                    paddingInput.min = String(error.minRequired || 1);
+                    paddingInput.classList.add('is-invalid');
+                    paddingInput.setAttribute('aria-invalid', 'true');
+                    paddingInput.focus();
+                } else if (message === Lang.t('systemSettingsSaveFailed')) {
+                    console.error('Systemeinstellungen speichern fehlgeschlagen:', Store.lastError);
+                }
+                return UI.toast(message);
             }
+            Store.applyAvatarSetting(q('#sys-avatars').value !== 'off');
             Store.applyModules({ sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked, outlook: q('#sys-module-outlook').checked });
             const outlookSecret = q('#sys-outlook-secret').value;
             if (outlookSecret && !await Store.updateOutlookSecret(outlookSecret)) return UI.toast(Lang.t('saveFailed'));
@@ -3426,7 +3744,7 @@ export const AdminBoard = {
     // Listenansicht: Tabelle mit sortierbaren Spalten, Filtern, gespeicherten Ansichten
     // und Mehrfachauswahl für Sammelaktionen -- für Admins mit vielen offenen Tickets,
     // wo ein Kanban-Board nicht mehr überschaubar ist.
-    listViewState: { sortKey: 'prio', sortDir: 'desc', selected: new Set() },
+    listViewState: { sortKey: 'prio', sortDir: 'desc', selected: new Set(), expandedIncidents: new Set() },
 
     openListView: async () => {
         const container = q('#list-view');
@@ -3664,24 +3982,55 @@ export const AdminBoard = {
         const validIds = new Set(visible.map(t => t.id));
         AdminBoard.listViewState.selected.forEach(id => { if (!validIds.has(id)) AdminBoard.listViewState.selected.delete(id); });
 
-        const body = q('#lv-body');
-        body.innerHTML = visible.length ? visible.map(t => {
+        // Tickets einer sichtbaren Grossstoerung stehen nicht mehr einzeln in der Liste, sondern als
+        // aufklappbare Unterpunkte unter der Stoerung. Ist die Stoerung selbst ausgefiltert, bleiben
+        // ihre Tickets normal sichtbar -- es verschwindet nichts.
+        const incidentIds = new Set(visible.filter(t => t.isMajorIncident).map(t => t.id));
+        const childrenOf = new Map();
+        visible.forEach(t => {
+            if (!t.linkedIncidentId || !incidentIds.has(t.linkedIncidentId) || t.id === t.linkedIncidentId) return;
+            if (!childrenOf.has(t.linkedIncidentId)) childrenOf.set(t.linkedIncidentId, []);
+            childrenOf.get(t.linkedIncidentId).push(t);
+        });
+        const expanded = AdminBoard.listViewState.expandedIncidents;
+        expanded.forEach(id => { if (!childrenOf.has(id)) expanded.delete(id); });
+        const rowHtml = (t, { parentId = null } = {}) => {
             const team = t.team ? groups.find(g => g.id === t.team) : null;
             const countdown = Store.formatSlaCountdown(t, settings);
             const checked = AdminBoard.listViewState.selected.has(t.id) ? 'checked' : '';
             const pendingApproval = (t.approvals || []).some(a => a.status === 'pending');
-            return `<tr data-id="${Utils.esc(t.id)}" data-ctx="ticket" class="lv-row">
+            const children = childrenOf.get(t.id) || [];
+            const isOpen = expanded.has(t.id);
+            const toggle = children.length
+                ? `<button type="button" class="btn-ghost btn-icon btn-xs lv-expand" data-expand="${Utils.esc(t.id)}" aria-expanded="${isOpen}" title="${Utils.esc(Lang.format(isOpen ? 'lvHideIncidentTickets' : 'lvShowIncidentTickets', { count: children.length }))}" aria-label="${Utils.esc(Lang.format(isOpen ? 'lvHideIncidentTickets' : 'lvShowIncidentTickets', { count: children.length }))}">${Icon('chevron-right', 14)}</button>`
+                : '';
+            return `<tr data-id="${Utils.esc(t.id)}" data-ctx="ticket" class="lv-row${children.length ? ' lv-incident-row' : ''}${parentId ? ' lv-child-row' : ''}"${parentId ? ` data-parent="${Utils.esc(parentId)}"${expanded.has(parentId) ? '' : ' hidden'}` : ''}>
                 <td><input type="checkbox" data-id="${Utils.esc(t.id)}" ${checked}></td>
                 <td>${Utils.esc(t.ticketNumber || t.id)}</td>
-                <td class="lv-title" title="${Utils.esc(t.title)}">${t.isMajorIncident ? `<span class="t-incident-badge lv-incident-icon" title="${Lang.t('majorIncident')}">${Icon('siren', 12)}</span> ` : ''}${Utils.esc(t.title)}</td>
+                <td class="lv-title" title="${Utils.esc(t.title)}">${toggle}${parentId ? `<span class="lv-child-marker" aria-hidden="true">${Icon('corner-down-right', 12)}</span>` : ''}${t.isMajorIncident ? `<span class="t-incident-badge lv-incident-icon" title="${Lang.t('majorIncident')}">${Icon('siren', 12)}</span> ` : ''}${Utils.esc(t.title)}${children.length ? ` <span class="badge lv-incident-count" title="${Utils.esc(Lang.format('lvIncidentTicketCount', { count: children.length }))}">${children.length}</span>` : ''}</td>
                 <td>${pendingApproval ? `<span class="approval-badge" title="${Lang.t('awaitingApproval')}">${Icon('hourglass', 12)}${Lang.t('approvals')}</span>` : `<span class="status-badge">${Utils.esc(Lang.status(t.status))}</span>`}${t.status === 'Geschlossen' && !t.archived ? `<button type="button" class="btn-ghost btn-icon btn-xs lv-archive-btn" data-archive="${Utils.esc(t.id)}" title="${Utils.esc(Lang.t('moveToArchive'))}" aria-label="${Utils.esc(Lang.t('moveToArchive'))}: ${Utils.esc(t.ticketNumber || t.id)}">${Icon('archive', 13)}</button>` : ''}</td>
                 <td><span class="t-tag prio-${t.prio}">${Utils.esc(Lang.prio(t.prio))}</span></td>
                 <td>${Utils.esc((Array.isArray(t.category) ? t.category : [t.category]).filter(Boolean).join(', ') || '-')}${team ? ` <span class="t-team">${Icon('route', 10)}${Utils.esc(team.name)}</span>` : ''}</td>
                 <td>${Utils.esc(nameFor(t.owner))}</td>
                 <td>${Utils.esc(Utils.fmtDate(t.createdAt))}</td>
                 <td data-module="sla">${countdown ? `<span class="sla-mini-badge sla-badge-${countdown.tone}" title="${Lang.t('deadline')}: ${Utils.esc(countdown.dueDateLabel)}">${Utils.esc(countdown.dueDateLabel)} · ${Utils.esc(countdown.label)}</span>` : '-'}</td>
-            </tr>`;
-        }).join('') : `<tr><td colspan="9"><div class="empty-state">${Lang.t('noTickets')}</div></td></tr>`;
+            </tr>${children.map(child => rowHtml(child, { parentId: t.id })).join('')}`;
+        };
+        const topLevel = visible.filter(t => !(t.linkedIncidentId && incidentIds.has(t.linkedIncidentId) && t.id !== t.linkedIncidentId));
+        const body = q('#lv-body');
+        body.innerHTML = topLevel.length ? topLevel.map(t => rowHtml(t)).join('') : `<tr><td colspan="9"><div class="empty-state">${Lang.t('noTickets')}</div></td></tr>`;
+        qa('#lv-body .lv-expand').forEach(btn => btn.addEventListener('click', event => {
+            event.stopPropagation();
+            const id = btn.dataset.expand;
+            const open = !expanded.has(id);
+            if (open) expanded.add(id); else expanded.delete(id);
+            qa(`#lv-body tr[data-parent="${CSS.escape(id)}"]`).forEach(row => { row.hidden = !open; });
+            const count = (childrenOf.get(id) || []).length;
+            const label = Lang.format(open ? 'lvHideIncidentTickets' : 'lvShowIncidentTickets', { count });
+            btn.setAttribute('aria-expanded', String(open));
+            btn.title = label;
+            btn.setAttribute('aria-label', label);
+        }));
         AdminBoard.syncTimerBadges();
         qa('#lv-body .lv-archive-btn').forEach(btn => btn.addEventListener('click', event => {
             event.stopPropagation();
@@ -4489,7 +4838,7 @@ export const AdminBoard = {
         }
         const now = Date.now();
         const substitute = substituteUsername ? users.find(u => u.username === substituteUsername) : null;
-        const fmt = ms => new Date(ms).toLocaleDateString('de-DE');
+        const fmt = ms => Utils.fmtDateOnly(ms);
         const me = await Store.currentUser();
         // VOR dem Server-Aufruf abfragen: applyUserAbsence haengt die Tickets server-seitig
         // sofort um, danach zeigt t.owner bereits die Vertretung, nicht mehr "username".
@@ -4654,7 +5003,7 @@ export const AdminBoard = {
     },
 
     absenceInfoText: absence => {
-        const fmt = ms => new Date(ms).toLocaleDateString('de-DE');
+        const fmt = ms => Utils.fmtDateOnly(ms);
         const period = absence.fromMs && absence.untilMs ? Lang.format('periodFromTo', { from: fmt(absence.fromMs), until: fmt(absence.untilMs) })
             : absence.untilMs ? Lang.format('periodUntil', { until: fmt(absence.untilMs) })
             : absence.fromMs ? Lang.format('periodFromIndefinite', { from: fmt(absence.fromMs) })
@@ -4708,7 +5057,6 @@ export const AdminBoard = {
             ['btn-textblocks', 'message-square-plus', 'Textbausteine', 'textBlocks', () => AdminBoard.openTextBlocks()],
             ['btn-reports', 'chart-column', 'Auswertung', 'reports', () => AdminBoard.openReports()],
             ['btn-kb', 'book-open', 'Wissensdatenbank', 'kb', () => AdminBoard.openKnowledgeBase()],
-            ['btn-approvals', 'badge-check', 'Genehmigungen', 'approvals', () => AdminBoard.openApprovals()],
             ['btn-recurring', 'repeat', 'Wiederkehrende Tickets', 'recurring', () => AdminBoard.openRecurring()]
         ];
         extras.filter(([, , , perm]) => AdminBoard.can(user, perm)).forEach(([id, icon, label, perm, handler]) => {
@@ -4982,7 +5330,7 @@ export const AdminBoard = {
             </span>`).join('') : `<span class="hint">${Utils.esc(Lang.t('kbNoLinkedSolutions'))}</span>`;
         const add = q('#m-kb-link-add');
         add.hidden = locked;
-        add.onclick = () => KbSearch.open({ ticket });
+        add.onclick = () => KbSearch.pickArticles({ ticket, linkedIds: links.map(link => link.articleId), onDone: () => AdminBoard.renderKbLinks(ticketId) });
         list.querySelectorAll('.kb-link-open').forEach(btn => btn.onclick = async () => {
             const article = (await Store.getKbArticles()).find(a => a.id === btn.dataset.id);
             if (!article) return UI.toast(Lang.t('kbArticleMissing'));
@@ -4999,16 +5347,34 @@ export const AdminBoard = {
     // t.comments existiert nicht mehr lokal (immer [], siehe mapApiTicketToLegacy) -- vorher
     // fand dieser Knopf dadurch NIE einen Lösungsweg und meldete immer "gibt noch keinen
     // Lösungsweg", selbst wenn einer dokumentiert war. Lädt die echten Notizen jetzt frisch.
+    // Loesungsdokumentation als Wissensartikel: oeffnet den Editor vorbefuellt und gegliedert wie im
+    // Ticket (Ursache, durchgefuehrte Massnahmen, Loesung, weitere Eintraege), damit vor dem Speichern
+    // bearbeitet werden kann. Vorher wurde der Rohtext aller Eintraege ohne Gliederung sofort
+    // gespeichert. Der neue Artikel wird dem Ticket direkt zugeordnet.
     addSolutionToKnowledgeBase: async (t) => {
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/notes`, { credentials: 'same-origin' }).catch(() => null);
         const notes = res && res.ok ? (await res.json()).notes || [] : [];
-        const solution = notes.filter(n => n.stream === 'solution');
+        const solution = notes.filter(n => n.stream === 'solution' && (n.content || '').trim())
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         if (!solution.length) return UI.toast(Lang.t('noSolutionYetInTicket'));
-        const title = await UI.promptText({ title: Lang.t('knowledgeArticle'), label: Lang.t('articleTitle'), value: t.title, saveLabel: Lang.t('save') });
-        if (!title || !title.trim()) return;
-        const body = solution.map(n => n.content || '').join('\n\n');
-        if (!(await Store.createKbArticle(title.trim(), body, t.id))) return UI.toast(Lang.t('saveFailed'));
-        UI.toast(Lang.t('savedAsKnowledgeArticle'));
+        const known = ['Ursache', 'Maßnahme', 'Lösung'];
+        const sections = [
+            { title: Lang.t('noteTypeCause'), entries: solution.filter(n => !n.is_resolution && n.note_type === 'Ursache') },
+            { title: Lang.t('solutionGroupMeasures'), entries: solution.filter(n => !n.is_resolution && n.note_type === 'Maßnahme'), numbered: true },
+            { title: Lang.t('noteTypeSolution'), entries: solution.filter(n => n.is_resolution || n.note_type === 'Lösung') },
+            { title: Lang.t('solutionGroupOther'), entries: solution.filter(n => !n.is_resolution && !known.includes(n.note_type)) }
+        ].filter(section => section.entries.length);
+        const html = value => Utils.renderMarkdown(value || '');
+        // Ueberschriften als fette Absaetze: der Editor erlaubt keine h-Elemente (sanitizeRichHtml).
+        const body = sections.map(section => `<p><strong>${Utils.esc(section.title)}</strong></p>${section.numbered
+            ? `<ol>${section.entries.map(n => `<li>${html(n.content)}</li>`).join('')}</ol>`
+            : section.entries.map(n => `<div>${html(n.content)}</div>`).join('')}`).join('');
+        const category = (Array.isArray(t.category) ? t.category[0] : t.category) || null;
+        await KbSearch.openEditor({
+            draft: { title: t.title, body, category },
+            sourceTicketId: t.id,
+            onSaved: () => AdminBoard.renderKbLinks(t.id)
+        });
     },
 
     // Ausführung l&auml;uft serverseitig per Timer (jobs/maintenance.ts runRecurringTickets),
@@ -5161,56 +5527,62 @@ export const AdminBoard = {
         return true;
     },
 
+    // Offene Genehmigungen der angemeldeten Person (jede Rolle) -- eigener Endpunkt: er liefert nur,
+    // was fuer die Entscheidung noetig ist, und ob das volle Ticket geoeffnet werden darf.
     openApprovals: async () => {
         if (Store.modules.approvals === false) return;
-        const me = await Store.currentUser();
         const settings = await Store.getSettings();
         const modal = AdminBoard.openDialog({ id: 'approvals-modal', title: Lang.t('approvals'), icon: 'badge-check', size: 'lg', body: '<div id="apr-list"></div>' });
         const render = async () => {
-            const tickets = (await Store.getTickets()).filter(t => (t.approvals || []).some(a => isPendingApprover(a, me.id)));
+            const approvals = await Store.getPendingApprovals();
             const box = modal.querySelector('#apr-list');
-            box.innerHTML = tickets.length ? tickets.map(t => {
-                const a = t.approvals.find(x => isPendingApprover(x, me.id));
-                const fields = Store.getCustomFieldsForCategories(t.category, settings.customFields || {});
-                return `<details class="kb-article apr-row" open data-id="${Utils.esc(t.id)}">
+            box.innerHTML = approvals.length ? approvals.map(a => `
+                <details class="kb-article apr-row" open data-id="${Utils.esc(a.ticket_id)}">
                     <summary>
-                        <strong>${Utils.esc(t.ticketNumber || t.id)} · ${Utils.esc(t.title)}</strong>
-                        <span class="hint">${Lang.format('requestedBy', { name: Utils.esc(a.requestedByName) })}${a.reason ? ' · ' + Utils.esc(a.reason) : ''}</span>
+                        <strong>${Utils.esc(a.ticket_number || a.ticket_id)} · ${Utils.esc(a.title)}</strong>
+                        <span class="hint">${Utils.esc(Lang.format('requestedBy', { name: a.requested_by || '-' }))}${a.requested_at ? ` · ${Utils.esc(Utils.fmtDate(a.requested_at))}` : ''}</span>
                     </summary>
+                    ${a.request_text ? `<div class="approval-request-text"><strong>${Utils.esc(Lang.t('approvalRequestText'))}</strong><p>${Utils.esc(a.request_text)}</p></div>` : ''}
                     <div class="meta-grid">
-                        <div class="meta-item"><strong>${Lang.t('priority')}</strong><span class="meta-value">${Utils.esc(t.prio)}</span></div>
-                        <div class="meta-item"><strong>${Lang.t('category')}</strong><span class="meta-value">${Utils.esc((t.category || []).join(', ') || '-')}</span></div>
+                        <div class="meta-item"><strong>${Lang.t('priority')}</strong><span class="meta-value">${Utils.esc(Lang.prio(a.priority))}</span></div>
+                        <div class="meta-item"><strong>${Lang.t('category')}</strong><span class="meta-value">${Utils.esc(a.category || '-')}</span></div>
+                        <div class="meta-item"><strong>${Lang.t('approvalTicketAuthor')}</strong><span class="meta-value">${Utils.esc(a.author || '-')}</span></div>
                     </div>
                     <h4 class="section-title">${Lang.t('description')}</h4>
-                    <p class="desc-text">${Utils.esc(t.desc || '-')}</p>
-                    ${fields.length ? `<div class="apr-fields"></div>` : ''}
-                    <div class="apr-attachments"></div>
+                    <p class="desc-text">${Utils.esc(a.description || '-')}</p>
+                    <div class="apr-fields"></div>
+                    ${(a.attachments || []).length ? `<div class="file-preview apr-attachments">${a.attachments.map(file => `<button type="button" class="file-chip apr-att" data-id="${Utils.esc(file.id)}" data-name="${Utils.esc(file.name)}" data-size="${Number(file.size) || 0}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('')}</div>` : ''}
                     <div class="field approval-comment"><label>${Lang.t('decisionCommentLabel')}</label><textarea class="apr-comment" rows="3" maxlength="5000" placeholder="${Lang.t('decisionCommentPlaceholder')}"></textarea></div>
+                    ${a.can_open ? '' : `<p class="hint">${Utils.esc(Lang.t('approvalNoTicketAccess'))}</p>`}
                     <div class="aa-actions">
-                        <button class="btn-secondary btn-sm apr-open" type="button">${Icon('external-link', 14)}${Lang.t('openTicket')}</button>
+                        ${a.can_open ? `<button class="btn-secondary btn-sm apr-open" type="button">${Icon('external-link', 14)}${Lang.t('openTicket')}</button>` : ''}
                         <button class="btn-primary btn-sm apr-yes" type="button">${Icon('check', 14)}${Lang.t('approve')}</button>
                         <button class="btn-secondary btn-sm btn-danger apr-no" type="button">${Icon('x', 14)}${Lang.t('decline')}</button>
-                    </div></details>`;
-            }).join('') : `<div class="empty-state compact">${Lang.t('noOpenApprovalsHint')}</div>`;
+                    </div></details>`).join('') : `<div class="empty-state compact">${Lang.t('noOpenApprovalsHint')}</div>`;
             box.querySelectorAll('.apr-row').forEach(row => {
-                const t = tickets.find(x => x.id === row.dataset.id);
-                const fieldsBox = row.querySelector('.apr-fields');
-                if (fieldsBox) UI.renderCustomFieldsDisplay(fieldsBox, Store.getCustomFieldsForCategories(t.category, settings.customFields || {}), t.customFieldValues || {});
-                AdminBoard.renderTicketAttachments(t, row.querySelector('.apr-attachments'));
-                row.querySelector('.apr-open').onclick = async () => {
+                const a = approvals.find(x => x.ticket_id === row.dataset.id);
+                let values = {};
+                try { values = a.custom_fields_json ? JSON.parse(a.custom_fields_json) : {}; } catch { values = {}; }
+                const fields = Store.getCustomFieldsForCategories(a.category ? [a.category] : [], settings.customFields || {});
+                if (fields.length) UI.renderCustomFieldsDisplay(row.querySelector('.apr-fields'), fields, values);
+                row.querySelectorAll('.apr-att').forEach(btn => btn.onclick = () =>
+                    AdminBoard.openAttachmentPreview({ attachmentId: btn.dataset.id, name: btn.dataset.name, size: Number(btn.dataset.size) || 0 }));
+                const open = row.querySelector('.apr-open');
+                if (open) open.onclick = async () => {
                     modal.remove();
-                    await AdminBoard.openTicketForCurrentPage(t.id);
+                    await AdminBoard.openTicketForCurrentPage(a.ticket_id);
                 };
                 const decide = async (status, reason) => {
-                    if (!(await AdminBoard.decideApproval(row.dataset.id, status, reason))) return;
+                    if (!(await AdminBoard.decideApproval(a.ticket_id, status, reason))) return;
+                    UI.toast(Lang.t(status === 'approved' ? 'approvalGrantedToast' : 'approvalDeclinedToast'));
                     await render();
-                    await AdminBoard.render();
+                    if (q('.kanban-board')) await AdminBoard.render();
                 };
                 row.querySelector('.apr-yes').onclick = () => decide('approved', row.querySelector('.apr-comment').value.trim());
                 row.querySelector('.apr-no').onclick = async () => {
                     const reason = row.querySelector('.apr-comment').value.trim();
-                    if (!reason || !reason.trim()) return UI.toast(Lang.t('enterAReason'));
-                    await decide('rejected', reason.trim());
+                    if (!reason) return UI.toast(Lang.t('enterAReason'));
+                    await decide('rejected', reason);
                 };
             });
             if (window.lucide) lucide.createIcons();
@@ -5218,19 +5590,52 @@ export const AdminBoard = {
         await render();
     },
 
-    // Nur Admin/Superadmin dürfen später über /approval-decision entscheiden (serverseitige
-    // Rechteprüfung) -- deshalb werden hier auch nur Admin/Superadmin als Prüfer angeboten.
+    // Genehmigungsverlauf eines Tickets: Anfrage (wer, bei wem, Begruendung) und Entscheidung
+    // (genehmigt/abgelehnt, von wem, Kommentar). Liefert die Eintraege (neueste zuerst).
+    renderApprovalHistory: async (ticket, selector) => {
+        const box = q(selector);
+        if (!box) return [];
+        const history = Store.modules.approvals === false ? [] : await Store.getTicketApprovals(ticket.id);
+        box.hidden = !history.length;
+        const status = {
+            pending: ['approvalStatusPending', 'hourglass'],
+            approved: ['approvalStatusApproved', 'circle-check'],
+            rejected: ['approvalStatusRejected', 'circle-x']
+        };
+        box.innerHTML = history.length ? `
+            <h4 class="section-title">${Icon('badge-check', 15)}${Utils.esc(Lang.t('approvalHistory'))}</h4>
+            <ol class="approval-history-list">${history.map(entry => {
+                const [labelKey, icon] = status[entry.status] || status.pending;
+                return `<li class="approval-entry is-${Utils.esc(entry.status)}">
+                    <div class="approval-entry-head">
+                        <span class="approval-status-pill is-${Utils.esc(entry.status)}">${Icon(icon, 13)}${Utils.esc(Lang.t(labelKey))}</span>
+                        <span class="hint">${Utils.esc(Lang.format('approvalRequestedLine', { by: entry.requested_by || '-', approver: entry.approver || '-', date: Utils.fmtDate(entry.requested_at) }))}</span>
+                    </div>
+                    ${entry.request_text ? `<div class="approval-text"><strong>${Utils.esc(Lang.t('approvalRequestText'))}</strong><p>${Utils.esc(entry.request_text)}</p></div>` : ''}
+                    ${entry.decided_at && entry.status !== 'pending' ? `<p class="hint">${Utils.esc(Lang.format('approvalDecidedLine', { by: entry.decided_by || entry.approver || '-', date: Utils.fmtDate(entry.decided_at) }))}</p>` : ''}
+                    ${entry.decision_text ? `<div class="approval-text"><strong>${Utils.esc(Lang.t('approvalDecisionText'))}</strong><p>${Utils.esc(entry.decision_text)}</p></div>` : ''}
+                </li>`;
+            }).join('')}</ol>` : '';
+        if (window.lucide) lucide.createIcons();
+        return history;
+    },
+
+    // Pruefen darf jedes aktive Konto (auch normale Benutzer, z.B. Vorgesetzte) -- nicht die eigene
+    // Person und nicht das erstellende Konto. Normale Konten sehen dabei nur die Angaben zur
+    // Genehmigung, nicht das ganze Ticket (siehe GET /api/v2/approvals).
     requestApproval: async (t) => {
         const me = await Store.currentUser();
-        const approvers = (await Store.getUsers()).filter(u => u.id !== me.id && u.role !== 'user' && !u.accountArchived);
+        const approvers = (await Store.getUsers())
+            .filter(u => u.id !== me.id && u.id !== t.authorUserId && !u.accountArchived)
+            .sort((a, b) => (a.name || a.username).localeCompare(b.name || b.username, Lang.current === 'en' ? 'en' : 'de'));
         if (!approvers.length) return UI.toast(Lang.t('noOtherApproversAvailable'));
         const modal = AdminBoard.openDialog({
             id: 'approval-request-modal',
             title: Lang.t('requestApprovalTitle'),
             icon: 'badge-check',
             size: 'sm',
-            body: `<div class="field"><label>${Lang.t('approvingPerson')}</label><div id="apr-approver"></div></div>
-                   <div class="field"><label for="apr-note">${Lang.t('noteLabel')}</label><textarea id="apr-note" rows="3" placeholder="${Lang.t('whatShouldBeApprovedPlaceholder')}"></textarea></div>`,
+            body: `<div class="field"><label>${Lang.t('approvingPerson')}</label><div id="apr-approver"></div><p class="hint">${Lang.t('approverAnyAccountHint')}</p></div>
+                   <div class="field"><label for="apr-note">${Lang.t('noteLabel')}</label><textarea id="apr-note" rows="3" maxlength="5000" placeholder="${Lang.t('whatShouldBeApprovedPlaceholder')}"></textarea></div>`,
             onSave: async (m) => {
                 const approverId = approverPicker.getValue();
                 const note = m.querySelector('#apr-note').value.trim();
@@ -5249,11 +5654,12 @@ export const AdminBoard = {
                 await AdminBoard.render();
             }
         });
+        const roleLabel = u => u.role === 'user' ? '' : ` · ${u.role === 'superadmin' ? 'Superadmin' : 'Admin'}`;
         const owner = (await Store.getUsers()).find(u => u.username === t.author);
         const preselect = (owner?.supervisor && approvers.some(u => u.username === owner.supervisor))
             ? approvers.find(u => u.username === owner.supervisor)?.id
-            : (approvers[0]?.id || '');
-        const approverPicker = UI.createMultiSelect(modal.querySelector('#apr-approver'), approvers.map(u => ({ value: u.id, label: u.name || u.username })), preselect, null, { single: true, emptyLabel: Lang.t('pleaseChoose') });
+            : (approvers.find(u => u.id === owner?.supervisorUserId)?.id || '');
+        const approverPicker = UI.createMultiSelect(modal.querySelector('#apr-approver'), approvers.map(u => ({ value: u.id, label: `${u.name || u.username}${roleLabel(u)}` })), preselect, null, { single: true, emptyLabel: Lang.t('pleaseChoose') });
         return modal;
     },
 
@@ -5512,9 +5918,29 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    // Zahl der aktuell (sichtbar) abwesenden Personen -- das Symbol erscheint nur, wenn es welche gibt.
+    refreshAbsenceBadge: async () => {
+        const btn = q('#btn-absence-overview');
+        if (!btn) return [];
+        const absences = await Store.getCurrentAbsences();
+        const label = absences.length ? Lang.format('absentCountLabel', { count: absences.length }) : Lang.t('absencesTitle');
+        btn.hidden = !absences.length;
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+        btn.querySelector('.notification-count').textContent = String(absences.length);
+        return absences;
+    },
+
+    // Aus /absences/overview (fuer alle Admin-Konten lesbar), nicht aus der Benutzerliste: Admins ohne
+    // Benutzerverwaltung bekommen dort nur das Verzeichnis ohne Abwesenheiten.
     openAbsenceOverview: async () => {
-        const users = await Store.getUsers();
-        const absent = users.filter(u => u.absence?.active && u.absence?.visible);
+        const [current, directory] = await Promise.all([AdminBoard.refreshAbsenceBadge(), Store.getUserDirectory().catch(() => [])]);
+        const users = directory;
+        const absent = current.map(a => {
+            const person = directory.find(u => u.id === a.userId);
+            const substitute = directory.find(u => u.id === a.substituteUserId);
+            return { name: person?.name, username: a.username, absence: { fromMs: a.fromMs, untilMs: a.untilMs, visible: true, substitute: substitute?.username || null } };
+        });
         q('#absence-overview-modal')?.remove();
         const modal = AdminBoard.createGenericModal();
         modal.id = 'absence-overview-modal';
@@ -5603,7 +6029,7 @@ export const AdminBoard = {
                             <label for="act-files" class="dropzone" id="act-files-dropzone">
                                 <i data-lucide="upload-cloud"></i>
                                 <span class="dropzone-text"><strong>${Lang.t('dragFilesHere')}</strong> ${Lang.t('orClickToSelect')}</span>
-                                <input id="act-files" type="file" multiple>
+                                <input id="act-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.pptx,.odt,.ods,.odp,.txt,.csv,.log">
                             </label>
                             <div id="act-files-preview" class="file-preview"></div>
                         </div>
@@ -5698,9 +6124,15 @@ export const AdminBoard = {
             if (missingFields.length) return UI.toast(Lang.format('requiredFieldsMissing', { fields: missingFields.join(', ') }));
             const onBehalfUser = users.find(u => u.username === selectedBehalfUsername);
             if (!onBehalfUser) return UI.toast(Lang.t('selectAPerson'));
-            if (AdminBoard.createTicketFiles.some(file => file.size > 500 * 1024 * 1024)) {
-                UI.toast(Lang.t('attachmentsTooLarge'));
-                return;
+            const invalidFiles = [];
+            AdminBoard.createTicketFiles.forEach(file => { try { Store.assertUploadAllowed(file); } catch (error) { invalidFiles.push(Store.uploadErrorMessage(error)); } });
+            if (invalidFiles.length) return UI.toast(invalidFiles.join(' '));
+            const activeIncidents = await Store.getActiveIncidents();
+            let linkedIncidentId = null;
+            if (activeIncidents.length) {
+                const choice = await UI.askIncidentLink(activeIncidents);
+                if (choice === undefined) return;
+                linkedIncidentId = choice;
             }
             const cat = AdminBoard.createTicketCategoryInstance.getValue();
             const category = cat.length ? cat : ['Allgemein'];
@@ -5713,14 +6145,11 @@ export const AdminBoard = {
                 return;
             }
             if (AdminBoard.createTicketFiles.length) {
-                try {
-                    for (const file of AdminBoard.createTicketFiles) await Store.saveAttachment(file, { ticketId: newTicket.id });
-                } catch (error) {
-                    console.error(error);
-                    UI.toast(Lang.t('ticketCreatedAttachmentsFailed'));
-                }
+                const { errors } = await Store.uploadFiles(AdminBoard.createTicketFiles, file => Store.saveAttachment(file, { ticketId: newTicket.id }));
+                if (errors.length) UI.toast(`${Lang.t('ticketCreatedAttachmentsFailed')} ${errors.join(' ')}`);
             }
             Store._ticketsCache = null;
+            if (linkedIncidentId) await AdminBoard.linkTicketToIncident(newTicket.id, linkedIncidentId);
             modal.classList.remove('open');
             UI.toast(Lang.t('ticketCreatedPlain'));
             await AdminBoard.render();
@@ -6264,7 +6693,8 @@ export const AdminBoard = {
             AdminBoard.currentTicketId = id;
             const tickets = await Store.getTickets();
             const t = tickets.find(x => x.id === id) || await Store.getTicketById(id);
-            if (!t) return;
+            // Kein Zugriff (serverseitig gefiltert) oder Ticket geloescht.
+            if (!t) return UI.toast(Lang.t('ticketNotAccessible'));
 
             const user = await Store.currentUser();
             const isSuper = user && user.role === 'superadmin';
@@ -6279,13 +6709,15 @@ export const AdminBoard = {
             AdminBoard.renderIncidentLinkedTickets(t, tickets);
 
             const pendingApproval = (t.approvals || []).find(a => a.status === 'pending');
+            const approvalHistory = await AdminBoard.renderApprovalHistory(t, '#m-approval-history');
             const approvalPendingBox = q('#m-approval-pending');
             if (approvalPendingBox) {
                 approvalPendingBox.hidden = !pendingApproval;
                 const approvalActions = q('#m-approval-actions');
                 if (pendingApproval) {
                     const approverName = await Store.describeApprover(pendingApproval);
-                    q('#m-approval-pending-text').textContent = `Wartet auf Genehmigung durch ${approverName} (seit ${Utils.fmtDate(pendingApproval.requestedAt)})`;
+                    const openRequest = approvalHistory.find(entry => entry.status === 'pending');
+                    q('#m-approval-pending-text').textContent = Lang.format('awaitingApprovalBy', { name: approverName, date: Utils.fmtDate(openRequest?.requested_at || pendingApproval.requestedAt) });
                     // Darf die aktuell angemeldete Person selbst entscheiden, direkt hier Freigeben/Ablehnen anbieten
                     const canDecideHere = user.role === 'superadmin' || isPendingApprover(pendingApproval, user.id);
                     if (approvalActions) approvalActions.hidden = !canDecideHere;
@@ -6311,13 +6743,6 @@ export const AdminBoard = {
                     }
                 } else if (approvalActions) {
                     approvalActions.hidden = true;
-                }
-            }
-            const approvalRejectedBox = q('#m-approval-rejected');
-            if (approvalRejectedBox) {
-                approvalRejectedBox.hidden = !t.rejectedApproval;
-                if (t.rejectedApproval) {
-                    q('#m-approval-rejected-text').textContent = `${t.rejectedApproval.byName || t.rejectedApproval.by} hat diese Anfrage abgelehnt: ${t.rejectedApproval.reason || '-'}`;
                 }
             }
 
@@ -6722,7 +7147,7 @@ export const AdminBoard = {
             return;
         }
         const nameOf = c => c.author_name || c.author_username || '–';
-        const avatar = (c, cls) => `<img class="${cls}" src="${Utils.esc(Utils.avatarUrl(c.author_user_id || c.author_username))}" alt="" aria-hidden="true">`;
+        const avatar = (c, cls) => Utils.avatarImg(c.author_user_id || c.author_username, cls);
         const edited = c => c.edited_at
             ? `<span class="note-edited" title="${Utils.esc(Lang.format('editedAt', { date: Utils.fmtDate(c.edited_at) }))}">${Utils.esc(Lang.t('edited'))}</span>`
             : '';
@@ -6826,16 +7251,10 @@ export const AdminBoard = {
         if (!pan) return;
         pan.innerHTML = '';
         pan.style.display = files.length ? 'flex' : 'none';
-        files.forEach((f, idx) => {
-            const tag = document.createElement('div');
-            tag.className = 'file-chip';
-            tag.innerHTML = `${Icon('paperclip', 13)}<span>${Utils.esc(f.name)}</span><button type="button" class="btn-ghost btn-icon btn-xs btn-danger remove-file" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('x', 13)}</button>`;
-            tag.querySelector('button').onclick = () => {
-                files.splice(idx, 1);
-                AdminBoard.renderNoteFilePreview(channel);
-            };
-            pan.appendChild(tag);
-        });
+        files.forEach((f, idx) => pan.appendChild(AdminBoard.stagedFileChip(f, () => {
+            files.splice(idx, 1);
+            AdminBoard.renderNoteFilePreview(channel);
+        })));
         if (window.lucide) lucide.createIcons();
     },
 
@@ -6914,11 +7333,8 @@ export const AdminBoard = {
             ).catch(() => null);
             if (!res || !res.ok) return UI.toast(Lang.t('saveFailed'));
             const noteId = editId || (await res.json().catch(() => ({}))).note?.id;
-            let failedUploads = 0;
-            for (const file of [...(AdminBoard.noteFiles[channel] || [])]) {
-                try { await Store.saveAttachment(file, { ticketId: id, noteId }); } catch { failedUploads++; }
-            }
-            if (failedUploads) UI.toast(Lang.t('noteAttachmentFailed'));
+            const { errors } = await Store.uploadFiles([...(AdminBoard.noteFiles[channel] || [])], file => Store.saveAttachment(file, { ticketId: id, noteId }));
+            if (errors.length) UI.toast(Lang.format('noteSavedAttachmentsFailed', { details: errors.join(' ') }));
             AdminBoard.resetNoteComposer(channel);
             const t = (await Store.getTickets()).find(x => x.id === id) || await Store.getTicketById(id);
             await AdminBoard.renderInternalComments(t, channel);
@@ -7031,6 +7447,8 @@ export const AdminBoard = {
                 if (event.target === modal) modal.querySelector('[data-close-preview]').click();
             };
         }
+        modal.classList.add('modal-top');
+        document.body.appendChild(modal);
         const name = String(attachment.name || '').toLowerCase();
         const mime = attachment.type || 'application/octet-stream';
         q('#attachment-preview-title').textContent = attachment.name || Lang.t('attachment');
@@ -7177,7 +7595,7 @@ export const AdminBoard = {
         AdminBoard._currentChatMessages = msgs;
 
         if (msgs.length === 0) {
-            box.innerHTML = '<div class="empty-state">Keine Nachrichten</div>';
+            box.innerHTML = `<div class="empty-state">${Utils.esc(Lang.t('noChatMessages'))}</div>`;
             return;
         }
 
@@ -7189,41 +7607,64 @@ export const AdminBoard = {
             const roleClass = ['admin', 'superadmin'].includes(m.sender_role) ? 'from-admin' : m.sender_role === 'user' ? 'from-user' : '';
             el.className = `chat-bubble ${isMe ? 'me' : 'other'} ${roleClass}`.trim();
 
-            const htmlText = Utils.formatRichText(m.content || '');
+            const htmlText = m.content ? Utils.formatRichText(m.content) : '';
+            const files = (m.attachments || []).length
+                ? `<div class="note-files chat-files">${m.attachments.map(file => `<button type="button" class="file-chip chat-att" data-id="${Utils.esc(file.id)}" data-name="${Utils.esc(file.name)}" data-size="${Number(file.size) || 0}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('')}</div>`
+                : '';
 
             el.innerHTML = `
                 <div class="msg-meta">
-                    <span class="msg-author"><img class="msg-avatar" src="${Utils.esc(Utils.avatarUrl(m.sender_user_id || m.sender_username))}" alt="" aria-hidden="true">${Utils.esc(m.sender_name || m.sender_username)}</span>
-                    <span class="msg-meta-actions">${Utils.fmtDate(m.created_at)}${m.edited_at ? `<span class="msg-edited" title="${Utils.esc(Lang.format('editedAt', { date: Utils.fmtDate(m.edited_at) }))}">${Utils.esc(Lang.t('edited'))}</span>` : ''}${isMe && !ticket.archived ? `<button type="button" class="btn-ghost btn-icon btn-xs chat-message-edit" data-message-id="${m.id}" title="Nachricht bearbeiten" aria-label="Nachricht bearbeiten">${Icon('pencil', 12)}</button>` : ''}</span>
+                    <span class="msg-author">${Utils.avatarImg(m.sender_user_id || m.sender_username, 'msg-avatar')}${Utils.esc(m.sender_name || m.sender_username)}</span>
+                    <span class="msg-meta-actions">${Utils.fmtDate(m.created_at)}${m.edited_at ? `<span class="msg-edited" title="${Utils.esc(Lang.format('editedAt', { date: Utils.fmtDate(m.edited_at) }))}">${Utils.esc(Lang.t('edited'))}</span>` : ''}${isMe && !ticket.archived && m.content ? `<button type="button" class="btn-ghost btn-icon btn-xs chat-message-edit" data-message-id="${m.id}" title="${Utils.esc(Lang.t('editOwnMessage'))}" aria-label="${Utils.esc(Lang.t('editOwnMessage'))}">${Icon('pencil', 12)}</button>` : ''}</span>
                 </div>
                 ${htmlText}
+                ${files}
             `;
             box.appendChild(el);
             el.querySelector('.chat-message-edit')?.addEventListener('click', () => AdminBoard.editChatMessage(ticket.id, m.id, containerSelector));
+            el.querySelectorAll('.chat-att').forEach(btn => btn.addEventListener('click', () =>
+                AdminBoard.openAttachmentPreview({ attachmentId: btn.dataset.id, name: btn.dataset.name, size: Number(btn.dataset.size) || 0 })));
         });
         box.scrollTop = box.scrollHeight;
         if (window.lucide) lucide.createIcons();
     },
 
     // Sendet direkt über /api/v2/tickets/:id/messages -- Benachrichtigung an die jeweils andere
-    // Seite erzeugt der Server dabei automatisch (siehe tickets.ts). Dateianhänge im Chat sind
-    // in dieser Umstellung noch nicht angebunden (siehe README "Daten Und Funktionen").
+    // Seite erzeugt der Server dabei automatisch (siehe tickets.ts). Ausgewählte Dateien werden
+    // danach mit der message_id hochgeladen; eine Nachricht darf auch nur aus Anhängen bestehen.
     postChat: async (role) => {
         const id = AdminBoard.currentTicketId || UserDash.currentTicketId;
         const prefix = (role === 'admin') ? '#m' : '#u';
         const txtInput = q(`${prefix}-chat-input`);
         const txt = txtInput.value.trim();
-        if (!txt) return;
+        const files = [...(role === 'admin' ? AdminBoard.selectedFiles : UserDash.selectedFiles)];
+        if (!txt && !files.length) return txtInput.focus();
+        // Unpassende Dateien sofort mit Grund melden, bevor eine Nachricht entsteht.
+        const invalid = [];
+        files.forEach(file => { try { Store.assertUploadAllowed(file); } catch (error) { invalid.push(Store.uploadErrorMessage(error)); } });
+        if (invalid.length) return UI.toast(invalid.join(' '));
 
-        const res = await fetch(`/api/v2/tickets/${encodeURIComponent(id)}/messages`, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ content: txt })
-        }).catch(() => null);
-        if (!res || !res.ok) {
-            UI.toast('Nachricht konnte nicht gesendet werden.');
-            return;
+        const sendButton = q(role === 'admin' ? '#btn-chat-send' : '#u-chat-send');
+        if (sendButton?.disabled) return;
+        if (sendButton) sendButton.disabled = true;
+        let errors = [];
+        try {
+            const res = await fetch(`/api/v2/tickets/${encodeURIComponent(id)}/messages`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ content: txt, ...(files.length ? { has_attachments: true } : {}) })
+            }).catch(() => null);
+            if (!res || !res.ok) {
+                UI.toast(Lang.t('chatSendFailed'));
+                return;
+            }
+            const messageId = (await res.json().catch(() => ({}))).message?.id;
+            ({ errors } = await Store.uploadFiles(files, file => Store.saveAttachment(file, { ticketId: id, messageId })));
+            if (role === 'admin') { AdminBoard.selectedFiles = []; AdminBoard.renderFilePreview(); }
+            else { UserDash.selectedFiles = []; UserDash.renderFilePreview(); }
+        } finally {
+            if (sendButton) sendButton.disabled = false;
         }
 
         // Statuswechsel nach einer Benutzerantwort erfolgt zusammen mit der Nachricht auf dem Server.
@@ -7241,68 +7682,10 @@ export const AdminBoard = {
         } else {
             await UserDash.openModal(id);
         }
-        UI.toast('Nachricht gesendet');
+        UI.toast(errors.length ? Lang.format('chatAttachmentsPartlyFailed', { details: errors.join(' ') }) : Lang.t('chatSent'));
     },
 
-    openApproveModal: async (req) => {
-        const currentUser = await Store.currentUser();
-        const isSuper = currentUser && currentUser.role === 'superadmin';
-
-        AdminBoard.currentReq = req;
-        q('#a-name-disp').textContent = req.name;
-        q('#a-username').value = req.name.toLowerCase().replace(/\s+/g, '');
-        q('#a-password').value = await Store.generatePassword();
-        UI.bindPasswordRequirements(q('#a-password'));
-        q('#approve-modal').classList.add('open');
-
-        // Permissions check: only superadmins can set role/dept
-        const roleField = q('#a-role')?.parentElement;
-        const deptField = q('#a-dept-field');
-
-        q('#a-role').value = 'user';
-        q('#approve-modal .modal').classList.remove('approval-admin-mode');
-        let permissions = q('#a-permissions');
-        if (!permissions) {
-            permissions = document.createElement('div'); permissions.id = 'a-permissions';
-            permissions.innerHTML = `<label>${Lang.t('adminRights')}</label><div class="perm-grid">${[
-                ['canManageRequests', Lang.t('manageAccountRequests')], ['canManageUsers', Lang.t('userManagementUsersOnly')],
-                ['canViewLogs', Lang.t('viewSystemLogs')], ['canManage2FA', Lang.t('reset2FA')],
-                ['textBlocks', Lang.t('manageTextBlocks')], ['reports', Lang.t('viewReports')],
-                ['approvals', Lang.t('decideApprovals')], ['recurring', Lang.t('manageRecurringTickets')]
-            ].map(([key, label]) => `<label class="check-row"><input type="checkbox" data-permission="${key}"><span>${label}</span></label>`).join('')}</div>
-            <label for="a-kb">${Lang.t('knowledgeBase')}</label><select id="a-kb"><option value="none">${Lang.t('noAccess')}</option><option value="read">${Lang.t('readOnly')}</option><option value="edit">${Lang.t('readAndEdit')}</option></select>`;
-            q('#a-dept-field').after(permissions);
-        }
-        permissions.hidden = true;
-        permissions.querySelectorAll('input').forEach(box => { box.checked = false; });
-        q('#a-kb').value = 'none';
-        q('#a-role').onchange = () => {
-            const show = isSuper && q('#a-role').value === 'admin';
-            permissions.hidden = !show;
-            q('#approve-modal .modal').classList.toggle('approval-admin-mode', show);
-            if (deptField) deptField.style.display = show ? '' : 'none';
-        };
-        if (deptField) deptField.style.display = 'none';
-
-        if (roleField) roleField.style.display = isSuper ? 'block' : 'none';
-        // deptField display is handled by onchange in ApproveModal listeners usually,
-        // but here we just hide the whole capability for non-supers
-
-        q('#a-confirm').onclick = AdminBoard.confirmApprove;
-        q('#a-close').onclick = AdminBoard.closeApprove;
-
-        // Listen for Enter key in inputs
-        const inputs = [q('#a-username'), q('#a-password')];
-        inputs.forEach(i => {
-            i.onkeydown = (e) => {
-                if (e.key === 'Enter') AdminBoard.confirmApprove();
-            };
-        });
-    },
-    closeApprove: () => {
-        q('#approve-modal').classList.remove('open');
-        AdminBoard.currentReq = null;
-    },
+    openApproveModal: async (req) => AdminBoard.openUserWizard({ request: req, viewContext: 'users' }),
     // Ueber den Server-Export statt im Browser: jeder Export landet im Systemprotokoll und der
     // Server neutralisiert Formel-Zellen zentral.
     exportUsersCSV: async () => {
@@ -7388,53 +7771,5 @@ export const AdminBoard = {
         } else {
             UI.toast(Lang.format('noNewUsersImportedDuplicates', { count: skippedCount }));
         }
-    },
-
-    confirmApprove: async () => {
-        if (!AdminBoard.currentReq) return;
-        const currentUser = await Store.currentUser();
-        const isSuper = currentUser && currentUser.role === 'superadmin';
-
-        const username = q('#a-username').value.trim();
-        const password = q('#a-password').value.trim();
-        const role = isSuper ? q('#a-role').value : 'user'; // Enforce 'user' if not super
-        const dept = q('#a-dept').value;
-
-        if (!username || !password) {
-            UI.toast(Lang.t('fillFields'));
-            return;
-        }
-        if (password.length < 14) {
-            UI.toast(Lang.t('passwordMinLength'));
-            return;
-        }
-
-        const users = await Store.getUsers();
-        if (users.find(u => u.username === username)) {
-            UI.toast('Benutzername existiert bereits');
-            return;
-        }
-
-        const newUser = {
-            id: Utils.uid(),
-            username,
-            password,
-            name: AdminBoard.currentReq.name,
-            email: AdminBoard.currentReq.email,
-            role: role
-        };
-
-        if (isSuper && role === 'admin') {
-            newUser.department = dept;
-            newUser.permissions = { ...Object.fromEntries([...q('#a-permissions').querySelectorAll('[data-permission]')].map(b => [b.dataset.permission, b.checked])), kb: q('#a-kb').value };
-        }
-
-        users.push(newUser);
-        if (!await Store.saveUsers(users)) return UI.toast(Store.lastError || 'Benutzer konnte nicht erstellt werden.');
-        if (!await Store.decideAccountRequest(AdminBoard.currentReq.id, 'approved')) return UI.toast('Benutzer erstellt; Kontoanfrage konnte nicht aktualisiert werden.');
-
-        AdminBoard.closeApprove();
-        await AdminBoard.renderRequests();
-        UI.toast('Benutzer erfolgreich erstellt!');
     }
 };

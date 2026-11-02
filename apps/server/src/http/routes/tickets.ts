@@ -20,6 +20,8 @@ import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
 import { loadModules, maskTicketModules, modulesFromConfig, requireModule } from '../../domain/modules.js';
 import { groupWithDescendants } from '../../domain/groups.js';
+import { canAccessTicket, loadTicketScope, scopeAllowsTicket } from '../../domain/ticketAccess.js';
+import { approverCandidates } from '../../domain/approvalRouting.js';
 import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
 import { mysqlTimestamp } from '../../db/date.js';
@@ -197,9 +199,11 @@ const updateTicketSchema = z.object({
 });
 
 const sendMessageSchema = z.object({
-  content: z.string().trim().min(1).max(50000),
-  content_html: z.string().max(200000).optional()
-});
+  content: z.string().trim().max(50000),
+  content_html: z.string().max(200000).optional(),
+  // Anhaenge werden direkt danach mit message_id hochgeladen (POST /api/v2/attachments bzw. /uploads).
+  has_attachments: z.boolean().optional()
+}).refine(value => value.content.length > 0 || value.has_attachments === true);
 
 const addNoteSchema = z.object({
   content: z.string().trim().min(1).max(50000),
@@ -403,6 +407,30 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     return names;
   }
 
+  // Anhaenge eines Tickets gruppiert nach Chat-Nachricht bzw. interner Notiz (nur Metadaten).
+  async function attachmentsByParent(ticketId: string, parent: 'message_id' | 'note_id') {
+    const rows = await app.db.selectFrom('attachments')
+      .select(['id', 'message_id', 'note_id', 'filename', 'mime_type', 'size_bytes'])
+      .where('ticket_id', '=', ticketId).where(parent, 'is not', null).orderBy('created_at', 'asc').execute();
+    const grouped = new Map<string, Array<{ id: string; name: string; type: string; size: number }>>();
+    if (!rows.length) return grouped;
+    const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
+    for (const att of rows) {
+      let name = 'Anhang';
+      try {
+        name = fieldCipher.decryptField(att.filename, filenameDek.rawDek, {
+          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+          tableName: 'attachments', recordId: att.id, fieldName: 'filename', keyVersion: filenameDek.keyVersion
+        });
+      } catch { /* Name nicht entschluesselbar: Anhang bleibt mit neutralem Namen erreichbar. */ }
+      const key = att[parent]!;
+      const list = grouped.get(key) ?? [];
+      list.push({ id: att.id, name, type: att.mime_type, size: Number(att.size_bytes) });
+      grouped.set(key, list);
+    }
+    return grouped;
+  }
+
   app.get('/api/v2/tickets', async (req, reply) => {
     try {
       const session = requireSession(req);
@@ -451,7 +479,14 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           eb.selectFrom('users')
             .select('account_archived')
             .whereRef('users.id', '=', 'tickets.created_by_user_id')
-            .as('author_archived')
+            .as('author_archived'),
+          eb.selectFrom('ticket_approvals')
+            .select('requested_at')
+            .whereRef('ticket_approvals.ticket_id', '=', 'tickets.id')
+            .where('ticket_approvals.status', '=', 'pending')
+            .orderBy('requested_at', 'desc')
+            .limit(1)
+            .as('approval_requested_at')
         ])
         .where('archived_at', 'is', null);
 
@@ -460,7 +495,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         query = query.where('created_by_user_id', '=', session.uid);
       }
 
-      const rows = await query.orderBy('created_at', 'desc').execute();
+      const scope = session.role === 'admin' ? await loadTicketScope(app.db, session) : null;
+      const rows = (await query.orderBy('created_at', 'desc').execute()).filter(row => !scope || scopeAllowsTicket(scope, row));
       const deks = await loadTicketDeks(app, deps.keyProvider);
       const tickets = rows.map(row => ({
         ...row,
@@ -469,7 +505,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         incident_notice: row.incident_notice
           ? decryptTicketField(row.incident_notice, deks.incidentNotice, deps, row.id, 'incident_notice')
           : null,
-        approval_text: row.approval_text
+        approval_text: isAdmin && row.approval_text
           ? decryptTicketFieldTolerant(row.approval_text, deks.approvalText, deps, row.id, 'approval_text')
           : null,
         waiting_message: row.waiting_message
@@ -494,10 +530,11 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         .where('archived_at', 'is not', null)
         .orderBy('archived_at', 'desc');
       if (!isAdmin) query = query.where('created_by_user_id', '=', session.uid);
-      const rows = await query.execute();
+      const scope = session.role === 'admin' ? await loadTicketScope(app.db, session) : null;
+      const rows = (await query.execute()).filter(row => !scope || scopeAllowsTicket(scope, row));
       const deks = await loadTicketDeks(app, deps.keyProvider);
       const modules = await loadModules(app.db);
-      const tickets = rows.map(row => maskTicketModules(decryptTicketRow(row, deks, deps), modules));
+      const tickets = rows.map(row => maskTicketModules({ ...decryptTicketRow(row, deks, deps), ...(isAdmin ? {} : { approval_text: null }) }, modules));
       return reply.send({ tickets });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -664,31 +701,43 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         const wf = config.approvalWorkflow;
         if (modulesFromConfig(config).approvals && wf?.enabled && (wf.priorities || []).includes(parsed.data.priority)) {
           const creator = await app.db.selectFrom('users').select('supervisor_user_id').where('id', '=', session.uid).executeTakeFirst();
-          let approverId: string | null = creator?.supervisor_user_id ?? null;
-          if (!approverId && wf.fallbackApproverUserId) approverId = wf.fallbackApproverUserId;
-          if (!approverId) {
-            const fallbackSuperadmin = await app.db.selectFrom('users').select('id')
-              .where('role', '=', 'superadmin').where('id', '!=', session.uid).executeTakeFirst();
-            approverId = fallbackSuperadmin?.id ?? null;
+          // Vorgesetzte Person, Ersatzperson der Kategorie bzw. Gruppe, allgemeine Ersatzperson
+          // (domain/approvalRouting.ts) -- die erste davon mit aktivem Konto, sonst eine Superadmin-Person.
+          const [memberships, groupRows] = await Promise.all([
+            app.db.selectFrom('user_groups').select('group_id').where('user_id', '=', session.uid).execute(),
+            app.db.selectFrom('groups').select(['id', 'parent_id']).execute()
+          ]);
+          const candidates = approverCandidates({
+            supervisorId: creator?.supervisor_user_id, rules: wf.fallbackRules, category: parsed.data.category ?? null,
+            creatorGroupIds: memberships.map(row => row.group_id), groups: groupRows, globalFallbackId: wf.fallbackApproverUserId
+          });
+          let approver: { id: string; username: string } | undefined;
+          for (const candidateId of candidates) {
+            if (candidateId === session.uid) continue;
+            approver = await app.db.selectFrom('users').select(['id', 'username'])
+              .where('id', '=', candidateId).where('account_archived', '=', false).executeTakeFirst();
+            if (approver) break;
           }
-          if (approverId && approverId !== session.uid) {
-            const approver = await app.db.selectFrom('users').select(['id', 'username']).where('id', '=', approverId).executeTakeFirst();
-            if (approver) {
-              await app.db.updateTable('tickets').set({
-                approval_status: 'pending', approval_requested_by: session.username, approval_reviewer_id: approver.id,
-                updated_at: mysqlTimestamp()
-              }).where('id', '=', newId).execute();
-              await app.db.insertInto('ticket_audit_log').values({
-                id: randomUUID(), ticket_id: newId, actor_user_id: session.uid, actor_username: session.username,
-                action: 'approval_requested', field: 'approval_status', old_value: null, new_value: `pending (Prüfer: ${approver.username})`
-              }).execute();
-              await createNotification(app, deps, {
-                recipientUserId: approver.id, recipientUsername: approver.username, type: 'approvalRequested',
-                ticketId: newId, ticketNumber: null,
-                message: `${session.username} hat ein Ticket mit Priorität ${parsed.data.priority} angelegt – bitte genehmigen.`
-              });
-              approvalRequested = true;
-            }
+          if (!approver) {
+            approver = await app.db.selectFrom('users').select(['id', 'username'])
+              .where('role', '=', 'superadmin').where('id', '!=', session.uid).where('account_archived', '=', false).executeTakeFirst();
+          }
+          if (approver) {
+            await app.db.updateTable('tickets').set({
+              approval_status: 'pending', approval_requested_by: session.username, approval_reviewer_id: approver.id,
+              updated_at: mysqlTimestamp()
+            }).where('id', '=', newId).execute();
+            await app.db.insertInto('ticket_audit_log').values({
+              id: randomUUID(), ticket_id: newId, actor_user_id: session.uid, actor_username: session.username,
+              action: 'approval_requested', field: 'approval_status', old_value: null, new_value: `pending (Prüfer: ${approver.username})`
+            }).execute();
+            await recordApprovalRequest(newId, { uid: session.uid, username: session.username }, approver);
+            await createNotification(app, deps, {
+              recipientUserId: approver.id, recipientUsername: approver.username, type: 'approvalRequested',
+              ticketId: newId, ticketNumber: null,
+              message: `${session.username} hat ein Ticket mit Priorität ${parsed.data.priority} angelegt – bitte genehmigen.`
+            });
+            approvalRequested = true;
           }
         }
       }
@@ -734,7 +783,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         ? await app.db.selectFrom('users').select('account_archived').where('id', '=', ticket.created_by_user_id).executeTakeFirst()
         : undefined;
       const modules = await loadModules(app.db);
-      return reply.send({ ticket: maskTicketModules({ ...decryptTicketRow(ticket, deks, deps), author_archived: authorRow?.account_archived ?? false }, modules) });
+      return reply.send({ ticket: maskTicketModules({ ...decryptTicketRow(ticket, deks, deps), ...(isAdmin ? {} : { approval_text: null }), author_archived: authorRow?.account_archived ?? false }, modules) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -945,8 +994,10 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         .selectAll().where('ticket_id', '=', id).orderBy('created_at', 'asc').execute();
       const msgDeks = await loadMessageDeks(app, deps.keyProvider);
       const names = await displayNames(rows.map(row => row.sender_user_id));
+      const byMessage = await attachmentsByParent(id, 'message_id');
       const messages = rows.map(row => ({ ...decryptMessage(row, msgDeks, deps),
-        sender_name: (row.sender_user_id && names.get(row.sender_user_id)) || row.sender_username }));
+        sender_name: (row.sender_user_id && names.get(row.sender_user_id)) || row.sender_username,
+        attachments: byMessage.get(row.id) ?? [] }));
       return reply.send({ messages });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -983,7 +1034,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           sender_role: session.role,
           content: encrypted.content,
           content_html: encrypted.content_html,
-          has_attachments: false
+          has_attachments: parsed.data.has_attachments === true
         }).execute();
 
         // Resolve the pending request without granting users general status-edit rights.
@@ -1066,25 +1117,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const noteDek = await loadNoteDek(app, deps.keyProvider);
       const notes = rows.map(row => decryptNote(row, noteDek, deps));
       // Anhaenge interner Notizen (nur Metadaten; Inhalt wie ueblich ueber /api/v2/attachments/:id).
-      const attachmentRows = await app.db.selectFrom('attachments')
-        .select(['id', 'note_id', 'filename', 'mime_type', 'size_bytes'])
-        .where('ticket_id', '=', id).where('note_id', 'is not', null).orderBy('created_at', 'asc').execute();
-      const byNote = new Map<string, Array<{ id: string; name: string; type: string; size: number }>>();
-      if (attachmentRows.length) {
-        const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
-        for (const att of attachmentRows) {
-          let name = 'Anhang';
-          try {
-            name = fieldCipher.decryptField(att.filename, filenameDek.rawDek, {
-              installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-              tableName: 'attachments', recordId: att.id, fieldName: 'filename', keyVersion: filenameDek.keyVersion
-            });
-          } catch { /* Name nicht entschluesselbar: Anhang bleibt mit neutralem Namen erreichbar. */ }
-          const list = byNote.get(att.note_id!) ?? [];
-          list.push({ id: att.id, name, type: att.mime_type, size: Number(att.size_bytes) });
-          byNote.set(att.note_id!, list);
-        }
-      }
+      const byNote = await attachmentsByParent(id, 'note_id');
       const names = await displayNames(rows.map(row => row.author_user_id));
       return reply.send({ notes: notes.map(note => ({ ...note, author_name: (note.author_user_id && names.get(note.author_user_id)) || note.author_username,
         attachments: byNote.get(note.id) ?? [] })) });
@@ -1183,7 +1216,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   // GET /api/v2/tickets/:id/attachments - Liste der Anhänge eines Tickets (nur Metadaten,
   // ohne data_b64 -- der eigentliche Inhalt wird erst bei Bedarf über GET /api/v2/attachments/:id
   // geladen, siehe extras.ts). Nur reine Ticket-Anhänge (message_id/note_id sind null); Chat-/
-  // Notiz-Anhänge sind in der Oberfläche noch nicht angebunden.
+  // Notiz-Anhänge kommen mit der jeweiligen Nachricht bzw. Notiz.
   app.get('/api/v2/tickets/:id/attachments', async (req, reply) => {
     try {
       const session = requireSession(req);
@@ -1232,13 +1265,15 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     try {
       requireSession(req);
       const rows = await app.db.selectFrom('tickets')
-        .select(['id', 'ticket_number', 'title'])
+        .select(['id', 'ticket_number', 'title', 'incident_notice'])
         .where('type', '=', 'incident')
         .where('archived_at', 'is', null)
         .where('status', '!=', 'Geschlossen')
         .execute();
       const deks = await loadTicketDeks(app, deps.keyProvider);
-      const incidents = rows.map(row => ({ ...row, title: decryptTicketField(row.title, deks.title, deps, row.id, 'title') }));
+      const incidents = rows.map(row => ({ id: row.id, ticket_number: row.ticket_number,
+        title: decryptTicketField(row.title, deks.title, deps, row.id, 'title'),
+        incident_notice: row.incident_notice ? decryptTicketField(row.incident_notice, deks.incidentNotice, deps, row.id, 'incident_notice') : null }));
       return reply.send({ incidents });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -1275,8 +1310,58 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   });
 
   // --- Genehmigungen ---
+  // Verlauf in ticket_approvals (Migration 0063): Anfrage und Entscheidung bleiben am Ticket
+  // sichtbar. tickets.approval_* haelt weiterhin den aktuellen Stand (Board-Kennzeichnung, Sperren).
 
-  // POST /api/v2/tickets/:id/request-approval (nur Admin)
+  const approvalTextCtx = (approvalId: string, field: 'request_text' | 'decision_text', keyVersion: number) => ({
+    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+    tableName: 'ticket_approvals', recordId: approvalId, fieldName: field, keyVersion
+  });
+  async function encryptApprovalText(approvalId: string, field: 'request_text' | 'decision_text', value: string | undefined) {
+    if (!value) return null;
+    const dek = await ensureDek(app.db, deps.keyProvider, `ticket_approvals.${field}`);
+    return fieldCipher.encryptField(value, dek.rawDek, approvalTextCtx(approvalId, field, dek.keyVersion));
+  }
+  async function decryptApprovalText(approvalId: string, field: 'request_text' | 'decision_text', value: Buffer | null) {
+    if (!value) return null;
+    try {
+      const dek = await ensureDek(app.db, deps.keyProvider, `ticket_approvals.${field}`);
+      return fieldCipher.decryptField(value, dek.rawDek, approvalTextCtx(approvalId, field, dek.keyVersion));
+    } catch { return null; }
+  }
+  // Neue Anfrage: eine noch offene Anfrage desselben Tickets gilt als ersetzt.
+  async function recordApprovalRequest(ticketId: string, requester: { uid: string | null; username: string | null },
+    approver: { id: string; username: string }, text?: string) {
+    await app.db.updateTable('ticket_approvals').set({ status: 'superseded', decided_at: mysqlTimestamp() })
+      .where('ticket_id', '=', ticketId).where('status', '=', 'pending').execute();
+    const approvalId = randomUUID();
+    await app.db.insertInto('ticket_approvals').values({
+      id: approvalId, ticket_id: ticketId, requested_by_user_id: requester.uid, requested_by_username: requester.username,
+      approver_user_id: approver.id, approver_username: approver.username,
+      request_text_enc: await encryptApprovalText(approvalId, 'request_text', text)
+    }).execute();
+  }
+  // Direkte Anhaenge eines Tickets (nicht aus Chat oder interner Kommunikation), nur Metadaten.
+  async function directAttachments(ticketId: string) {
+    const rows = await app.db.selectFrom('attachments').select(['id', 'filename', 'mime_type', 'size_bytes'])
+      .where('ticket_id', '=', ticketId).where('message_id', 'is', null).where('note_id', 'is', null)
+      .orderBy('created_at', 'asc').execute();
+    if (!rows.length) return [];
+    const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
+    return rows.map(att => {
+      let name = 'Anhang';
+      try {
+        name = fieldCipher.decryptField(att.filename, filenameDek.rawDek, {
+          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+          tableName: 'attachments', recordId: att.id, fieldName: 'filename', keyVersion: filenameDek.keyVersion
+        });
+      } catch { /* Name nicht entschluesselbar: Anhang bleibt mit neutralem Namen erreichbar. */ }
+      return { id: att.id, name, type: att.mime_type, size: Number(att.size_bytes) };
+    });
+  }
+
+  // POST /api/v2/tickets/:id/request-approval (Admin mit Recht "Genehmigungen")
+  // Pruefen darf jedes aktive Konto, auch normale Benutzer (z.B. Vorgesetzte ohne Admin-Rolle).
   app.post('/api/v2/tickets/:id/request-approval', async (req, reply) => {
     try {
       const session = requireAdmin(req);
@@ -1291,13 +1376,17 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (parsed.data.approver_user_id === session.uid) {
         return reply.code(400).send({ error: 'approver_must_not_be_self' });
       }
-      const ticketForApproval = await app.db.selectFrom('tickets').select(['created_by_user_id']).where('id', '=', id).executeTakeFirst();
-      if (ticketForApproval?.created_by_user_id && ticketForApproval.created_by_user_id === parsed.data.approver_user_id) {
+      const ticketForApproval = await app.db.selectFrom('tickets').select(['ticket_number', 'created_by_user_id', 'archived_at'])
+        .where('id', '=', id).executeTakeFirst();
+      if (!ticketForApproval) return reply.code(404).send({ error: 'not_found' });
+      if (ticketForApproval.archived_at) return reply.code(409).send({ error: 'ticket_archived' });
+      if (ticketForApproval.created_by_user_id && ticketForApproval.created_by_user_id === parsed.data.approver_user_id) {
         return reply.code(400).send({ error: 'approver_must_not_be_requester' });
       }
 
-      const approver = await app.db.selectFrom('users').select(['username']).where('id', '=', parsed.data.approver_user_id).executeTakeFirst();
-      if (!approver) return reply.code(400).send({ error: 'invalid_body' });
+      const approver = await app.db.selectFrom('users').select(['id', 'username', 'account_archived'])
+        .where('id', '=', parsed.data.approver_user_id).executeTakeFirst();
+      if (!approver || approver.account_archived) return reply.code(400).send({ error: 'invalid_approver' });
 
       // Security-Audit N10: approval_text jetzt verschlüsselt wie title/description.
       const approvalDeks = await loadTicketDeks(app, deps.keyProvider);
@@ -1308,10 +1397,11 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       await app.db.updateTable('tickets').set({
         approval_status: 'pending',
         approval_requested_by: session.username,
-        approval_reviewer_id: parsed.data.approver_user_id,
+        approval_reviewer_id: approver.id,
         approval_text: approvalTextEnc,
         updated_at: mysqlTimestamp()
       }).where('id', '=', id).execute();
+      await recordApprovalRequest(id, { uid: session.uid, username: session.username }, approver, parsed.data.text);
 
       // Security-Audit R-13: approval_text ist in tickets.approval_text verschlüsselt (N10) --
       // der Genehmigungsgrund darf deshalb nicht zusätzlich im Klartext im Audit-Log landen, das
@@ -1323,14 +1413,15 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         new_value: `pending (Prüfer: ${approver.username}${parsed.data.text ? ', mit Begründung' : ''})`
       }).execute();
 
-      const ticketRow = await app.db.selectFrom('tickets').select(['ticket_number']).where('id', '=', id).executeTakeFirst();
+      // Der Text steht nicht in der Benachrichtigung (sie landet auch per E-Mail), sondern nur in
+      // der Genehmigungsansicht.
       await createNotification(app, deps, {
-        recipientUserId: parsed.data.approver_user_id,
+        recipientUserId: approver.id,
         recipientUsername: approver.username,
         type: 'approvalRequested',
         ticketId: id,
-        ticketNumber: ticketRow?.ticket_number ?? null,
-        message: `${session.username} bittet dich um eine Genehmigung für Ticket ${ticketRow?.ticket_number ?? ''}${parsed.data.text ? ': ' + parsed.data.text : ''}`
+        ticketNumber: ticketForApproval.ticket_number ?? null,
+        message: `${session.username} bittet dich um eine Genehmigung für Ticket ${ticketForApproval.ticket_number ?? ''}`
       });
       return reply.send({ success: true });
     } catch (e: any) {
@@ -1338,18 +1429,19 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     }
   });
 
-  // POST /api/v2/tickets/:id/approval-decision - nur die als Prüfer eingetragene Person
-  // (oder Admin/Superadmin als Vertretung) darf entscheiden -- IDOR-Schutz auf Genehmiger-Ebene.
+  // POST /api/v2/tickets/:id/approval-decision - nur die als Prüfer eingetragene Person (jede
+  // Rolle) oder Superadmin als Vertretung -- IDOR-Schutz auf Genehmiger-Ebene.
   app.post('/api/v2/tickets/:id/approval-decision', async (req, reply) => {
     try {
-      const session = requireAdmin(req);
+      const session = requireSession(req);
       if (!(await loadModules(app.db)).approvals) return reply.code(403).send({ error: 'module_disabled' });
       const { id } = req.params as { id: string };
       const parsed = decideApprovalSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      if (parsed.data.decision === 'rejected' && !parsed.data.reason) return reply.code(400).send({ error: 'reason_required' });
 
       const ticket = await app.db.selectFrom('tickets')
-        .select(['approval_reviewer_id', 'approval_status', 'approval_requested_by', 'ticket_number', 'created_by_user_id'])
+        .select(['approval_reviewer_id', 'approval_status', 'approval_requested_by', 'ticket_number', 'created_by_user_id', 'created_by_username'])
         .where('id', '=', id).executeTakeFirst();
       if (!ticket || ticket.approval_status !== 'pending') return reply.code(409).send({ error: 'no_pending_approval' });
       if (session.role !== 'superadmin' && ticket.approval_reviewer_id !== session.uid) {
@@ -1368,6 +1460,15 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         updated_at: mysqlTimestamp()
       }).where('id', '=', id).execute();
 
+      const pending = await app.db.selectFrom('ticket_approvals').select(['id', 'requested_by_user_id', 'requested_by_username'])
+        .where('ticket_id', '=', id).where('status', '=', 'pending').orderBy('requested_at', 'desc').executeTakeFirst();
+      if (pending) {
+        await app.db.updateTable('ticket_approvals').set({
+          status: parsed.data.decision, decided_by_user_id: session.uid, decided_by_username: session.username,
+          decision_text_enc: await encryptApprovalText(pending.id, 'decision_text', parsed.data.reason), decided_at: mysqlTimestamp()
+        }).where('id', '=', pending.id).execute();
+      }
+
       // Security-Audit R-13: wie bei approval_requested oben -- die Begründung der Entscheidung
       // darf nicht zusätzlich zur verschlüsselten Spalte im Klartext im Audit-Log stehen.
       await app.db.insertInto('ticket_audit_log').values({
@@ -1376,17 +1477,102 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         new_value: parsed.data.reason ? `${parsed.data.decision} (mit Begründung)` : parsed.data.decision
       }).execute();
 
-      if (ticket.approval_requested_by) {
+      // Benachrichtigt werden das erstellende Konto und, falls abweichend, die anfragende Person.
+      const message = `Genehmigung für Ticket ${ticket.ticket_number} ${parsed.data.decision === 'approved' ? 'erteilt' : 'abgelehnt'}`;
+      const recipients = new Map<string, string | null>();
+      if (ticket.created_by_user_id) recipients.set(ticket.created_by_user_id, ticket.created_by_username);
+      if (pending?.requested_by_user_id) recipients.set(pending.requested_by_user_id, pending.requested_by_username);
+      recipients.delete(session.uid);
+      for (const [recipientUserId, recipientUsername] of recipients) {
         await createNotification(app, deps, {
-          recipientUserId: ticket.created_by_user_id,
-          recipientUsername: ticket.approval_requested_by,
-          type: 'approvalDecided',
-          ticketId: id,
-          ticketNumber: ticket.ticket_number,
-          message: `Genehmigung für Ticket ${ticket.ticket_number} ${parsed.data.decision === 'approved' ? 'erteilt' : 'abgelehnt'}${parsed.data.reason ? ': ' + parsed.data.reason.slice(0, 1500) : ''}`
+          recipientUserId, recipientUsername: recipientUsername ?? undefined, type: 'approvalDecided',
+          ticketId: id, ticketNumber: ticket.ticket_number, message
         });
       }
       return reply.send({ success: true });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // GET /api/v2/approvals - offene Genehmigungen der angemeldeten Person (jede Rolle). Liefert nur,
+  // was fuer die Entscheidung noetig ist: Ticketkopf, Zusatzfelder, Anfrage und direkte Anhaenge --
+  // keinen Chat, keine interne Kommunikation, keine verwandten Tickets.
+  app.get('/api/v2/approvals', async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      if (!(await loadModules(app.db)).approvals) return reply.send({ approvals: [] });
+      const rows = await app.db.selectFrom('tickets')
+        .select(['id', 'ticket_number', 'title', 'description', 'priority', 'category', 'status', 'created_by_user_id', 'created_by_username',
+          'assigned_to_user_id', 'assigned_group_id', 'custom_fields_json', 'created_at'])
+        .where('approval_status', '=', 'pending').where('approval_reviewer_id', '=', session.uid).where('archived_at', 'is', null)
+        .orderBy('created_at', 'asc').execute();
+      if (!rows.length) return reply.send({ approvals: [] });
+      const deks = await loadTicketDeks(app, deps.keyProvider);
+      const requests = await app.db.selectFrom('ticket_approvals')
+        .select(['id', 'ticket_id', 'requested_by_user_id', 'requested_by_username', 'request_text_enc', 'requested_at'])
+        .where('ticket_id', 'in', rows.map(row => row.id)).where('status', '=', 'pending').execute();
+      const scope = await loadTicketScope(app.db, session);
+      const names = await displayNames([...rows.map(row => row.created_by_user_id), ...requests.map(row => row.requested_by_user_id)]);
+      const approvals = [];
+      for (const row of rows) {
+        const request = requests.find(entry => entry.ticket_id === row.id);
+        approvals.push({
+          ticket_id: row.id,
+          ticket_number: row.ticket_number,
+          title: decryptTicketField(row.title, deks.title, deps, row.id, 'title'),
+          description: decryptTicketField(row.description, deks.description, deps, row.id, 'description'),
+          priority: row.priority,
+          category: row.category,
+          status: row.status,
+          created_at: row.created_at,
+          author: (row.created_by_user_id && names.get(row.created_by_user_id)) || row.created_by_username,
+          custom_fields_json: decryptCustomFieldsJson(row.custom_fields_json, deks.customFields, deps, row.id),
+          requested_by: (request?.requested_by_user_id && names.get(request.requested_by_user_id)) || request?.requested_by_username || null,
+          requested_at: request?.requested_at ?? null,
+          request_text: request ? await decryptApprovalText(request.id, 'request_text', request.request_text_enc) : null,
+          attachments: await directAttachments(row.id),
+          // Das volle Ticket oeffnen darf nur, wer es auch ohne Genehmigung sehen duerfte.
+          can_open: scopeAllowsTicket(scope, row)
+        });
+      }
+      return reply.send({ approvals });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  // GET /api/v2/tickets/:id/approvals - Genehmigungsverlauf eines Tickets. Den Anfragetext sehen
+  // Admins und die anfragende Person; das erstellende Konto sieht Status und Entscheidung.
+  app.get('/api/v2/tickets/:id/approvals', async (req, reply) => {
+    try {
+      const session = requireSession(req);
+      const { id } = req.params as { id: string };
+      const ticket = await app.db.selectFrom('tickets').select(['id', 'created_by_user_id']).where('id', '=', id).executeTakeFirst();
+      if (!ticket) return reply.code(404).send({ error: 'not_found' });
+      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+      if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
+      if (!(await loadModules(app.db)).approvals) return reply.send({ approvals: [] });
+      const rows = await app.db.selectFrom('ticket_approvals').selectAll().where('ticket_id', '=', id)
+        .where('status', '!=', 'superseded').orderBy('requested_at', 'desc').execute();
+      const names = await displayNames(rows.flatMap(row => [row.requested_by_user_id, row.approver_user_id, row.decided_by_user_id]));
+      const nameOf = (userId: string | null, username: string | null) => (userId && names.get(userId)) || username || null;
+      const approvals = [];
+      for (const row of rows) {
+        const mayReadRequest = isAdmin || row.requested_by_user_id === session.uid;
+        approvals.push({
+          id: row.id,
+          status: row.status,
+          requested_by: nameOf(row.requested_by_user_id, row.requested_by_username),
+          approver: nameOf(row.approver_user_id, row.approver_username),
+          decided_by: nameOf(row.decided_by_user_id, row.decided_by_username),
+          requested_at: row.requested_at,
+          decided_at: row.decided_at,
+          request_text: mayReadRequest ? await decryptApprovalText(row.id, 'request_text', row.request_text_enc) : null,
+          decision_text: await decryptApprovalText(row.id, 'decision_text', row.decision_text_enc)
+        });
+      }
+      return reply.send({ approvals });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -1634,7 +1820,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
 
       const rows = await app.db.selectFrom('ticket_relations').select('related_ticket_id').where('ticket_id', '=', id).execute();
-      return reply.send({ relatedTicketIds: rows.map(r => r.related_ticket_id) });
+      const visible = [];
+      for (const row of rows) if (await canAccessTicket(app.db, session, row.related_ticket_id)) visible.push(row.related_ticket_id);
+      return reply.send({ relatedTicketIds: visible });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
@@ -1651,6 +1839,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       const other = await app.db.selectFrom('tickets').select('id').where('id', '=', parsed.data.related_ticket_id).executeTakeFirst();
       if (!other) return reply.code(404).send({ error: 'not_found' });
+      if (!(await canAccessTicket(app.db, session, other.id))) return reply.code(403).send({ error: 'forbidden' });
 
       await app.db.insertInto('ticket_relations').values({ id: randomUUID(), ticket_id: id, related_ticket_id: other.id })
         .onDuplicateKeyUpdate({ ticket_id: id }).execute();
@@ -1802,6 +1991,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const { id } = req.params as { id: string };
       const parsed = mergeTicketSchema.safeParse(req.body);
       if (!parsed.success || parsed.data.target_ticket_id === id) return reply.code(400).send({ error: 'invalid_body' });
+      if (await canAccessTicket(app.db, session, parsed.data.target_ticket_id) === false) return reply.code(403).send({ error: 'forbidden' });
 
       // Security-Audit N11: lief bisher als Folge unabhängiger Einzel-Updates ohne Transaktion --
       // ein Fehler/Absturz mittendrin konnte Nachrichten/Notizen bereits auf das Zielticket

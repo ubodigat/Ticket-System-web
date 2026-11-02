@@ -6,6 +6,7 @@ import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { isAccountExpired } from '../../domain/accountValidity.js';
 import { signOfficeConfig, signOfficeSource, verifyOfficeSource } from '../../documents/officeTokens.js';
 import { routeError } from './routeError.js';
+import { canReadAttachment } from '../../domain/ticketAccess.js';
 
 export function registerOfficeViewerRoutes(app: FastifyInstance, deps: UsersRouteDeps) {
   async function authorized(id: string, uid: string) {
@@ -13,8 +14,8 @@ export function registerOfficeViewerRoutes(app: FastifyInstance, deps: UsersRout
     if (!user || user.account_archived || user.locked_permanent || (user.locked_until && new Date(user.locked_until) > new Date()) || isAccountExpired(user.account_valid_until)) throw { statusCode: 403, message: 'forbidden' };
     const attachment = await app.db.selectFrom('attachments').selectAll().where('id', '=', id).executeTakeFirst();
     if (!attachment?.ticket_id) throw { statusCode: 404, message: 'attachment_not_found' };
-    const ticket = await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', attachment.ticket_id).executeTakeFirst();
-    if (!ticket || (user.role === 'user' && ticket.created_by_user_id !== uid)) throw { statusCode: 403, message: 'forbidden' };
+    // Gleiche Regeln wie der Anhangabruf (auch: Anhaenge interner Notizen nur fuer Admins).
+    if (!(await canReadAttachment(app.db, { uid, role: user.role }, attachment))) throw { statusCode: 403, message: 'forbidden' };
     if (attachment.size_bytes > 15 * 1024 * 1024) throw { statusCode: 413, message: 'preview_too_large' };
     return attachment;
   }

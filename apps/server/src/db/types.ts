@@ -71,6 +71,8 @@ export interface UsersTable {
   mobile: Nullable<Buffer>;
   job_title: Nullable<Buffer>;
   office_location: Nullable<Buffer>;
+  // Weitere Angaben inkl. Arbeitszeiten, verschluesseltes JSON (Migration 0064).
+  profile_enc: ColumnType<Buffer | null, Buffer | null | undefined, Buffer | null>;
   permissions_json: Nullable<string>;
   notif_prefs_json: Nullable<string>;
   supervisor_user_id: Nullable<string>;
@@ -388,6 +390,22 @@ export interface TicketParticipantsTable {
   created_at: CreatedAt;
 }
 
+export interface TicketApprovalsTable {
+  id: string;
+  ticket_id: string;
+  requested_by_user_id: Nullable<string>;
+  requested_by_username: Nullable<string>;
+  approver_user_id: Nullable<string>;
+  approver_username: Nullable<string>;
+  request_text_enc: Buffer | null;
+  status: ColumnType<string, string | undefined, string>;
+  decided_by_user_id: Nullable<string>;
+  decided_by_username: Nullable<string>;
+  decision_text_enc: Buffer | null;
+  requested_at: CreatedAt;
+  decided_at: NullableTimestamp;
+}
+
 export interface TicketRelationsTable {
   id: string;
   ticket_id: string;
@@ -480,6 +498,7 @@ export interface GlobalAuditLogTable {
 export interface Database {
   file_uploads: {
     id: string; owner_user_id: string | null; ticket_id: string | null; article_id: string | null;
+    message_id: Generated<string | null>; note_id: Generated<string | null>;
     filename: Buffer; mime_type: string; size_bytes: number; received_bytes: Generated<number>;
     completed: Generated<boolean>; created_at: CreatedAt;
   };
@@ -535,6 +554,7 @@ export interface Database {
   ticket_notes: TicketNotesTable;
   ticket_todos: TicketTodosTable;
   ticket_participants: TicketParticipantsTable;
+  ticket_approvals: TicketApprovalsTable;
   ticket_relations: TicketRelationsTable;
   ticket_time_entries: TicketTimeEntriesTable;
   user_preferences: UserPreferencesTable;

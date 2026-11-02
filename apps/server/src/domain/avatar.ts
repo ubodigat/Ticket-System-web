@@ -1,3 +1,18 @@
+import type { Kysely } from 'kysely';
+import type { Database } from '../db/types.js';
+
+// Systemeinstellungen > Allgemein: Profilbilder aktiv (Vorlage oder eigenes Bild) oder ganz aus.
+// Ausgeschaltet werden keine Bilder geloescht, nur nicht mehr ausgeliefert oder angenommen.
+export function avatarsEnabledFromConfig(config: Record<string, any> | null | undefined): boolean {
+  return config?.avatarConfig?.enabled !== false;
+}
+export async function loadAvatarsEnabled(db: Kysely<Database>): Promise<boolean> {
+  const row = await db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+  let config: Record<string, any> = {};
+  try { config = row?.config_json ? JSON.parse(row.config_json) : {}; } catch { config = {}; }
+  return avatarsEnabledFromConfig(config);
+}
+
 // Eigene Profilbilder: nur PNG, JPEG oder WebP, erkannt an den Dateisignaturen (nicht an der
 // Angabe des Browsers), hoechstens 300 KB und 1024 x 1024 Pixel. Die Pixelgrenze verhindert
 // Bilder, die klein als Datei sind, beim Anzeigen aber riesige Speichermengen belegen wuerden.

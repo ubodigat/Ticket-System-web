@@ -9,26 +9,28 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
 import { scanIfConfigured } from '../../domain/antivirus.js';
+import { MAX_UPLOAD_BYTES, dailyUploadQuota, installationDailyUploadQuota, loadUploadLimitBytes } from '../../domain/uploadLimits.js';
+import { canAccessTicket, canReadAttachment } from '../../domain/ticketAccess.js';
 
-export const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
-// Security-Audit R-26: Tageskontingent je Rolle (normale Konten deutlich kleiner) und fuer die gesamte
-// Installation, damit einzelne Konten die Datenbank-Platte nicht fuellen koennen.
-export const DAILY_UPLOAD_QUOTA = { user: 500 * 1024 ** 2, admin: 2 * 1024 ** 3, superadmin: 2 * 1024 ** 3 } as const;
-export const INSTALLATION_DAILY_UPLOAD_QUOTA = 20 * 1024 ** 3;
+export { MAX_UPLOAD_BYTES };
 const MAX_PARALLEL_COMPLETIONS = 2;
 export const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+// Ziel ist entweder ein Ticket (optional eine Chat-Nachricht oder interne Notiz darin) oder ein
+// Wissensdatenbank-Artikel. Die tatsaechlich erlaubte Groesse stellt der Superadmin ein (uploadLimits.ts).
 export const uploadRequestSchema = z.object({ ticket_id: z.string().uuid().optional(), article_id: z.string().uuid().optional(),
+  message_id: z.string().uuid().optional(), note_id: z.string().uuid().optional(),
   filename: z.string().min(1).max(255), mime_type: z.string().max(255), size_bytes: z.number().int().min(1).max(MAX_UPLOAD_BYTES)
-}).strict().refine(value => !!value.ticket_id !== !!value.article_id);
+}).strict().refine(value => !!value.ticket_id !== !!value.article_id)
+  .refine(value => !(value.message_id && value.note_id) && (!value.message_id && !value.note_id || !!value.ticket_id));
 
 export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) {
   const ctx = (recordId: string, fieldName: string, keyVersion: number) => ({ installationId: deps.env.INSTALLATION_ID,
     schemaVersion: deps.env.SCHEMA_VERSION, tableName: 'file_uploads', recordId, fieldName, keyVersion });
   async function parentAccess(actor: { uid: string; role: string }, ticketId: string | null, articleId: string | null, write = true) {
     if (ticketId) {
-      const ticket = await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', ticketId).executeTakeFirst();
-      if (!ticket) throw { statusCode: 404, message: 'ticket_not_found' };
-      if (actor.role === 'user' && ticket.created_by_user_id !== actor.uid) throw { statusCode: 403, message: 'forbidden' };
+      const access = await canAccessTicket(app.db, actor, ticketId);
+      if (access === null) throw { statusCode: 404, message: 'ticket_not_found' };
+      if (!access) throw { statusCode: 403, message: 'forbidden' };
     } else if (articleId) {
       const article = await app.db.selectFrom('kb_articles').select('id').where('id', '=', articleId).executeTakeFirst();
       if (!article) throw { statusCode: 404, message: 'article_not_found' };
@@ -38,12 +40,25 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
       if (actor.role !== 'admin' || !(write ? permission === 'edit' : ['read', 'edit'].includes(permission))) throw { statusCode: 403, message: 'forbidden' };
     } else throw { statusCode: 404, message: 'not_found' };
   }
+  // Nachricht/Notiz muessen zum selben Ticket gehoeren; interne Notizen sind Admins vorbehalten.
+  async function targetAccess(actor: { role: string }, ticketId: string | null, messageId: string | null, noteId: string | null) {
+    if (noteId && !['admin', 'superadmin'].includes(actor.role)) throw { statusCode: 403, message: 'forbidden' };
+    if (messageId && !(await app.db.selectFrom('ticket_messages').select('id').where('id', '=', messageId).where('ticket_id', '=', ticketId ?? '').executeTakeFirst())) {
+      throw { statusCode: 400, message: 'invalid_message_id' };
+    }
+    if (noteId && !(await app.db.selectFrom('ticket_notes').select('id').where('id', '=', noteId).where('ticket_id', '=', ticketId ?? '').executeTakeFirst())) {
+      throw { statusCode: 400, message: 'invalid_note_id' };
+    }
+  }
   app.post('/api/v2/uploads', { config: { rateLimit: { max: 12, timeWindow: '1 hour', keyGenerator: req => req.ticketSession?.uid ?? req.ip } } }, async (req, reply) => {
     try {
       const actor = requireSession(req); const parsed = uploadRequestSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_upload', details: parsed.error.flatten() });
       const data = parsed.data;
       await parentAccess(actor, data.ticket_id || null, data.article_id || null);
+      await targetAccess(actor, data.ticket_id || null, data.message_id || null, data.note_id || null);
+      const limit = await loadUploadLimitBytes(app.db);
+      if (data.size_bytes > limit) return reply.code(413).send({ error: 'file_too_large', max_bytes: limit });
       // Reclaim unfinished uploads. Completed data is part of the attachment and its backup.
       await app.db.deleteFrom('file_uploads').where('completed', '=', false).where('created_at', '<', new Date(Date.now() - 86400000)).execute();
       const id = randomUUID(); const dek = await ensureDek(app.db, deps.keyProvider, 'file_uploads.filename');
@@ -51,12 +66,12 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
         await trx.selectFrom('users').select('id').where('id', '=', actor.uid).forUpdate().executeTakeFirstOrThrow();
         const used = await trx.selectFrom('file_uploads').select(eb => eb.fn.sum<number>('size_bytes').as('total'))
           .where('owner_user_id', '=', actor.uid).where('created_at', '>=', new Date(Date.now() - 86400000)).executeTakeFirst();
-        if (Number(used?.total || 0) + data.size_bytes > DAILY_UPLOAD_QUOTA[actor.role]) throw { statusCode: 429, message: 'upload_quota_exceeded' };
+        if (Number(used?.total || 0) + data.size_bytes > dailyUploadQuota(actor.role, limit)) throw { statusCode: 429, message: 'upload_quota_exceeded' };
         const total = await trx.selectFrom('file_uploads').select(eb => eb.fn.sum<number>('size_bytes').as('total'))
           .where('created_at', '>=', new Date(Date.now() - 86400000)).executeTakeFirst();
-        if (Number(total?.total || 0) + data.size_bytes > INSTALLATION_DAILY_UPLOAD_QUOTA) throw { statusCode: 429, message: 'upload_capacity_exceeded' };
+        if (Number(total?.total || 0) + data.size_bytes > installationDailyUploadQuota(limit)) throw { statusCode: 429, message: 'upload_capacity_exceeded' };
         await trx.insertInto('file_uploads').values({ id, owner_user_id: actor.uid, ticket_id: data.ticket_id || null,
-          article_id: data.article_id || null, filename: fieldCipher.encryptField(data.filename, dek.rawDek, ctx(id, 'filename', dek.keyVersion)),
+          article_id: data.article_id || null, message_id: data.message_id || null, note_id: data.note_id || null, filename: fieldCipher.encryptField(data.filename, dek.rawDek, ctx(id, 'filename', dek.keyVersion)),
           mime_type: data.mime_type, size_bytes: data.size_bytes }).execute();
       });
       return reply.code(201).send({ id, chunk_bytes: UPLOAD_CHUNK_BYTES });
@@ -109,6 +124,9 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
         await parentAccess(actor, upload.ticket_id, upload.article_id);
         if (upload.received_bytes !== upload.size_bytes) throw { statusCode: 400, message: 'upload_incomplete' };
         if (!Number.isSafeInteger(upload.size_bytes) || upload.size_bytes < 1 || upload.size_bytes > MAX_UPLOAD_BYTES) throw new Error('invalid_stored_upload_size');
+        // Wurde das Limit seit Beginn des Uploads gesenkt, gilt der neue Wert.
+        if (upload.size_bytes > await loadUploadLimitBytes(trx)) throw { statusCode: 413, message: 'file_too_large' };
+        await targetAccess(actor, upload.ticket_id, upload.message_id, upload.note_id);
         const fileDek = await ensureDek(trx, deps.keyProvider, 'file_uploads.filename');
         const chunkDek = await ensureDek(trx, deps.keyProvider, 'file_uploads.data');
         const filename = fieldCipher.decryptField(upload.filename, fileDek.rawDek, ctx(id, 'filename', fileDek.keyVersion));
@@ -130,7 +148,7 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
           size_bytes: bytes.length, filename: fieldCipher.encryptField(filename, nameDek.rawDek, context('filename', nameDek.keyVersion)),
           data_b64: fieldCipher.encryptField(JSON.stringify({ storage: 'chunks-v1', size: bytes.length,
             chunks: Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES) }), dataDek.rawDek, context('data', dataDek.keyVersion)) };
-        if (upload.ticket_id) await trx.insertInto('attachments').values({ ...common, ticket_id: upload.ticket_id }).execute();
+        if (upload.ticket_id) await trx.insertInto('attachments').values({ ...common, ticket_id: upload.ticket_id, message_id: upload.message_id, note_id: upload.note_id }).execute();
         else await trx.insertInto('kb_article_attachments').values({ ...common, kb_article_id: upload.article_id! }).execute();
         await trx.updateTable('file_uploads').set({ completed: true, mime_type: validated.mimeType }).where('id', '=', id).execute();
         return { id, filename, mime_type: validated.mimeType, size_bytes: bytes.length };
@@ -153,7 +171,12 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
       const actor = requireSession(req); const { id } = req.params as { id: string };
       const upload = await app.db.selectFrom('file_uploads').selectAll().where('id', '=', id).where('completed', '=', true).executeTakeFirst();
       if (!upload) return reply.code(404).send({ error: 'not_found' });
-      await parentAccess(actor, upload.ticket_id, upload.article_id, false);
+      // Ticket-Dateien wie jeder andere Anhang (interne Notizen nur Admins, offene Genehmigung).
+      if (upload.ticket_id) {
+        if (!(await canReadAttachment(app.db, actor, { ticket_id: upload.ticket_id, message_id: upload.message_id, note_id: upload.note_id, uploaded_by_user_id: upload.owner_user_id }))) {
+          return reply.code(403).send({ error: 'forbidden' });
+        }
+      } else await parentAccess(actor, upload.ticket_id, upload.article_id, false);
       const table = upload.ticket_id ? 'attachments' : 'kb_article_attachments';
       const attachment = await app.db.selectFrom(table).select(['id', 'data_b64']).where('id', '=', id).executeTakeFirst();
       if (!attachment) return reply.code(404).send({ error: 'not_found' });
