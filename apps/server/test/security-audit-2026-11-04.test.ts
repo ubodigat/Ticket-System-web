@@ -255,7 +255,7 @@ describe('vendor libraries match their published checksums', () => {
     const table = read('vendor/VERSIONS.md');
     for (const file of ['lucide.min.js', 'mammoth.browser.min.js', 'xlsx.full.min.js', 'jszip.min.js', 'dompurify.min.js']) {
       const hash = createHash('sha256').update(readFileSync(new URL(`vendor/${file}`, repo))).digest('hex');
-      expect(table, file).toMatch(new RegExp(`\\| \`${file.replace(/\./g, '\\.')}\` \\|[^\\n]*\`${hash}\``));
+      expect(table, file).toMatch(new RegExp(`\\| \`${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` \\|[^\\n]*\`${hash}\``));
     }
   });
 });
