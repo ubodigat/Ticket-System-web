@@ -18,7 +18,6 @@ type Nullable<T> = ColumnType<T | null, T | null | undefined, T | null>;
 
 export interface InstallationsTable {
   id: string;
-  schema_version: number;
   created_at: CreatedAt;
 }
 
@@ -28,6 +27,9 @@ export interface DataEncryptionKeysTable {
   key_version: number;
   wrapped_dek: Buffer;
   active: ColumnType<boolean, boolean, boolean>;
+  // KEK-Version, mit der die DEK umhuellt ist; wrap_format 1 = an Zweck und Version gebunden (AAD).
+  kek_version: ColumnType<number, number | undefined, number>;
+  wrap_format: ColumnType<number, number | undefined, number>;
   created_at: CreatedAt;
 }
 
@@ -503,7 +505,13 @@ export interface Database {
     completed: Generated<boolean>; created_at: CreatedAt;
   };
   file_upload_chunks: { upload_id: string; part: number; data_enc: Buffer };
-  encryption_checkpoints: { purpose: string };
+  // Fortschritt der Neuverschluesselung je Spalte (crypto/rotation.ts).
+  crypto_jobs: {
+    job_key: string; last_id: string | null; processed: Generated<number>; failed: Generated<number>;
+    target_version: Generated<number>; done_at: Date | null; updated_at: Generated<Date>;
+  };
+  // Fingerabdruck des zuletzt angewendeten Schemas (db/schemaSync.ts).
+  schema_state: { id: number; fingerprint: string; applied_at: Generated<Date> };
   recurring_admin_todos: {
     id: string;
     content: Buffer;

@@ -23,6 +23,7 @@ export const Auth = {
     login: async (u, p) => {
         Auth.lastError = null;
         Auth.pendingMfaToken = null;
+        Store._anonymousAt = 0; // Anmeldung beginnt: "nicht angemeldet" nicht mehr zwischenspeichern
         const res = await fetch('/api/v1/auth/login', {
             method: 'POST',
             credentials: 'same-origin',

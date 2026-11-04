@@ -31,14 +31,12 @@ export interface MfaRouteDeps {
   keyProvider: KeyProvider;
 }
 
-function totpCtx(deps: MfaRouteDeps, userId: string, keyVersion: number) {
+function totpCtx(deps: MfaRouteDeps, userId: string) {
   return {
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'users',
     recordId: userId,
-    fieldName: 'totp_secret',
-    keyVersion
+    fieldName: 'totp_secret'
   };
 }
 
@@ -91,7 +89,7 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
       });
 
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
-      const encrypted = fieldCipher.encryptField(secret.base32, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
+      const encrypted = fieldCipher.encryptField(secret.base32, dek, totpCtx(deps, session.uid));
       if (user.totp_enabled) {
         await app.db.updateTable('users').set({ totp_pending_secret_enc: encrypted }).where('id', '=', session.uid).execute();
       } else {
@@ -122,7 +120,7 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
 
       if (await secondFactorWait(app.db, session.uid)) return reply.code(429).send({ error: 'too_many_attempts' });
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
-      const secret = fieldCipher.decryptField(targetEnc, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
+      const secret = fieldCipher.decryptField(targetEnc, dek, totpCtx(deps, session.uid));
       if (!(await verifyAndConsumeTotp(app.db, session.uid, secret, parsed.data.code))) {
         await noteSecondFactorFailure({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, session.uid, req.ip);
         return reply.code(401).send({ error: 'invalid_code' });
@@ -154,7 +152,7 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
     }
   });
 
-  // POST /api/v2/mfa/disable - erfordert Passwort UND gültigen TOTP-Code (Step-up, docs/SPEC.md
+  // POST /api/v2/mfa/disable - erfordert Passwort UND gültigen TOTP-Code (Step-up, docs/THREAT_MODEL.md
   // §8). Security-Audit R-12: bisher reichte allein das Passwort -- eine übernommene Session
   // konnte den zweiten Faktor damit selbst abschalten, ohne ihn je besessen zu haben, und ohne
   // jede Spur im Audit-Log. Jetzt zusätzlich ein gültiger TOTP-Code, ein Audit-Eintrag und eine
@@ -179,7 +177,7 @@ export function registerMfaRoutes(app: FastifyInstance, deps: MfaRouteDeps): voi
       if (!user.totp_secret_enc) return reply.code(409).send({ error: 'mfa_not_enabled' });
       if (await secondFactorWait(app.db, session.uid)) return reply.code(429).send({ error: 'too_many_attempts' });
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
-      const secret = fieldCipher.decryptField(user.totp_secret_enc, dek.rawDek, totpCtx(deps, session.uid, dek.keyVersion));
+      const secret = fieldCipher.decryptField(user.totp_secret_enc, dek, totpCtx(deps, session.uid));
       if (!(await verifyAndConsumeTotp(app.db, session.uid, secret, parsed.data.code))) {
         await noteSecondFactorFailure({ db: app.db, env: deps.env, keyProvider: deps.keyProvider }, session.uid, req.ip);
         return reply.code(401).send({ error: 'invalid_code' });

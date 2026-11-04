@@ -8,16 +8,16 @@ import { isAccountExpired } from '../domain/accountValidity.js';
 const MAIL_TYPE = 'smtp.delivery';
 const MAX_ATTEMPTS = 5;
 const LEASE_MS = 5 * 60_000;
-const context = (deps: MailDeps, id: string, keyVersion: number) => ({
-  installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-  tableName: 'jobs', recordId: id, fieldName: 'mail_payload', keyVersion
+const context = (deps: MailDeps, id: string) => ({
+  installationId: deps.env.INSTALLATION_ID,
+  tableName: 'jobs', recordId: id, fieldName: 'mail_payload'
 });
 
 export async function queueMail(deps: MailDeps, to: string, subject: string, text: string, variables?: Record<string, string>): Promise<void> {
   if (!await isSmtpConfigured(deps)) throw new Error('smtp_not_configured');
   const id = randomUUID();
   const dek = await ensureDek(deps.db, deps.keyProvider, 'jobs.mail_payload');
-  const encrypted = fieldCipher.encryptField(JSON.stringify({ to, subject, text, ...(variables ? { variables } : {}) }), dek.rawDek, context(deps, id, dek.keyVersion));
+  const encrypted = fieldCipher.encryptField(JSON.stringify({ to, subject, text, ...(variables ? { variables } : {}) }), dek, context(deps, id));
   await deps.db.insertInto('jobs').values({
     type: MAIL_TYPE, idempotency_key: id, payload_json: JSON.stringify({ ciphertext: encrypted.toString('base64') }),
     status: 'queued', max_attempts: MAX_ATTEMPTS, locked_by: null, locked_at: null
@@ -81,15 +81,15 @@ export async function queueUserMail(deps: MailDeps, userId: string, subject: str
   // zuerst deaktivieren und danach unbemerkt Faktoren austauschen.
   if (!enabled && type !== 'security') return;
   const dek = await ensureDek(deps.db, deps.keyProvider, 'users.email');
-  const email = fieldCipher.decryptField(user.email_enc, dek.rawDek, {
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'users', recordId: userId, fieldName: 'email', keyVersion: dek.keyVersion
+  const email = fieldCipher.decryptField(user.email_enc, dek, {
+    installationId: deps.env.INSTALLATION_ID,
+    tableName: 'users', recordId: userId, fieldName: 'email'
   });
   let name = user.username || email;
   if (user.name_enc) {
     const nameDek = await ensureDek(deps.db, deps.keyProvider, 'users.name');
-    name = fieldCipher.decryptField(user.name_enc, nameDek.rawDek, { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-      tableName: 'users', recordId: userId, fieldName: 'name', keyVersion: nameDek.keyVersion });
+    name = fieldCipher.decryptField(user.name_enc, nameDek, { installationId: deps.env.INSTALLATION_ID,
+      tableName: 'users', recordId: userId, fieldName: 'name' });
   }
   await queueMail(deps, email, subject, text, { recipientName: name, username: user.username || '' });
 }
@@ -117,8 +117,8 @@ export async function drainMailQueue(deps: MailDeps, now = new Date()): Promise<
     try {
       const dek = await ensureDek(deps.db, deps.keyProvider, 'jobs.mail_payload');
       const envelope = JSON.parse(job.payload_json);
-      const payload = JSON.parse(fieldCipher.decryptField(Buffer.from(envelope.ciphertext, 'base64'), dek.rawDek,
-        context(deps, job.idempotency_key, dek.keyVersion)));
+      const payload = JSON.parse(fieldCipher.decryptField(Buffer.from(envelope.ciphertext, 'base64'), dek,
+        context(deps, job.idempotency_key)));
       if (payload.variables) await sendMail(deps, payload.to, payload.subject, payload.text, payload.variables);
       else await sendMail(deps, payload.to, payload.subject, payload.text);
       await deps.db.updateTable('jobs').set({ status: 'done', payload_json: '{}', locked_at: null, locked_by: null,

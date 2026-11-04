@@ -20,6 +20,7 @@ export const WorkTimer = {
     timer: null,
     ticket: null,
     activityTimerId: null,
+    activityRequired: true,
     activityCleanup: null,
     indicatorTick: null,
     closeActivity() {
@@ -28,6 +29,7 @@ export const WorkTimer = {
     async init() {
         const user = await Store.currentUser();
         if (!['admin', 'superadmin'].includes(user?.role)) return;
+        WorkTimer.activityRequired = (await Store.getSettings()).timeTrackingConfig?.requireActivity !== false;
         await WorkTimer.refresh();
         // Refresh across tabs without trusting client timestamps for billing.
         window.addEventListener('focus', () => WorkTimer.refresh().catch(error => UI.toast(error.message)));
@@ -142,8 +144,8 @@ export const WorkTimer = {
             <label for="work-minutes">${t('Erfasste Zeit (Minuten)', 'Recorded time (minutes)')}</label>
             <input id="work-minutes" type="number" min="1" max="20160" step="1" required value="${minutes}" aria-describedby="work-minutes-hint">
             <p class="hint" id="work-minutes-hint">${t('Bei Bedarf anpassen, z. B. wenn das Stoppen vergessen wurde. Eine Änderung wird im Ticket-Protokoll vermerkt.', 'Adjust if needed, e.g. if you forgot to stop the timer. Changes are recorded in the ticket log.')}</p>
-            <p>${t('Bitte beschreibe deine Tätigkeit, um die Zeiterfassung abzuschließen.', 'Describe your activity to finish tracking.')}</p>
-            <label for="work-activity">${t('Tätigkeit (Pflichtfeld)', 'Activity (required)')}</label><textarea id="work-activity" required maxlength="4000"></textarea>
+            <p>${WorkTimer.activityRequired ? t('Bitte beschreibe deine Tätigkeit, um die Zeiterfassung abzuschließen.', 'Describe your activity to finish tracking.') : t('Optional: kurz beschreiben, was du gemacht hast.', 'Optional: briefly describe what you did.')}</p>
+            <label for="work-activity">${WorkTimer.activityRequired ? t('Tätigkeit (Pflichtfeld)', 'Activity (required)') : t('Tätigkeit (optional)', 'Activity (optional)')}</label><textarea id="work-activity"${WorkTimer.activityRequired ? ' required' : ''} maxlength="4000"></textarea>
             <fieldset class="work-solution">
                 <legend>${t('Lösungsdokumentation (optional)', 'Solution documentation (optional)')}</legend>
                 <div class="solution-type-picker" role="radiogroup" aria-label="${Utils.esc(Lang.t('entryTypeTitle'))}">${SOLUTION_TYPES.map(([value, key, icon, tone]) =>
@@ -189,7 +191,7 @@ export const WorkTimer = {
         WorkTimer.activityCleanup = () => { overlay.remove(); document.removeEventListener('keydown', guard, true); background.forEach(node => { node.inert = false; }); };
         overlay.querySelector('form').onsubmit = async event => {
             event.preventDefault(); const activity = overlay.querySelector('#work-activity').value.trim();
-            if (!activity) { overlay.querySelector('#work-activity').focus(); return; }
+            if (!activity && WorkTimer.activityRequired) { overlay.querySelector('#work-activity').focus(); return; }
             const minutesInput = overlay.querySelector('#work-minutes');
             const recorded = Number(minutesInput.value);
             if (!Number.isInteger(recorded) || recorded < 1 || recorded > 20160) { minutesInput.focus(); minutesInput.reportValidity(); return; }

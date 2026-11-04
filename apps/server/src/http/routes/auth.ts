@@ -7,6 +7,7 @@ The Initial Developer of the Original Code is U:Bodigat. All portions of the cod
 Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { derivedKey } from '../../crypto/derivedKeys.js';
 import * as argon2 from 'argon2';
 import { verifyAndConsumeTotp } from '../../domain/totp.js';
 import { z } from 'zod';
@@ -81,12 +82,12 @@ const MFA_PENDING_TTL_MS = 5 * 60 * 1000;
 
 // Kurzlebiges, signiertes Zwischentoken für den zweiten Faktor -- NICHT die normale
 // Session-Cookie-Signierung (fastify/cookie), sondern ein eigenständiges HMAC über
-// COOKIE_SECRET, da dieser Wert dem Client im Response-Body (nicht als Cookie) mitgegeben
+// einen aus COOKIE_SECRET abgeleiteten Schluessel (crypto/derivedKeys.ts), da dieser Wert dem Client im Response-Body (nicht als Cookie) mitgegeben
 // wird und bis zur erfolgreichen TOTP-Prüfung ausdrücklich NICHT als Login gilt.
 function signMfaPendingToken(env: Env, uid: string): string {
   const payload = { uid, iat: Date.now() };
   const json = JSON.stringify(payload);
-  const mac = createHmac('sha256', env.COOKIE_SECRET).update(json).digest('base64url');
+  const mac = createHmac('sha256', derivedKey(env.COOKIE_SECRET, 'mfa-pending-token')).update(json).digest('base64url');
   return Buffer.from(json, 'utf8').toString('base64url') + '.' + mac;
 }
 
@@ -94,7 +95,7 @@ function verifyMfaPendingToken(env: Env, token: string): { uid: string } | null 
   const [body, mac] = token.split('.');
   if (!body || !mac) return null;
   const json = Buffer.from(body, 'base64url').toString('utf8');
-  const expectedMac = createHmac('sha256', env.COOKIE_SECRET).update(json).digest('base64url');
+  const expectedMac = createHmac('sha256', derivedKey(env.COOKIE_SECRET, 'mfa-pending-token')).update(json).digest('base64url');
   const a = Buffer.from(mac);
   const b = Buffer.from(expectedMac);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
@@ -186,21 +187,17 @@ async function decryptUser(app: FastifyInstance, deps: AuthRouteDeps, user: {
   try {
     const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
     const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
-    name = fieldCipher.decryptField(user.name_enc, nameDek.rawDek, {
+    name = fieldCipher.decryptField(user.name_enc, nameDek, {
       installationId: deps.env.INSTALLATION_ID,
-      schemaVersion: deps.env.SCHEMA_VERSION,
       tableName: 'users',
       recordId: user.id,
-      fieldName: 'name',
-      keyVersion: nameDek.keyVersion
+      fieldName: 'name'
     });
-    email = fieldCipher.decryptField(user.email_enc, emailDek.rawDek, {
+    email = fieldCipher.decryptField(user.email_enc, emailDek, {
       installationId: deps.env.INSTALLATION_ID,
-      schemaVersion: deps.env.SCHEMA_VERSION,
       tableName: 'users',
       recordId: user.id,
-      fieldName: 'email',
-      keyVersion: emailDek.keyVersion
+      fieldName: 'email'
     });
   } catch (err) {
     app.log.error({ err, userId: user.id }, 'Benutzerprofil konnte nicht entschluesselt werden');
@@ -368,7 +365,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
   // gleichartigen Zaehler im Speicher (nur als HMAC des Namens, begrenzte Groesse) und damit dieselbe
   // Antwortfolge wie ein echtes Konto.
   const pseudoFailures = new Map<string, { count: number; last: number }>();
-  const pseudoKey = (name: string) => createHmac('sha256', deps.env.COOKIE_SECRET).update(`login-pseudo:${name.trim().toLowerCase()}`).digest('hex');
+  const pseudoKey = (name: string) => createHmac('sha256', derivedKey(deps.env.COOKIE_SECRET, 'login-pseudo-account')).update(name.trim().toLowerCase()).digest('hex');
   const pseudoBackoff = (name: string) => {
     const entry = pseudoFailures.get(pseudoKey(name));
     return entry ? accountBackoffSecondsRemaining(entry.count, new Date(entry.last)) : 0;
@@ -516,13 +513,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
         return authProblem(reply, 429, 'Zu viele Fehlversuche', `Bitte in ${secondFactorSeconds} Sekunden erneut versuchen.`);
       }
       const totpDek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
-      const secret = fieldCipher.decryptField(user.totp_secret_enc, totpDek.rawDek, {
+      const secret = fieldCipher.decryptField(user.totp_secret_enc, totpDek, {
         installationId: deps.env.INSTALLATION_ID,
-        schemaVersion: deps.env.SCHEMA_VERSION,
         tableName: 'users',
         recordId: user.id,
-        fieldName: 'totp_secret',
-        keyVersion: totpDek.keyVersion
+        fieldName: 'totp_secret'
       });
 
       if (!(await verifyAndConsumeTotp(app.db, user.id, secret, parsed.data.code))) {
@@ -566,6 +561,13 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthRouteDeps): v
     const user = await currentUser(req, app, deps);
     if (!user) return authProblem(reply, 401, 'Nicht angemeldet', 'Bitte melde dich an.');
     return reply.send({ user });
+  });
+
+  // Oeffentliche Seiten fragen hier zuerst, ob ueberhaupt eine Sitzung besteht -- statt mehrere
+  // geschuetzte Endpunkte aufzurufen, die alle mit 401 enden (Review 11/2026, Punkt 12).
+  app.get('/api/v1/auth/session', async (req, reply) => {
+    const user = await currentUser(req, app, deps);
+    return reply.header('cache-control', 'no-store').send({ authenticated: !!user });
   });
 
   app.get('/api/v1/public-settings', async (_req, reply) => {

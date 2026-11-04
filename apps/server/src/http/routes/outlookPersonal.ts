@@ -18,7 +18,7 @@ import { routeError } from './routeError.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
-import { fieldCipher, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
+import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { requireModule } from '../../domain/modules.js';
 import {
@@ -63,10 +63,10 @@ async function refreshDek(app: FastifyInstance, keyProvider: KeyProvider) {
   return ensureDek(app.db, keyProvider, 'users.outlook_refresh_token');
 }
 
-function tokenCtx(deps: OutlookPersonalRouteDeps, userId: string, keyVersion: number) {
+function tokenCtx(deps: OutlookPersonalRouteDeps, userId: string) {
   return {
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'users', recordId: userId, fieldName: 'outlook_refresh_token', keyVersion
+    installationId: deps.env.INSTALLATION_ID,
+    tableName: 'users', recordId: userId, fieldName: 'outlook_refresh_token'
   };
 }
 
@@ -80,10 +80,10 @@ async function getFreshAccessToken(app: FastifyInstance, deps: OutlookPersonalRo
   if (!row?.outlook_refresh_token_enc) return null;
 
   const dek = await refreshDek(app, deps.keyProvider);
-  const storedRefreshToken = decryptFieldTolerant(row.outlook_refresh_token_enc, dek.rawDek, tokenCtx(deps, userId, dek.keyVersion));
+  const storedRefreshToken = fieldCipher.decryptField(row.outlook_refresh_token_enc, dek, tokenCtx(deps, userId));
   const tokens = await refreshDelegatedAccessToken(creds.tenantId, creds.clientId, creds.clientSecret, storedRefreshToken);
   if (tokens.refreshToken && tokens.refreshToken !== storedRefreshToken) {
-    const newEnc = fieldCipher.encryptField(tokens.refreshToken, dek.rawDek, tokenCtx(deps, userId, dek.keyVersion));
+    const newEnc = fieldCipher.encryptField(tokens.refreshToken, dek, tokenCtx(deps, userId));
     await app.db.updateTable('users').set({ outlook_refresh_token_enc: newEnc }).where('id', '=', userId).execute();
   }
   return tokens.accessToken;
@@ -154,7 +154,7 @@ export function registerOutlookPersonalRoutes(app: FastifyInstance, deps: Outloo
       const profile = await getMyProfile(tokens.accessToken).catch(() => ({ email: null }));
 
       const dek = await refreshDek(app, deps.keyProvider);
-      const enc = fieldCipher.encryptField(tokens.refreshToken, dek.rawDek, tokenCtx(deps, session.uid, dek.keyVersion));
+      const enc = fieldCipher.encryptField(tokens.refreshToken, dek, tokenCtx(deps, session.uid));
       await app.db.updateTable('users').set({
         outlook_refresh_token_enc: enc,
         outlook_account_email: profile.email,

@@ -22,9 +22,9 @@ export const recurringAdminTodoSchema = createAdminTodoSchema.omit({ due_at: tru
 });
 
 export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) {
-  const context = (tableName: string, fieldName: string, recordId: string, keyVersion: number) => ({
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName, fieldName, recordId, keyVersion
+  const context = (tableName: string, fieldName: string, recordId: string) => ({
+    installationId: deps.env.INSTALLATION_ID,
+    tableName, fieldName, recordId
   });
   app.get('/api/v2/todos/recurring', async (req, reply) => {
     try {
@@ -32,7 +32,7 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
       const rows = await app.db.selectFrom('recurring_admin_todos').selectAll().where('created_by_user_id', '=', actor.uid).orderBy('next_run_at', 'asc').execute();
       const dek = await ensureDek(app.db, deps.keyProvider, 'recurring_admin_todos.content');
       return reply.send({ rules: rows.map(r => ({ ...r, active: !!r.active,
-        content: fieldCipher.decryptField(r.content, dek.rawDek, context('recurring_admin_todos', 'content', r.id, dek.keyVersion)),
+        content: fieldCipher.decryptField(r.content, dek, context('recurring_admin_todos', 'content', r.id)),
         recipient_ids: JSON.parse(r.recipient_ids_json), recipient_ids_json: undefined })) });
     } catch (error) { return routeError(app, reply, error); }
   });
@@ -48,7 +48,7 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
       const id = randomUUID();
       const dek = await ensureDek(app.db, deps.keyProvider, 'recurring_admin_todos.content');
       await app.db.insertInto('recurring_admin_todos').values({ id, created_by_user_id: actor.uid,
-        content: fieldCipher.encryptField(parsed.data.content, dek.rawDek, context('recurring_admin_todos', 'content', id, dek.keyVersion)),
+        content: fieldCipher.encryptField(parsed.data.content, dek, context('recurring_admin_todos', 'content', id)),
         recipient_ids_json: JSON.stringify(ids.filter(uid => uid !== actor.uid)), interval_unit: parsed.data.interval_unit,
         interval_count: parsed.data.interval_count, due_after_hours: parsed.data.due_after_hours,
         next_run_at: mysqlTimestamp(new Date(parsed.data.next_run_at)), active: true }).execute();
@@ -97,7 +97,7 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
       ]);
       const slaModuleActive = (await loadModules(app.db)).sla;
       const decrypt = (value: Buffer, table: string, field: string, id: string, dek: typeof personalDek) =>
-        fieldCipher.decryptField(value, dek.rawDek, context(table, field, id, dek.keyVersion));
+        fieldCipher.decryptField(value, dek, context(table, field, id));
       return reply.send({ todos: [
         ...own.map(t => ({ id: t.id, kind: 'personal', content: decrypt(t.content, 'admin_todos', 'content', t.id, personalDek),
           done: !!t.done, done_at: t.done_at ?? null, due_at: t.due_at, creator_id: t.created_by_user_id })),
@@ -134,7 +134,7 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
         if (todo?.created_by_user_id !== actor.uid) return reply.code(403).send({ error: 'forbidden' });
         if (parsed.data.content !== undefined) {
           const dek = await ensureDek(app.db, deps.keyProvider, 'admin_todos.content');
-          updates.content = fieldCipher.encryptField(parsed.data.content, dek.rawDek, context('admin_todos', 'content', id, dek.keyVersion));
+          updates.content = fieldCipher.encryptField(parsed.data.content, dek, context('admin_todos', 'content', id));
         }
         if (parsed.data.due_at !== undefined) updates.due_at = parsed.data.due_at ? mysqlTimestamp(new Date(parsed.data.due_at)) : null;
       }

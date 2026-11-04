@@ -24,8 +24,8 @@ async function fixture() {
   const app = Fastify(); await app.register(cookie); const db = memoryDb(tables); app.decorate('db', db);
   const actor = { uid, role: 'admin' as 'admin' | 'user', username: 'admin' }; let authenticated = true; let finished = 0;
   app.addHook('onRequest', async req => { req.ticketSession = authenticated ? actor : null; });
-  const deps = { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1, COOKIE_SECRET: secret, WEBAUTHN_ORIGIN: 'http://localhost' } as any,
-    keyProvider: { wrapDek: async (value: Buffer) => value, unwrapDek: async (value: Buffer) => value } as any };
+  const deps = { env: { INSTALLATION_ID: 'test', COOKIE_SECRET: secret, WEBAUTHN_ORIGIN: 'http://localhost' } as any,
+    keyProvider: { currentKekVersion: async () => 1, wrapDek: async (value: Buffer) => value, unwrapDek: async (value: Buffer) => value } as any };
   registerPreferenceRoutes(app, deps); registerWorkTimerRoutes(app, deps); registerOfficeViewerRoutes(app, deps);
   registerPasskeyRoutes(app, deps, async () => { finished++; return { success: true }; });
   const post = (url: string, payload: any = {}) => app.inject({ method: 'POST', url, payload });
@@ -244,7 +244,7 @@ describe('read-only Office capabilities', () => {
       f.deps.env.ONLYOFFICE_PUBLIC_URL = 'https://office.example.com';
       const encrypt = async (field: string, content: string) => {
         const dek = await ensureDek(f.db, f.deps.keyProvider, `attachments.${field}`);
-        return fieldCipher.encryptField(content, dek.rawDek, { installationId: 'test', schemaVersion: 1, tableName: 'attachments', recordId: 'file', fieldName: field, keyVersion: 1 });
+        return fieldCipher.encryptField(content, dek, { installationId: 'test', tableName: 'attachments', recordId: 'file', fieldName: field });
       };
       f.tables.attachments = [{ id: 'file', ticket_id: tid, size_bytes: 6, filename: await encrypt('filename', 'Book.xlsx'), data_b64: await encrypt('data', Buffer.from('Office').toString('base64')) }];
       const config = (await f.app.inject('/api/v2/attachments/file/office-config')).json();

@@ -7,9 +7,9 @@ The Initial Developer of the Original Code is U:Bodigat. All portions of the cod
 Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
 // Statische Assets der Einrichtungsseite als TS-Konstanten statt separater Dateien im Build-
-// Output -- Phase-1-Vereinfachung. Sobald apps/web über Vite eingebunden wird (docs/PROGRESS.md
+// Output -- Phase-1-Vereinfachung. Sobald apps/web über Vite eingebunden wird (
 // Phase 4/5), zieht diese Seite dorthin um. Kein Inline-<script>/<style>, da die CSP aus
-// docs/adr/0006-csp-directives.md weder 'unsafe-inline' noch 'unsafe-eval' erlaubt -- CSS/JS
+// die CSP (http/app.ts) weder 'unsafe-inline' noch 'unsafe-eval' erlaubt -- CSS/JS
 // werden als eigene, same-origin Endpunkte ausgeliefert.
 
 export const SETUP_HTML = `<!doctype html>
@@ -148,6 +148,9 @@ button:disabled { opacity: 0.6; cursor: default; }
   background: rgba(15,23,42,.55); color: #a7b0c4;
   font: 11px/1.45 system-ui, sans-serif; text-align: center; opacity: .8;
 }
+.setup-done { display: grid; gap: 14px; }
+.setup-code { display: block; padding: 14px; border-radius: 10px; background: rgba(255,255,255,.08); font-size: 22px; letter-spacing: .12em; text-align: center; user-select: all; }
+.setup-next { display: inline-block; justify-self: start; padding: 10px 18px; border-radius: 10px; background: #2f6fed; color: #fff; text-decoration: none; font-weight: 600; }
 .cpal-origin:hover, .cpal-origin:focus-within { opacity: 1; }
 .cpal-origin strong { color: #e8ecf1; font-weight: 600; }
 .cpal-origin__meta { font-size: 10.5px; }
@@ -196,7 +199,22 @@ form.addEventListener('submit', async (event) => {
       submitBtn.disabled = false;
       return;
     }
-    window.location.href = '/login';
+    // Einrichtungscode fuer die verpflichtende Zwei-Faktor-Anmeldung einmalig anzeigen.
+    const done = document.createElement('section');
+    done.className = 'setup-done';
+    const title = document.createElement('h2');
+    title.textContent = 'Einrichtung abgeschlossen';
+    const text = document.createElement('p');
+    text.textContent = 'Für Admin-Konten ist die Zwei-Faktor-Anmeldung Pflicht. Bei der ersten Anmeldung richtest du eine Authenticator-App oder einen Passkey ein und bestätigst das mit diesem einmaligen Code (24 Stunden gültig):';
+    const code = document.createElement('code');
+    code.className = 'setup-code';
+    code.textContent = body.mfaEnrollCode || '';
+    const next = document.createElement('a');
+    next.href = '/login';
+    next.className = 'setup-next';
+    next.textContent = 'Weiter zur Anmeldung';
+    done.append(title, text, code, next);
+    form.replaceWith(done);
   } catch (err) {
     errorBox.textContent = 'Verbindung zum Server fehlgeschlagen.';
     errorBox.hidden = false;

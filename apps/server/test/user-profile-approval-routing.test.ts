@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { approverCandidates } from '../src/domain/approvalRouting.js';
 import { decryptUserProfile, encryptUserProfile, userProfileSchema } from '../src/domain/userProfile.js';
+import { testDek } from './helpers/testDek.js';
 
 describe('approval routing with substitutes per group or category', () => {
   const groups = [{ id: 'it', parent_id: null }, { id: 'net', parent_id: 'it' }, { id: 'hr', parent_id: null }];
@@ -27,7 +28,7 @@ describe('approval routing with substitutes per group or category', () => {
 });
 
 describe('user profile with working hours', () => {
-  const cipher = { installationId: 'test', schemaVersion: 1, recordId: 'user-1', dek: { rawDek: Buffer.alloc(32, 3), keyVersion: 1 } };
+  const cipher = { installationId: 'test', recordId: 'user-1', dek: testDek(3) };
 
   it('accepts part-time schedules and round-trips them encrypted', () => {
     const profile = userProfileSchema.parse({ employee_number: 'P-17', work_days: { '1': { start: '08:00', end: '12:30' }, '3': { start: '13:00', end: '17:00' } } });

@@ -8,6 +8,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 */
 import { loadEnv } from './config/env.js';
 import { createDb } from './db/connection.js';
+import { SCHEMA_FINGERPRINT, appliedSchemaFingerprint } from './db/schemaSync.js';
 import { createFileKeyProvider } from './crypto/keyProvider.js';
 import { buildApp } from './http/app.js';
 import { startMaintenanceScheduler } from './jobs/maintenance.js';
@@ -18,6 +19,14 @@ async function main(): Promise<void> {
   // Security-Audit N9: Laufzeitbetrieb nutzt (falls konfiguriert) das eingeschränkte
   // DB_RUNTIME_USER-Konto -- siehe db/connection.ts.
   const db = createDb(env, 'runtime');
+  // Die App aendert das Schema nie selbst (das Laufzeitkonto darf es nicht). Passt die Datenbank
+  // nicht zum Code, wird nicht gestartet -- der Updater bemerkt das am Healthcheck und setzt den
+  // Code automatisch zurueck, statt mit unpassendem Schema Daten zu schreiben.
+  const applied = await appliedSchemaFingerprint(db);
+  if (applied !== SCHEMA_FINGERPRINT) {
+    await db.destroy();
+    throw new Error('Die Datenbank entspricht nicht dem Schema dieser Version. Bitte "node dist/cli/schema.js" ausfuehren (macht der Installer bzw. das Online-Update automatisch).');
+  }
   const keyProvider = createFileKeyProvider(env.KEK_FILE_PATH);
   const app = await buildApp({ env, db, keyProvider });
 

@@ -2,16 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runRecurringAdminTodos } from '../src/jobs/adminTodos.js';
 import { insertAdminTodo, todoContext } from '../src/domain/adminTodos.js';
 import { fieldCipher } from '../src/crypto/fieldCrypto.js';
+import { testDek } from './helpers/testDek.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 vi.mock('../src/domain/adminTodos.js', async importOriginal => ({ ...await importOriginal<any>(), insertAdminTodo: vi.fn().mockResolvedValue('task') }));
 beforeEach(() => vi.clearAllMocks());
 
 function setup(activeActor = true) {
-  const deps: any = { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 }, keyProvider: {} };
+  const deps: any = { env: { INSTALLATION_ID: 'test' }, keyProvider: {} };
   const rule: any = { id: 'rule', created_by_user_id: 'creator', active: true, next_run_at: new Date('2026-10-01T10:00:00Z'), interval_unit: 'day', interval_count: 1,
     due_after_hours: 24, recipient_ids_json: '["recipient"]',
-    content: fieldCipher.encryptField('Routine task', Buffer.alloc(32, 7), todoContext(deps, 'recurring_admin_todos', 'content', 'rule', 1)) };
+    content: fieldCipher.encryptField('Routine task', testDek(), todoContext(deps, 'recurring_admin_todos', 'content', 'rule')) };
   const lock = vi.fn();
   const db: any = {
     selectFrom: (table: string) => {

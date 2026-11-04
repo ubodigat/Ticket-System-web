@@ -24,8 +24,7 @@ export const uploadRequestSchema = z.object({ ticket_id: z.string().uuid().optio
   .refine(value => !(value.message_id && value.note_id) && (!value.message_id && !value.note_id || !!value.ticket_id));
 
 export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) {
-  const ctx = (recordId: string, fieldName: string, keyVersion: number) => ({ installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION, tableName: 'file_uploads', recordId, fieldName, keyVersion });
+  const ctx = (recordId: string, fieldName: string) => ({ installationId: deps.env.INSTALLATION_ID, tableName: 'file_uploads', recordId, fieldName });
   async function parentAccess(actor: { uid: string; role: string }, ticketId: string | null, articleId: string | null, write = true) {
     if (ticketId) {
       const access = await canAccessTicket(app.db, actor, ticketId);
@@ -71,7 +70,7 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
           .where('created_at', '>=', new Date(Date.now() - 86400000)).executeTakeFirst();
         if (Number(total?.total || 0) + data.size_bytes > installationDailyUploadQuota(limit)) throw { statusCode: 429, message: 'upload_capacity_exceeded' };
         await trx.insertInto('file_uploads').values({ id, owner_user_id: actor.uid, ticket_id: data.ticket_id || null,
-          article_id: data.article_id || null, message_id: data.message_id || null, note_id: data.note_id || null, filename: fieldCipher.encryptField(data.filename, dek.rawDek, ctx(id, 'filename', dek.keyVersion)),
+          article_id: data.article_id || null, message_id: data.message_id || null, note_id: data.note_id || null, filename: fieldCipher.encryptField(data.filename, dek, ctx(id, 'filename')),
           mime_type: data.mime_type, size_bytes: data.size_bytes }).execute();
       });
       return reply.code(201).send({ id, chunk_bytes: UPLOAD_CHUNK_BYTES });
@@ -102,7 +101,7 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
           const expected = Math.min(UPLOAD_CHUNK_BYTES, upload.size_bytes - upload.received_bytes);
           if (index * UPLOAD_CHUNK_BYTES !== upload.received_bytes || buffer.length !== expected) throw { statusCode: 400, message: 'invalid_chunk_order_or_size' };
           await trx.insertInto('file_upload_chunks').values({ upload_id: id, part: index,
-            data_enc: fieldCipher.encryptField(buffer.toString('base64'), dek.rawDek, ctx(`${id}:${index}`, 'data', dek.keyVersion)) }).execute();
+            data_enc: fieldCipher.encryptField(buffer.toString('base64'), dek, ctx(`${id}:${index}`, 'data')) }).execute();
           await trx.updateTable('file_uploads').set({ received_bytes: upload.received_bytes + buffer.length }).where('id', '=', id).execute();
         });
         return reply.send({ success: true });
@@ -129,12 +128,12 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
         await targetAccess(actor, upload.ticket_id, upload.message_id, upload.note_id);
         const fileDek = await ensureDek(trx, deps.keyProvider, 'file_uploads.filename');
         const chunkDek = await ensureDek(trx, deps.keyProvider, 'file_uploads.data');
-        const filename = fieldCipher.decryptField(upload.filename, fileDek.rawDek, ctx(id, 'filename', fileDek.keyVersion));
+        const filename = fieldCipher.decryptField(upload.filename, fileDek, ctx(id, 'filename'));
         // A single bounded validation buffer, never a 667 MB base64/JSON string.
         const bytes = Buffer.allocUnsafe(upload.size_bytes);
         for (let part = 0, offset = 0; offset < bytes.length; part++) {
           const chunk = await trx.selectFrom('file_upload_chunks').select('data_enc').where('upload_id', '=', id).where('part', '=', part).executeTakeFirstOrThrow();
-          const decoded = Buffer.from(fieldCipher.decryptField(chunk.data_enc, chunkDek.rawDek, ctx(`${id}:${part}`, 'data', chunkDek.keyVersion)), 'base64');
+          const decoded = Buffer.from(fieldCipher.decryptField(chunk.data_enc, chunkDek, ctx(`${id}:${part}`, 'data')), 'base64');
           if (decoded.length !== Math.min(UPLOAD_CHUNK_BYTES, bytes.length - offset)) throw new Error('invalid_stored_chunk');
           decoded.copy(bytes, offset); offset += decoded.length;
         }
@@ -143,11 +142,11 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
         const table = upload.ticket_id ? 'attachments' : 'kb_article_attachments';
         const nameDek = await ensureDek(trx, deps.keyProvider, `${table}.filename`);
         const dataDek = await ensureDek(trx, deps.keyProvider, `${table}.data`);
-        const context = (fieldName: string, keyVersion: number) => ({ ...ctx(id, fieldName, keyVersion), tableName: table });
+        const context = (fieldName: string) => ({ ...ctx(id, fieldName), tableName: table });
         const common = { id, uploaded_by_user_id: actor.uid, uploaded_by_username: actor.username, mime_type: validated.mimeType,
-          size_bytes: bytes.length, filename: fieldCipher.encryptField(filename, nameDek.rawDek, context('filename', nameDek.keyVersion)),
+          size_bytes: bytes.length, filename: fieldCipher.encryptField(filename, nameDek, context('filename')),
           data_b64: fieldCipher.encryptField(JSON.stringify({ storage: 'chunks-v1', size: bytes.length,
-            chunks: Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES) }), dataDek.rawDek, context('data', dataDek.keyVersion)) };
+            chunks: Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES) }), dataDek, context('data')) };
         if (upload.ticket_id) await trx.insertInto('attachments').values({ ...common, ticket_id: upload.ticket_id, message_id: upload.message_id, note_id: upload.note_id }).execute();
         else await trx.insertInto('kb_article_attachments').values({ ...common, kb_article_id: upload.article_id! }).execute();
         await trx.updateTable('file_uploads').set({ completed: true, mime_type: validated.mimeType }).where('id', '=', id).execute();
@@ -181,16 +180,16 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
       const attachment = await app.db.selectFrom(table).select(['id', 'data_b64']).where('id', '=', id).executeTakeFirst();
       if (!attachment) return reply.code(404).send({ error: 'not_found' });
       const dataDek = await ensureDek(app.db, deps.keyProvider, `${table}.data`);
-      const manifest = JSON.parse(fieldCipher.decryptField(attachment.data_b64, dataDek.rawDek,
-        { ...ctx(id, 'data', dataDek.keyVersion), tableName: table }));
+      const manifest = JSON.parse(fieldCipher.decryptField(attachment.data_b64, dataDek,
+        { ...ctx(id, 'data'), tableName: table }));
       if (manifest.storage !== 'chunks-v1' || manifest.size !== upload.size_bytes || manifest.chunks !== Math.ceil(upload.size_bytes / UPLOAD_CHUNK_BYTES)) throw new Error('invalid_upload_manifest');
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'file_uploads.filename');
       const dek = await ensureDek(app.db, deps.keyProvider, 'file_uploads.data');
-      const filename = fieldCipher.decryptField(upload.filename, nameDek.rawDek, ctx(id, 'filename', nameDek.keyVersion));
+      const filename = fieldCipher.decryptField(upload.filename, nameDek, ctx(id, 'filename'));
       async function* content() {
         for (let part = 0; part * UPLOAD_CHUNK_BYTES < upload!.size_bytes; part++) {
           const chunk = await app.db.selectFrom('file_upload_chunks').select('data_enc').where('upload_id', '=', id).where('part', '=', part).executeTakeFirstOrThrow();
-          yield Buffer.from(fieldCipher.decryptField(chunk.data_enc, dek.rawDek, ctx(`${id}:${part}`, 'data', dek.keyVersion)), 'base64');
+          yield Buffer.from(fieldCipher.decryptField(chunk.data_enc, dek, ctx(`${id}:${part}`, 'data')), 'base64');
         }
       }
       return reply.header('cache-control', 'no-store').header('content-length', upload.size_bytes)

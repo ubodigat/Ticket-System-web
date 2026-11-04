@@ -6,99 +6,91 @@
 # The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
 # Contributors: see CONTRIBUTORS.md and CHANGES.md.
 #
-# Stellt ein mit backup.sh erstelltes Archiv wieder her: entschlüsselt, ersetzt den KEK
-# (ops/secrets/app.kek) und importiert den MariaDB-Dump. ÜBERSCHREIBT die aktuelle Datenbank
-# und den aktuellen Schlüssel vollständig -- nur für Wiederherstellung auf einem leeren/zu
-# ersetzenden System gedacht, nicht zum Zusammenführen mit vorhandenen Daten.
+# Wiederherstellung einer mit backup.sh erstellten Datensicherung. Gebraucht werden die
+# Datensicherung und das Wiederherstellungs-Kit samt Passphrase (enthaelt den privaten
+# Sicherungsschluessel und die KEK).
+#
+#   restore.sh --verify  <kit> <datensicherung>   Restore-Test: entschluesseln, Integritaet und Inhalt
+#                                                  pruefen -- die Datenbank bleibt unveraendert.
+#   restore.sh           <kit> <datensicherung>   Datenbank ersetzen (fragt nach "ja").
+#   restore.sh --with-secrets <kit> <datensicherung>  zusaetzlich KEK, .env und TLS aus dem Kit
+#                                                  zurueckspielen (neuer, leerer Server).
+# Danach bringt "node dist/cli/schema.js" (macht der Installer) eine aeltere Sicherung auf das
+# aktuelle Schema -- vorhandene Daten bleiben erhalten.
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 ENV_FILE="$SCRIPT_DIR/.env"
+die() { echo "$*" >&2; exit 1; }
 
-ARCHIVE_PATH="${1:-}"
-if [[ -z "$ARCHIVE_PATH" || ! -f "$ARCHIVE_PATH" ]]; then
-  echo "Nutzung: $0 <pfad-zum-backup.tar.gz.gpg>" >&2
-  exit 1
-fi
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "Nicht gefunden: $ENV_FILE -- zuerst ./install.sh ausführen." >&2
-  exit 1
-fi
-# shellcheck disable=SC1090
-source "$ENV_FILE"
+MODE=restore
+case "${1:-}" in
+  --verify) MODE=verify; shift ;;
+  --with-secrets) MODE=secrets; shift ;;
+esac
+KIT="${1:-}"; DATA="${2:-}"
+[[ -f "$KIT" && -f "$DATA" ]] || die "Verwendung: $0 [--verify|--with-secrets] <wiederherstellungs-kit.tar.gz.gpg> <ticket-system-data-*.sql.gz.gpg>"
+command -v gpg >/dev/null 2>&1 || die "gpg nicht gefunden -- 'apt-get install -y gnupg' und erneut versuchen."
 
-echo "WARNUNG: Dies überschreibt die aktuelle Datenbank und den aktuellen Verschlüsselungsschlüssel"
-echo "dieser Installation vollständig und unwiderruflich."
-read -rp "Fortfahren? Tippe GENAU 'ja': " CONFIRM
-if [[ "$CONFIRM" != "ja" ]]; then
-  echo "Abgebrochen."
-  exit 1
-fi
-
-if ! command -v gpg >/dev/null 2>&1; then
-  echo "gpg nicht gefunden -- 'apt-get install -y gnupg' und erneut versuchen." >&2
-  exit 1
-fi
-
-PASSPHRASE="${BACKUP_PASSPHRASE:-}"
-if [[ -z "$PASSPHRASE" ]]; then
-  read -rsp "Passphrase des Backups: " PASSPHRASE
-  echo
-fi
-
-WORK_DIR="$(mktemp -d)"
+WORK_PARENT="$SCRIPT_DIR/../backups"
+mkdir -p "$WORK_PARENT"; chmod 0700 "$WORK_PARENT"
+WORK_DIR="$(mktemp -d "$WORK_PARENT/.restore.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-echo "==> Entschlüssele Archiv..."
-# Security-Audit N14: Gegenstück zu backup.sh -- gpg (authentifiziert, erkennt ein manipuliertes
-# Archiv statt es still als kaputtes tar zu behandeln), Passphrase über einen separaten
-# Dateideskriptor statt als Kommandozeilenargument.
-gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 --decrypt "$ARCHIVE_PATH" 3<<< "$PASSPHRASE" | \
-  tar -C "$WORK_DIR" -xzf -
-unset PASSPHRASE
+PASSPHRASE="${BACKUP_KIT_PASSPHRASE:-}"
+if [[ -z "$PASSPHRASE" ]]; then read -rsp "Passphrase des Wiederherstellungs-Kits: " PASSPHRASE; echo; fi
 
-if [[ ! -f "$WORK_DIR/database.sql" || ! -f "$WORK_DIR/secrets/app.kek" ]]; then
-  echo "Archiv unvollständig oder falsche Passphrase (database.sql/secrets/app.kek fehlen)." >&2
-  exit 1
+echo "==> Öffne Wiederherstellungs-Kit..."
+mkdir "$WORK_DIR/kit"
+gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 3 --decrypt "$KIT" 3<<<"$PASSPHRASE" | tar -C "$WORK_DIR/kit" -xzf - \
+  || die "Kit konnte nicht entschlüsselt werden (falsche Passphrase oder beschädigt)."
+unset PASSPHRASE
+[[ -f "$WORK_DIR/kit/backup-private.asc" ]] || die "Das Kit enthält keinen privaten Sicherungsschlüssel -- das Kit aus 'backup.sh --init-keys' verwenden."
+[[ -f "$WORK_DIR/kit/secrets/app.kek" ]] || die "Das Kit enthält keine KEK."
+HOME_DIR="$WORK_DIR/gnupg"; mkdir -m 0700 "$HOME_DIR"
+GNUPGHOME="$HOME_DIR" gpg --batch --quiet --import "$WORK_DIR/kit/backup-private.asc"
+
+decrypt_data() { GNUPGHOME="$HOME_DIR" gpg --batch --quiet --decrypt "$DATA" | gunzip -c; }
+
+echo "==> Prüfe Datensicherung (Signatur der Verschlüsselung, Kompression, Inhalt)..."
+TABLES="$(decrypt_data | grep -c '^CREATE TABLE ' || true)"
+[[ "$TABLES" -gt 10 ]] || die "Die Datensicherung ist unvollständig oder beschädigt ($TABLES Tabellen gefunden)."
+decrypt_data | grep -q '^CREATE TABLE `users`' || die "Die Datensicherung enthält keine Benutzertabelle."
+echo "    $TABLES Tabellen, lesbar und vollständig."
+if [[ "$MODE" == verify ]]; then
+  echo "==> Restore-Test erfolgreich. Es wurde nichts verändert."
+  exit 0
 fi
+
+[[ -f "$ENV_FILE" ]] || die "Nicht gefunden: $ENV_FILE -- zuerst install.sh ausführen (bei einem neuen Server mit --with-secrets wiederherstellen)."
+echo "WARNUNG: Dies ersetzt die aktuelle Datenbank dieser Installation vollständig."
+read -rp "Fortfahren? Tippe GENAU 'ja': " CONFIRM
+[[ "$CONFIRM" == "ja" ]] || die "Abgebrochen."
+
+if [[ "$MODE" == secrets ]]; then
+  echo "==> Stelle KEK, .env und TLS-Material aus dem Kit wieder her..."
+  mkdir -p "$SCRIPT_DIR/../secrets" "$SCRIPT_DIR/../tls"
+  install -m 0600 "$WORK_DIR/kit/secrets/app.kek" "$SCRIPT_DIR/../secrets/app.kek"
+  install -m 0600 "$WORK_DIR/kit/env" "$ENV_FILE"
+  [[ -f "$WORK_DIR/kit/backup-recipient.asc" ]] && install -m 0644 "$WORK_DIR/kit/backup-recipient.asc" "$SCRIPT_DIR/../secrets/backup-recipient.asc"
+  [[ -d "$WORK_DIR/kit/tls-mariadb" ]] && { rm -rf "$SCRIPT_DIR/../tls/mariadb"; cp -r "$WORK_DIR/kit/tls-mariadb" "$SCRIPT_DIR/../tls/mariadb"; }
+fi
+env_value() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2- || true; }
 
 echo "==> Stoppe Anwendung (Datenbank bleibt für den Import erreichbar)..."
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" stop app
 
-echo "==> Spiele Datenbank-Dump ein..."
-# Security-Audit N14: DB-Passwort nie als Kommandozeilenargument (siehe backup.sh) -- die
-# Zugangsdaten werden in einem ersten, separaten exec-Aufruf per stdin in eine temporäre,
-# nur-dem-Container-eigene Optionsdatei geschrieben (Pfad selbst ist kein Geheimnis); der
-# eigentliche Datenimport im zweiten Aufruf braucht stdin für den SQL-Dump und kann die
-# Zugangsdaten deshalb nicht erneut per stdin bekommen.
-CNF_PATH="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
-  umask 077
-  cnf="$(mktemp)"
-  cat > "$cnf"
-  printf "%s" "$cnf"
-' <<EOF
-[client]
-user=$DB_USER
-password=$DB_PASSWORD
-EOF
-)"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
-  cnf="$1"; db="$2"
-  trap "rm -f \"$cnf\"" EXIT
+echo "==> Spiele Datensicherung ein..."
+# Zugangsdaten nie als Kommandozeilenargument: erster Aufruf legt eine nur im Container lesbare
+# Optionsdatei an (stdin), der zweite streamt den entschluesselten Dump hinein.
+CNF_PATH="$(printf '[client]\nuser=%s\npassword=%s\n' "$(env_value DB_USER)" "$(env_value DB_PASSWORD)" \
+  | docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c 'umask 077; cnf="$(mktemp)"; cat > "$cnf"; printf "%s" "$cnf"')"
+decrypt_data | docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
+  cnf="$1"; db="$2"; trap "rm -f \"$cnf\"" EXIT
   mariadb --defaults-extra-file="$cnf" "$db"
-' _ "$CNF_PATH" "$DB_NAME" < "$WORK_DIR/database.sql"
+' _ "$CNF_PATH" "$(env_value DB_NAME)"
 
-echo "==> Stelle Schlüssel (KEK) und TLS-Zertifikate wieder her..."
-mkdir -p "$SCRIPT_DIR/../secrets" "$SCRIPT_DIR/../tls"
-cp "$WORK_DIR/secrets/app.kek" "$SCRIPT_DIR/../secrets/app.kek"
-chmod 600 "$SCRIPT_DIR/../secrets/app.kek"
-if [[ -d "$WORK_DIR/tls/mariadb" ]]; then
-  cp -r "$WORK_DIR/tls/mariadb" "$SCRIPT_DIR/../tls/"
-fi
-
-echo "==> Starte Anwendung neu..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d app
-
-echo
-echo "==> Wiederherstellung abgeschlossen."
+echo "==> Datenbank wiederhergestellt. Jetzt 'bash install.sh' ausführen: bringt das Schema auf den"
+echo "    aktuellen Stand (ohne Datenverlust) und startet die Anwendung."

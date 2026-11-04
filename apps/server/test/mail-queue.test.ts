@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { drainMailQueue, queueMail, queueUserMail } from '../src/mail/queue.js';
 import { fieldCipher } from '../src/crypto/fieldCrypto.js';
+import { testDek } from './helpers/testDek.js';
 
 const { send, configured } = vi.hoisted(() => ({ send: vi.fn(), configured: vi.fn() }));
 vi.mock('../src/mail/mailer.js', () => ({ sendMail: send, isSmtpConfigured: configured }));
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 
 function database() {
   const millis = (value: any) => new Date(typeof value === 'string' && /^\d{4}-\d{2}-\d{2} /.test(value)
@@ -39,7 +40,7 @@ function database() {
       run_after: new Date(0), updated_at: new Date(), ...value }) }) }),
     transaction: () => ({ execute: (callback: any) => callback(db) })
   };
-  return { deps: { db, env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any }, rows, locks };
+  return { deps: { db, env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any }, rows, locks };
 }
 
 beforeEach(() => { send.mockReset(); configured.mockReset().mockResolvedValue(true); });
@@ -51,8 +52,8 @@ describe('durable SMTP outbox', () => {
     expect(rows[0].status).toBe('queued');
     expect(rows[0].payload_json).not.toContain('private@example.org');
     expect(rows[0].payload_json).not.toContain('Secret text');
-    const decrypted = fieldCipher.decryptField(Buffer.from(JSON.parse(rows[0].payload_json).ciphertext, 'base64'), Buffer.alloc(32, 7), {
-      installationId: 'test', schemaVersion: 1, tableName: 'jobs', recordId: rows[0].idempotency_key, fieldName: 'mail_payload', keyVersion: 1
+    const decrypted = fieldCipher.decryptField(Buffer.from(JSON.parse(rows[0].payload_json).ciphertext, 'base64'), testDek(), {
+      installationId: 'test', tableName: 'jobs', recordId: rows[0].idempotency_key, fieldName: 'mail_payload'
     });
     expect(JSON.parse(decrypted).text).toBe('Secret text');
   });
@@ -101,8 +102,8 @@ describe('durable SMTP outbox', () => {
   it.each([false, true])('respects personal mail opt-out unless policy is locked (%s)', async locked => {
     const { deps, rows } = database();
     const selectJobs = deps.db.selectFrom;
-    const email = fieldCipher.encryptField('person@example.org', Buffer.alloc(32, 7), {
-      installationId: 'test', schemaVersion: 1, tableName: 'users', recordId: 'person', fieldName: 'email', keyVersion: 1
+    const email = fieldCipher.encryptField('person@example.org', testDek(), {
+      installationId: 'test', tableName: 'users', recordId: 'person', fieldName: 'email'
     });
     deps.db.selectFrom = (table: string) => {
       if (table === 'jobs') return selectJobs(table);

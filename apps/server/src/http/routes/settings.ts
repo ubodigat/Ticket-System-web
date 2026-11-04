@@ -66,6 +66,8 @@ const settingsConfigSchema = z.object({
   slaHoursByPriority: z.record(z.string(), z.number().int().positive().max(24 * 365)).optional(),
   // "Frist auch Benutzern anzeigen" -- dezenter SLA-Hinweis im Benutzer-Dashboard (ohne Alarmfarben).
   showSlaToUsers: z.boolean().optional(),
+  // Zeiterfassung: Taetigkeitsbeschreibung beim Beenden verlangen (Standard: ja).
+  timeTrackingConfig: z.object({ requireActivity: z.boolean().optional() }).strict().optional(),
   defaultPrio: z.enum(['Niedrig', 'Normal', 'Hoch']).optional(),
   businessHours: z.object({
     enabled: z.boolean().optional(),
@@ -233,7 +235,7 @@ const ldapConfigSchema = z.object({
 // (Legacy-)Schluessel in config_json gelangen so nie versehentlich an normale Konten.
 const USER_VISIBLE_CONFIG_KEYS = ['slaHoursByPriority', 'showSlaToUsers', 'defaultPrio', 'businessHours', 'ticketNumberFormat',
   'ticketNumberCategoryFormats', 'ticketNumberCategoryCodes', 'accountSelfServiceFields', 'autoArchiveClosedAfterDays', 'waitingReminderDays',
-  'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig', 'modules', 'avatarConfig'] as const;
+  'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig', 'modules', 'avatarConfig', 'timeTrackingConfig'] as const;
 function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any> {
   const source = config || {};
   const clone: Record<string, any> = {};
@@ -435,9 +437,9 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       };
       if (parsed.data.password) {
         const dek = await ensureDek(app.db, deps.keyProvider, 'app_settings.smtp_password');
-        updates.smtp_password_enc = fieldCipher.encryptField(parsed.data.password, dek.rawDek, {
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'app_settings', recordId: '1', fieldName: 'smtp_password', keyVersion: dek.keyVersion
+        updates.smtp_password_enc = fieldCipher.encryptField(parsed.data.password, dek, {
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'app_settings', recordId: '1', fieldName: 'smtp_password'
         });
       }
 
@@ -506,9 +508,9 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       if (!parsed.data.clientSecret) return reply.send({ success: true });
 
       const dek = await ensureDek(app.db, deps.keyProvider, 'app_settings.outlook_client_secret');
-      const outlook_client_secret_enc = fieldCipher.encryptField(parsed.data.clientSecret, dek.rawDek, {
-        installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-        tableName: 'app_settings', recordId: '1', fieldName: 'outlook_client_secret', keyVersion: dek.keyVersion
+      const outlook_client_secret_enc = fieldCipher.encryptField(parsed.data.clientSecret, dek, {
+        installationId: deps.env.INSTALLATION_ID,
+        tableName: 'app_settings', recordId: '1', fieldName: 'outlook_client_secret'
       });
       await app.db.updateTable('app_settings').set({ outlook_client_secret_enc, updated_at: mysqlTimestamp() }).where('id', '=', 1).execute();
       await app.db.insertInto('global_audit_log').values({
@@ -572,9 +574,9 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       };
       if (parsed.data.bindPassword) {
         const dek = await ensureDek(app.db, deps.keyProvider, 'app_settings.ldap_bind_password');
-        updates.ldap_bind_password_enc = fieldCipher.encryptField(parsed.data.bindPassword, dek.rawDek, {
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'app_settings', recordId: '1', fieldName: 'ldap_bind_password', keyVersion: dek.keyVersion
+        updates.ldap_bind_password_enc = fieldCipher.encryptField(parsed.data.bindPassword, dek, {
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'app_settings', recordId: '1', fieldName: 'ldap_bind_password'
         });
       }
 

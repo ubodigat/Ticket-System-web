@@ -43,9 +43,9 @@ async function loadSmtpConfig(deps: MailDeps): Promise<{ config: SmtpConfig; pas
   let password: string | null = null;
   if (row.smtp_password_enc) {
     const dek = await ensureDek(deps.db, deps.keyProvider, 'app_settings.smtp_password');
-    password = fieldCipher.decryptField(row.smtp_password_enc, dek.rawDek, {
-      installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-      tableName: 'app_settings', recordId: '1', fieldName: 'smtp_password', keyVersion: dek.keyVersion
+    password = fieldCipher.decryptField(row.smtp_password_enc, dek, {
+      installationId: deps.env.INSTALLATION_ID,
+      tableName: 'app_settings', recordId: '1', fieldName: 'smtp_password'
     });
   }
   return {

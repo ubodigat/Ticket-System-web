@@ -19,7 +19,7 @@ import { mysqlTimestamp } from '../../db/date.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
-import { fieldCipher, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
+import { fieldCipher } from '../../crypto/fieldCrypto.js';
 
 export interface RecurringRouteDeps {
   env: Env;
@@ -77,13 +77,13 @@ export function registerRecurringRoutes(app: FastifyInstance, deps: RecurringRou
   ) {
     return {
       ...row,
-      title: decryptFieldTolerant(row.title, deks.titleDek.rawDek, {
-        installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-        tableName: 'recurring_ticket_rules', recordId: row.id, fieldName: 'title', keyVersion: deks.titleDek.keyVersion
+      title: fieldCipher.decryptField(row.title, deks.titleDek, {
+        installationId: deps.env.INSTALLATION_ID,
+        tableName: 'recurring_ticket_rules', recordId: row.id, fieldName: 'title'
       }),
-      description: decryptFieldTolerant(row.description, deks.descriptionDek.rawDek, {
-        installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-        tableName: 'recurring_ticket_rules', recordId: row.id, fieldName: 'description', keyVersion: deks.descriptionDek.keyVersion
+      description: fieldCipher.decryptField(row.description, deks.descriptionDek, {
+        installationId: deps.env.INSTALLATION_ID,
+        tableName: 'recurring_ticket_rules', recordId: row.id, fieldName: 'description'
       })
     };
   }
@@ -111,13 +111,13 @@ export function registerRecurringRoutes(app: FastifyInstance, deps: RecurringRou
       const { titleDek, descriptionDek } = await loadRuleDeks();
       await app.db.insertInto('recurring_ticket_rules').values({
         id,
-        title: fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, {
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'recurring_ticket_rules', recordId: id, fieldName: 'title', keyVersion: titleDek.keyVersion
+        title: fieldCipher.encryptField(parsed.data.title, titleDek, {
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'recurring_ticket_rules', recordId: id, fieldName: 'title'
         }),
-        description: fieldCipher.encryptField(parsed.data.description, descriptionDek.rawDek, {
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'recurring_ticket_rules', recordId: id, fieldName: 'description', keyVersion: descriptionDek.keyVersion
+        description: fieldCipher.encryptField(parsed.data.description, descriptionDek, {
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'recurring_ticket_rules', recordId: id, fieldName: 'description'
         }),
         category: parsed.data.category ?? null,
         priority: parsed.data.priority,
@@ -146,10 +146,10 @@ export function registerRecurringRoutes(app: FastifyInstance, deps: RecurringRou
       const updates: Record<string, unknown> = {};
       if (data.title !== undefined || data.description !== undefined) {
         const { titleDek, descriptionDek } = await loadRuleDeks();
-        const ctx = (fieldName: string, keyVersion: number) => ({ installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'recurring_ticket_rules', recordId: id, fieldName, keyVersion });
-        if (data.title !== undefined) updates.title = fieldCipher.encryptField(data.title, titleDek.rawDek, ctx('title', titleDek.keyVersion));
-        if (data.description !== undefined) updates.description = fieldCipher.encryptField(data.description, descriptionDek.rawDek, ctx('description', descriptionDek.keyVersion));
+        const ctx = (fieldName: string) => ({ installationId: deps.env.INSTALLATION_ID,
+          tableName: 'recurring_ticket_rules', recordId: id, fieldName });
+        if (data.title !== undefined) updates.title = fieldCipher.encryptField(data.title, titleDek, ctx('title'));
+        if (data.description !== undefined) updates.description = fieldCipher.encryptField(data.description, descriptionDek, ctx('description'));
       }
       if (data.category !== undefined) updates.category = data.category || null;
       if (data.priority !== undefined) updates.priority = data.priority;

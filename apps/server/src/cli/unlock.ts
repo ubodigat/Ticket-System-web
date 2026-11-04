@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   }
 
   const env = loadEnv();
-  const db = createDb(env, env.DB_RUNTIME_USER ? 'runtime' : 'migrate');
+  const db = createDb(env, env.DB_RUNTIME_USER ? 'runtime' : 'schema');
   try {
     const user = await db.selectFrom('users').select(['id', 'username']).where('username', '=', username).executeTakeFirst();
     if (!user) {

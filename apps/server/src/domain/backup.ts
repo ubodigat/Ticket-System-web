@@ -24,7 +24,9 @@ const SCRYPT = { N: 2 ** 17, r: 8, p: 1 };
 export interface BackupHeader {
   format: 1;
   installationId: string;
-  latestMigration: string | null;
+  // Schema-Fingerabdruck beim Erstellen (db/schemaSync.ts) -- nur zur Information; ob eine Sicherung
+  // eingespielt werden kann, entscheidet der Abgleich der Tabellen und Spalten.
+  schemaFingerprint: string | null;
   createdAt: string;
   createdBy: string;
   kdf: { name: 'scrypt'; N: number; r: number; p: number; salt: string };
@@ -65,7 +67,7 @@ function headerBlock(header: BackupHeader): Buffer {
 }
 
 export async function sealBackup(payload: Buffer, passphrase: string,
-  meta: Pick<BackupHeader, 'installationId' | 'latestMigration' | 'createdBy'>,
+  meta: Pick<BackupHeader, 'installationId' | 'schemaFingerprint' | 'createdBy'>,
   params: { N: number; r: number; p: number } = SCRYPT): Promise<Buffer> {
   if (passphrase.length < BACKUP_PASSPHRASE_MIN) throw new BackupError('passphrase_too_short');
   const salt = randomBytes(16);

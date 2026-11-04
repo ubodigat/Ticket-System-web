@@ -12,7 +12,7 @@ für den optionalen Virenscanner zusätzlich 1-2 GB, für die Office-Oberfläche
 `--enable-office-viewer` aktiviert (Anleitung unten).
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=13e9750cc7fadd3217ac29df282ad5dca549fd01d6e985937465161fe2cd20c9 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "b748e9444097b970161b9349d15c958bd70c409d957e1eefb859578258371ade" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=12e54631cb3ba5b33e6374433bd957f04457f96b951a6a389bcaebfa68b1c162 bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -20,6 +20,21 @@ Dateien des gesamten Installationsstands gegen ein festgelegtes SHA-256-Manifest
 Abweichungen wird abgebrochen. Immer den vollständigen Befehl aus diesem README verwenden,
 nicht durch ein ungeprüftes `curl | bash` ersetzen. Skript, Manifest und README müssen
 gemeinsam veröffentlicht sein; vor dem Push ist der neue Befehl noch nicht verwendbar.
+
+### Signiertes Release installieren (empfohlen für den Produktivbetrieb)
+
+Der Befehl oben prüft gegen Hashes aus diesem README – das schützt vor Übertragungsfehlern, nicht vor
+einem kompromittierten Repository. Für den Produktivbetrieb daher ein signiertes Release verwenden.
+`TAG` ist die aktuelle Version von der Releases-Seite, `FPR` der Fingerabdruck des
+Signaturschlüssels von einer **zweiten, unabhängigen Stelle** (Website des Herausgebers):
+
+```bash
+TAG=vJJJJ.MM.N FPR=<40-stelliger-Fingerabdruck> bash -c 'set -euo pipefail; apt-get update -qq && apt-get install -y -qq curl gnupg ca-certificates >/dev/null; d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT; export GNUPGHOME="$d/gpg"; mkdir -m 700 "$GNUPGHOME"; gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$FPR"; u=https://github.com/ubodigat/Ticket-System-web/releases/download/$TAG; curl -fsSL "$u/install.sh" -o "$d/install.sh"; curl -fsSL "$u/install.sh.asc" -o "$d/install.sh.asc"; curl -fsSL "$u/install-manifest.sha256.txt" -o "$d/manifest-hash"; gpg --batch --status-fd 1 --verify "$d/install.sh.asc" "$d/install.sh" | grep -q "VALIDSIG $FPR"; INSTALL_REF=$TAG INSTALL_SIGNER_FINGERPRINT=$FPR INSTALL_MANIFEST_SHA256=$(cat "$d/manifest-hash") bash "$d/install.sh"'
+```
+
+Geprüft wird in dieser Reihenfolge: Schlüssel über den vollständigen Fingerabdruck, Signatur von
+`install.sh` vor der Ausführung, danach im Installer die Signatur des Release-Tags und das
+Installationsmanifest. Wie ein Release erstellt wird: [docs/OPERATIONS.md](docs/OPERATIONS.md#release-erstellen-maintainer).
 
 Nach erfolgreichem Start zeigt der Installer die Adresse und das Setup-Token an.
 Vor der Erfolgsmeldung prüft er die öffentliche Anmeldeseite, JavaScript-Module und
@@ -39,7 +54,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=13e9750cc7fadd3217ac29df282ad5dca549fd01d6e985937465161fe2cd20c9 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "b748e9444097b970161b9349d15c958bd70c409d957e1eefb859578258371ade" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=12e54631cb3ba5b33e6374433bd957f04457f96b951a6a389bcaebfa68b1c162 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist
@@ -51,11 +66,11 @@ bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update
   nicht zugewiesene, eigene, beteiligte und Tickets ihrer Gruppe (inklusive Ober- und Untergruppen)
   sowie die Kategorie „Allgemein“, Superadmins alles. Genehmigen kann jedes aktive Konto; die
   prüfende Person sieht dabei nur Ticketkopf, Zusatzfelder, direkte Anhänge und die Begründung.
-  Anfrage und Entscheidung bleiben als Verlauf am Ticket (Migration 0063). Ohne vorgesetzte Person
+  Anfrage und Entscheidung bleiben als Verlauf am Ticket. Ohne vorgesetzte Person
   greift zuerst die Ersatzperson der Ticket-Kategorie, dann die der Gruppe, dann die allgemeine.
 - Benutzer werden über einen Assistenten angelegt (Konto, Organisation, Kontakt und Arbeitszeiten,
   Rechte, Übersicht) – identisch beim Annehmen einer Kontoanfrage. Zusatzangaben wie Personalnummer,
-  Kostenstelle, Gebäude/Raum, Eintrittsdatum und Arbeitstage liegen verschlüsselt (Migration 0064).
+  Kostenstelle, Gebäude/Raum, Eintrittsdatum und Arbeitstage liegen verschlüsselt.
 - PDF-Vorschau und optionale, schreibgeschützte Office-Oberfläche über isolierte Dokumentendienste.
 - SMTP mit verschlüsselter, dauerhafter Versandqueue; LDAP und Outlook nach Einrichtung.
 - Argon2id, widerrufbare Sitzungen, MFA mit TOTP/Passkeys, CSRF-Schutz und Feldverschlüsselung.
@@ -82,7 +97,7 @@ Bei der Erstinstallation diesen verifizierten Befehl verwenden und `--domain=…
 hinter `--enable-office-viewer` ergänzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "47b286d028734801935bdc3ad5cf48b9e9d4d5abc850b05ff677b9503f2c411f" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=13e9750cc7fadd3217ac29df282ad5dca549fd01d6e985937465161fe2cd20c9 bash "$f" --enable-office-viewer'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "b748e9444097b970161b9349d15c958bd70c409d957e1eefb859578258371ade" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=12e54631cb3ba5b33e6374433bd957f04457f96b951a6a389bcaebfa68b1c162 bash "$f" --enable-office-viewer'
 ```
 
 Bei einem bereits aktualisierten Checkout auf dem Server:
@@ -170,8 +185,6 @@ undokumentiert sein. Laufende und angehaltene Timer bleiben nach Neuladen erhalt
 Ein Browser/Tab selbst kann geschlossen werden; beim nächsten Besuch erscheint die noch
 ausstehende Dokumentation erneut.
 
-Die Schema-Erweiterungen sind Migrationen **0050 und 0051**. Der Installer führt sie vor
-dem App-Start aus; eine reine Ersetzung von Frontend-Dateien reicht für dieses Update nicht.
 
 </details>
 
@@ -187,8 +200,8 @@ werden nicht rückwirkend ungültig. Für das erste Setup gelten mindestens 14 Z
 Allgemein ein (500 bis 2000 MB, Standard 1 GB). Sie gilt für Ticket-Anhänge, Chat-Nachrichten,
 interne Kommunikation und die Wissensdatenbank. Erlaubt sind PDF, PNG, JPG, DOCX, XLSX, PPTX,
 ODT, ODS, ODP, TXT, CSV und LOG; die Oberfläche lehnt andere Typen sofort mit Begründung ab.
-Dateien über 15 MB werden blockweise übertragen und verschlüsselt in MariaDB gespeichert
-(Migrationen 0049 und 0062); die Freigabe erfolgt erst nach vollständiger Prüfung. Das
+Dateien über 15 MB werden blockweise übertragen und verschlüsselt in MariaDB gespeichert;
+die Freigabe erfolgt erst nach vollständiger Prüfung. Das
 Tageskontingent beträgt für normale Konten einmal, für Admins viermal die eingestellte
 Dateigröße, für die gesamte Installation mindestens 20 GB. Dateien über 15 MB werden
 heruntergeladen statt vorgerendert. Die abschließende Prüfung hält jede Datei einmal im
@@ -285,12 +298,12 @@ zeigender Release-Tag mit einem bekannten Schlüssel signiert ist (Security-Audi
 Signaturschlüssel importiert ist (`gpg --import ...`), muss die Änderung dann bewusst manuell
 geprüft werden, statt ungeprüft übernommen zu werden.
 
-Der Installer übernimmt bestehende Daten und Schlüssel, prüft das Laufzeit-Datenbankkonto
-und führt die Migrationen aus. Während der Datenmigration wird die alte App angehalten,
-damit sie keine Klartextwerte mehr nachschreiben kann. Schlägt die Migration fehl, bleibt
-die App bis zur Fehlerbehebung angehalten. Keine Volumes löschen und keine neuen Schlüssel über alte
-Schlüssel schreiben. Migrationen dürfen nicht im dauerhaft laufenden App-Container
-ausgeführt werden: Dieser besitzt absichtlich keine DDL-Zugangsdaten.
+Der Installer übernimmt bestehende Daten und Schlüssel, sichert die Datenbank, prüft das
+Laufzeit-Datenbankkonto und bringt die Datenbank auf das aktuelle Schema. Es gibt keine
+Migrationsdateien: `apps/server/src/db/schema.ts` beschreibt das vollständige Schema, der Abgleich
+legt nur Fehlendes an und erweitert Spalten verlustfrei – **vorhandene Daten werden nie gelöscht**.
+Würde eine Anpassung Daten kosten, bricht er ab, bevor etwas geändert wird. Der dauerhaft laufende
+App-Container besitzt absichtlich keine DDL-Zugangsdaten. Details: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 **Online-Updates:** Standardmäßig deaktiviert. Der optionale Updater läuft als systemd-Dienst
 direkt auf dem Server; kein Container erhält Zugriff auf den Docker-Socket. Er übernimmt
@@ -310,8 +323,6 @@ danach werden Anmeldung und bestehende Sitzungen abgewiesen. Ein leeres Datum be
 unbegrenzte Gültigkeit. Das Datum kann mit Benutzerverwaltungsrechten geändert oder entfernt
 werden; normale Benutzer können es nicht selbst verlängern. Der letzte dauerhaft verfügbare
 Superadmin darf nicht befristet werden. Bestehende Konten bleiben ohne Datum gültig.
-
-Die neue Spalte wird beim regulären Installer-/Update-Lauf durch Migration 0045 angelegt.
 
 ### Container verwalten
 
@@ -345,7 +356,7 @@ rekonstruieren und bricht dann ab, ohne Daten oder Volumes zu löschen.
 ### Online-Updater bewusst aktivieren
 
 Der Updater ist ein systemd-Dienst auf dem Host (`ops/host-updater`). Die App legt lediglich
-eng begrenzte Anfragen (Status, Update auf den angezeigten Commit, Migration, Rollback) in
+eng begrenzte Anfragen (Status, Update auf den angezeigten Commit, erneut ausrollen, Rollback) in
 `/var/lib/ticket-system-update/requests` ab; der Dienst prüft vor jedem Update die Signatur des
 Ziel-Commits bzw. eines darauf zeigenden Release-Tags (`v…` oder `release-…`). Kein Container
 hat Zugriff auf den Docker-Socket.
@@ -442,7 +453,7 @@ gemeinsam veröffentlichen. CI weist ein veraltetes Manifest zurück. Das README
 Hash-Vertrauensanker selbst nicht Teil des Manifests.
 
 Architektur, Grenzen und Sicherheitsentscheidungen: [docs](docs),
-[Sicherheitsmodell](docs/THREAT_MODEL.md), [aktueller Reparaturstand](docs/SECURITY-REMEDIATION.md).
+[Sicherheitsmodell](docs/THREAT_MODEL.md), [Kryptografie](docs/CRYPTOGRAPHY.md), [Betrieb](docs/OPERATIONS.md), [Schwachstelle melden](SECURITY.md).
 
 </details>
 

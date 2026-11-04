@@ -1,0 +1,10 @@
+[Unit]
+Description=Ticket-System: verschluesselte Datensicherung
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash @REPO_DIR@/ops/docker/backup.sh
+Nice=10
+IOSchedulingClass=idle

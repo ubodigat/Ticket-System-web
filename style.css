@@ -6006,6 +6006,12 @@ button:disabled {
     max-height: 62vh;
 }
 
+/* Systemeinstellungen: breiter und etwas hoeher als die uebrigen grossen Dialoge (Punkt 3.1). */
+#sys-settings-modal > .modal { max-width: min(1320px, 96vw); max-height: 92vh; }
+#sys-settings-modal .sys-settings-shell { grid-template-columns: 220px minmax(0, 1fr); min-height: 600px; }
+#sys-settings-modal .sys-settings-content { max-height: 72vh; }
+#sys-settings-modal .sys-settings-content .tab-content { max-width: 1080px; }
+
 .sys-settings-content .tab-content {
     max-width: 980px;
 }
@@ -6141,10 +6147,11 @@ button:disabled {
 
 /* Diskrete Breiten statt inline style="width:..." (CSP style-src ohne 'unsafe-inline') --
    job.step kennt nur 5 feste Schritte, also gibt es nur diese 6 moeglichen Prozentwerte. */
-.update-progress-fill[data-percent="20"] { width: 20%; }
-.update-progress-fill[data-percent="40"] { width: 40%; }
-.update-progress-fill[data-percent="60"] { width: 60%; }
-.update-progress-fill[data-percent="80"] { width: 80%; }
+.update-progress-fill[data-percent="17"] { width: 17%; }
+.update-progress-fill[data-percent="33"] { width: 33%; }
+.update-progress-fill[data-percent="50"] { width: 50%; }
+.update-progress-fill[data-percent="67"] { width: 67%; }
+.update-progress-fill[data-percent="83"] { width: 83%; }
 .update-progress-fill[data-percent="100"] { width: 100%; }
 
 .update-progress-fill.ok {
@@ -6166,9 +6173,67 @@ button:disabled {
 
 .update-progress-step {
     flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
     text-align: center;
     overflow-wrap: anywhere;
+    list-style: none;
 }
+.update-progress-steps { padding: 0; }
+.update-progress-step.active svg { animation: upd-spin 1s linear infinite; }
+@keyframes upd-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .update-progress-step.active svg { animation: none; } }
+/* Online-Update: Status, Aenderungen, Ablauf (Punkt 1) */
+.callout-warning { border-color: rgba(var(--warning-rgb), .5); background: rgba(var(--warning-rgb), .08); }
+.upd-hero { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--card-bg); }
+.upd-hero > svg { flex: none; }
+.upd-hero > div { display: flex; flex-direction: column; gap: 2px; }
+.upd-hero strong { font-size: var(--fs-lg, 17px); }
+.upd-hero span { color: var(--text-sec); font-size: var(--fs-sm); }
+.upd-hero.is-available { border-color: rgba(var(--primary-rgb), .5); background: rgba(var(--primary-rgb), .06); }
+.upd-hero.is-available > svg { color: var(--primary-solid); }
+.upd-hero.is-current > svg { color: var(--success); }
+.upd-changes { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; }
+.upd-changes summary { cursor: pointer; font-weight: 600; }
+.upd-changes ul { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; max-height: 220px; overflow: auto; }
+.upd-changes li { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; font-size: var(--fs-sm); }
+.upd-change-date { color: var(--text-sec); font-variant-numeric: tabular-nums; }
+.upd-plan { padding: 12px 14px; border-radius: 12px; background: var(--input-bg); }
+.upd-plan ol { margin: 8px 0; padding-left: 20px; display: grid; gap: 4px; font-size: var(--fs-sm); }
+.upd-backup { display: flex; gap: 10px; align-items: flex-start; }
+.upd-backup > svg { flex: none; margin-top: 2px; }
+.upd-backup p { margin: 4px 0 0; }
+.upd-backup code { display: inline-block; margin-top: 6px; user-select: all; }
+/* Service-Einstieg im Benutzerportal */
+.service-entry { margin-bottom: var(--space-5); }
+.service-entry h2 { margin-bottom: 4px; }
+.service-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: var(--space-3); }
+.service-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 96px; padding: 14px 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--card-bg); color: var(--text); font-weight: 600; cursor: pointer; text-align: center; overflow-wrap: anywhere; }
+.service-tile svg { color: var(--primary-solid); }
+.service-tile:hover { border-color: var(--sel-border); transform: translateY(-1px); }
+.service-tile.is-active { border-color: var(--primary-solid); background: rgba(var(--primary-rgb), .1); }
+.service-tile:focus-visible { outline: 2px solid var(--primary-solid); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .service-tile:hover { transform: none; } }
+
+/* Arbeitsansichten ueber dem Board */
+.board-queues { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: var(--space-3); }
+.queue-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--card-bg); color: var(--text-sec); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; }
+.queue-chip:hover { border-color: var(--sel-border); color: var(--text); }
+.queue-chip.is-active { border-color: var(--primary-solid); background: rgba(var(--primary-rgb), .12); color: var(--text); }
+.queue-chip:focus-visible { outline: 2px solid var(--primary-solid); outline-offset: 2px; }
+.queue-count { min-width: 22px; padding: 1px 7px; border-radius: var(--radius-pill); background: var(--card-hover); font-variant-numeric: tabular-nums; text-align: center; }
+.queue-chip.is-alert .queue-count { background: rgba(var(--danger-rgb), .18); color: var(--danger); }
+.queue-closed { margin-left: auto; }
+@media (max-width: 768px) { .queue-closed { margin-left: 0; } }
+.mfa-policy-hint { display: flex; align-items: flex-start; gap: 12px; margin-bottom: var(--space-4); }
+.mfa-policy-hint > svg { flex: none; margin-top: 2px; }
+.mfa-policy-hint p { margin: 4px 0 0; }
+.mfa-policy-hint-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.upd-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+.update-log details { margin-top: 10px; }
+.update-log summary { cursor: pointer; color: var(--text-sec); font-size: var(--fs-sm); }
 
 .update-progress-step.done {
     color: var(--success);
@@ -6346,8 +6411,16 @@ button:disabled {
         align-items: stretch;
     }
 
+    /* Review 11/2026, Punkt 9: Spalten untereinander in voller Hoehe, ohne innere Scrollbox --
+       auf dem Handy scrollt nur die Seite. */
     .column {
         min-width: 0;
+        height: auto;
+    }
+
+    .column .ticket-list {
+        flex: none;
+        overflow: visible;
     }
 
     .archive-header {
@@ -6391,8 +6464,10 @@ button:disabled {
         width: 160px;
     }
 
-    .sys-settings-shell {
+    .sys-settings-shell,
+    #sys-settings-modal .sys-settings-shell {
         grid-template-columns: 1fr;
+        min-height: 0;
     }
 
     .sys-settings-nav {
@@ -6449,8 +6524,9 @@ button:disabled {
 #sys-update .setting-row { justify-content: flex-end; padding-block: 14px; gap: 14px; }
 #sys-update .button-row { display: flex; flex-wrap: wrap; gap: 12px; }
 #sys-update-status > * + * { margin-top: 16px; }
-@media (max-width: 500px) {
-  .cpal-origin { left: 8px; right: 8px; bottom: 6px; align-items: center; text-align: center; }
+/* Lizenzhinweis auf schmalen Bildschirmen im Seitenfuss statt fest ueber dem Inhalt. */
+@media (max-width: 768px) {
+  .cpal-origin { position: static; margin: 24px auto 12px; max-width: none; align-items: center; text-align: center; opacity: 1; }
 }
 /* Personal, keyboard-accessible settings sections. */
 .settings-section { margin: 0 0 18px; border: 1px solid var(--border); border-radius: 10px; padding: 0 14px 14px; }

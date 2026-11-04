@@ -42,9 +42,9 @@ export async function requireStepUp(app: FastifyInstance, deps: { env: Env; keyP
     if (!user.totp_secret_enc) throw { statusCode: 401, message: 'totp_code_required' };
     if (await secondFactorWait(app.db, uid)) throw { statusCode: 429, message: 'too_many_attempts' };
     const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
-    const secret = fieldCipher.decryptField(user.totp_secret_enc, dek.rawDek, {
-      installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-      tableName: 'users', recordId: uid, fieldName: 'totp_secret', keyVersion: dek.keyVersion
+    const secret = fieldCipher.decryptField(user.totp_secret_enc, dek, {
+      installationId: deps.env.INSTALLATION_ID,
+      tableName: 'users', recordId: uid, fieldName: 'totp_secret'
     });
     const totpOk = await verifyAndConsumeTotp(app.db, uid, secret, parsed.data.totp_code);
     if (!totpOk) {

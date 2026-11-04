@@ -11,10 +11,20 @@ permissions:
 jobs:
   server:
     runs-on: ubuntu-latest
+    # Review 11/2026, Punkt 5: zusaetzlich mit Europe/Berlin fuer MariaDB UND Node -- Zeitstempel muessen
+    # unabhaengig von der Server-Zeitzone stimmen.
+    strategy:
+      fail-fast: false
+      matrix:
+        tz: [UTC, Europe/Berlin]
+    name: server (TZ=${{ matrix.tz }})
+    env:
+      TZ: ${{ matrix.tz }}
     services:
       mariadb:
         image: mariadb:12.3@sha256:99c125f103f5d081ebbc9ffe064e63daf7f688ac33a5f7f29af2d7260a96debf
         env:
+          TZ: ${{ matrix.tz }}
           MARIADB_ROOT_PASSWORD: ci-root-password
           MARIADB_DATABASE: ticketsystem_security_ci
           MARIADB_USER: ticketapp
@@ -44,6 +54,9 @@ jobs:
       - name: Installer security regressions
         run: bash ops/tests/installer-security.sh
 
+      - name: Backup and restore regressions (asymmetric backups, recovery kit)
+        run: bash ops/tests/backup-roundtrip.sh
+
       - name: Typecheck
         run: npm run typecheck --workspace=apps/server
 
@@ -60,7 +73,7 @@ jobs:
       - name: Match production max_allowed_packet for the chunked-upload integration test
         run: mysql -h127.0.0.1 -uroot -pci-root-password -e "SET GLOBAL max_allowed_packet = 134217728;"
 
-      - name: MariaDB upgrade and encryption integration
+      - name: MariaDB schema sync, upgrade, key rotation and time zone integration
         run: node ops/tests/mariadb-security.mjs
         env:
           NODE_ENV: test
@@ -70,6 +83,10 @@ jobs:
           DB_PASSWORD: ci-password-with-equals==
           COOKIE_SECRET: ci-cookie-secret-32-characters-minimum
           INSTALLATION_ID: 33333333-3333-4333-8333-333333333333
+
+      - name: MariaDB encryption at rest and container hardening
+        if: matrix.tz == 'UTC'
+        run: bash ops/tests/mariadb-encryption-at-rest.sh
 
       - name: Dependency audit (keine bekannten Schwachstellen, docs/THREAT_MODEL.md §7)
         run: npm audit --audit-level=high

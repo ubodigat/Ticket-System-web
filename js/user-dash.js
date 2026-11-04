@@ -46,6 +46,30 @@ export const UserDash = {
         }
     },
 
+    // Auswirkung x Dringlichkeit -> Prioritaet (1..3 je Achse).
+    priorityFor: (impact, urgency) => {
+        const score = impact + urgency;
+        return score >= 5 ? 'Hoch' : score >= 4 ? 'Normal' : 'Niedrig';
+    },
+
+    // Kacheln je aktiver Kategorie: waehlt die Kategorie (und damit Zusatzfelder und Zustaendigkeit)
+    // und springt ins Formular.
+    renderServiceTiles: (categories) => {
+        const box = q('#service-tiles');
+        if (!box) return;
+        const icons = [['hardware', 'monitor'], ['drucker', 'printer'], ['print', 'printer'], ['zugang', 'key-round'], ['account', 'key-round'], ['konto', 'key-round'],
+            ['software', 'laptop'], ['bestell', 'package'], ['netz', 'wifi'], ['abrechnung', 'receipt'], ['allgemein', 'circle-help']];
+        const iconFor = name => (icons.find(([needle]) => name.toLocaleLowerCase().includes(needle)) || [null, 'folder'])[1];
+        box.innerHTML = categories.map(name => `<button type="button" class="service-tile" data-category="${Utils.esc(name)}">${Icon(iconFor(name), 22)}<span>${Utils.esc(name)}</span></button>`).join('');
+        box.querySelectorAll('.service-tile').forEach(tile => tile.onclick = () => {
+            UserDash.categoryInstance?.setValue([tile.dataset.category]);
+            box.querySelectorAll('.service-tile').forEach(other => other.classList.toggle('is-active', other === tile));
+            q('#ticket-create-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            q('#t-title')?.focus({ preventScroll: true });
+        });
+        if (window.lucide) lucide.createIcons();
+    },
+
     init: async () => {
         // Admin Button Injection if on dashboard (for superadmin/admin)
         const user = await Store.currentUser();
@@ -70,10 +94,14 @@ export const UserDash = {
             const title = q('#t-title').value.trim();
             const desc = q('#t-desc').value.trim();
             const settings = await Store.getSettings();
-            const selectedPrio = q('#t-prio').value;
-            const configuredPrio = settings.generalConfig?.defaultPrio;
-            const prio = ['Niedrig', 'Normal', 'Hoch'].includes(selectedPrio) ? selectedPrio :
-                (['Niedrig', 'Normal', 'Hoch'].includes(configuredPrio) ? configuredPrio : 'Normal');
+            // Prioritaet aus Auswirkung und Dringlichkeit statt Selbsteinstufung (Bewertung 11/2026, 3.1).
+            const impact = Number(q('#t-impact')?.value) || 1;
+            const urgency = Number(q('#t-urgency')?.value) || 2;
+            const prio = UserDash.priorityFor(impact, urgency);
+            const impactLine = Lang.format('impactSummary', {
+                impact: q('#t-impact')?.selectedOptions[0]?.textContent || '',
+                urgency: q('#t-urgency')?.selectedOptions[0]?.textContent || ''
+            });
             // Get values from custom multi-select
             const selectedCats = UserDash.categoryInstance ? UserDash.categoryInstance.getValue() : ['Allgemein'];
             const cat = selectedCats.length > 0 ? selectedCats : ['Allgemein'];
@@ -105,7 +133,7 @@ export const UserDash = {
                 linkedIncidentId = choice;
             }
             const user = await Store.currentUser();
-            const newTicket = await Store.createTicket({ title, desc, prio, category: cat, customFieldValues });
+            const newTicket = await Store.createTicket({ title, desc: desc ? `${desc}\n\n${impactLine}` : impactLine, prio, category: cat, customFieldValues });
             if (!newTicket) {
                 UI.toast(Lang.t('ticketCreateFailed'));
                 return;
@@ -131,7 +159,8 @@ export const UserDash = {
             UserDash.createFiles = [];
             if (q('#t-files')) q('#t-files').value = '';
             UserDash.renderCreateFilePreview();
-            if (q('#t-prio')) q('#t-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(settings.generalConfig?.defaultPrio) ? settings.generalConfig.defaultPrio : 'Normal';
+            if (q('#t-impact')) q('#t-impact').value = '1';
+            if (q('#t-urgency')) q('#t-urgency').value = '2';
             UI.renderCustomFieldsForm(q('#t-custom-fields'), Store.getCustomFieldsForCategories(cat, settings));
             await UserDash.renderList();
         };
@@ -176,7 +205,6 @@ export const UserDash = {
         if (catContainer) {
             const settings = await Store.getSettings();
             const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
-            if (q('#t-prio')) q('#t-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(settings.generalConfig?.defaultPrio) ? settings.generalConfig.defaultPrio : 'Normal';
             const initial = categories.includes('Allgemein') ? ['Allgemein'] : categories.slice(0, 1);
             const refreshCustomFields = (selectedCats) => {
                 const fields = Store.getCustomFieldsForCategories(selectedCats, settings);
@@ -184,6 +212,7 @@ export const UserDash = {
             };
             UserDash.categoryInstance = UI.createMultiSelect(catContainer, categories, initial, refreshCustomFields);
             refreshCustomFields(initial);
+            UserDash.renderServiceTiles(categories);
         }
 
         // Modal Events

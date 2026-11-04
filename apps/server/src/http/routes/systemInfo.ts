@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { platform, arch, release } from 'node:os';
 import { sql } from 'kysely';
 import type { FastifyInstance } from 'fastify';
+import { SCHEMA_FINGERPRINT, appliedSchemaFingerprint } from '../../db/schemaSync.js';
+import { reencryptPending } from '../../crypto/rotation.js';
 import { requireSuperadmin } from './session.js';
 import { routeError } from './routeError.js';
 import type { UsersRouteDeps } from './users.js';
@@ -54,11 +56,11 @@ export function registerSystemInfoRoutes(app: FastifyInstance, deps: UsersRouteD
       requireSuperadmin(req);
       const mailDeps = { db: app.db, env: deps.env, keyProvider: deps.keyProvider };
       const count = async (query: Promise<{ n: number | string | bigint } | undefined>) => Number((await query)?.n ?? 0);
-      const [databaseVersion, latestMigration, migrationCount, sslCipher, settings, smtp, ldap, outlook,
+      const [databaseVersion, appliedSchema, reencryptOpen, sslCipher, settings, smtp, ldap, outlook,
         usersActive, usersTotal, ticketsOpen, ticketsArchived, attachments, kbArticles, packages, vendor, version] = await Promise.all([
         safe(async () => (await sql<{ v: string }>`SELECT VERSION() AS v`.execute(app.db)).rows[0]?.v ?? null),
-        safe(async () => (await sql<{ name: string }>`SELECT name FROM kysely_migration ORDER BY name DESC LIMIT 1`.execute(app.db)).rows[0]?.name ?? null),
-        safe(async () => Number((await sql<{ n: number }>`SELECT COUNT(*) AS n FROM kysely_migration`.execute(app.db)).rows[0]?.n ?? 0)),
+        safe(() => appliedSchemaFingerprint(app.db)),
+        safe(() => reencryptPending(app.db)),
         safe(async () => (await sql<{ Value: string }>`SHOW SESSION STATUS LIKE 'Ssl_cipher'`.execute(app.db)).rows[0]?.Value ?? ''),
         safe(() => app.db.selectFrom('app_settings').select(['setup_completed_at']).where('id', '=', 1).executeTakeFirst()),
         safe(() => isSmtpConfigured(mailDeps)),
@@ -80,8 +82,10 @@ export function registerSystemInfoRoutes(app: FastifyInstance, deps: UsersRouteD
         app: { version, commit, builtAt },
         runtime: { node: process.version, platform: `${platform()} ${arch()}`, kernel: release(),
           uptimeSeconds: Math.round(process.uptime()), memoryMb: Math.round(process.memoryUsage().rss / 1048576) },
-        database: { version: databaseVersion, latestMigration, migrationCount, tls: !!sslCipher, cipher: sslCipher || null },
-        installation: { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION, environment: deps.env.NODE_ENV,
+        database: { version: databaseVersion, tls: !!sslCipher, cipher: sslCipher || null,
+          schema: { applied: appliedSchema, expected: SCHEMA_FINGERPRINT, upToDate: appliedSchema === SCHEMA_FINGERPRINT },
+          reencryptPending: reencryptOpen === true },
+        installation: { installationId: deps.env.INSTALLATION_ID, environment: deps.env.NODE_ENV,
           publicUrl: deps.env.PUBLIC_BASE_URL ?? null, setupCompletedAt: settings?.setup_completed_at ?? null },
         integrations: {
           smtp: !!smtp, ldap: !!ldap, outlook: !!outlook, passkeys: !!deps.env.WEBAUTHN_ORIGIN, antivirus: !!deps.env.CLAMAV_HOST,

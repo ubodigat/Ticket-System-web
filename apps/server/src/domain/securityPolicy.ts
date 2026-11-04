@@ -27,6 +27,11 @@ export interface SecurityPolicy {
 // solange eine frische Installation securityConfig nie explizit gespeichert hat, bleibt das
 // Verhalten unveraendert (5 Fehlversuche/15 Minuten Sperre/8h Sitzung). Unsichere
 // Deaktivierungswerte (0/negativ) werden nicht uebernommen, sondern auf diese Defaults abgebildet.
+// Zwei-Faktor-Pflicht fuer Admin-Konten (TOTP oder Passkey), die das Setup fuer jede neue Installation
+// speichert (Review 11/2026, Punkt 2). Bestehende Installationen werden bewusst nicht stillschweigend
+// umgestellt (Admins ohne zweiten Faktor koennten sich aussperren) -- die Oberflaeche weist
+// Superadmins stattdessen auf die fehlende Pflicht hin.
+export const SETUP_MFA_POLICY = { mfaMode: 'either', mfaRoles: 'admin' } as const;
 const SAFE_DEFAULTS: SecurityPolicy = {
   force2FA: 'none',
   sessionTimeoutMinutes: 480,
@@ -59,6 +64,7 @@ export async function loadSecurityPolicy(db: Kysely<Database>): Promise<Security
     lockoutMinutes: typeof sec.lockoutMinutes === 'number' && sec.lockoutMinutes > 0 ? sec.lockoutMinutes : SAFE_DEFAULTS.lockoutMinutes
   };
 }
+
 
 export function force2faAppliesToRole(policy: SecurityPolicy, role: 'user' | 'admin' | 'superadmin'): boolean {
   if (policy.force2FA === 'all') return true;

@@ -1,0 +1,21 @@
+# Verschluesselung der Datenbankdateien auf der Festplatte (Review 11/2026, Punkt 7). Die
+# Feldverschluesselung der App schuetzt Inhalte; das hier schuetzt zusaetzlich Metadaten, Indizes,
+# Redo-/Undo-Logs, Binlog und temporaere Dateien. Ohne die Schluesseldateien in
+# ops/secrets/mariadb-encryption (von install.sh erzeugt, Teil des Wiederherstellungs-Kits) sind die
+# Dateien im Volume nicht lesbar -- belegt durch ops/tests/mariadb-encryption-at-rest.sh.
+[mariadb]
+plugin_load_add = file_key_management
+file_key_management_filename = /etc/mysql/encryption/keyfile.enc
+file_key_management_filekey = FILE:/etc/mysql/encryption/keyfile.key
+file_key_management_encryption_algorithm = AES_CTR
+innodb_encrypt_tables = FORCE
+innodb_encrypt_log = ON
+innodb_encrypt_temporary_tables = ON
+innodb_encryption_threads = 4
+innodb_encryption_rotate_key_age = 1
+encrypt_tmp_disk_tables = ON
+encrypt_tmp_files = ON
+encrypt_binlog = ON
+aria_encrypt_tables = ON
+# Server laeuft in UTC; die App setzt die Sitzungszeitzone zusaetzlich selbst (db/connection.ts).
+default_time_zone = '+00:00'

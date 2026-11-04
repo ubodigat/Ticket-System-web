@@ -2,7 +2,7 @@ import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { registerTicketsV2Routes } from '../src/http/routes/tickets.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 vi.mock('../src/http/routes/extras.js', () => ({ createNotification: vi.fn().mockResolvedValue(undefined) }));
 
 async function sendReply(status: string, role: 'user' | 'admin' = 'user', foreign = false, archived = false,
@@ -28,7 +28,7 @@ async function sendReply(status: string, role: 'user' | 'admin' = 'user', foreig
   };
   const app = Fastify(); app.decorate('db', db);
   app.addHook('onRequest', async req => { req.ticketSession = { uid: 'user-1', username: 'user', role }; });
-  registerTicketsV2Routes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+  registerTicketsV2Routes(app, { env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any });
   try {
     const response = await app.inject({ method: 'POST', url: '/api/v2/tickets/ticket-1/messages', payload });
     return { response, changes, audits, message };

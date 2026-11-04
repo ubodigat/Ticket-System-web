@@ -22,6 +22,7 @@ import { validateUploadedFile } from '../../domain/fileValidation.js';
 import { scanIfConfigured } from '../../domain/antivirus.js';
 import { sanitizeServerHtml } from '../../domain/sanitizer.js';
 import { loadTicketScope, scopeAllowsTicket } from '../../domain/ticketAccess.js';
+import type { ResolvedDek } from '../../crypto/fieldCrypto.js';
 
 const createKbAttachmentSchema = z.object({
   filename: z.string().trim().min(1).max(255).refine(
@@ -51,8 +52,8 @@ const createTextBlockSchema = z.object({
   content: z.string().trim().min(1).max(50000)
 });
 
-function ctx(deps: KnowledgeRouteDeps, tableName: string, recordId: string, fieldName: string, keyVersion: number) {
-  return { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION, tableName, recordId, fieldName, keyVersion };
+function ctx(deps: KnowledgeRouteDeps, tableName: string, recordId: string, fieldName: string) {
+  return { installationId: deps.env.INSTALLATION_ID, tableName, recordId, fieldName };
 }
 
 export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRouteDeps): void {
@@ -67,10 +68,10 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
   }
 
   // Voller Name der erstellenden Person (verschluesselt gespeichert); null, falls nicht lesbar.
-  function displayName(nameEnc: Buffer | null | undefined, userId: string | null, dek: { rawDek: Buffer; keyVersion: number }): string | null {
+  function displayName(nameEnc: Buffer | null | undefined, userId: string | null, dek: ResolvedDek): string | null {
     if (!nameEnc || !userId) return null;
     try {
-      return fieldCipher.decryptField(nameEnc, dek.rawDek, ctx(deps, 'users', userId, 'name', dek.keyVersion));
+      return fieldCipher.decryptField(nameEnc, dek, ctx(deps, 'users', userId, 'name'));
     } catch {
       return null;
     }
@@ -100,8 +101,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
         .groupBy('article_id').execute()).map(row => [row.article_id, Number(row.n)]));
       const articles = rows.map(({ created_by_name_enc, ...row }) => ({
         ...row,
-        title: fieldCipher.decryptField(row.title, titleDek.rawDek, ctx(deps, 'kb_articles', row.id, 'title', titleDek.keyVersion)),
-        content: fieldCipher.decryptField(row.content, contentDek.rawDek, ctx(deps, 'kb_articles', row.id, 'content', contentDek.keyVersion)),
+        title: fieldCipher.decryptField(row.title, titleDek, ctx(deps, 'kb_articles', row.id, 'title')),
+        content: fieldCipher.decryptField(row.content, contentDek, ctx(deps, 'kb_articles', row.id, 'content')),
         created_by_name: displayName(created_by_name_enc, row.created_by_user_id, nameDek) ?? row.created_by_username,
         linked_ticket_count: linkCounts.get(row.id) ?? 0
       }));
@@ -130,8 +131,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const contentDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.content');
       await app.db.insertInto('kb_articles').values({
         id,
-        title: fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, ctx(deps, 'kb_articles', id, 'title', titleDek.keyVersion)),
-        content: fieldCipher.encryptField(cleanContent, contentDek.rawDek, ctx(deps, 'kb_articles', id, 'content', contentDek.keyVersion)),
+        title: fieldCipher.encryptField(parsed.data.title, titleDek, ctx(deps, 'kb_articles', id, 'title')),
+        content: fieldCipher.encryptField(cleanContent, contentDek, ctx(deps, 'kb_articles', id, 'content')),
         source_ticket_id: parsed.data.source_ticket_id ?? null,
         category: parsed.data.category ?? null,
         created_by_user_id: session.uid
@@ -157,13 +158,13 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       }
       if (parsed.data.title !== undefined) {
         const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
-        updates.title = fieldCipher.encryptField(parsed.data.title, titleDek.rawDek, ctx(deps, 'kb_articles', id, 'title', titleDek.keyVersion));
+        updates.title = fieldCipher.encryptField(parsed.data.title, titleDek, ctx(deps, 'kb_articles', id, 'title'));
       }
       if (parsed.data.content !== undefined) {
         const cleanContent = sanitizeServerHtml(parsed.data.content);
         if (!cleanContent) return reply.code(400).send({ error: 'empty_content' });
         const contentDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.content');
-        updates.content = fieldCipher.encryptField(cleanContent, contentDek.rawDek, ctx(deps, 'kb_articles', id, 'content', contentDek.keyVersion));
+        updates.content = fieldCipher.encryptField(cleanContent, contentDek, ctx(deps, 'kb_articles', id, 'content'));
       }
       await app.db.updateTable('kb_articles').set(updates).where('id', '=', id).execute();
       return reply.send({ success: true });
@@ -205,7 +206,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
       return reply.send({ links: rows.map(row => ({
         article_id: row.id, category: row.category, linked_at: row.linked_at,
-        title: fieldCipher.decryptField(row.title, titleDek.rawDek, ctx(deps, 'kb_articles', row.id, 'title', titleDek.keyVersion))
+        title: fieldCipher.decryptField(row.title, titleDek, ctx(deps, 'kb_articles', row.id, 'title'))
       })) });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -338,7 +339,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.filename');
       const attachments = rows.map(row => ({
         ...row,
-        filename: fieldCipher.decryptField(row.filename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'filename', filenameDek.keyVersion))
+        filename: fieldCipher.decryptField(row.filename, filenameDek, ctx(deps, 'kb_article_attachments', row.id, 'filename'))
       }));
       return reply.send({ attachments });
     } catch (e: any) {
@@ -355,9 +356,9 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       if (!row) return reply.code(404).send({ error: 'not_found' });
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'kb_article_attachments.data');
-      const filename = fieldCipher.decryptField(row.filename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'filename', filenameDek.keyVersion));
+      const filename = fieldCipher.decryptField(row.filename, filenameDek, ctx(deps, 'kb_article_attachments', row.id, 'filename'));
       const chunked = !!await app.db.selectFrom('file_uploads').select('id').where('id', '=', row.id).where('completed', '=', true).executeTakeFirst();
-      const data_b64 = chunked ? null : fieldCipher.decryptField(row.data_b64, dataDek.rawDek, ctx(deps, 'kb_article_attachments', row.id, 'data', dataDek.keyVersion));
+      const data_b64 = chunked ? null : fieldCipher.decryptField(row.data_b64, dataDek, ctx(deps, 'kb_article_attachments', row.id, 'data'));
       return reply.send({ attachment: { ...row, filename, data_b64, chunked } });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -394,10 +395,10 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
         kb_article_id: id,
         uploaded_by_user_id: session.uid,
         uploaded_by_username: session.username,
-        filename: fieldCipher.encryptField(validated.safeFilename, filenameDek.rawDek, ctx(deps, 'kb_article_attachments', attachmentId, 'filename', filenameDek.keyVersion)),
+        filename: fieldCipher.encryptField(validated.safeFilename, filenameDek, ctx(deps, 'kb_article_attachments', attachmentId, 'filename')),
         mime_type: validated.mimeType,
         size_bytes: validated.sizeBytes,
-        data_b64: fieldCipher.encryptField(parsed.data.data_b64, dataDek.rawDek, ctx(deps, 'kb_article_attachments', attachmentId, 'data', dataDek.keyVersion))
+        data_b64: fieldCipher.encryptField(parsed.data.data_b64, dataDek, ctx(deps, 'kb_article_attachments', attachmentId, 'data'))
       }).execute();
       return reply.code(201).send({ id: attachmentId, filename: validated.safeFilename, mime_type: validated.mimeType, size_bytes: validated.sizeBytes });
     } catch (e: any) {
@@ -428,7 +429,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const contentDek = await ensureDek(app.db, deps.keyProvider, 'text_blocks.content');
       const blocks = rows.map(row => ({
         ...row,
-        content: fieldCipher.decryptField(row.content, contentDek.rawDek, ctx(deps, 'text_blocks', row.id, 'content', contentDek.keyVersion))
+        content: fieldCipher.decryptField(row.content, contentDek, ctx(deps, 'text_blocks', row.id, 'content'))
       }));
       return reply.send({ blocks });
     } catch (e: any) {
@@ -448,7 +449,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       await app.db.insertInto('text_blocks').values({
         id,
         title: parsed.data.title,
-        content: fieldCipher.encryptField(parsed.data.content, contentDek.rawDek, ctx(deps, 'text_blocks', id, 'content', contentDek.keyVersion)),
+        content: fieldCipher.encryptField(parsed.data.content, contentDek, ctx(deps, 'text_blocks', id, 'content')),
         created_by_user_id: session.uid
       }).execute();
       return reply.code(201).send({ id });
@@ -468,7 +469,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       if (!existing) return reply.code(404).send({ error: 'not_found' });
       const dek = await ensureDek(app.db, deps.keyProvider, 'text_blocks.content');
       await app.db.updateTable('text_blocks').set({ title: parsed.data.title,
-        content: fieldCipher.encryptField(parsed.data.content, dek.rawDek, ctx(deps, 'text_blocks', id, 'content', dek.keyVersion)) }).where('id', '=', id).execute();
+        content: fieldCipher.encryptField(parsed.data.content, dek, ctx(deps, 'text_blocks', id, 'content')) }).where('id', '=', id).execute();
       return { success: true };
     } catch (error) { return routeError(app, reply, error); }
   });

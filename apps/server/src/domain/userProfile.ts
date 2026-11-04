@@ -3,6 +3,7 @@ The contents of this file are subject to the Common Public Attribution License V
 */
 import { z } from 'zod';
 import { fieldCipher } from '../crypto/fieldCrypto.js';
+import type { ResolvedDek } from '../crypto/fieldCrypto.js';
 
 // Weitere Angaben zu einem Konto (Benutzerverwaltung): Personalnummer, Kostenstelle, Gebaeude/Raum,
 // Eintrittsdatum, Arbeitstage mit Arbeitszeit und ein Hinweis zur Erreichbarkeit. Alles zusammen
@@ -33,14 +34,13 @@ export type UserProfile = z.infer<typeof userProfileSchema>;
 
 export interface ProfileCipherContext {
   installationId: string;
-  schemaVersion: number;
   recordId: string;
-  dek: { rawDek: Buffer; keyVersion: number };
+  dek: ResolvedDek;
 }
 
 const ctx = (c: ProfileCipherContext) => ({
-  installationId: c.installationId, schemaVersion: c.schemaVersion,
-  tableName: 'users', recordId: c.recordId, fieldName: 'profile', keyVersion: c.dek.keyVersion
+  installationId: c.installationId,
+  tableName: 'users', recordId: c.recordId, fieldName: 'profile'
 });
 
 // Leere Werte fallen weg; ein komplett leeres Profil wird als NULL gespeichert.
@@ -57,14 +57,14 @@ export function compactUserProfile(profile: UserProfile): UserProfile {
 export function encryptUserProfile(profile: UserProfile | null | undefined, c: ProfileCipherContext): Buffer | null {
   const compact = profile ? compactUserProfile(profile) : {};
   if (!Object.keys(compact).length) return null;
-  return fieldCipher.encryptField(JSON.stringify(compact), c.dek.rawDek, ctx(c));
+  return fieldCipher.encryptField(JSON.stringify(compact), c.dek, ctx(c));
 }
 
 // Nicht lesbare oder ungueltige Daten ergeben ein leeres Profil statt eines Fehlers.
 export function decryptUserProfile(stored: Buffer | null | undefined, c: ProfileCipherContext): UserProfile {
   if (!stored) return {};
   try {
-    const parsed = userProfileSchema.safeParse(JSON.parse(fieldCipher.decryptField(stored, c.dek.rawDek, ctx(c))));
+    const parsed = userProfileSchema.safeParse(JSON.parse(fieldCipher.decryptField(stored, c.dek, ctx(c))));
     return parsed.success ? parsed.data : {};
   } catch {
     return {};

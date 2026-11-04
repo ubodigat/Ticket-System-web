@@ -6,101 +6,170 @@
 # The Initial Developer of the Original Code is U:Bodigat. All portions of the code written by U:Bodigat are Copyright (c) 2026 U:Bodigat. All Rights Reserved.
 # Contributors: see CONTRIBUTORS.md and CHANGES.md.
 #
-# Vollsicherung: MariaDB-Dump (alle Geschäftsdaten, liegen dort bereits AES-256-GCM-verschlüsselt)
-# + der KEK (ops/secrets/app.kek), ohne den der Dump wertlos ist (Schlüsselverschlüsselungsschlüssel
-# für alle Datenentschlüsselungsschlüssel, siehe apps/server/src/crypto/keyProvider.ts).
+# Server-Sicherung in zwei getrennten Teilen (Review 11/2026, Punkt 4):
 #
-# Das fertige Archiv wird selbst noch einmal mit einer eigenen Passphrase verschlüsselt -- ein
-# Backup, das DB-Dump UND Schlüssel im Klartext zusammen enthält, wäre sonst selbst die
-# "Sicherheitslücke offene Backup-Dateien" aus der Anforderungsliste. Ohne Passphrase ist das
-# Archiv nutzlos, auch wenn es irgendwo offen liegt.
+#   backup.sh                  Datensicherung: MariaDB-Dump, direkt gestreamt (kein Klartext auf der
+#                              Platte), komprimiert und ASYMMETRISCH mit dem oeffentlichen
+#                              Sicherungsschluessel verschluesselt. Der private Schluessel liegt NICHT
+#                              auf dem Server -- ein Angreifer mit Serverzugriff kann alte Sicherungen
+#                              nicht lesen. Laeuft automatisch vor jedem Update und taeglich (Timer).
+#   backup.sh --init-keys      Einmalig: erzeugt das Sicherungs-Schluesselpaar und das
+#                              Wiederherstellungs-Kit. Nur der oeffentliche Schluessel bleibt hier.
+#   backup.sh --recovery-kit   Wiederherstellungs-Kit neu erzeugen (nach einer KEK-Rotation): KEK,
+#                              .env-Geheimnisse und TLS-Material, symmetrisch mit einer Passphrase.
 #
-# Security-Audit N14, zwei Punkte behoben:
-# 1. gpg (symmetrisch, AES256, OpenPGP-Integritätsschutz/MDC) statt openssl AES-256-CBC: CBC
-#    allein ist nicht authentifiziert -- ein verändertes Archiv würde beim Restore nicht als
-#    manipuliert erkannt, nur als evtl. kaputtes tar. gpg erkennt eine Veränderung beim Entschlüsseln.
-# 2. DB-Passwort und Backup-Passphrase landen nie als Kommandozeilenargument (sonst für jeden
-#    lokalen Prozess auf diesem Host über "ps aux"/"/proc/<pid>/cmdline" sichtbar) -- beide werden
-#    ausschließlich über Datei-Deskriptoren/stdin übergeben.
+# Datensicherungen enthalten weder KEK noch .env. Fuer eine Wiederherstellung braucht man die
+# Datensicherung UND das Wiederherstellungs-Kit samt Passphrase (restore.sh).
+#
+# Externe Kopie (dringend empfohlen, sonst warnt die Oberflaeche):
+#   BACKUP_RESTIC_REPOSITORY + BACKUP_RESTIC_PASSWORD_FILE   restic, z.B. rest-server --append-only
+#   BACKUP_S3_URI (s3://bucket/pfad)                          aws CLI; Bucket mit Object Lock
+# Beides in ops/docker/.env eintragen.
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 ENV_FILE="$SCRIPT_DIR/.env"
+SECRETS_DIR="$SCRIPT_DIR/../secrets"
+RECIPIENT_KEY="$SECRETS_DIR/backup-recipient.asc"
 BACKUP_DIR="${BACKUP_DIR:-$SCRIPT_DIR/../backups}"
+KEEP_LOCAL="${BACKUP_KEEP_LOCAL:-14}"
+STATE_DIR="${UPDATE_BRIDGE_HOST_DIR:-/var/lib/ticket-system-update}/state"
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "Nicht gefunden: $ENV_FILE -- zuerst ./install.sh ausführen." >&2
-  exit 1
-fi
-# shellcheck disable=SC1090
-source "$ENV_FILE"
+die() { echo "$*" >&2; exit 1; }
+[[ -f "$ENV_FILE" ]] || die "Nicht gefunden: $ENV_FILE -- zuerst install.sh ausführen."
+command -v gpg >/dev/null 2>&1 || die "gpg nicht gefunden -- 'apt-get install -y gnupg' und erneut versuchen."
+env_value() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2- || true; }
 
-KEK_PATH="$SCRIPT_DIR/../secrets/app.kek"
-if [[ ! -f "$KEK_PATH" ]]; then
-  echo "Nicht gefunden: $KEK_PATH -- ohne den Schlüssel ist jedes Backup wertlos." >&2
-  exit 1
-fi
-
-if ! command -v gpg >/dev/null 2>&1; then
-  echo "gpg nicht gefunden -- 'apt-get install -y gnupg' und erneut versuchen." >&2
-  exit 1
-fi
-
-PASSPHRASE="${BACKUP_PASSPHRASE:-}"
-if [[ -z "$PASSPHRASE" ]]; then
-  read -rsp "Passphrase zur Verschlüsselung des Backups (wird für Restore erneut benötigt): " PASSPHRASE
-  echo
-  if [[ -z "$PASSPHRASE" ]]; then
-    echo "Leere Passphrase nicht erlaubt." >&2
-    exit 1
-  fi
-fi
-
-TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-WORK_DIR="$(mktemp -d)"
-trap 'rm -rf "$WORK_DIR"' EXIT
-
-echo "==> Sichere MariaDB (konsistenter Dump, eine Transaktion)..."
-# DB_USER/DB_PASSWORD werden als MySQL-Optionsdatei (--defaults-extra-file) über stdin an den
-# Container übergeben -- nie als "-p..."-Kommandozeilenargument (siehe Kommentar oben).
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
-  set -e
-  umask 077
-  cnf="$(mktemp)"
-  cat > "$cnf"
-  trap "rm -f \"$cnf\"" EXIT
-  mariadb-dump --defaults-extra-file="$cnf" --single-transaction --routines --triggers "$1"
-' _ "$DB_NAME" > "$WORK_DIR/database.sql" <<EOF
-[client]
-user=$DB_USER
-password=$DB_PASSWORD
-EOF
-
-echo "==> Kopiere Schlüssel (KEK) und TLS-Zertifikate..."
-mkdir -p "$WORK_DIR/secrets" "$WORK_DIR/tls"
-cp "$KEK_PATH" "$WORK_DIR/secrets/app.kek"
-if [[ -d "$SCRIPT_DIR/../tls/mariadb" ]]; then
-  cp -r "$SCRIPT_DIR/../tls/mariadb" "$WORK_DIR/tls/"
-fi
-cp "$ENV_FILE" "$WORK_DIR/env.backup"
-
+# Privates Arbeitsverzeichnis neben den Sicherungen statt im gemeinsam genutzten /tmp.
 mkdir -p "$BACKUP_DIR"
-ARCHIVE_PATH="$BACKUP_DIR/ticket-system-backup-$TIMESTAMP.tar.gz.gpg"
+chmod 0700 "$BACKUP_DIR"
+WORK_DIR="$(mktemp -d "$BACKUP_DIR/.work.XXXXXX")"
+PARTIAL=""
+trap 'rm -rf "$WORK_DIR"; [[ -z "$PARTIAL" ]] || rm -f "$PARTIAL"' EXIT
 
-echo "==> Packe und verschlüssele Archiv (gpg, authentifiziert)..."
-# --passphrase-fd 3 (NICHT 0/stdin, das traegt den eigentlichen tar-Datenstrom): Passphrase kommt
-# über einen separaten Dateideskriptor, steht nie als Kommandozeilenargument in der Prozessliste.
-# s2k-count auf das Maximum erhöht den Aufwand für einen Brute-Force-Versuch gegen die Passphrase
-# selbst erheblich.
-tar -C "$WORK_DIR" -czf - . | \
-  gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
-    --symmetric --cipher-algo AES256 --s2k-mode 3 --s2k-count 65011712 \
-    --output "$ARCHIVE_PATH" 3<<< "$PASSPHRASE"
-unset PASSPHRASE
+write_state() {
+  [[ -d "$STATE_DIR" ]] || return 0
+  local tmp
+  tmp="$(mktemp "$STATE_DIR/.backup.XXXXXX")"
+  local pair
+  for pair in "$@"; do printf '%s\n' "$pair" >>"$tmp"; done
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$STATE_DIR/backup.env"
+}
+previous_state() { grep -m1 "^$1=" "$STATE_DIR/backup.env" 2>/dev/null | cut -d= -f2- || true; }
 
-chmod 600 "$ARCHIVE_PATH"
-echo
-echo "==> Backup erstellt: $ARCHIVE_PATH"
-echo "    Diese Datei UND die Passphrase werden für ./restore.sh gebraucht -- getrennt aufbewahren"
-echo "    (3-2-1-Regel: mindestens eine Kopie an einem anderen Ort als dieser Server)."
+read_passphrase() {
+  local value="${BACKUP_KIT_PASSPHRASE:-}"
+  if [[ -z "$value" ]]; then
+    [[ -t 0 ]] || die "Keine Passphrase: BACKUP_KIT_PASSPHRASE setzen oder interaktiv ausführen."
+    read -rsp "Passphrase für das Wiederherstellungs-Kit (mind. 16 Zeichen): " value; echo
+  fi
+  [[ ${#value} -ge 16 ]] || die "Die Passphrase muss mindestens 16 Zeichen lang sein."
+  printf '%s' "$value"
+}
+
+# Wiederherstellungs-Kit: KEK, .env, TLS-Material und (bei --init-keys) der private
+# Sicherungsschluessel. Symmetrisch, authentifiziert (gpg MDC), Passphrase nur ueber einen Deskriptor.
+write_recovery_kit() {
+  local passphrase="$1" private_key="${2:-}" kit
+  kit="$REPO_DIR/ops/recovery-kit-$(date +%Y%m%d-%H%M%S).tar.gz.gpg"
+  mkdir -p "$WORK_DIR/kit/secrets"
+  cp "$SECRETS_DIR/app.kek" "$WORK_DIR/kit/secrets/app.kek"
+  cp "$ENV_FILE" "$WORK_DIR/kit/env"
+  [[ -d "$SCRIPT_DIR/../tls/mariadb" ]] && cp -r "$SCRIPT_DIR/../tls/mariadb" "$WORK_DIR/kit/tls-mariadb"
+  [[ -d "$SECRETS_DIR/mariadb-encryption" ]] && cp -r "$SECRETS_DIR/mariadb-encryption" "$WORK_DIR/kit/mariadb-encryption"
+  [[ -f "$RECIPIENT_KEY" ]] && cp "$RECIPIENT_KEY" "$WORK_DIR/kit/backup-recipient.asc"
+  [[ -n "$private_key" ]] && cp "$private_key" "$WORK_DIR/kit/backup-private.asc"
+  tar -C "$WORK_DIR/kit" -czf - . | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
+    --symmetric --cipher-algo AES256 --s2k-mode 3 --s2k-count 65011712 --output "$kit" 3<<<"$passphrase"
+  rm -rf "$WORK_DIR/kit"
+  chmod 600 "$kit"
+  echo "$kit"
+}
+
+init_keys() {
+  [[ -f "$RECIPIENT_KEY" ]] && die "Sicherungsschlüssel existiert bereits ($RECIPIENT_KEY)."
+  local passphrase home
+  passphrase="$(read_passphrase)"
+  home="$WORK_DIR/gnupg"; mkdir -m 0700 "$home"
+  GNUPGHOME="$home" gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key \
+    "Ticket-System Datensicherung <backup@ticket-system.invalid>" cv25519 encr never >/dev/null 2>&1 \
+    || GNUPGHOME="$home" gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key \
+      "Ticket-System Datensicherung <backup@ticket-system.invalid>" rsa4096 encr never >/dev/null
+  mkdir -p "$SECRETS_DIR"
+  GNUPGHOME="$home" gpg --batch --armor --export > "$RECIPIENT_KEY"
+  GNUPGHOME="$home" gpg --batch --armor --pinentry-mode loopback --passphrase '' --export-secret-keys > "$WORK_DIR/backup-private.asc"
+  chmod 0644 "$RECIPIENT_KEY"
+  local kit
+  kit="$(write_recovery_kit "$passphrase" "$WORK_DIR/backup-private.asc")"
+  rm -rf "$home" "$WORK_DIR/backup-private.asc"
+  echo "==> Wiederherstellungs-Kit: $kit"
+  echo "    Enthält den einzigen privaten Sicherungsschlüssel. JETZT vom Server herunterladen,"
+  echo "    getrennt von der Passphrase aufbewahren und danach hier löschen."
+}
+
+data_backup() {
+  [[ -f "$RECIPIENT_KEY" ]] || die "Kein Sicherungsschlüssel vorhanden -- einmalig 'bash ops/docker/backup.sh --init-keys' ausführen."
+  local stamp archive tmp home db_name db_user db_password
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  archive="$BACKUP_DIR/ticket-system-data-$stamp.sql.gz.gpg"
+  tmp="$archive.partial"
+  PARTIAL="$tmp"
+  home="$WORK_DIR/gnupg"; mkdir -m 0700 "$home"
+  GNUPGHOME="$home" gpg --batch --quiet --import "$RECIPIENT_KEY"
+  local fingerprint
+  fingerprint="$(GNUPGHOME="$home" gpg --batch --with-colons --list-keys | awk -F: '/^fpr:/ {print $10; exit}')"
+  db_name="$(env_value DB_NAME)"; db_user="$(env_value DB_USER)"; db_password="$(env_value DB_PASSWORD)"
+  echo "==> Datensicherung (konsistenter Dump, direkt verschlüsselt)..."
+  # Zugangsdaten als Optionsdatei ueber stdin in den Container -- nie als Kommandozeilenargument.
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T mariadb sh -c '
+    set -e; umask 077; cnf="$(mktemp)"; trap "rm -f \"$cnf\"" EXIT
+    cat > "$cnf"
+    exec mariadb-dump --defaults-extra-file="$cnf" --single-transaction --routines --triggers --hex-blob "$1"
+  ' _ "$db_name" < <(printf '[client]\nuser=%s\npassword=%s\n' "$db_user" "$db_password") \
+    | gzip -9 \
+    | GNUPGHOME="$home" gpg --batch --yes --trust-model always --encrypt --recipient "$fingerprint" --output "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$archive"
+  PARTIAL=""
+  echo "==> Gesichert: $archive"
+
+  # Alte lokale Datensicherungen entfernen (die neuesten KEEP_LOCAL bleiben).
+  ls -1t "$BACKUP_DIR"/ticket-system-data-*.sql.gz.gpg 2>/dev/null | tail -n +"$((KEEP_LOCAL + 1))" | xargs -r rm -f --
+
+  local offsite="none" offsite_at error=""
+  offsite_at="$(previous_state lastOffsiteAt)"
+  local restic_repo s3_uri
+  restic_repo="$(env_value BACKUP_RESTIC_REPOSITORY)"; s3_uri="$(env_value BACKUP_S3_URI)"
+  if [[ -n "$restic_repo" ]]; then
+    offsite="restic"
+    if RESTIC_REPOSITORY="$restic_repo" RESTIC_PASSWORD_FILE="$(env_value BACKUP_RESTIC_PASSWORD_FILE)" \
+      restic backup --quiet --tag ticket-system "$archive"; then offsite_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    else error="offsite_failed"; fi
+  elif [[ -n "$s3_uri" ]]; then
+    offsite="s3"
+    if aws s3 cp --only-show-errors "$archive" "${s3_uri%/}/$(basename "$archive")"; then offsite_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    else error="offsite_failed"; fi
+  fi
+  write_state "lastBackupAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" "lastBackupFile=$(basename "$archive")" \
+    "offsite=$offsite" "lastOffsiteAt=$offsite_at" "error=$error"
+  if [[ "$offsite" == none ]]; then
+    echo "HINWEIS: Keine externe Kopie eingerichtet (BACKUP_RESTIC_REPOSITORY oder BACKUP_S3_URI)."
+    echo "         Eine Sicherung nur auf diesem Server schützt nicht vor Ausfall oder Kompromittierung."
+  elif [[ -n "$error" ]]; then
+    echo "WARNUNG: Externe Kopie fehlgeschlagen -- die lokale Sicherung ist vorhanden." >&2
+    return 1
+  fi
+}
+
+case "${1:-}" in
+  "") data_backup ;;
+  --init-keys) init_keys ;;
+  --recovery-kit)
+    kit="$(write_recovery_kit "$(read_passphrase)")"
+    echo "==> Wiederherstellungs-Kit: $kit (vom Server herunterladen und hier löschen)" ;;
+  *) die "Verwendung: $0 [--init-keys | --recovery-kit]" ;;
+esac

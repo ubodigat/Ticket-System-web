@@ -15,8 +15,10 @@ import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, computeBlindIndex } from '../../crypto/fieldCrypto.js';
 import { SETUP_HTML, SETUP_CSS, SETUP_JS } from '../assets/setupPage.js';
+import { ADMIN_CODE_TTL_MS, enrollCodeHash, generateAdminEnrollCode } from '../../domain/mfaEnrollment.js';
+import { SETUP_MFA_POLICY } from '../../domain/securityPolicy.js';
 
-// Setup-Wizard gemäß docs/SPEC.md §5: erscheint einmalig nach der Installation, fragt
+// Setup-Wizard gemäß docs/ARCHITECTURE.md: erscheint einmalig nach der Installation, fragt
 // Unternehmenseinstellungen + ersten (superadmin-)Benutzer ab. Danach ist die Seite gesperrt
 // (409), sie lässt sich nicht erneut ausführen, um ein bestehendes System zu übernehmen.
 const setupRequestSchema = z.object({
@@ -30,7 +32,7 @@ const setupRequestSchema = z.object({
     .regex(/^[a-zA-Z0-9._-]+$/, 'Nur Buchstaben, Ziffern, Punkt, Unterstrich und Bindestrich erlaubt.'),
   adminEmail: z.string().trim().toLowerCase().email().max(255),
   adminName: z.string().trim().min(1).max(255),
-  // Argon2id-Passwortrichtlinie für admin/superadmin: mindestens 14 Zeichen (docs/SPEC.md §8).
+  // Argon2id-Passwortrichtlinie für admin/superadmin: mindestens 14 Zeichen.
   adminPassword: z.string().min(14).max(256),
   // Verhindert, dass eine fremde Person zwischen Installation und erstem Aufruf durch den
   // Betreiber das erste (Superadmin-)Konto anlegt (Security-Audit B4) -- install.sh gibt den
@@ -110,9 +112,10 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
     }
 
     try {
+      const mfaEnrollCode = generateAdminEnrollCode();
       const result = await app.db.transaction().execute(async trx => {
         // Zeile sperren, solange die Transaktion läuft -- verhindert, dass zwei parallele
-        // Einrichtungsversuche beide durchlaufen (docs/SPEC.md §7.1 "serverseitige Prüfung").
+        // Einrichtungsversuche beide durchlaufen (serverseitige Prüfung).
         const settingsRow = await trx
           .selectFrom('app_settings')
           .select(['setup_completed_at'])
@@ -126,8 +129,8 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
 
         await trx
           .insertInto('installations')
-          .values({ id: deps.env.INSTALLATION_ID, schema_version: deps.env.SCHEMA_VERSION })
-          .onDuplicateKeyUpdate({ schema_version: deps.env.SCHEMA_VERSION })
+          .values({ id: deps.env.INSTALLATION_ID })
+          .onDuplicateKeyUpdate({ id: deps.env.INSTALLATION_ID })
           .execute();
 
         const nameDek = await ensureDek(trx, deps.keyProvider, 'users.name');
@@ -145,16 +148,14 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
 
         const nameCtx = {
           installationId: deps.env.INSTALLATION_ID,
-          schemaVersion: deps.env.SCHEMA_VERSION,
           tableName: 'users',
           recordId: userId,
-          fieldName: 'name',
-          keyVersion: nameDek.keyVersion
+          fieldName: 'name'
         };
-        const emailCtx = { ...nameCtx, fieldName: 'email', keyVersion: emailDek.keyVersion };
+        const emailCtx = { ...nameCtx, fieldName: 'email' };
 
-        const nameEnc = fieldCipher.encryptField(input.adminName, nameDek.rawDek, nameCtx);
-        const emailEnc = fieldCipher.encryptField(input.adminEmail, emailDek.rawDek, emailCtx);
+        const nameEnc = fieldCipher.encryptField(input.adminName, nameDek, nameCtx);
+        const emailEnc = fieldCipher.encryptField(input.adminEmail, emailDek, emailCtx);
         const emailBlindIdx = computeBlindIndex(blindIndexDek.rawDek, input.adminEmail);
 
         await trx
@@ -171,6 +172,11 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
             locked_permanent: false,
             totp_enabled: false,
             ldap_login_enabled: false,
+            // Einrichtungscode fuer den zweiten Faktor: die Person hat sich gerade mit dem
+            // Setup-Token ausgewiesen; ohne Mailversand und ohne weitere Admins gaebe es sonst
+            // keinen Weg, die verpflichtende Ersteinrichtung abzuschliessen.
+            mfa_enroll_code_hash: enrollCodeHash(deps.env.COOKIE_SECRET, userId, mfaEnrollCode, 'admin'),
+            mfa_enroll_code_expires_at: new Date(Date.now() + ADMIN_CODE_TTL_MS),
             installation_id: deps.env.INSTALLATION_ID
           })
           .execute();
@@ -181,6 +187,8 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
           .set({
             company_name: input.companyName,
             portal_name: input.portalName,
+            // Zwei-Faktor-Anmeldung ist fuer Admin-Konten von Anfang an Pflicht.
+            config_json: JSON.stringify({ securityConfig: SETUP_MFA_POLICY }),
             setup_completed_at: new Date()
           })
           .where('id', '=', 1)
@@ -198,7 +206,7 @@ export function registerSetupRoutes(app: FastifyInstance, deps: SetupRouteDeps):
         });
       }
 
-      return reply.code(201).send({ success: true });
+      return reply.code(201).send({ success: true, mfaEnrollCode });
     } catch (err) {
       app.log.error({ err }, 'Einrichtung fehlgeschlagen');
       return reply.code(500).send({

@@ -2,13 +2,14 @@ import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { fieldCipher } from '../src/crypto/fieldCrypto.js';
 import { registerTicketsV2Routes } from '../src/http/routes/tickets.js';
+import { testDek } from './helpers/testDek.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 vi.mock('../src/http/routes/extras.js', () => ({ createNotification: vi.fn().mockResolvedValue(undefined) }));
 
-const dek = Buffer.alloc(32, 7);
+const dek = testDek();
 const enc = (text: string, tableName: string, recordId: string, fieldName: string) =>
-  fieldCipher.encryptField(text, dek, { installationId: 'test', schemaVersion: 1, tableName, recordId, fieldName, keyVersion: 1 });
+  fieldCipher.encryptField(text, dek, { installationId: 'test', tableName, recordId, fieldName });
 
 function fixture() {
   const message = { id: 'm1', ticket_id: 't1', sender_user_id: 'admin-1', sender_username: 'mmuster', sender_name: 'mmuster',
@@ -29,7 +30,7 @@ function fixture() {
   const app = Fastify(); app.decorate('db', db);
   const actor = { uid: 'admin-1', username: 'mmuster', role: 'admin' };
   app.addHook('onRequest', async req => { req.ticketSession = actor; });
-  registerTicketsV2Routes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+  registerTicketsV2Routes(app, { env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any });
   return { app, message, actor };
 }
 

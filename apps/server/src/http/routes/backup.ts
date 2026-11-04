@@ -23,16 +23,17 @@ import {
   encodeValue, hashMatches, openBackup, readBackupHeader, readPayloadLines, sealBackup, sha256Hex
 } from '../../domain/backup.js';
 import type { Database } from '../../db/types.js';
+import { appliedSchemaFingerprint } from '../../db/schemaSync.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 
 export interface BackupRouteDeps { env: Env; keyProvider: KeyProvider }
 
 export const RESTORE_CONFIRMATION = 'WIEDERHERSTELLEN';
-// Nicht Teil der Sicherung: Migrationsstand (gehoert zum laufenden Code), Sitzungen, gemerkte
-// MFA-Geraete/-Ablaeufe (sonst lebten alte Anmeldungen wieder auf), Auftragswarteschlange und
-// Sperr-/Zaehlerstaende der Anmeldedrosselung.
-export const BACKUP_EXCLUDED_TABLES = new Set(['kysely_migration', 'kysely_migration_lock', 'sessions', 'mfa_flows', 'mfa_devices',
+// Nicht Teil der Sicherung: Schemastand (gehoert zum laufenden Code), Fortschritt der
+// Neuverschluesselung, Sitzungen, gemerkte MFA-Geraete/-Ablaeufe (sonst lebten alte Anmeldungen wieder
+// auf), Auftragswarteschlange und Sperr-/Zaehlerstaende der Anmeldedrosselung.
+export const BACKUP_EXCLUDED_TABLES = new Set(['schema_state', 'crypto_jobs', 'sessions', 'mfa_flows', 'mfa_devices',
   'jobs', 'job_dead_letter', 'rate_limit_counters', 'login_failure_sources']);
 const CLEARED_AFTER_RESTORE = ['sessions', 'mfa_flows', 'mfa_devices', 'jobs'] as const;
 const STAGE_TTL_MS = 15 * 60 * 1000;
@@ -47,13 +48,15 @@ const restoreSchema = z.object({
   confirm: z.literal(RESTORE_CONFIRMATION)
 }).passthrough();
 
-interface TableSchema { name: string; columns: string[]; primaryKey: string[] }
+// required: Spalten ohne Standardwert, die NOT NULL sind -- muessen in einer Sicherung vorkommen.
+interface TableSchema { name: string; columns: string[]; primaryKey: string[]; required: string[] }
 
 // Aktuelle Tabellen/Spalten der Datenbank (ohne berechnete Spalten) -- Grundlage fuer Export und
 // fuer den Abgleich beim Einspielen.
 export async function loadTableSchemas(db: Kysely<Database>): Promise<TableSchema[]> {
-  const rows = (await sql<{ table_name: string; column_name: string; column_key: string; extra: string }>`
-    SELECT c.TABLE_NAME AS table_name, c.COLUMN_NAME AS column_name, c.COLUMN_KEY AS column_key, c.EXTRA AS extra
+  const rows = (await sql<{ table_name: string; column_name: string; column_key: string; extra: string; nullable: string; def: string | null }>`
+    SELECT c.TABLE_NAME AS table_name, c.COLUMN_NAME AS column_name, c.COLUMN_KEY AS column_key, c.EXTRA AS extra,
+      c.IS_NULLABLE AS nullable, c.COLUMN_DEFAULT AS def
     FROM information_schema.COLUMNS c
     JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
     WHERE c.TABLE_SCHEMA = DATABASE() AND t.TABLE_TYPE = 'BASE TABLE'
@@ -61,16 +64,27 @@ export async function loadTableSchemas(db: Kysely<Database>): Promise<TableSchem
   const tables = new Map<string, TableSchema>();
   for (const row of rows) {
     if (BACKUP_EXCLUDED_TABLES.has(row.table_name) || /GENERATED|VIRTUAL|PERSISTENT|STORED/i.test(row.extra || '')) continue;
-    const table = tables.get(row.table_name) ?? { name: row.table_name, columns: [], primaryKey: [] };
+    const table = tables.get(row.table_name) ?? { name: row.table_name, columns: [], primaryKey: [], required: [] };
     table.columns.push(row.column_name);
+    if (row.nullable !== 'YES' && row.def === null && !/auto_increment/i.test(row.extra || '')) table.required.push(row.column_name);
     if (row.column_key === 'PRI') table.primaryKey.push(row.column_name);
     tables.set(row.table_name, table);
   }
   return [...tables.values()];
 }
 
-async function latestMigration(db: Kysely<Database>): Promise<string | null> {
-  return (await sql<{ name: string }>`SELECT name FROM kysely_migration ORDER BY name DESC LIMIT 1`.execute(db)).rows[0]?.name ?? null;
+// Passt eine Sicherung ins aktuelle Schema? Jede gesicherte Tabelle und Spalte muss es noch geben
+// (sonst gingen Daten verloren); neue Spalten muessen einen Standardwert haben oder NULL erlauben.
+// So laesst sich auch eine Sicherung einer aelteren Version nach einem Update einspielen.
+export function backupFitsSchema(meta: BackupTableMeta[], current: Map<string, TableSchema>): boolean {
+  const names = new Set(meta.map(table => table.name));
+  if (names.size !== meta.length) return false;
+  return meta.every(table => {
+    const live = current.get(table.name);
+    if (!live || !Array.isArray(table.columns) || new Set(table.columns).size !== table.columns.length) return false;
+    const liveColumns = new Set(live.columns);
+    return table.columns.every(column => liveColumns.has(column)) && live.required.every(column => table.columns.includes(column));
+  });
 }
 
 async function audit(app: FastifyInstance, session: { uid: string; username: string }, action: string, detail: Record<string, unknown>) {
@@ -120,7 +134,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: BackupRouteDeps
           }
         });
         const file = await sealBackup(await writer.finish(), parsed.data.passphrase, {
-          installationId: deps.env.INSTALLATION_ID, latestMigration: await latestMigration(app.db), createdBy: session.username
+          installationId: deps.env.INSTALLATION_ID, schemaFingerprint: await appliedSchemaFingerprint(app.db), createdBy: session.username
         });
         return { file, rowCount, tableCount: tables.length };
       });
@@ -195,26 +209,19 @@ export function registerBackupRoutes(app: FastifyInstance, deps: BackupRouteDeps
       if (!hashMatches(upload.file, parsed.data.sha256)) return reject('backup_hash_mismatch');
       const { header } = readBackupHeader(upload.file);
       if (header.installationId !== deps.env.INSTALLATION_ID) return reject('backup_installation_mismatch');
-      if (header.latestMigration !== await latestMigration(app.db)) return reject('backup_schema_mismatch');
 
       const stats = await exclusive(async () => {
         const { payload } = await openBackup(upload.file, parsed.data.passphrase);
         const current = new Map((await loadTableSchemas(app.db)).map(table => [table.name, table]));
-        // Durchlauf 1: nur pruefen. Tabellen und Spalten muessen exakt dem aktuellen Schema
-        // entsprechen, jede Zeile muss vollstaendig und dekodierbar sein.
+        // Durchlauf 1: nur pruefen. Die Sicherung muss ins aktuelle Schema passen (backupFitsSchema),
+        // jede Zeile muss vollstaendig und dekodierbar sein.
         let meta: BackupTableMeta[] | null = null;
         let rows = 0;
         for await (const line of readPayloadLines(payload)) {
           if (!meta) {
             if (!('kind' in line) || line.kind !== 'meta' || !Array.isArray(line.tables)) throw new BackupError('backup_invalid_content');
             meta = line.tables;
-            const names = new Set(meta.map(table => table.name));
-            if (names.size !== meta.length || names.size !== current.size) throw new BackupError('backup_schema_mismatch');
-            for (const table of meta) {
-              const live = current.get(table.name);
-              if (!live || !Array.isArray(table.columns) || table.columns.length !== live.columns.length
-                || [...table.columns].sort().join('\n') !== [...live.columns].sort().join('\n')) throw new BackupError('backup_schema_mismatch');
-            }
+            if (!backupFitsSchema(meta, current)) throw new BackupError('backup_schema_mismatch');
             continue;
           }
           if (!('t' in line)) throw new BackupError('backup_invalid_content');
@@ -228,10 +235,13 @@ export function registerBackupRoutes(app: FastifyInstance, deps: BackupRouteDeps
         // Durchlauf 2: Austausch in einer Transaktion. Fremdschluessel-Pruefungen nur fuer diese
         // Verbindung und nur waehrend des Austauschs aus (Reihenfolge der Tabellen beliebig).
         const tableMeta = meta;
+        // Tabellen, die es beim Erstellen der Sicherung noch nicht gab, werden mit geleert -- sonst
+        // blieben Zeilen stehen, die auf nicht mehr vorhandene Datensaetze verweisen.
+        const cleared = [...current.keys()];
         await app.db.transaction().execute(async trx => {
           await sql`SET FOREIGN_KEY_CHECKS = 0`.execute(trx);
           try {
-            for (const table of tableMeta) await (trx as Kysely<any>).deleteFrom(table.name).execute();
+            for (const table of cleared) await (trx as Kysely<any>).deleteFrom(table).execute();
             let batch: Record<string, unknown>[] = [];
             let batchTable = '';
             let batchBytes = 0;

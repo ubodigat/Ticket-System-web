@@ -26,3 +26,13 @@ tr:nth-child(even) { background: #fafafa; }
 .text { white-space: pre-wrap; }
 img { max-width: 100%; }
 @media print { body { padding: 0; } thead { display: table-header-group; } }
+
+/* Einrueckung der Untergruppen (Klassen statt Inline-Style, CSP) */
+.print-depth-1 { margin-left: 18px; }
+.print-depth-2 { margin-left: 36px; }
+.print-depth-3 { margin-left: 54px; }
+.print-depth-4 { margin-left: 72px; }
+.print-depth-5 { margin-left: 90px; }
+.print-depth-6 { margin-left: 108px; }
+.print-depth-7 { margin-left: 126px; }
+.print-depth-8 { margin-left: 144px; }

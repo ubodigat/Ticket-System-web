@@ -42,7 +42,6 @@ const envSchema = z.object({
   COOKIE_SECRET: z.string().min(32),
 
   INSTALLATION_ID: z.string().uuid(),
-  SCHEMA_VERSION: z.coerce.number().int().positive().default(1),
 
   // Security-Audit R-1: Fastify 5.12.5 behandelt eine reine Hop-Zahl absichtlich als "keinem
   // Proxy vertrauen" (fail-closed, siehe node_modules/fastify/lib/request.js

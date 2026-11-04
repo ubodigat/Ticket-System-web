@@ -20,7 +20,7 @@ const AUDITED_ON_SUCCESS = new Set([
   'POST /api/v2/users/import.csv', 'POST /api/v2/groups', 'PATCH /api/v2/groups/:id', 'DELETE /api/v2/groups/:id',
   'PATCH /api/v2/settings', 'PATCH /api/v2/settings/smtp', 'PATCH /api/v2/settings/outlook/secret', 'PATCH /api/v2/settings/ldap',
   'POST /api/v2/categories', 'PATCH /api/v2/categories/:id', 'POST /api/v2/mail/send', 'POST /api/v2/mfa/disable',
-  'POST /api/v2/update/run', 'POST /api/v2/update/migrate', 'POST /api/v2/update/rollback'
+  'POST /api/v2/update/run', 'POST /api/v2/update/repair', 'POST /api/v2/update/rollback'
 ]);
 // Technische Zwischenschritte: Erfolg ohne eigenen Eintrag (der Abschluss wird protokolliert).
 const QUIET_ON_SUCCESS = new Set([

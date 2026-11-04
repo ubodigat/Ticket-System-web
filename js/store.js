@@ -98,7 +98,18 @@ export const Store = {
     _meCacheAt: 0,
     fetchSessionUser: async () => {
         if (Store._meCache && Date.now() - Store._meCacheAt < 3000) return Store._meCache;
+        if (Store._anonymousAt && Date.now() - Store._anonymousAt < 3000) return null;
         try {
+            // Oeffentliche Seiten (Anmeldung): erst fragen, ob eine Sitzung besteht -- ohne
+            // Anmeldung werden keine geschuetzten Endpunkte aufgerufen (keine 401 in der Konsole).
+            if (location.protocol.startsWith('http') && !document.body?.dataset.guard) {
+                const probe = await fetch('/api/v1/auth/session', { credentials: 'same-origin' });
+                if (probe.ok && !(await probe.json()).authenticated) {
+                    Store._meCache = null;
+                    Store._anonymousAt = Date.now();
+                    return null;
+                }
+            }
             const res = await fetch('/api/v2/users/me', { credentials: 'same-origin' });
             if (!res.ok) { Store._meCache = null; return null; }
             const payload = await res.json();
@@ -841,16 +852,18 @@ export const Store = {
             : (stored || {});
         const loadedSettings = { ...Settings.defaults, ...localOnly };
         const settings = typeof structuredClone === 'function' ? structuredClone(loadedSettings) : JSON.parse(JSON.stringify(loadedSettings));
-        const categories = await Store.getCategories();
+        const serverMode = location.protocol.startsWith('http');
+        const signedIn = !serverMode || !!(await Store.currentUser());
+        const categories = signedIn ? await Store.getCategories() : [];
         settings.categories = categories.filter(c => !c.archived).map(c => c.name);
         settings.customFields = {};
         categories.forEach(c => { if (c.customFields.length) settings.customFields[c.name] = c.customFields; });
 
         let serverSettings = null;
-        if (location.protocol.startsWith('http')) {
+        if (serverMode) {
             try {
-                const res = await fetch('/api/v2/settings', { credentials: 'same-origin' });
-                if (res.ok) serverSettings = await res.json();
+                const res = signedIn ? await fetch('/api/v2/settings', { credentials: 'same-origin' }) : null;
+                if (res?.ok) serverSettings = await res.json();
                 else {
                     const pub = await fetch('/api/v1/public-settings', { credentials: 'same-origin' }).catch(() => null);
                     if (pub && pub.ok) serverSettings = { portalName: (await pub.json()).portalName, companyName: undefined, config: {} };
@@ -925,6 +938,7 @@ export const Store = {
                 ...(settings.securityConfig || {}),
                 ...(cfg.securityConfig || {})
             };
+            settings.timeTrackingConfig = cfg.timeTrackingConfig || {};
             settings.notificationConfig = {
                 ...(settings.notificationConfig || {}),
                 ...(cfg.notificationConfig || {})
@@ -1108,8 +1122,9 @@ export const Store = {
     // Unabhängig vom vollen Update-Zyklus, immer verfügbar (nicht durch "kein Update verfügbar"
     // blockiert) -- holt die Datenbank wieder auf den Schema-Stand des bereits laufenden Codes,
     // falls ein früherer Update-Lauf vor dem Migrations-Schritt abgebrochen ist.
-    runMigrate: async (password, totpCode) => {
-        const res = await fetch('/api/v2/update/migrate', {
+    // Aktuellen Stand erneut ausrollen (Sicherung, Build, Datenbankabgleich, Neustart).
+    runRepair: async (password, totpCode) => {
+        const res = await fetch('/api/v2/update/repair', {
             method: 'POST', credentials: 'same-origin',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ password, totp_code: totpCode || undefined })
@@ -1403,7 +1418,7 @@ export const Store = {
         'mfa.totp_enrolled': ['Authenticator-App eingerichtet', 'Authenticator app set up'],
         'update.run_triggered': ['Update gestartet', 'Update started'],
         'update.run_rejected_commit_mismatch': ['Update abgelehnt: Zielversion stimmt nicht', 'Update rejected: target version mismatch'],
-        'update.migrate_triggered': ['Datenbank-Migration gestartet', 'Database migration started'],
+        'update.repair_triggered': ['Aktuellen Stand erneut ausgerollt', 'Current version redeployed'],
         'update.rollback_triggered': ['Rollback gestartet', 'Rollback started'],
         'POST /api/v1/auth/logout': ['Abgemeldet', 'Signed out'],
         'POST /api/v1/setup/complete': ['Ersteinrichtung abgeschlossen', 'Initial setup completed'],
@@ -1489,7 +1504,7 @@ export const Store = {
         'PATCH /api/v2/todos/:id': ['Aufgabe bearbeitet', 'Task updated'],
         'DELETE /api/v2/todos/:id': ['Aufgabe gelöscht', 'Task deleted'],
         'POST /api/v2/update/run': ['Update starten', 'Start update'],
-        'POST /api/v2/update/migrate': ['Migration starten', 'Start migration'],
+        'POST /api/v2/update/repair': ['Stand erneut ausrollen', 'Redeploy current version'],
         'POST /api/v2/update/rollback': ['Rollback starten', 'Start rollback'],
         'POST /api/v2/uploads': ['Datei-Upload begonnen', 'File upload started'],
         'PUT /api/v2/uploads/:id/chunks/:part': ['Datei-Upload (Teil)', 'File upload (part)'],
@@ -1876,10 +1891,11 @@ export const Store = {
 
     notificationUI: {
         init: async () => {
+            const user = await Store.currentUser();
+            if (!user) return;
             const button = q('#btn-notifications');
             if (button) button.onclick = Notifications.open;
             await Notifications.refresh();
-            const user = await Store.currentUser();
             if (button && user) BrowserNotifications.start({
                 user, load: () => Store.getNotifications(true),
                 onBatch: items => {

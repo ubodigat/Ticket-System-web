@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose';
-import { createHash } from 'node:crypto';
-const key = (secret: string) => createHash('sha256').update('ticket-office-source\0' + secret).digest();
+import { derivedKey } from '../crypto/derivedKeys.js';
+const key = (secret: string) => derivedKey(secret, 'office-source-token');
 export async function signOfficeSource(secret: string, attachmentId: string, userId: string) {
   return new SignJWT({ attachmentId }).setProtectedHeader({ alg: 'HS256' }).setIssuer('ticket-system')
     .setAudience('office-source').setSubject(userId).setIssuedAt().setExpirationTime('30m').sign(key(secret));

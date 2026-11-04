@@ -3,11 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerTicketsV2Routes } from '../src/http/routes/tickets.js';
 import { registerExtrasV2Routes } from '../src/http/routes/extras.js';
 import { registerRecurringRoutes } from '../src/http/routes/recurring.js';
-import { fieldCipher, decryptFieldTolerant } from '../src/crypto/fieldCrypto.js';
+import { fieldCipher } from '../src/crypto/fieldCrypto.js';
 import { encryptMailSecrets, readMailSecrets } from '../src/mail/secrets.js';
+import { testDek } from './helpers/testDek.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
-const deps = { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any };
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
+const deps = { env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any };
 
 function database(owner: string | null = 'owner') {
   const operations: any[] = [];
@@ -125,15 +126,15 @@ describe('audit authorization regressions', () => {
 });
 
 describe('encrypted data boundaries', () => {
-  const ctx = { installationId: 'test', schemaVersion: 1, tableName: 'tickets', recordId: 'one', fieldName: 'waiting_message', keyVersion: 1 };
+  const ctx = { installationId: 'test', tableName: 'tickets', recordId: 'one', fieldName: 'waiting_message' };
   it('never returns raw bytes on authentication failure or wrong AAD', () => {
-    const key = Buffer.alloc(32, 7);
+    const key = testDek();
     const ciphertext = fieldCipher.encryptField('Private message', key, ctx);
-    expect(decryptFieldTolerant(ciphertext, key, ctx)).toBe('Private message');
-    expect(() => decryptFieldTolerant(ciphertext, key, { ...ctx, recordId: 'two' })).toThrow();
+    expect(fieldCipher.decryptField(ciphertext, key, ctx)).toBe('Private message');
+    expect(() => fieldCipher.decryptField(ciphertext, key, { ...ctx, recordId: 'two' })).toThrow();
     ciphertext[ciphertext.length - 1]! ^= 1;
-    expect(() => decryptFieldTolerant(ciphertext, key, ctx)).toThrow();
-    expect(() => decryptFieldTolerant(Buffer.from('legacy plaintext'), key, ctx)).toThrow();
+    expect(() => fieldCipher.decryptField(ciphertext, key, ctx)).toThrow();
+    expect(() => fieldCipher.decryptField(Buffer.from('legacy plaintext'), key, ctx)).toThrow();
   });
   it('encrypts private mail keys and passphrases in a separate authenticated envelope', async () => {
     const input = { smimePrivateKeyPem: 'PRIVATE-KEY-SECRET', smimePassphrase: 'secret-passphrase', dkimPrivateKeyPem: 'DKIM-SECRET' };
@@ -151,7 +152,7 @@ describe('encrypted data boundaries', () => {
     const row = operations.find(op => op.table === 'account_requests' && op.values).values;
     for (const [field, plaintext] of [['company', 'Private company'], ['reason', 'Sensitive reason']]) {
       expect(Buffer.isBuffer(row[field!])).toBe(true);
-      expect(fieldCipher.decryptField(row[field!], Buffer.alloc(32, 7), { ...ctx, tableName: 'account_requests', recordId: row.id, fieldName: field! })).toBe(plaintext);
+      expect(fieldCipher.decryptField(row[field!], testDek(), { ...ctx, tableName: 'account_requests', recordId: row.id, fieldName: field! })).toBe(plaintext);
     }
   });
   it('encrypts recurring ticket titles and descriptions before persistence', async () => {
@@ -162,7 +163,7 @@ describe('encrypted data boundaries', () => {
     const row = operations.find(op => op.table === 'recurring_ticket_rules' && op.values).values;
     for (const field of ['title', 'description']) {
       expect(Buffer.isBuffer(row[field])).toBe(true);
-      expect(fieldCipher.decryptField(row[field], Buffer.alloc(32, 7), { ...ctx, tableName: 'recurring_ticket_rules', recordId: row.id, fieldName: field })).toBe(field === 'title' ? 'Private recurring task' : 'Sensitive description');
+      expect(fieldCipher.decryptField(row[field], testDek(), { ...ctx, tableName: 'recurring_ticket_rules', recordId: row.id, fieldName: field })).toBe(field === 'title' ? 'Private recurring task' : 'Sensitive description');
     }
   });
 });

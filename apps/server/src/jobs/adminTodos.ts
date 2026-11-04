@@ -16,7 +16,7 @@ export async function runRecurringAdminTodos(deps: TodoDeps & { db: Kysely<Datab
         .where('role', 'in', ['admin', 'superadmin']).where('account_archived', '=', false).executeTakeFirst();
       if (!actor) { await trx.updateTable('recurring_admin_todos').set({ active: false }).where('id', '=', rule.id).execute(); return; }
       const dek = await ensureDek(trx, deps.keyProvider, 'recurring_admin_todos.content');
-      const content = fieldCipher.decryptField(rule.content, dek.rawDek, todoContext(deps, 'recurring_admin_todos', 'content', rule.id, dek.keyVersion));
+      const content = fieldCipher.decryptField(rule.content, dek, todoContext(deps, 'recurring_admin_todos', 'content', rule.id));
       await insertAdminTodo(trx, deps, { uid: actor.id, username: actor.username }, { content,
         due_at: rule.due_after_hours ? new Date(now.getTime() + rule.due_after_hours * 3600000).toISOString() : null,
         recipient_ids: JSON.parse(rule.recipient_ids_json) }, false);

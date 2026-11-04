@@ -10,17 +10,18 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 // wiederkehrender Ticket-Regeln.
 //
 // Bewusst EIN einfacher In-Prozess-Timer (setInterval in index.ts), KEINE echte Job-Queue mit
-// Tabellen-Lock/Retry/Dead-Letter wie in docs/JOBS.md beschrieben -- das ist eine bekannte
+// Tabellen-Lock/Retry/Dead-Letter -- das ist eine bekannte
 // Vereinfachung, die bei genau einer laufenden App-Instanz korrekt funktioniert, aber bei
 // mehreren gleichzeitig laufenden Instanzen zu doppelter Ausführung führen kann (keine
 // Sperre zwischen Instanzen). Für eine horizontal skalierte Installation müsste das durch die
-// in docs/JOBS.md vorgesehene DB-Queue ersetzt werden.
+// eine DB-Queue ersetzt werden.
 import { sql, type Kysely } from 'kysely';
 import type { Database } from '../db/types.js';
 import type { Env } from '../config/env.js';
 import type { KeyProvider } from '../crypto/keyProvider.js';
 import { ensureDek } from '../crypto/dekService.js';
-import { fieldCipher, decryptFieldTolerant } from '../crypto/fieldCrypto.js';
+import { fieldCipher } from '../crypto/fieldCrypto.js';
+import { reencryptAll, reencryptPending } from '../crypto/rotation.js';
 import { randomUUID } from 'node:crypto';
 import { mysqlTimestamp } from '../db/date.js';
 import { isAccountExpired } from '../domain/accountValidity.js';
@@ -96,13 +97,13 @@ export async function runRecurringTickets(deps: MaintenanceDeps): Promise<number
   const ruleDescriptionDek = await ensureDek(deps.db, deps.keyProvider, 'recurring_ticket_rules.description');
 
   for (const rule of due) {
-    const ruleTitle = decryptFieldTolerant(rule.title, ruleTitleDek.rawDek, {
-      installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-      tableName: 'recurring_ticket_rules', recordId: rule.id, fieldName: 'title', keyVersion: ruleTitleDek.keyVersion
+    const ruleTitle = fieldCipher.decryptField(rule.title, ruleTitleDek, {
+      installationId: deps.env.INSTALLATION_ID,
+      tableName: 'recurring_ticket_rules', recordId: rule.id, fieldName: 'title'
     });
-    const ruleDescription = decryptFieldTolerant(rule.description, ruleDescriptionDek.rawDek, {
-      installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-      tableName: 'recurring_ticket_rules', recordId: rule.id, fieldName: 'description', keyVersion: ruleDescriptionDek.keyVersion
+    const ruleDescription = fieldCipher.decryptField(rule.description, ruleDescriptionDek, {
+      installationId: deps.env.INSTALLATION_ID,
+      tableName: 'recurring_ticket_rules', recordId: rule.id, fieldName: 'description'
     });
     const rows = await deps.db.selectFrom('tickets').select('ticket_number').execute();
     const lastNum = rows.reduce((max, row) => {
@@ -112,19 +113,17 @@ export async function runRecurringTickets(deps: MaintenanceDeps): Promise<number
     const ticketNumber = buildTicketNumber(lastNum + 1, rule.category, numberingConfig);
 
     const newId = randomUUID();
-    const ctx = (fieldName: string, keyVersion: number) => ({
+    const ctx = (fieldName: string) => ({
       installationId: deps.env.INSTALLATION_ID,
-      schemaVersion: deps.env.SCHEMA_VERSION,
       tableName: 'tickets',
       recordId: newId,
-      fieldName,
-      keyVersion
+      fieldName
     });
     await deps.db.insertInto('tickets').values({
       id: newId,
       ticket_number: ticketNumber,
-      title: fieldCipher.encryptField(ruleTitle, titleDek.rawDek, ctx('title', titleDek.keyVersion)),
-      description: fieldCipher.encryptField(ruleDescription, descriptionDek.rawDek, ctx('description', descriptionDek.keyVersion)),
+      title: fieldCipher.encryptField(ruleTitle, titleDek, ctx('title')),
+      description: fieldCipher.encryptField(ruleDescription, descriptionDek, ctx('description')),
       priority: rule.priority,
       category: rule.category,
       type: 'ticket',
@@ -222,9 +221,9 @@ export async function runWaitingTickets(deps: MaintenanceDeps): Promise<{ remind
       let waitingMessageText: string | null = null;
       if (t.waiting_message) {
         const dek = await ensureDek(deps.db, deps.keyProvider, 'tickets.waiting_message');
-        waitingMessageText = decryptFieldTolerant(t.waiting_message, dek.rawDek, {
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'tickets', recordId: t.id, fieldName: 'waiting_message', keyVersion: dek.keyVersion
+        waitingMessageText = fieldCipher.decryptField(t.waiting_message, dek, {
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'tickets', recordId: t.id, fieldName: 'waiting_message'
         });
       }
       await notifyTicketAuthor(deps, t, `Erinnerung: Wir warten noch auf deine Antwort.${waitingMessageText ? ' ' + waitingMessageText : ''}`);
@@ -246,7 +245,8 @@ export async function runLogRetention(deps: MaintenanceDeps, now = Date.now()): 
     await deps.db.deleteFrom('global_audit_log').where('action', 'like', 'request:%').where('created_at', '<', before(RETENTION_DAYS.requests)).executeTakeFirst(),
     await deps.db.deleteFrom('global_audit_log').where('created_at', '<', before(RETENTION_DAYS.audit)).executeTakeFirst(),
     await deps.db.deleteFrom('ticket_audit_log').where('action', 'like', 'activity:%').where('created_at', '<', before(RETENTION_DAYS.ticketActivity)).executeTakeFirst(),
-    await deps.db.deleteFrom('sessions').where('expires_at', '<', before(RETENTION_DAYS.sessions)).executeTakeFirst()
+    await deps.db.deleteFrom('sessions').where('expires_at', '<', before(RETENTION_DAYS.sessions)).executeTakeFirst(),
+    await deps.db.deleteFrom('rate_limit_counters').where('window_start', '<', before(1)).executeTakeFirst()
   ];
   const anonymized = await sql`UPDATE global_audit_log SET detail_json = JSON_REMOVE(detail_json, '$.ip')
     WHERE created_at < ${before(RETENTION_DAYS.ipAddresses)} AND detail_json IS NOT NULL AND JSON_VALID(detail_json)
@@ -275,6 +275,13 @@ export function startMaintenanceScheduler(deps: MaintenanceDeps, intervalMs = 5 
       ['Wiederkehrende Tickets', 'system.recurring_tickets_created', async () => ({ count: await runRecurringTickets(deps) })],
       ['Wiederkehrende Aufgaben', 'system.recurring_todos_created', async () => ({ count: Number(await runRecurringAdminTodos(deps)) || 0 })],
       ['Warten-auf-Benutzer', 'system.waiting_processed', async () => await runWaitingTickets(deps)],
+      // Werte im Altformat bzw. mit alter Schluesselversion schrittweise neu verschluesseln
+      // (hoechstens 20 s je Durchlauf, setzt beim naechsten Durchlauf fort).
+      ['Neuverschlüsselung', 'system.reencrypted', async () => {
+        if (!await reencryptPending(deps.db)) return {};
+        const result = await reencryptAll({ db: deps.db, keyProvider: deps.keyProvider, installationId: deps.env.INSTALLATION_ID }, 20_000);
+        return { count: result.updated, failed: result.failed };
+      }],
       // Loeschfristen einmal pro Stunde.
       ['Löschfristen', 'system.retention_applied', async () => {
         if (Date.now() - lastRetentionRun < 3_600_000) return {};

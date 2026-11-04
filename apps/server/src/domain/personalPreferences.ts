@@ -11,7 +11,9 @@ export const preferencePatchSchema = z.object({
     || /^bg-[a-z-]{1,40}$/.test(value)
     || /^#[0-9a-f]{6}$/i.test(value)
     || /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/.test(value), 'Invalid background').optional(),
-  collapsedSections: z.record(z.string().regex(/^[a-z0-9:-]{1,100}$/), z.boolean()).refine(v => Object.keys(v).length <= 150).optional()
+  collapsedSections: z.record(z.string().regex(/^[a-z0-9:-]{1,100}$/), z.boolean()).refine(v => Object.keys(v).length <= 150).optional(),
+  // Hinweis "Zwei-Faktor-Pflicht fehlt" fuer diese Person ausgeblendet.
+  mfaHintDismissed: z.boolean().optional()
 }).strict();
 
 export function mergePreferences(current: Record<string, unknown>, patch: z.infer<typeof preferencePatchSchema>) {

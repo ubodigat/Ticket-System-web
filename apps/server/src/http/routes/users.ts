@@ -19,7 +19,7 @@ import { requireSession, requireAdmin } from './session.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
-import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
+import { fieldCipher, computeBlindIndex, blindIndexCandidates } from '../../crypto/fieldCrypto.js';
 import { queueMailIfConfigured, queueUserMail } from '../../mail/queue.js';
 import { routeError } from './routeError.js';
 import { mysqlTimestamp } from '../../db/date.js';
@@ -27,25 +27,24 @@ import { isAccountExpired, isValidAccountDate } from '../../domain/accountValidi
 import { loadSecurityPolicy } from '../../domain/securityPolicy.js';
 import { isSourceLocked, recordSourceFailure, clearSourceFailures } from '../../domain/loginThrottle.js';
 import { loadPasswordPolicy, passwordFailures, generatePolicyPassword } from '../../domain/passwordPolicy.js';
+import type { ResolvedDek } from '../../crypto/fieldCrypto.js';
 
 export interface UsersRouteDeps {
   env: Env;
   keyProvider: KeyProvider;
 }
 
-function safeUserProfileFields(app: FastifyInstance, deps: UsersRouteDeps, row: Record<string, any>, nameDek: { rawDek: Buffer; keyVersion: number }, emailDek: { rawDek: Buffer; keyVersion: number }): { name: string; email: string } {
-  const ctx = (fieldName: string, keyVersion: number) => ({
+function safeUserProfileFields(app: FastifyInstance, deps: UsersRouteDeps, row: Record<string, any>, nameDek: ResolvedDek, emailDek: ResolvedDek): { name: string; email: string } {
+  const ctx = (fieldName: string) => ({
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'users',
     recordId: row.id,
-    fieldName,
-    keyVersion
+    fieldName
   });
   try {
     return {
-      name: fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-      email: fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion))
+      name: fieldCipher.decryptField(row.name_enc, nameDek, ctx('name')),
+      email: fieldCipher.decryptField(row.email_enc, emailDek, ctx('email'))
     };
   } catch (err) {
     app.log.error({ err, userId: row.id }, 'Benutzerprofil konnte nicht entschluesselt werden');
@@ -56,10 +55,10 @@ function safeUserProfileFields(app: FastifyInstance, deps: UsersRouteDeps, row: 
 // Security-Audit N10: Telefon/Mobilnummer/Position/Standort sind jetzt genauso AES-256-GCM-
 // verschlüsselt wie name/email -- dieselbe Pro-Zweck-DEK-Struktur wie TicketDeks in tickets.ts.
 interface ContactDeks {
-  phone: { rawDek: Buffer; keyVersion: number };
-  mobile: { rawDek: Buffer; keyVersion: number };
-  jobTitle: { rawDek: Buffer; keyVersion: number };
-  officeLocation: { rawDek: Buffer; keyVersion: number };
+  phone: ResolvedDek;
+  mobile: ResolvedDek;
+  jobTitle: ResolvedDek;
+  officeLocation: ResolvedDek;
 }
 
 async function loadContactDeks(app: FastifyInstance, keyProvider: KeyProvider): Promise<ContactDeks> {
@@ -72,10 +71,10 @@ async function loadContactDeks(app: FastifyInstance, keyProvider: KeyProvider): 
   return { phone, mobile, jobTitle, officeLocation };
 }
 
-function encryptContactField(value: string, dek: { rawDek: Buffer; keyVersion: number }, deps: UsersRouteDeps, recordId: string, fieldName: string): Buffer {
-  return fieldCipher.encryptField(value, dek.rawDek, {
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'users', recordId, fieldName, keyVersion: dek.keyVersion
+function encryptContactField(value: string, dek: ResolvedDek, deps: UsersRouteDeps, recordId: string, fieldName: string): Buffer {
+  return fieldCipher.encryptField(value, dek, {
+    installationId: deps.env.INSTALLATION_ID,
+    tableName: 'users', recordId, fieldName
   });
 }
 
@@ -83,10 +82,10 @@ function encryptContactField(value: string, dek: { rawDek: Buffer; keyVersion: n
 // vier Felder wurden per Migration 0035 nachträglich auf verschlüsselt umgestellt, ohne
 // vorhandene Klartextwerte selbst zu verschlüsseln. db/reencryptLegacy.ts behebt das automatisch
 // bei jedem migrate.js-Lauf; dieser tolerante Fallback ist nur das zusätzliche Sicherheitsnetz.
-function decryptContactField(stored: Buffer, dek: { rawDek: Buffer; keyVersion: number }, deps: UsersRouteDeps, recordId: string, fieldName: string): string {
-  return decryptFieldTolerant(stored, dek.rawDek, {
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'users', recordId, fieldName, keyVersion: dek.keyVersion
+function decryptContactField(stored: Buffer, dek: ResolvedDek, deps: UsersRouteDeps, recordId: string, fieldName: string): string {
+  return fieldCipher.decryptField(stored, dek, {
+    installationId: deps.env.INSTALLATION_ID,
+    tableName: 'users', recordId, fieldName
   });
 }
 
@@ -197,7 +196,7 @@ const deleteUserQuerySchema = z.object({
   tickets: z.enum(['archive', 'delete']).default('archive')
 });
 
-// Formel-Injektions-Neutralisierung (docs/SPEC.md §10): Excel/LibreOffice/Sheets interpretieren
+// Formel-Injektions-Neutralisierung: Excel/LibreOffice/Sheets interpretieren
 // Zellen, die mit =, +, -, @ beginnen, als Formel -- eine Zelle mit z.B. "=HYPERLINK(...)" kann
 // beim Öffnen des Exports in einer Tabellenkalkulation Code/Netzwerkzugriffe auslösen. Jede
 // potenziell gefährliche Zelle bekommt daher ein führendes Apostroph, das die Kalkulation als
@@ -348,6 +347,14 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
     });
   }
 
+  // Rechte entstehen nur durch Superadmins (Review 11/2026, Punkt 1): ein Admin mit
+  // "Benutzerverwaltung" verwaltet ausschliesslich Konten der Rolle "user" -- er kann weder Admin-
+  // Konten anlegen oder befoerdern noch Zusatzrechte vergeben, auch nicht per CSV-Import.
+  function grantsPrivileges(session: { role: string }, role: string | undefined, permissions: unknown): boolean {
+    if (session.role === 'superadmin') return false;
+    return (role !== undefined && role !== 'user') || (permissions !== undefined && permissions !== null);
+  }
+
   async function hasAdminPermission(session: { uid: string; role: string }, key: 'canManageRequests' | 'canManageUsers' | 'canViewLogs' | 'canManage2FA'): Promise<boolean> {
     if (session.role === 'superadmin') return true;
     if (session.role !== 'admin') return false;
@@ -412,7 +419,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
         return {
           ...row,
-          profile: decryptUserProfile(profile_enc, { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION, recordId: row.id, dek: profileDek }),
+          profile: decryptUserProfile(profile_enc, { installationId: deps.env.INSTALLATION_ID, recordId: row.id, dek: profileDek }),
           group_ids: groupIds.get(row.id) ?? [],
           avatar: avatarDescriptor({ avatar_preset, avatar_mime, avatar_updated_at }),
           name_enc: undefined,
@@ -434,7 +441,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   });
 
   const profileCipher = async (recordId: string) => ({
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION, recordId,
+    installationId: deps.env.INSTALLATION_ID, recordId,
     dek: await ensureDek(app.db, deps.keyProvider, 'users.profile')
   });
 
@@ -552,7 +559,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
       const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
       const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
-      const emailBlindIdx = emailInput ? computeBlindIndex(blindIndexDek.rawDek, emailInput) : null;
+      const emailCandidates = emailInput ? blindIndexCandidates(blindIndexDek, emailInput) : [];
 
       const rows = await app.db.selectFrom('users')
         .select(['id', 'username', 'name_enc', 'email_enc', 'email_blind_idx', 'account_archived'])
@@ -565,7 +572,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
 
       for (const row of rows) {
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
-        const sameEmail = emailBlindIdx !== null && row.email_blind_idx === emailBlindIdx;
+        const sameEmail = emailCandidates.includes(row.email_blind_idx);
         const sameName = normalizedName.length > 0 && normalize(profile.name) === normalizedName;
         if (sameEmail && sameName) { exact = true; similar.push({ id: row.id, username: row.username, name: profile.name, email: profile.email, reason: 'name_and_email' }); continue; }
         if (sameEmail) { similar.push({ id: row.id, username: row.username, name: profile.name, email: profile.email, reason: 'email' }); continue; }
@@ -587,7 +594,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       if (!(await hasAdminPermission(session, 'canManageUsers'))) return reply.code(403).send({ error: 'forbidden' });
       const parsed = createUserSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
-      if (parsed.data.role === 'superadmin' && session.role !== 'superadmin') return reply.code(403).send({ error: 'forbidden' });
+      if (grantsPrivileges(session, parsed.data.role, parsed.data.permissions)) return reply.code(403).send({ error: 'privileged_account_superadmin_only' });
       const failures = passwordFailures(parsed.data.password, await loadPasswordPolicy(app.db));
       if (failures.length) return reply.code(400).send({ error: 'password_policy_failed', requirements: failures });
 
@@ -605,19 +612,19 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
       const baseCtx = {
         installationId: deps.env.INSTALLATION_ID,
-        schemaVersion: deps.env.SCHEMA_VERSION,
         tableName: 'users',
         recordId: newId
       };
-      const name_enc = fieldCipher.encryptField(parsed.data.name, nameDek.rawDek, { ...baseCtx, fieldName: 'name', keyVersion: nameDek.keyVersion });
-      const email_enc = fieldCipher.encryptField(parsed.data.email, emailDek.rawDek, { ...baseCtx, fieldName: 'email', keyVersion: emailDek.keyVersion });
+      const name_enc = fieldCipher.encryptField(parsed.data.name, nameDek, { ...baseCtx, fieldName: 'name' });
+      const email_enc = fieldCipher.encryptField(parsed.data.email, emailDek, { ...baseCtx, fieldName: 'email' });
       const email_blind_idx = computeBlindIndex(blindIndexDek.rawDek, parsed.data.email.trim().toLowerCase());
 
       // E-Mail-Adresse muss eindeutig sein -- der Blind-Index macht einen Gleichheitsvergleich
       // moeglich, ohne die E-Mail dafuer im Klartext suchen zu muessen (siehe computeBlindIndex).
       // Zwei Konten mit derselben Adresse ergeben operativ keinen Sinn und waeren beim Login per
       // "Passwort vergessen"/Benachrichtigungen nicht eindeutig zuordenbar.
-      const emailTaken = await app.db.selectFrom('users').select('id').where('email_blind_idx', '=', email_blind_idx).executeTakeFirst();
+      const emailTaken = await app.db.selectFrom('users').select('id')
+        .where('email_blind_idx', 'in', blindIndexCandidates(blindIndexDek, parsed.data.email.trim().toLowerCase())).executeTakeFirst();
       if (emailTaken) return reply.code(409).send({ error: 'email_taken' });
 
       // Security-Audit N10: Kontaktfelder jetzt verschlüsselt wie name/email.
@@ -644,9 +651,8 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         office_location: office_location_enc,
         profile_enc: encryptUserProfile(parsed.data.profile, await profileCipher(newId)),
         supervisor_user_id: parsed.data.supervisor_user_id ?? null,
-        // Zusatzrechte nur bei role='admin' sinnvoll (fuer 'user' zeigt der Editor das Feld gar
-        // nicht an), trotzdem hier nicht erzwungen -- ein leeres Objekt bei 'user' ist harmlos.
-        permissions_json: parsed.data.permissions ? JSON.stringify(parsed.data.permissions) : null,
+        // Zusatzrechte gibt es nur fuer Admin-Konten (und nur ein Superadmin kommt bis hierher damit).
+        permissions_json: parsed.data.permissions && parsed.data.role === 'admin' ? JSON.stringify(parsed.data.permissions) : null,
         account_archived: false,
         account_valid_until: parsed.data.account_valid_until ?? null,
         locked_permanent: false,
@@ -718,36 +724,32 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       let previousEmail: string | null = null;
       if (parsed.data.name !== undefined) {
         const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
-        updates.name_enc = fieldCipher.encryptField(parsed.data.name, nameDek.rawDek, {
+        updates.name_enc = fieldCipher.encryptField(parsed.data.name, nameDek, {
           installationId: deps.env.INSTALLATION_ID,
-          schemaVersion: deps.env.SCHEMA_VERSION,
           tableName: 'users',
           recordId: id,
-          fieldName: 'name',
-          keyVersion: nameDek.keyVersion
+          fieldName: 'name'
         });
       }
       if (parsed.data.email !== undefined) {
         const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
         const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
-        updates.email_enc = fieldCipher.encryptField(parsed.data.email, emailDek.rawDek, {
+        updates.email_enc = fieldCipher.encryptField(parsed.data.email, emailDek, {
           installationId: deps.env.INSTALLATION_ID,
-          schemaVersion: deps.env.SCHEMA_VERSION,
           tableName: 'users',
           recordId: id,
-          fieldName: 'email',
-          keyVersion: emailDek.keyVersion
+          fieldName: 'email'
         });
         updates.email_blind_idx = computeBlindIndex(blindIndexDek.rawDek, parsed.data.email.trim().toLowerCase());
         const emailTaken = await app.db.selectFrom('users').select('id')
-          .where('email_blind_idx', '=', updates.email_blind_idx as string).where('id', '!=', id).executeTakeFirst();
+          .where('email_blind_idx', 'in', blindIndexCandidates(blindIndexDek, parsed.data.email.trim().toLowerCase())).where('id', '!=', id).executeTakeFirst();
         if (emailTaken) return reply.code(409).send({ error: 'email_taken' });
         const current = await app.db.selectFrom('users').select('email_enc').where('id', '=', id).executeTakeFirst();
         if (current?.email_enc) {
           try {
-            const previous = fieldCipher.decryptField(current.email_enc, emailDek.rawDek, {
-              installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-              tableName: 'users', recordId: id, fieldName: 'email', keyVersion: emailDek.keyVersion
+            const previous = fieldCipher.decryptField(current.email_enc, emailDek, {
+              installationId: deps.env.INSTALLATION_ID,
+              tableName: 'users', recordId: id, fieldName: 'email'
             });
             if (previous.trim().toLowerCase() !== parsed.data.email.trim().toLowerCase()) previousEmail = previous;
           } catch (err) {
@@ -780,6 +782,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         // durch updateUserSchema (nur 'user'|'admin' erlaubt) bereits ausgeschlossen (B1).
         if (target && id !== session.uid && (target.role === 'admin' || target.role === 'superadmin') && session.role !== 'superadmin') {
           return reply.code(403).send({ error: 'forbidden' });
+        }
+        // Befoerdern ist Superadmins vorbehalten (Review 11/2026, Punkt 1).
+        if (parsed.data.role !== undefined && parsed.data.role !== target.role && grantsPrivileges(session, parsed.data.role, undefined)) {
+          return reply.code(403).send({ error: 'privileged_account_superadmin_only' });
         }
         // Security-Audit M-6: letzten aktiven Superadmin vor Herabstufung, Sperre und
         // Archivierung schützen (unabhängig davon, ob die Person sich selbst betrifft oder ein
@@ -1069,9 +1075,9 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   });
 
   // --- Profilbild: Vorlage waehlen oder eigenes Bild hochladen (nur fuer das eigene Konto) ---
-  const avatarCtx = (userId: string, keyVersion: number) => ({
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'users', recordId: userId, fieldName: 'avatar_image', keyVersion
+  const avatarCtx = (userId: string) => ({
+    installationId: deps.env.INSTALLATION_ID,
+    tableName: 'users', recordId: userId, fieldName: 'avatar_image'
   });
 
   // Eigenes Bild einer Person -- fuer alle angemeldeten Konten (wie Name im Personenverzeichnis).
@@ -1085,7 +1091,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const row = await app.db.selectFrom('users').select(['avatar_image_enc', 'avatar_mime']).where('id', '=', id).executeTakeFirst();
       if (!row?.avatar_image_enc || !row.avatar_mime) return reply.code(404).send({ error: 'not_found' });
       const dek = await ensureDek(app.db, deps.keyProvider, 'users.avatar_image');
-      const image = Buffer.from(fieldCipher.decryptField(row.avatar_image_enc, dek.rawDek, avatarCtx(id, dek.keyVersion)), 'base64');
+      const image = Buffer.from(fieldCipher.decryptField(row.avatar_image_enc, dek, avatarCtx(id)), 'base64');
       const info = inspectAvatarImage(image);
       if (!info) return reply.code(404).send({ error: 'not_found' });
       return reply
@@ -1131,7 +1137,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const updatedAt = mysqlTimestamp();
       await app.db.updateTable('users').set({
         avatar_preset: null, avatar_mime: info.mime, avatar_updated_at: updatedAt,
-        avatar_image_enc: fieldCipher.encryptField(image.toString('base64'), dek.rawDek, avatarCtx(session.uid, dek.keyVersion))
+        avatar_image_enc: fieldCipher.encryptField(image.toString('base64'), dek, avatarCtx(session.uid))
       }).where('id', '=', session.uid).execute();
       return reply.send({ avatar: avatarDescriptor({ avatar_mime: info.mime, avatar_updated_at: updatedAt }) });
     } catch (e: any) {
@@ -1282,7 +1288,7 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       visible: data.visible
     }).execute();
 
-    // Sofortige Wirkung (docs/SPEC.md §7.1): offene, zugewiesene Tickets gehen sofort an die
+    // Sofortige Wirkung: offene, zugewiesene Tickets gehen sofort an die
     // Vertretung über, nicht erst beim nächsten Login irgendeiner Person.
     if (start <= Date.now()) {
       const reassigned = await db.selectFrom('tickets')
@@ -1414,12 +1420,12 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       const header = ['username', 'name', 'email', 'role', 'department', 'phone', 'mobile', 'job_title', 'office_location', 'account_archived', 'locked_permanent', 'totp_enabled', 'created_at'];
       const lines = [header.map(csvSafeCell).join(',')];
       for (const row of rows) {
-        const ctx = (fieldName: string, keyVersion: number) => ({
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'users', recordId: row.id, fieldName, keyVersion
+        const ctx = (fieldName: string) => ({
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'users', recordId: row.id, fieldName
         });
-        const name = fieldCipher.decryptField(row.name_enc, nameDek.rawDek, ctx('name', nameDek.keyVersion));
-        const email = fieldCipher.decryptField(row.email_enc, emailDek.rawDek, ctx('email', emailDek.keyVersion));
+        const name = fieldCipher.decryptField(row.name_enc, nameDek, ctx('name'));
+        const email = fieldCipher.decryptField(row.email_enc, emailDek, ctx('email'));
         const contact = decryptContactFields(row, contactDeks, deps);
         lines.push([
           row.username, name, email, row.role,
@@ -1476,6 +1482,10 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           results.push({ username: record.username || '?', status: 'invalid' });
           continue;
         }
+        if (grantsPrivileges(session, rowParsed.data.role, undefined)) {
+          results.push({ username: rowParsed.data.username, status: 'privileged_account_superadmin_only' });
+          continue;
+        }
         const existing = await app.db.selectFrom('users').select('id').where('username', '=', rowParsed.data.username).executeTakeFirst();
         if (existing) {
           results.push({ username: rowParsed.data.username, status: 'skipped_exists' });
@@ -1489,20 +1499,20 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
         const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
         const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
         const emailBlindIdx = computeBlindIndex(blindIndexDek.rawDek, rowParsed.data.email.trim().toLowerCase());
-        if (await app.db.selectFrom('users').select('id').where('email_blind_idx', '=', emailBlindIdx).executeTakeFirst()) {
+        if (await app.db.selectFrom('users').select('id').where('email_blind_idx', 'in', blindIndexCandidates(blindIndexDek, rowParsed.data.email.trim().toLowerCase())).executeTakeFirst()) {
           results.push({ username: rowParsed.data.username, status: 'skipped_email_exists' });
           continue;
         }
         const contactDeks = await loadContactDeks(app, deps.keyProvider);
-        const ctx = (fieldName: string, keyVersion: number) => ({
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'users', recordId: newId, fieldName, keyVersion
+        const ctx = (fieldName: string) => ({
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'users', recordId: newId, fieldName
         });
         await app.db.insertInto('users').values({
           id: newId,
           username: rowParsed.data.username,
-          name_enc: fieldCipher.encryptField(rowParsed.data.name, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-          email_enc: fieldCipher.encryptField(rowParsed.data.email, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
+          name_enc: fieldCipher.encryptField(rowParsed.data.name, nameDek, ctx('name')),
+          email_enc: fieldCipher.encryptField(rowParsed.data.email, emailDek, ctx('email')),
           email_blind_idx: emailBlindIdx,
           password_hash,
           role: rowParsed.data.role,

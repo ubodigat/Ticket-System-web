@@ -55,9 +55,9 @@ async function loadLdapConfig(deps: LdapDeps): Promise<LdapConfig | null> {
   if (!/^ldaps:\/\//i.test(row.ldap_url)) return null;
 
   const dek = await ensureDek(deps.db, deps.keyProvider, 'app_settings.ldap_bind_password');
-  const bindPassword = fieldCipher.decryptField(row.ldap_bind_password_enc, dek.rawDek, {
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'app_settings', recordId: '1', fieldName: 'ldap_bind_password', keyVersion: dek.keyVersion
+  const bindPassword = fieldCipher.decryptField(row.ldap_bind_password_enc, dek, {
+    installationId: deps.env.INSTALLATION_ID,
+    tableName: 'app_settings', recordId: '1', fieldName: 'ldap_bind_password'
   });
   return {
     url: row.ldap_url,

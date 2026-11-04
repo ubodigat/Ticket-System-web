@@ -7,8 +7,8 @@ import { registerAuthRoutes } from '../src/http/routes/auth.js';
 import { buildApp } from '../src/http/app.js';
 
 vi.mock('argon2', () => ({ hash: async () => 'hashed', verify: async () => true, argon2id: 2 }));
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
-const env: any = { NODE_ENV: 'test', HOST: '127.0.0.1', PORT: 3000, COOKIE_SECRET: 'a'.repeat(32), INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 };
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
+const env: any = { NODE_ENV: 'test', HOST: '127.0.0.1', PORT: 3000, COOKIE_SECRET: 'a'.repeat(32), INSTALLATION_ID: 'test' };
 const deps = { env, keyProvider: {} as any };
 
 function database(expiry: string | null = null, role = 'user', rootCount = 0) {

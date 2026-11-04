@@ -63,7 +63,7 @@ async function request(dir: string | undefined, role: 'user' | 'superadmin', met
   const { db, auditLogRows } = buildDb();
   app.decorate('db', db);
   app.addHook('onRequest', async req => { req.ticketSession = { uid: 'test-user', username: 'test', role }; });
-  registerUpdateRoutes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1, UPDATE_BRIDGE_DIR: dir } as Env, keyProvider: {} as any });
+  registerUpdateRoutes(app, { env: { INSTALLATION_ID: 'test', UPDATE_BRIDGE_DIR: dir } as Env, keyProvider: {} as any });
   try {
     return { response: await app.inject({ method, url: `/api/v2/update/${path}`, payload }), auditLogRows };
   } finally {

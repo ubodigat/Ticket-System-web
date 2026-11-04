@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerSystemInfoRoutes } from '../src/http/routes/systemInfo.js';
 import { registerKnowledgeRoutes } from '../src/http/routes/knowledge.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
-const deps = { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1, NODE_ENV: 'test' } as any, keyProvider: {} as any };
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
+const deps = { env: { INSTALLATION_ID: 'test', NODE_ENV: 'test' } as any, keyProvider: {} as any };
 
 function dummyDb() {
   return new Kysely<any>({ dialect: { createAdapter: () => new MysqlAdapter(), createDriver: () => new DummyDriver(),

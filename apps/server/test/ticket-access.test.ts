@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { fieldCipher } from '../src/crypto/fieldCrypto.js';
 import { canAccessTicket, canReadAttachment, scopeAllowsTicket, visibleGroupIds } from '../src/domain/ticketAccess.js';
 import { registerTicketsV2Routes } from '../src/http/routes/tickets.js';
+import { testDek } from './helpers/testDek.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 const notifications: any[] = [];
 vi.mock('../src/http/routes/extras.js', () => ({ createNotification: vi.fn(async (_app: unknown, _deps: unknown, params: unknown) => { notifications.push(params); }) }));
 
@@ -100,9 +101,9 @@ describe('attachment access', () => {
 });
 
 describe('approvals', () => {
-  const deps = { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any };
-  const enc = (id: string, field: string, value: string) => fieldCipher.encryptField(value, Buffer.alloc(32, 7), {
-    installationId: 'test', schemaVersion: 1, tableName: 'tickets', recordId: id, fieldName: field, keyVersion: 1 });
+  const deps = { env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any };
+  const enc = (id: string, field: string, value: string) => fieldCipher.encryptField(value, testDek(), {
+    installationId: 'test', tableName: 'tickets', recordId: id, fieldName: field });
   async function call(session: { uid: string; username: string; role: string }, tables: Record<string, any[]>, method: 'GET' | 'POST', url: string, payload?: unknown) {
     const { db, writes } = fakeDb({ app_settings: [{ config_json: '{}' }], ...tables });
     const app = Fastify(); app.decorate('db', db);

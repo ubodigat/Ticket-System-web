@@ -9,11 +9,11 @@ import { routeError } from './routeError.js';
 export function registerPreferenceRoutes(app: FastifyInstance, deps: UsersRouteDeps) {
   async function cipher(userId: string) {
     const dek = await ensureDek(app.db, deps.keyProvider, 'users.preferences');
-    const context = { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-      tableName: 'user_preferences', recordId: userId, fieldName: 'value', keyVersion: dek.keyVersion };
+    const context = { installationId: deps.env.INSTALLATION_ID,
+      tableName: 'user_preferences', recordId: userId, fieldName: 'value' };
     return {
-      read: (value: Buffer) => JSON.parse(fieldCipher.decryptField(value, dek.rawDek, context)),
-      write: (value: unknown) => fieldCipher.encryptField(JSON.stringify(value), dek.rawDek, context)
+      read: (value: Buffer) => JSON.parse(fieldCipher.decryptField(value, dek, context)),
+      write: (value: unknown) => fieldCipher.encryptField(JSON.stringify(value), dek, context)
     };
   }
   app.get('/api/v2/users/me/preferences', async (req, reply) => {

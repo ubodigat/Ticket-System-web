@@ -117,8 +117,8 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
   const secondFactorFailed = (userId: string, ip: string) => noteSecondFactorFailure(mailDeps(), userId, ip);
   async function secretFor(uid: string, encrypted: Buffer) {
     const dek = await ensureDek(app.db, deps.keyProvider, 'users.totp_secret');
-    return { dek, context: { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-      tableName: 'users', recordId: uid, fieldName: 'totp_secret', keyVersion: dek.keyVersion }, encrypted };
+    return { dek, context: { installationId: deps.env.INSTALLATION_ID,
+      tableName: 'users', recordId: uid, fieldName: 'totp_secret' }, encrypted };
   }
   app.post('/api/v2/mfa/login/status', limits, async (req, reply) => {
     try {
@@ -147,7 +147,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
       if (!state.recovering && !state.enrollVerified) return reply.code(403).send({ error: 'enrollment_verification_required' });
       const secret = new Secret({ size: 20 }); const totp = new TOTP({ issuer: 'Ticket-System', label: user.username, secret });
       const { dek, context } = await secretFor(user.id, Buffer.alloc(0));
-      state.pendingSecret = fieldCipher.encryptField(secret.base32, dek.rawDek, context).toString('base64');
+      state.pendingSecret = fieldCipher.encryptField(secret.base32, dek, context).toString('base64');
       await save(flow, state);
       return { secret: secret.base32, qrDataUrl: await QRCode.toDataURL(totp.toString(), { margin: 1, width: 240 }) };
     } catch (error) { return fail(reply, error); }
@@ -212,7 +212,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
         const encrypted = currentUser.totp_enabled ? currentUser.totp_secret_enc : state.pendingSecret ? Buffer.from(state.pendingSecret, 'base64') : null;
         if (!encrypted) throw { statusCode: 409, message: 'totp_not_configured' };
         const { dek, context } = await secretFor(user.id, encrypted);
-        if (!await verifyAndConsumeTotp(trx, user.id, fieldCipher.decryptField(encrypted, dek.rawDek, context), code)) return false;
+        if (!await verifyAndConsumeTotp(trx, user.id, fieldCipher.decryptField(encrypted, dek, context), code)) return false;
         state.totp = true; delete state.pendingSecret;
         await trx.updateTable('mfa_flows').set({ state_json: JSON.stringify(state) }).where('token_hash', '=', flow.token_hash).execute();
         if (!currentUser.totp_enabled) {
@@ -332,7 +332,7 @@ export function registerPasskeyRoutes(app: FastifyInstance, deps: MfaRouteDeps,
       if (!user.totp_enabled || !user.totp_secret_enc) return reply.code(409).send({ error: 'enable_totp_first' });
       if (await secondFactorBlocked(reply, user.id)) return reply;
       const { dek, context } = await secretFor(user.id, user.totp_secret_enc);
-      if (!await verifyAndConsumeTotp(app.db, user.id, fieldCipher.decryptField(user.totp_secret_enc, dek.rawDek, context), body.code)) {
+      if (!await verifyAndConsumeTotp(app.db, user.id, fieldCipher.decryptField(user.totp_secret_enc, dek, context), body.code)) {
         await secondFactorFailed(user.id, req.ip);
         return reply.code(401).send({ error: 'invalid_code' });
       }

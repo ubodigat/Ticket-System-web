@@ -12,17 +12,20 @@ import { Kysely, MysqlDialect } from 'kysely';
 import type { Env } from '../config/env.js';
 import type { Database } from './types.js';
 
-// Verbindung zu MariaDB ausschließlich über den typisierten Query-Builder (Kysely), nie über
-// rohe SQL-Strings -- gemäß docs/SPEC.md §3 und docs/adr/0001. TLS ist verpflichtend, sobald
-// DB_SSL_CA_PATH gesetzt ist; DB_SSL_REJECT_UNAUTHORIZED darf in Produktion nie auf false stehen
-// (Standardwert ist true, siehe env.ts).
-// Security-Audit N9: "migrate" nutzt IMMER das volle DB_USER/DB_PASSWORD-Konto (DDL-Rechte für
-// ALTER/CREATE TABLE nötig). "runtime" (Standard) nutzt DB_RUNTIME_USER/DB_RUNTIME_PASSWORD,
-// falls konfiguriert -- ein kompromittierter App-Prozess (z.B. über eine künftige Schwachstelle)
-// könnte das Schema dann nicht mehr verändern oder Tabellen löschen, nur noch Zeilen lesen/
-// schreiben. Ohne konfiguriertes Laufzeit-Konto (Rückwärtskompatibilität) bleibt das Verhalten
-// unverändert wie vor diesem Update.
-export function createDb(env: Env, purpose: 'migrate' | 'runtime' = 'runtime'): Kysely<Database> {
+// Verbindung zu MariaDB über den typisierten Query-Builder (Kysely). TLS ist verpflichtend, sobald
+// DB_SSL_CA_PATH gesetzt ist; die Zertifikatspruefung laesst sich nicht abschalten (siehe env.ts).
+// Security-Audit N9: "schema" (Abgleich in db/schemaSync.ts) nutzt IMMER das volle DB_USER/DB_PASSWORD-
+// Konto, weil Tabellen angelegt und erweitert werden. "runtime" (Standard) nutzt DB_RUNTIME_USER/
+// DB_RUNTIME_PASSWORD -- ein kompromittierter App-Prozess kann das Schema dann weder veraendern
+// noch Tabellen loeschen, nur Zeilen lesen und schreiben.
+export type DbPurpose = 'schema' | 'runtime';
+
+// Jede Verbindung arbeitet in UTC, unabhaengig von der Zeitzone des MariaDB-Servers: sonst wuerden
+// DEFAULT CURRENT_TIMESTAMP, NOW() und die von mysql2 als UTC ('Z') gelesenen Werte auseinanderlaufen
+// (verschobene Fristen, zu spaet versandte Mails aus der Warteschlange).
+export const SESSION_TIME_ZONE_SQL = "SET time_zone = '+00:00'";
+
+export function createDb(env: Env, purpose: DbPurpose = 'runtime'): Kysely<Database> {
   const useRuntimeAccount = purpose === 'runtime' && !!env.DB_RUNTIME_USER && !!env.DB_RUNTIME_PASSWORD;
   const credentials = useRuntimeAccount
     ? { user: env.DB_RUNTIME_USER, password: env.DB_RUNTIME_PASSWORD }
@@ -31,7 +34,7 @@ export function createDb(env: Env, purpose: 'migrate' | 'runtime' = 'runtime'): 
     // Security-Audit N9: DB_USER/DB_PASSWORD sind jetzt optional (der App-Container bekommt sie
     // absichtlich nicht mehr) -- ohne diese klare Meldung würde mysql2 nur mit einer kryptischen
     // Fehlermeldung über eine fehlgeschlagene Authentifizierung mit "undefined" scheitern.
-    const needed = purpose === 'migrate' ? 'DB_USER/DB_PASSWORD' : 'DB_RUNTIME_USER/DB_RUNTIME_PASSWORD oder DB_USER/DB_PASSWORD';
+    const needed = purpose === 'schema' ? 'DB_USER/DB_PASSWORD' : 'DB_RUNTIME_USER/DB_RUNTIME_PASSWORD oder DB_USER/DB_PASSWORD';
     throw new Error(`Keine Datenbank-Zugangsdaten für Zweck "${purpose}" konfiguriert -- ${needed} wird benötigt.`);
   }
   const pool = createPool({
@@ -50,6 +53,14 @@ export function createDb(env: Env, purpose: 'migrate' | 'runtime' = 'runtime'): 
     ...(env.DB_SSL_CA_PATH
       ? { ssl: { ca: readFileSync(env.DB_SSL_CA_PATH, 'utf8'), rejectUnauthorized: env.DB_SSL_REJECT_UNAUTHORIZED } }
       : {})
+  });
+
+  // mysql2 arbeitet die Befehle einer Verbindung der Reihe nach ab -- die Zeitzone ist damit gesetzt,
+  // bevor die erste Abfrage der Anwendung auf dieser Verbindung laeuft.
+  pool.on('connection', connection => {
+    connection.query(SESSION_TIME_ZONE_SQL, error => {
+      if (error) connection.destroy();
+    });
   });
 
   return new Kysely<Database>({

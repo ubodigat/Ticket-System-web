@@ -2,14 +2,15 @@ import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { registerExtrasV2Routes } from '../src/http/routes/extras.js';
 import { fieldCipher } from '../src/crypto/fieldCrypto.js';
+import { testDek } from './helpers/testDek.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 const uid = 'owner';
 async function requestAttachment({ method = 'DELETE', role = 'admin', uploader = uid, owner = uid, preview = false, noteId = null }:
   { method?: 'GET' | 'DELETE'; role?: 'user' | 'admin' | 'superadmin'; uploader?: string; owner?: string; preview?: boolean; noteId?: string | null } = {}) {
-  const context = (fieldName: string) => ({ installationId: 'test', schemaVersion: 1, tableName: 'attachments', recordId: 'file', fieldName, keyVersion: 1 });
+  const context = (fieldName: string) => ({ installationId: 'test', tableName: 'attachments', recordId: 'file', fieldName });
   const file = { id: 'file', uploaded_by_user_id: uploader, ticket_id: 'ticket', note_id: noteId,
-    filename: fieldCipher.encryptField('document.xlsx', Buffer.alloc(32, 7), context('filename')) };
+    filename: fieldCipher.encryptField('document.xlsx', testDek(), context('filename')) };
   const deleted: unknown[][] = [];
   const db: any = {
     selectFrom: (table: string) => {
@@ -24,7 +25,7 @@ async function requestAttachment({ method = 'DELETE', role = 'admin', uploader =
   };
   const app = Fastify(); app.decorate('db', db);
   app.addHook('onRequest', async req => { (req as any).ticketSession = { uid, username: 'owner', role }; });
-  registerExtrasV2Routes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+  registerExtrasV2Routes(app, { env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any });
   try {
     return { response: await app.inject({ method, url: `/api/v2/attachments/file${preview ? '/preview' : ''}` }), deleted };
   } finally { await app.close(); }
@@ -75,7 +76,7 @@ describe('attachment ownership enforcement', () => {
     };
     app.decorate('db', db);
     app.addHook('onRequest', async req => { (req as any).ticketSession = { uid, username: 'owner', role: 'admin' }; });
-    registerExtrasV2Routes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+    registerExtrasV2Routes(app, { env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any });
 
     try {
       // 1. Blocked extension

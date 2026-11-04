@@ -21,9 +21,9 @@ export function registerOfficeViewerRoutes(app: FastifyInstance, deps: UsersRout
   }
   async function decrypt(attachment: { id: string; filename: Buffer; data_b64: Buffer }, field: 'filename' | 'data') {
     const dek = await ensureDek(app.db, deps.keyProvider, `attachments.${field}`);
-    return fieldCipher.decryptField(field === 'filename' ? attachment.filename : attachment.data_b64, dek.rawDek,
-      { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION, tableName: 'attachments',
-        recordId: attachment.id, fieldName: field, keyVersion: dek.keyVersion });
+    return fieldCipher.decryptField(field === 'filename' ? attachment.filename : attachment.data_b64, dek,
+      { installationId: deps.env.INSTALLATION_ID, tableName: 'attachments',
+        recordId: attachment.id, fieldName: field });
   }
   app.get('/api/v2/attachments/:id/office-config', async (req, reply) => {
     try {

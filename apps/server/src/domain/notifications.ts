@@ -32,9 +32,9 @@ export async function notifyUser(deps: NotifyDeps, params: NotifyParams, log?: F
   if (prefs.app) {
     const id = randomUUID();
     const dek = await ensureDek(deps.db, deps.keyProvider, 'notifications.message');
-    const message = fieldCipher.encryptField(params.message, dek.rawDek, {
-      installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-      tableName: 'notifications', recordId: id, fieldName: 'message', keyVersion: dek.keyVersion
+    const message = fieldCipher.encryptField(params.message, dek, {
+      installationId: deps.env.INSTALLATION_ID,
+      tableName: 'notifications', recordId: id, fieldName: 'message'
     });
     await deps.db.insertInto('notifications').values({
       id, recipient_user_id: recipient.id, recipient_username: recipient.username, type: params.type,

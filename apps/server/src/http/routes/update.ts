@@ -26,7 +26,7 @@ export interface UpdateRouteDeps {
 // Commit-Pinning (der zuvor angezeigte Ziel-Commit muss exakt passen), Signaturpruefung des
 // Ziel-Commits bzw. Release-Tags auf dem Host und ein Audit-Eintrag je Aktion.
 
-type Action = 'status' | 'run' | 'migrate' | 'rollback';
+type Action = 'status' | 'run' | 'repair' | 'rollback';
 interface UpdateStatus { enabled: boolean; error?: string; remoteCommit?: string | null; [key: string]: unknown }
 const POLL_MS = 250;
 
@@ -69,20 +69,37 @@ export function createUpdateBridge(dir: string | undefined) {
   return { read, request, waitFor };
 }
 
-async function readJobLog(dir: string | undefined): Promise<string[]> {
+async function readStateLines(dir: string | undefined, file: string, limit: number): Promise<string[]> {
   if (!dir) return [];
   try {
-    return (await readFile(join(dir, 'state', 'job.log'), 'utf8')).split('\n').filter(Boolean).slice(-400);
+    return (await readFile(join(dir, 'state', file), 'utf8')).split('\n').filter(Boolean).slice(-limit);
   } catch {
     return [];
   }
+}
+const readJobLog = (dir: string | undefined) => readStateLines(dir, 'job.log', 400);
+
+// Neue Commits als "JJJJ-MM-TT hash Betreff" (ops/host-updater, do_status).
+function parseChanges(lines: string[]) {
+  return lines.slice(0, 30).map(line => {
+    const match = /^(\d{4}-\d{2}-\d{2}) ([0-9a-f]{7,12}) (.*)$/.exec(line);
+    return match ? { date: match[1], commit: match[2], subject: match[3]!.slice(0, 200) } : null;
+  }).filter(Boolean);
+}
+
+// Stand der Datensicherung (ops/docker/backup.sh schreibt backup.env).
+export function backupStateFrom(state: Record<string, string> | null) {
+  if (!state) return null;
+  const date = (value: string | undefined) => (value && /^\d{4}-\d{2}-\d{2}T[\d:]+Z$/.test(value) ? value : null);
+  const offsite = ['restic', 's3'].includes(state.offsite ?? '') ? state.offsite! : 'none';
+  return { lastBackupAt: date(state.lastBackupAt), offsite, lastOffsiteAt: date(state.lastOffsiteAt), error: state.error || null };
 }
 
 function jobFrom(state: Record<string, string> | null, log: string[]) {
   if (!state) return null;
   return {
     action: state.action || null, running: state.running === '1', ok: state.ok === '1', failed: state.failed === '1',
-    step: state.step || null, needsInstaller: state.needsInstaller === '1',
+    step: state.step || null, needsInstaller: state.needsInstaller === '1', rolledBack: state.rolledBack === '1',
     startedAt: state.startedAt || null, finishedAt: state.finishedAt || null, log
   };
 }
@@ -110,9 +127,14 @@ export function registerUpdateRoutes(app: FastifyInstance, deps: UpdateRouteDeps
     const commit = (value: string | undefined) => (value && /^[0-9a-f]{40}$/.test(value) ? value : null);
     const localCommit = commit(state.localCommit);
     const remoteCommit = commit(state.remoteCommit);
+    const isoDate = (value: string | undefined) => (value && /^\d{4}-\d{2}-\d{2}T/.test(value) ? value : null);
     return {
       enabled, branch: state.branch || null, localCommit, remoteCommit,
       localSubject: state.localSubject || null, remoteSubject: state.remoteSubject || null,
+      localDate: isoDate(state.localDate), remoteDate: isoDate(state.remoteDate),
+      backupReady: state.backupReady === '1', freeMb: Number(state.freeMb) || null,
+      changes: parseChanges(await readStateLines(dir, 'changes.log', 30)),
+      backup: backupStateFrom(await bridge.read('backup.env')),
       updateAvailable: !!localCommit && !!remoteCommit && localCommit !== remoteCommit,
       commitsBehind: Number(state.commitsBehind) || 0,
       rollbackAvailable: !!commit(state.rollbackCommit), rollbackCommit: commit(state.rollbackCommit),
@@ -164,17 +186,15 @@ export function registerUpdateRoutes(app: FastifyInstance, deps: UpdateRouteDeps
     }
   });
 
-  // Gleicht die Datenbank mit dem laufenden Code ab (z.B. nach einem abgebrochenen Update).
-  app.post('/api/v2/update/migrate', { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }, async (req, reply) => {
+  // Aktuellen Stand erneut ausrollen (Sicherung, Build, Datenbankabgleich, Neustart) -- z.B. nach
+  // einem abgebrochenen Lauf. Kein neuer Code, deshalb ohne Commit-Pinning, aber mit Step-up.
+  app.post('/api/v2/update/repair', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async (req, reply) => {
     try {
       const session = requireSuperadmin(req);
       await requireStepUp(app, deps, req, session.uid);
-      const nonce = await startJob('migrate');
-      await logUpdateAction(app, session, 'update.migrate_triggered', {});
-      const finished = await bridge.waitFor('job.env', nonce, 150_000, state => state.running === '0');
-      const log = (await readJobLog(dir)).join('\n');
-      if (!finished) return reply.code(202).send({ ok: false, running: true, log });
-      return reply.code(finished.ok === '1' ? 200 : 500).send({ ok: finished.ok === '1', log });
+      await startJob('repair');
+      await logUpdateAction(app, session, 'update.repair_triggered', {});
+      return reply.code(202).send({ ok: true, job: jobFrom(await bridge.read('job.env'), []) });
     } catch (error) {
       return routeError(app, reply, error);
     }

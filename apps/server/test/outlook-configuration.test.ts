@@ -18,7 +18,7 @@ async function request(path: string) {
   // PUBLIC_BASE_URL-Konfiguration, nicht mehr aus Host/X-Forwarded-Host der Anfrage -- ein
   // manipulierter Host-Header kann die redirect_uri daher nicht mehr beeinflussen (vorher testete
   // dieser Request-Header "localhost:8443" ueberhaupt erst die alte, verwundbare Ableitung).
-  registerOutlookPersonalRoutes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1, PUBLIC_BASE_URL: 'https://support.example.com' } as any, keyProvider: {} as any });
+  registerOutlookPersonalRoutes(app, { env: { INSTALLATION_ID: 'test', PUBLIC_BASE_URL: 'https://support.example.com' } as any, keyProvider: {} as any });
   try { return await app.inject({ method: 'GET', url: path, headers: { host: 'localhost:8443', 'x-forwarded-proto': 'https' } }); }
   finally { await app.close(); }
 }

@@ -9,8 +9,8 @@ import { mysqlTimestamp } from '../db/date.js';
 import { queueUserMail } from '../mail/queue.js';
 
 export interface TodoDeps { env: Env; keyProvider: KeyProvider }
-export function todoContext(deps: TodoDeps, tableName: string, fieldName: string, recordId: string, keyVersion: number) {
-  return { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION, tableName, fieldName, recordId, keyVersion };
+export function todoContext(deps: TodoDeps, tableName: string, fieldName: string, recordId: string) {
+  return { installationId: deps.env.INSTALLATION_ID, tableName, fieldName, recordId };
 }
 
 // Call within a transaction: the task, shared lists and notifications must commit together.
@@ -26,7 +26,7 @@ export async function insertAdminTodo(db: Kysely<Database>, deps: TodoDeps,
   const dek = await ensureDek(db, deps.keyProvider, 'admin_todos.content');
   await db.insertInto('admin_todos').values({ id, created_by_user_id: actor.uid, done: false,
     due_at: data.due_at ? mysqlTimestamp(new Date(data.due_at)) : null,
-    content: fieldCipher.encryptField(data.content, dek.rawDek, todoContext(deps, 'admin_todos', 'content', id, dek.keyVersion)) }).execute();
+    content: fieldCipher.encryptField(data.content, dek, todoContext(deps, 'admin_todos', 'content', id)) }).execute();
   await db.insertInto('admin_todo_members').values(recipients.map(r => ({ todo_id: id, user_id: r.id, hidden: false }))).execute();
   const others = recipients.filter(r => r.id !== actor.uid);
   if (others.length) {
@@ -36,7 +36,7 @@ export async function insertAdminTodo(db: Kysely<Database>, deps: TodoDeps,
       return { id: notificationId, recipient_user_id: r.id, recipient_username: r.username,
         type: 'todo_assigned', ticket_id: null, ticket_number: null, is_read: false,
         message: fieldCipher.encryptField(`${actor.username} hat dir eine Aufgabe zugewiesen: ${data.content.slice(0, 1000)}`,
-          notificationDek.rawDek, todoContext(deps, 'notifications', 'message', notificationId, notificationDek.keyVersion)) };
+          notificationDek, todoContext(deps, 'notifications', 'message', notificationId)) };
     })).execute();
     for (const recipient of others) {
       await queueUserMail({ db, ...deps }, recipient.id, 'Neue Aufgabe',

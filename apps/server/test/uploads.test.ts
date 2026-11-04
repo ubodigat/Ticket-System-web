@@ -4,8 +4,9 @@ import { registerUploadRoutes, uploadRequestSchema, MAX_UPLOAD_BYTES, UPLOAD_CHU
 import { fieldCipher } from '../src/crypto/fieldCrypto.js';
 import { uploadLimitBytesFromConfig } from '../src/domain/uploadLimits.js';
 import { createHash } from 'node:crypto';
+import { testDek } from './helpers/testDek.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 vi.mock('../src/domain/antivirus.js', () => ({ scanIfConfigured: vi.fn(async () => {}) }));
 // Fester Wert fuer den optionalen Volltest (unter dem Standardlimit von 1 GB).
 const LARGE_TEST_BYTES = 500 * 1024 * 1024;
@@ -35,7 +36,7 @@ function fixture() {
   const session = { uid, username: 'owner', role: 'user' as 'user' | 'admin' | 'superadmin' };
   let authenticated = true;
   app.addHook('onRequest', async req => { req.ticketSession = authenticated ? session : null; });
-  registerUploadRoutes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+  registerUploadRoutes(app, { env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any });
   const start = async (size: number, filename = 'document.txt') => app.inject({ method: 'POST', url: '/api/v2/uploads', payload: { ticket_id: ticketId, filename, mime_type: 'text/plain', size_bytes: size } });
   const chunk = (id: string, part: number, data: Buffer) => app.inject({ method: 'PUT', url: `/api/v2/uploads/${id}/chunks/${part}`, headers: { 'content-type': 'application/octet-stream' }, payload: data });
   return { app, start, chunk, tables, session, setAuthenticated: (value: boolean) => { authenticated = value; } };
@@ -106,7 +107,7 @@ describe('bounded encrypted attachment uploads', () => {
       expect((await f.chunk(id, 0, first)).statusCode).toBe(200);
       expect((await f.chunk(id, 1, tail)).statusCode).toBe(200);
       const stored = f.tables.file_upload_chunks[0]!;
-      const plaintext = fieldCipher.decryptField(stored.data_enc, Buffer.alloc(32, 7), { installationId: 'test', schemaVersion: 1, tableName: 'file_uploads', recordId: `${id}:0`, fieldName: 'data', keyVersion: 1 });
+      const plaintext = fieldCipher.decryptField(stored.data_enc, testDek(), { installationId: 'test', tableName: 'file_uploads', recordId: `${id}:0`, fieldName: 'data' });
       expect(Buffer.from(plaintext, 'base64').equals(first)).toBe(true);
       expect((await f.app.inject({ method: 'POST', url: `/api/v2/uploads/${id}/complete` })).statusCode).toBe(201);
       expect(f.tables.attachments).toHaveLength(1);

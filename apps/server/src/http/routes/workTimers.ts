@@ -13,9 +13,14 @@ export function timerMinutes(start: Date, stop: Date) {
 // minutes: optional angepasste Dauer (z.B. vergessenes Stoppen); Obergrenze 14 Tage. Abweichungen von
 // der serverseitig gemessenen Zeit werden im Ticket-Protokoll festgehalten.
 // solution_type/solution_final: Einordnung des optionalen Loesungsschritts wie im Loesungs-Tab.
-export const finishTimerSchema = z.object({ activity: z.string().trim().min(1).max(4000), solution: z.string().trim().max(10000).optional(),
+export const finishTimerSchema = z.object({ activity: z.string().trim().max(4000).default(''), solution: z.string().trim().max(10000).optional(),
   solution_type: z.enum(['Ursache', 'Maßnahme', 'Lösung']).optional(), solution_final: z.boolean().optional(),
   minutes: z.number().int().min(1).max(20160).optional() }).strict();
+
+async function activityRequired(app: FastifyInstance): Promise<boolean> {
+  const row = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
+  try { return JSON.parse(row?.config_json || '{}').timeTrackingConfig?.requireActivity !== false; } catch { return true; }
+}
 
 export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDeps) {
   app.get('/api/v2/work-timer', async (req, reply) => {
@@ -63,11 +68,12 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
       const session = requireAdmin(req); const { id } = req.params as { id: string };
       const parsed = finishTimerSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'activity_required' });
+      if (!parsed.data.activity && await activityRequired(app)) return reply.code(400).send({ error: 'activity_required' });
       const activityDek = await ensureDek(app.db, deps.keyProvider, 'ticket_time_entries.note');
       const noteDek = await ensureDek(app.db, deps.keyProvider, 'ticket_notes.content');
       const encrypt = (text: string, tableName: string, recordId: string, fieldName: string, dek: typeof noteDek) =>
-        fieldCipher.encryptField(text, dek.rawDek, { installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName, recordId, fieldName, keyVersion: dek.keyVersion });
+        fieldCipher.encryptField(text, dek, { installationId: deps.env.INSTALLATION_ID,
+          tableName, recordId, fieldName });
       const result = await app.db.transaction().execute(async trx => {
         const timer = await trx.selectFrom('ticket_work_timers').selectAll().where('user_id', '=', session.uid).where('id', '=', id).forUpdate().executeTakeFirst();
         if (!timer?.stopped_at) return null;
@@ -79,7 +85,7 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
           old_value: String(measured), new_value: String(minutes) }).execute();
         await trx.insertInto('ticket_time_entries').values({ id: entryId, ticket_id: timer.ticket_id, user_id: session.uid,
           username: session.username, minutes,
-          note: null, note_enc: encrypt(parsed.data.activity, 'ticket_time_entries', entryId, 'note', activityDek) }).execute();
+          note: null, note_enc: parsed.data.activity ? encrypt(parsed.data.activity, 'ticket_time_entries', entryId, 'note', activityDek) : null }).execute();
         if (parsed.data.solution) {
           const noteId = randomUUID();
           await trx.insertInto('ticket_notes').values({ id: noteId, ticket_id: timer.ticket_id,

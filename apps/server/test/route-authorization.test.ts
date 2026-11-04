@@ -29,8 +29,8 @@ describe('route authorization without a session', () => {
     app = await buildApp({
       env: { NODE_ENV: 'test', PORT: 3000, HOST: '127.0.0.1', DB_HOST: 'localhost', DB_PORT: 3306, DB_NAME: 'test', DB_USER: 'app', DB_PASSWORD: 'secret',
         DB_SSL_REJECT_UNAUTHORIZED: true, KEK_FILE_PATH: '/dev/null', COOKIE_SECRET: 'a'.repeat(32),
-        INSTALLATION_ID: '123e4567-e89b-12d3-a456-426614174000', SCHEMA_VERSION: 1 } as Env,
-      db: fakeDb(), keyProvider: { getCurrentKek: async () => ({ version: 1 }), wrapDek: async raw => raw, unwrapDek: async wrapped => wrapped } as any
+        INSTALLATION_ID: '123e4567-e89b-12d3-a456-426614174000' } as Env,
+      db: fakeDb(), keyProvider: { currentKekVersion: async () => 1, wrapDek: async raw => raw, unwrapDek: async wrapped => wrapped } as any
     });
     await app.ready();
   });

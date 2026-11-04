@@ -15,7 +15,7 @@ import { routeError } from './routeError.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
-import { fieldCipher, computeBlindIndex, decryptFieldTolerant } from '../../crypto/fieldCrypto.js';
+import { fieldCipher, blindIndexCandidates } from '../../crypto/fieldCrypto.js';
 import { queueMail as sendMail, queueMailIfConfigured as sendMailSafe } from '../../mail/queue.js';
 import { notifyUser } from '../../domain/notifications.js';
 import { canAccessTicket, canReadAttachment } from '../../domain/ticketAccess.js';
@@ -94,9 +94,8 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
       const blindIndexDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
-      const blindIdx = computeBlindIndex(blindIndexDek.rawDek, parsed.data.to.trim().toLowerCase());
       const known = await app.db.selectFrom('users').select('id')
-        .where('email_blind_idx', '=', blindIdx).executeTakeFirst();
+        .where('email_blind_idx', 'in', blindIndexCandidates(blindIndexDek, parsed.data.to.trim().toLowerCase())).executeTakeFirst();
       if (!known) return reply.code(403).send({ error: 'recipient_not_allowed' });
 
       await sendMail(
@@ -139,13 +138,11 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const notifications = rows.map(row => ({
         ...row,
         message: row.message
-          ? fieldCipher.decryptField(row.message, dek.rawDek, {
+          ? fieldCipher.decryptField(row.message, dek, {
               installationId: deps.env.INSTALLATION_ID,
-              schemaVersion: deps.env.SCHEMA_VERSION,
               tableName: 'notifications',
               recordId: row.id,
-              fieldName: 'message',
-              keyVersion: dek.keyVersion
+              fieldName: 'message'
             })
           : null
       }));
@@ -263,13 +260,11 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
     const id = randomUUID();
     const nameDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.name');
     const emailDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.email');
-    const ctx = (fieldName: string, keyVersion: number) => ({
+    const ctx = (fieldName: string) => ({
       installationId: deps.env.INSTALLATION_ID,
-      schemaVersion: deps.env.SCHEMA_VERSION,
       tableName: 'account_requests',
       recordId: id,
-      fieldName,
-      keyVersion
+      fieldName
     });
     // Security-Audit N10-Rest: company/reason sind Freitextfelder (koennen personenbezogene
     // Angaben enthalten) und werden jetzt genauso verschluesselt wie name/email.
@@ -277,10 +272,10 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
     const reasonDek = parsed.data.reason ? await ensureDek(app.db, deps.keyProvider, 'account_requests.reason') : null;
     await app.db.insertInto('account_requests').values({
       id,
-      name: fieldCipher.encryptField(parsed.data.name, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-      email: fieldCipher.encryptField(parsed.data.email, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
-      company: companyDek ? fieldCipher.encryptField(parsed.data.company!, companyDek.rawDek, ctx('company', companyDek.keyVersion)) : null,
-      reason: reasonDek ? fieldCipher.encryptField(parsed.data.reason!, reasonDek.rawDek, ctx('reason', reasonDek.keyVersion)) : null,
+      name: fieldCipher.encryptField(parsed.data.name, nameDek, ctx('name')),
+      email: fieldCipher.encryptField(parsed.data.email, emailDek, ctx('email')),
+      company: companyDek ? fieldCipher.encryptField(parsed.data.company!, companyDek, ctx('company')) : null,
+      reason: reasonDek ? fieldCipher.encryptField(parsed.data.reason!, reasonDek, ctx('reason')) : null,
       status: 'pending',
       installation_id: deps.env.INSTALLATION_ID
     }).execute();
@@ -302,22 +297,20 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const companyDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.company');
       const reasonDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.reason');
       const requests = rows.map(row => {
-        const ctx = (fieldName: string, keyVersion: number) => ({
+        const ctx = (fieldName: string) => ({
           installationId: deps.env.INSTALLATION_ID,
-          schemaVersion: deps.env.SCHEMA_VERSION,
           tableName: 'account_requests',
           recordId: row.id,
-          fieldName,
-          keyVersion
+          fieldName
         });
         return {
           ...row,
-          name: fieldCipher.decryptField(row.name, nameDek.rawDek, ctx('name', nameDek.keyVersion)),
-          email: fieldCipher.decryptField(row.email, emailDek.rawDek, ctx('email', emailDek.keyVersion)),
+          name: fieldCipher.decryptField(row.name, nameDek, ctx('name')),
+          email: fieldCipher.decryptField(row.email, emailDek, ctx('email')),
           // Security-Audit N10-Rest: tolerant, weil bestehende Anfragen aus der Zeit vor Migration
           // 0039 erst durch db/reencryptLegacy.ts nachverschluesselt werden (siehe R-2-Timing).
-          company: row.company ? decryptFieldTolerant(row.company, companyDek.rawDek, ctx('company', companyDek.keyVersion)) : null,
-          reason: row.reason ? decryptFieldTolerant(row.reason, reasonDek.rawDek, ctx('reason', reasonDek.keyVersion)) : null
+          company: row.company ? fieldCipher.decryptField(row.company, companyDek, ctx('company')) : null,
+          reason: row.reason ? fieldCipher.decryptField(row.reason, reasonDek, ctx('reason')) : null
         };
       });
       return reply.send({ requests });
@@ -349,16 +342,14 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
           if (request) {
             const nameDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.name');
             const emailDek = await ensureDek(app.db, deps.keyProvider, 'account_requests.email');
-            const ctx = (fieldName: string, keyVersion: number) => ({
+            const ctx = (fieldName: string) => ({
               installationId: deps.env.INSTALLATION_ID,
-              schemaVersion: deps.env.SCHEMA_VERSION,
               tableName: 'account_requests',
               recordId: request.id,
-              fieldName,
-              keyVersion
+              fieldName
             });
-            const email = fieldCipher.decryptField(request.email, emailDek.rawDek, ctx('email', emailDek.keyVersion));
-            const name = fieldCipher.decryptField(request.name, nameDek.rawDek, ctx('name', nameDek.keyVersion));
+            const email = fieldCipher.decryptField(request.email, emailDek, ctx('email'));
+            const name = fieldCipher.decryptField(request.name, nameDek, ctx('name'));
             await sendMailSafe(
               { db: app.db, env: deps.env, keyProvider: deps.keyProvider },
               email,
@@ -376,13 +367,11 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
 
   // --- Datei-Anhänge ---
 
-  const attachmentCtx = (fieldName: string, recordId: string, keyVersion: number) => ({
+  const attachmentCtx = (fieldName: string, recordId: string) => ({
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'attachments',
     recordId,
-    fieldName,
-    keyVersion
+    fieldName
   });
 
   // GET /api/v2/attachments/:id - Anhang abrufen (Auth erforderlich + Ticket-Prüfung)
@@ -399,9 +388,9 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
 
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'attachments.data');
-      const filename = fieldCipher.decryptField(attachment.filename, filenameDek.rawDek, attachmentCtx('filename', attachment.id, filenameDek.keyVersion));
+      const filename = fieldCipher.decryptField(attachment.filename, filenameDek, attachmentCtx('filename', attachment.id));
       const chunked = !!await app.db.selectFrom('file_uploads').select('id').where('id', '=', id).where('completed', '=', true).executeTakeFirst();
-      const data_b64 = chunked ? null : fieldCipher.decryptField(attachment.data_b64, dataDek.rawDek, attachmentCtx('data', attachment.id, dataDek.keyVersion));
+      const data_b64 = chunked ? null : fieldCipher.decryptField(attachment.data_b64, dataDek, attachmentCtx('data', attachment.id));
 
       return reply.send({ attachment: { ...attachment, filename, data_b64, chunked } });
     } catch (e: any) {
@@ -435,11 +424,11 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       if (attachment.size_bytes > 15 * 1024 * 1024) return reply.code(413).send({ error: 'preview_too_large' });
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
       const dataDek = await ensureDek(app.db, deps.keyProvider, 'attachments.data');
-      const filename = fieldCipher.decryptField(attachment.filename, filenameDek.rawDek, attachmentCtx('filename', id, filenameDek.keyVersion));
+      const filename = fieldCipher.decryptField(attachment.filename, filenameDek, attachmentCtx('filename', id));
       const supported = /\.(pdf|xlsx|xls|ods|docx|doc|odt|pptx|ppt|odp)$/i.test(filename);
       if (!supported) return reply.code(415).send({ error: 'unsupported_preview' });
       if (!/\.pdf$/i.test(filename) && !deps.env.OFFICE_PREVIEW_URL) return reply.code(503).send({ error: 'preview_not_configured' });
-      const encoded = fieldCipher.decryptField(attachment.data_b64, dataDek.rawDek, attachmentCtx('data', id, dataDek.keyVersion));
+      const encoded = fieldCipher.decryptField(attachment.data_b64, dataDek, attachmentCtx('data', id));
       const original = Buffer.from(encoded, 'base64');
       let pdf: Buffer;
       try { pdf = /\.pdf$/i.test(filename) ? original : await convertOfficePreview(id, filename, original, deps.env.OFFICE_PREVIEW_URL!); }
@@ -511,10 +500,10 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
         note_id: parsed.data.note_id ?? null,
         uploaded_by_user_id: session.uid,
         uploaded_by_username: session.username,
-        filename: fieldCipher.encryptField(validated.safeFilename, filenameDek.rawDek, attachmentCtx('filename', id, filenameDek.keyVersion)),
+        filename: fieldCipher.encryptField(validated.safeFilename, filenameDek, attachmentCtx('filename', id)),
         mime_type: validated.mimeType,
         size_bytes: validated.sizeBytes,
-        data_b64: fieldCipher.encryptField(parsed.data.data_b64, dataDek.rawDek, attachmentCtx('data', id, dataDek.keyVersion))
+        data_b64: fieldCipher.encryptField(parsed.data.data_b64, dataDek, attachmentCtx('data', id))
       }).execute();
 
       return reply.code(201).send({ id, filename: validated.safeFilename, size_bytes: validated.sizeBytes, mime_type: validated.mimeType });

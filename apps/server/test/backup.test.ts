@@ -6,9 +6,10 @@ import {
 } from '../src/domain/backup.js';
 import { registerBackupRoutes } from '../src/http/routes/backup.js';
 import { fieldCipher } from '../src/crypto/fieldCrypto.js';
+import { testDek } from './helpers/testDek.js';
 
 vi.mock('argon2', () => ({ verify: async (_hash: string, password: string) => password === 'correct-password' }));
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 vi.mock('../src/domain/totp.js', () => ({ verifyAndConsumeTotp: async (_db: unknown, _uid: string, _secret: string, code: string) => code === '123456' }));
 
 const FAST = { N: 2 ** 14, r: 8, p: 1 };
@@ -75,8 +76,8 @@ describe('backup file format', () => {
 
 function backupApp(role: 'user' | 'admin' | 'superadmin', totpEnabled: boolean) {
   const audit: any[] = [];
-  const totpSecret = fieldCipher.encryptField('SECRET', Buffer.alloc(32, 7), {
-    installationId: 'install-a', schemaVersion: 1, tableName: 'users', recordId: 'root-id', fieldName: 'totp_secret', keyVersion: 1
+  const totpSecret = fieldCipher.encryptField('SECRET', testDek(), {
+    installationId: 'install-a', tableName: 'users', recordId: 'root-id', fieldName: 'totp_secret'
   });
   const db: any = {
     selectFrom: () => {
@@ -91,7 +92,7 @@ function backupApp(role: 'user' | 'admin' | 'superadmin', totpEnabled: boolean) 
   const app = Fastify();
   app.decorate('db', db);
   app.addHook('onRequest', async req => { req.ticketSession = { uid: 'root-id', username: 'root', role }; });
-  registerBackupRoutes(app, { env: { INSTALLATION_ID: 'install-a', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+  registerBackupRoutes(app, { env: { INSTALLATION_ID: 'install-a' } as any, keyProvider: {} as any });
   return { app, audit };
 }
 

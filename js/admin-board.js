@@ -386,6 +386,13 @@ export const AdminBoard = {
         const canUsers = canManageUsers || canManage2FA;
         const canReqs = isSuper || (user && user.canManageRequests);
 
+        if (isSuper) AdminBoard.showMfaPolicyHint().catch(() => {});
+        const linkedTicket = new URLSearchParams(location.search).get('ticket');
+        if (linkedTicket && /^[0-9a-f-]{36}$/i.test(linkedTicket)) {
+            history.replaceState(null, '', location.pathname);
+            setTimeout(() => AdminBoard.openModal(linkedTicket), 0);
+        }
+
         const actionsForAbsence = q('.topbar-right');
         if (actionsForAbsence && !q('#btn-absence-overview')) {
             const btn = document.createElement('button');
@@ -744,6 +751,13 @@ export const AdminBoard = {
 
         const deadlines = new Map(tickets.map(t => [t.id, Store.ticketSlaDueAt(t, slaSettings)]));
         tickets.sort((a, b) => compareTicketUrgency(a, b, t => deadlines.get(t.id)));
+        // Arbeitsansichten: jede Person sieht sofort ihre naechsten Aufgaben (Bewertung 11/2026, Abschnitt 4).
+        const queues = AdminBoard.boardQueues(user, deadlines, Date.now());
+        AdminBoard.renderQueueBar(tickets, queues);
+        const activeQueue = queues[AdminBoard.boardQueue] || queues.open;
+        const showClosed = AdminBoard.showClosed && AdminBoard.boardQueue === 'open';
+        tickets = tickets.filter(t => t.status === 'Geschlossen' ? showClosed : activeQueue.match(t));
+        if (q('#col-done')) q('#col-done').hidden = !showClosed;
 
         const cols = {
             'Neu': q('#list-new'),
@@ -1639,7 +1653,7 @@ export const AdminBoard = {
                 <body><div class="print-head"><div><h1>${Lang.format('companyGroupHeading', { company: Utils.esc(company.name || 'Support Portal'), group: Utils.esc(current.label || current.name) })}</h1>
                 <div class="meta">${Lang.format('membersPrintedByOn', { count: memberCount, name: Utils.esc(actor?.name || actor?.username || '-'), date: Utils.esc(Utils.fmtDate(new Date().toISOString())) })}</div></div>
                 ${companyLogo ? `<img src="${Utils.esc(companyLogo)}" alt="Logo">` : ''}</div>
-                ${sections.map((section, index) => `<section class="print-group" style="margin-left:${section.depth * 18}px">
+                ${sections.map((section, index) => `<section class="print-group print-depth-${Math.min(section.depth, 8)}">
                     ${index || sections.length > 1 ? `<h2>${section.depth ? '↳ ' : ''}${Utils.esc(section.group.label || section.group.name)} <small>(${section.members.length})</small></h2>` : ''}
                     ${table(section.members)}</section>`).join('')}
                 </body></html>`);
@@ -2212,39 +2226,54 @@ export const AdminBoard = {
         modal.querySelector('#generic-save-head')?.remove();
     },
 
-    // Übersichtlicher Fortschritt statt nur "Schritt: build" als Text -- ein docker build
-    // --no-cache kann mehrere Minuten dauern, ohne sichtbaren Fortschritt wirkt das wie ein
-    // Haenger. job.step bleibt auch nach einem Fehler auf dem Namen des zuletzt gestarteten
-    // Schritts stehen (ops/host-updater), job.failed zeigt den Fehlschlag separat an.
+    // Fortschritt eines Update-Laufs (Schritte wie in ops/host-updater). job.step bleibt nach einem
+    // Fehler auf dem zuletzt gestarteten Schritt stehen, job.failed/job.rolledBack zeigen den Ausgang.
     updateSteps: [
-        { key: 'fetch', get label() { return Lang.t('stepFetch'); } },
-        { key: 'reset', get label() { return Lang.t('stepUpdate'); } },
-        { key: 'build', get label() { return Lang.t('stepBuild'); } },
-        { key: 'migrate', get label() { return Lang.t('stepMigrate'); } },
-        { key: 'restart', get label() { return Lang.t('stepRestart'); } }
+        { key: 'check', get label() { return Lang.t('updStepCheck'); } },
+        { key: 'backup', get label() { return Lang.t('updStepBackup'); } },
+        { key: 'download', get label() { return Lang.t('updStepDownload'); } },
+        { key: 'build', get label() { return Lang.t('updStepBuild'); } },
+        { key: 'database', get label() { return Lang.t('updStepDatabase'); } },
+        { key: 'restart', get label() { return Lang.t('updStepRestart'); } }
     ],
     renderUpdateProgress: (job) => {
         const steps = AdminBoard.updateSteps;
         const done = job.step === 'done' || job.ok;
         let currentIndex = steps.findIndex(s => s.key === job.step);
         if (done) currentIndex = steps.length;
-        if (currentIndex === -1 && !done) currentIndex = 0; // "starting" -- noch vor dem ersten Schritt
+        if (currentIndex === -1 && !done) currentIndex = 0;
         const percent = done ? 100 : Math.round((currentIndex / steps.length) * 100);
         return `
             <div class="update-progress">
                 <div class="update-progress-bar"><div class="update-progress-fill ${job.failed ? 'failed' : done ? 'ok' : ''}" data-percent="${percent}"></div></div>
-                <div class="update-progress-steps">
+                <ol class="update-progress-steps">
                     ${steps.map((s, i) => {
                         const state = job.failed && i === currentIndex ? 'failed' : (i < currentIndex || done) ? 'done' : i === currentIndex ? 'active' : '';
-                        return `<span class="update-progress-step${state ? ' ' + state : ''}">${Utils.esc(s.label)}</span>`;
+                        const icon = state === 'done' ? 'check' : state === 'failed' ? 'x' : state === 'active' ? 'loader-circle' : 'circle';
+                        return `<li class="update-progress-step${state ? ' ' + state : ''}">${Icon(icon, 14)}<span>${Utils.esc(s.label)}</span></li>`;
                     }).join('')}
-                </div>
+                </ol>
             </div>`;
     },
 
-    // pollTimer: l&auml;uft ein Update, fragt diese Funktion den Status alle 4s erneut ab, damit der
-    // Fortschritt live sichtbar ist (ein docker build --no-cache kann mehrere Minuten dauern) --
-    // ohne dass die Person manuell auf "Pruefen" klicken muss.
+    // Stand der Datensicherung (ops/docker/backup.sh) mit Warnung, solange keine externe Kopie besteht.
+    renderBackupState: (status) => {
+        const backup = status.backup;
+        if (!status.backupReady) {
+            return `<div class="callout callout-warning upd-backup">${Icon('shield-alert', 16)}<div><strong>${Lang.t('updBackupMissingTitle')}</strong><p>${Lang.t('updBackupMissingText')}</p><code>bash ops/docker/backup.sh --init-keys</code></div></div>`;
+        }
+        const last = backup?.lastBackupAt ? Utils.fmtDate(backup.lastBackupAt) : Lang.t('updBackupNever');
+        const offsite = backup?.offsite && backup.offsite !== 'none';
+        const offsiteText = offsite
+            ? Lang.format('updBackupOffsite', { target: backup.offsite === 's3' ? 'S3' : 'restic', date: backup.lastOffsiteAt ? Utils.fmtDate(backup.lastOffsiteAt) : Lang.t('updBackupNever') })
+            : Lang.t('updBackupNoOffsite');
+        const warn = !offsite || !!backup?.error;
+        return `<div class="callout ${warn ? 'callout-warning' : 'callout-info'} upd-backup">${Icon(warn ? 'shield-alert' : 'shield-check', 16)}<div>
+            <strong>${Lang.format('updBackupLast', { date: Utils.esc(last) })}</strong>
+            <p>${Utils.esc(offsiteText)}${backup?.error ? ` ${Utils.esc(Lang.t('updBackupOffsiteFailed'))}` : ''}</p></div></div>`;
+    },
+
+    // pollTimer: laeuft ein Update, wird der Status alle 4 s neu abgefragt (ein Build dauert Minuten).
     updatePollTimer: null,
     // Anleitung im Update-Tab. Jede settings-section-title-Ueberschrift wird beim Aufbau des Dialogs
     // zu einem eigenen, einklappbaren Abschnitt (siehe Aufbau der .tab-content-Bereiche).
@@ -2278,7 +2307,7 @@ export const AdminBoard = {
                 ${card('sysInfoAppVersion', info.app.version, commit ? `Commit ${commit}` : Lang.t('sysInfoUnknownCommit'))}
                 ${card('sysInfoNode', info.runtime.node, info.runtime.platform)}
                 ${card('sysInfoDatabase', info.database.version, info.database.tls ? Lang.t('sysInfoTlsOn') : Lang.t('sysInfoTlsOff'))}
-                ${card('sysInfoSchema', info.database.latestMigration, Lang.format('sysInfoMigrationCount', { count: info.database.migrationCount ?? '–' }))}
+                ${card('sysInfoSchema', Lang.t(info.database.schema?.upToDate ? 'sysInfoSchemaOk' : 'sysInfoSchemaOutdated'), [Lang.format('sysInfoSchemaFingerprint', { value: (info.database.schema?.applied || '–').slice(0, 12) }), info.database.reencryptPending ? Lang.t('sysInfoReencryptPending') : ''].filter(Boolean).join(' · '))}
             </div>
             <h4 class="section-title">${Utils.esc(Lang.t('sysInfoInstallation'))}</h4>
             <dl class="sys-info-list">
@@ -2558,121 +2587,163 @@ export const AdminBoard = {
         const area = q('#sys-update-status');
         if (!area) return;
         clearTimeout(AdminBoard.updatePollTimer);
-        if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
+        const runBtn = q('#sys-update-run');
+        if (runBtn) runBtn.hidden = true;
         const actor = await Store.currentUser();
-        if (actor?.role !== 'superadmin') {
-            area.textContent = Lang.t('onlySuperadminsCanUpdate');
-            return;
-        }
+        if (actor?.role !== 'superadmin') { area.textContent = Lang.t('onlySuperadminsCanUpdate'); return; }
         area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} ${Lang.t('updateStatusChecking')}</div>`;
         const status = await Store.getUpdateStatus();
-        if (!q('#sys-update-status')) return; // Modal inzwischen geschlossen
-        // httpStatus unterscheidet, WARUM der Abruf fehlschlug -- vorher zeigte jeder Fehlschlag
-        // (auch ein voruebergehender Gateway-Timeout waehrend eines laufenden Updates) dieselbe,
-        // irrefuehrende "nicht konfiguriert"-Meldung.
-        if (status.httpStatus === 0) {
-            area.innerHTML = `<div class="callout callout-danger">${Lang.t('serverUnreachableRetry')}</div>`;
+        if (!q('#sys-update-status')) return;
+        const notice = (kind, text, retry = false) => {
+            area.innerHTML = `<div class="callout callout-${kind}">${text}</div>${retry ? `<button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}${Lang.t('checkAgain')}</button>` : ''}`;
+            q('#sys-update-retry')?.addEventListener('click', () => AdminBoard.renderUpdateStatus());
             if (window.lucide) lucide.createIcons();
-            return;
-        }
-        if (status.error === 'update_service_disabled' || status.error === 'update_service_not_configured') {
-            area.innerHTML = `<div class="callout callout-info">${Lang.t('onlineUpdatesDisabled')}</div>`;
-            const runBtn = q('#sys-update-run');
-            if (runBtn) runBtn.disabled = true;
-            if (q('#sys-update-migrate')) q('#sys-update-migrate').disabled = true;
-            if (window.lucide) lucide.createIcons();
-            return;
-        }
-        if (status.error === 'update_signature_not_configured') {
-            area.innerHTML = `<div class="callout callout-info">${Lang.t('updatesLockedNoSignature')}</div>`;
-            if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
-            return;
-        }
-        if (status.error === 'update_runner_disabled' || status.enabled === false) {
-            area.innerHTML = `<div class="callout callout-info">${Lang.t('updaterDeploymentDisabled')}</div>`;
-            const runBtn = q('#sys-update-run');
-            if (runBtn) runBtn.disabled = true;
-            if (q('#sys-update-migrate')) q('#sys-update-migrate').disabled = true;
-            if (window.lucide) lucide.createIcons();
-            return;
-        }
-        if (status.httpStatus === 503 || status.httpStatus === 504 || status.httpStatus === 502) {
-            area.innerHTML = `<div class="callout callout-danger">${Lang.format('updaterNotResponding', { code: Utils.esc(String(status.httpStatus)) })}</div>
-                <button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}${Lang.t('checkAgain')}</button>`;
-            q('#sys-update-retry').onclick = () => AdminBoard.renderUpdateStatus();
-            if (window.lucide) lucide.createIcons();
-            return;
-        }
-        if (status.error === 'github_unreachable') {
-            area.innerHTML = `<div class="callout callout-danger">${Lang.t('githubUnreachable')}</div>`;
-            if (q('#sys-update-run')) q('#sys-update-run').disabled = true;
-            if (window.lucide) lucide.createIcons();
-            return;
-        }
-        if (status.error || status.httpStatus !== 200) {
-            area.innerHTML = `<div class="callout callout-danger">${Lang.format('updateStatusLoadFailed', { code: Utils.esc(String(status.httpStatus)) })}</div>`;
-            return;
-        }
+        };
+        if (status.httpStatus === 0) return notice('danger', Lang.t('serverUnreachableRetry'), true);
+        if (status.error === 'update_service_disabled' || status.error === 'update_service_not_configured') return notice('info', Lang.t('onlineUpdatesDisabled'));
+        if (status.error === 'update_signature_not_configured') return notice('info', Lang.t('updatesLockedNoSignature'));
+        if (status.error === 'update_runner_disabled' || status.enabled === false) return notice('info', Lang.t('updaterDeploymentDisabled'));
+        if ([502, 503, 504].includes(status.httpStatus)) return notice('danger', Lang.format('updaterNotResponding', { code: Utils.esc(String(status.httpStatus)) }), true);
+        if (status.error === 'github_unreachable') return notice('danger', Lang.t('githubUnreachable'), true);
+        if (status.error || status.httpStatus !== 200) return notice('danger', Lang.format('updateStatusLoadFailed', { code: Utils.esc(String(status.httpStatus)) }), true);
+
         const job = status.job;
         const updateAvailable = !!status.updateAvailable;
-        // Fuer die Bestaetigungsdialoge der Klick-Handler weiter unten (Commit-Pinning).
         AdminBoard._lastUpdateStatus = status;
-        if (q('#sys-update-migrate')) q('#sys-update-migrate').disabled = false;
-        area.innerHTML = `
-            <div class="settings-summary-grid">
-                <div class="summary-card"><span>${Lang.t('localVersion')}</span><strong>${Utils.esc((status.localCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.localSubject || '')}</small></div>
-                <div class="summary-card"><span>${Lang.t('githubVersion')}</span><strong>${Utils.esc((status.remoteCommit || '').slice(0, 12) || '-')}</strong><small>${Utils.esc(status.remoteSubject || '')}</small></div>
-                <div class="summary-card"><span>${Lang.t('status')}</span><strong>${updateAvailable ? Lang.format('updatesAvailable', { count: status.commitsBehind || 1 }) : Lang.t('upToDate')}</strong><small>${Utils.esc(status.branch || 'main')}</small></div>
-            </div>
-            ${job ? `<div class="update-log ${job.failed ? 'failed' : job.ok ? 'ok' : 'running'}">
-                <strong>${job.running ? Lang.t('updateRunning') : job.ok ? Lang.t('lastUpdateSuccessful') : job.failed ? Lang.t('lastUpdateFailed') : ''}</strong>
+        const short = commit => Utils.esc((commit || '').slice(0, 7) || '-');
+        const date = value => value ? Utils.esc(Utils.fmtDate(value)) : '';
+        const changes = (status.changes || []).map(c => `<li><span class="upd-change-date">${Utils.esc(Utils.fmtDate(c.date).split(' ')[0])}</span><span>${Utils.esc(c.subject)}</span></li>`).join('');
+        const hero = updateAvailable
+            ? `<div class="upd-hero is-available">${Icon('sparkles', 22)}<div>
+                    <strong>${Lang.format('updNewVersion', { count: status.commitsBehind || 1 })}</strong>
+                    <span>${Lang.format('updVersionLine', { commit: short(status.remoteCommit), date: date(status.remoteDate) })}</span>
+                </div></div>
+                ${changes ? `<details class="upd-changes" open><summary>${Lang.t('updWhatsNew')}</summary><ul>${changes}</ul></details>` : ''}
+                <div class="upd-plan">
+                    <strong>${Lang.t('updPlanTitle')}</strong>
+                    <ol>${['updPlanBackup', 'updPlanCheck', 'updPlanInstall', 'updPlanDatabase', 'updPlanRestart'].map(key => `<li>${Lang.t(key)}</li>`).join('')}</ol>
+                    <p class="hint">${Lang.t('updPlanHint')}</p>
+                </div>`
+            : `<div class="upd-hero is-current">${Icon('circle-check', 22)}<div>
+                    <strong>${Lang.t('upToDate')}</strong>
+                    <span>${Lang.format('updVersionLine', { commit: short(status.localCommit), date: date(status.localDate) })}</span>
+                </div></div>`;
+        const jobBox = job ? `<div class="update-log ${job.failed ? 'failed' : job.ok ? 'ok' : 'running'}">
+                <strong>${job.running ? Lang.t('updateRunning') : job.ok ? Lang.t('lastUpdateSuccessful') : job.rolledBack ? Lang.t('updRolledBack') : job.failed ? Lang.t('lastUpdateFailed') : ''}</strong>
                 ${job.ok && job.needsInstaller ? `<div class="callout callout-info">${Lang.t('updateNeedsInstaller')}</div>` : ''}
                 ${AdminBoard.renderUpdateProgress(job)}
-                <pre>${Utils.esc((job.log || []).slice(-18).join('\n'))}</pre>
-            </div>` : ''}
-        `;
-        const runBtn = q('#sys-update-run');
-        // Ist kein neues Update verfügbar, der letzte Lauf aber fehlgeschlagen (z.B. Build/
-        // Migration/Neustart abgebrochen), bleibt die Installation trotzdem anklickbar: der
-        // lokale Stand ist bereits auf der neuesten Version, nur die restlichen Schritte
-        // (Build/Migration/Neustart) müssen erneut laufen. Ohne das könnte man einen
-        // fehlgeschlagenen Lauf nie wiederholen, solange GitHub keinen weiteren Commit liefert.
-        const canRetryFailed = !updateAvailable && !!job?.failed;
+                <details${job.failed ? ' open' : ''}><summary>${Lang.t('updShowLog')}</summary><pre>${Utils.esc((job.log || []).slice(-30).join('\n'))}</pre></details>
+            </div>` : '';
+        area.innerHTML = `${hero}${AdminBoard.renderBackupState(status)}${jobBox}`;
+
         if (runBtn) {
-            runBtn.disabled = (!updateAvailable && !canRetryFailed) || !!job?.running;
-            runBtn.innerHTML = canRetryFailed
-                ? `${Icon('refresh-cw', 15)}${Lang.t('reinstallLastUpdate')}`
-                : `${Icon('download-cloud', 15)}${Lang.t('installUpdate')}`;
+            runBtn.hidden = !updateAvailable || !!job?.running;
+            runBtn.disabled = !!job?.running;
         }
-        if (canRetryFailed) {
-            area.insertAdjacentHTML('beforeend', `<div class="callout callout-info">${Lang.t('noNewCommitButFailedRun')}</div>`);
+        // Abgebrochener Lauf ohne neue Version: den aktuellen Stand erneut ausrollen.
+        if (!updateAvailable && job?.failed && !job.running) {
+            area.insertAdjacentHTML('beforeend', `<div class="setting-row"><span class="hint">${Lang.t('updRepairHint')}</span>
+                <button class="btn-secondary btn-sm" id="sys-update-repair" type="button">${Icon('wrench', 15)}${Lang.t('updRepair')}</button></div>`);
+            q('#sys-update-repair').onclick = async () => {
+                const stepUp = await AdminBoard.confirmStepUp(Lang.t('updRepairConfirm'));
+                if (!stepUp) return;
+                q('#sys-update-repair').disabled = true;
+                const result = await Store.runRepair(stepUp.password, stepUp.totpCode);
+                UI.toast(result && [200, 202].includes(result.httpStatus) ? Lang.t('updateStartedToast')
+                    : result?.error === 'wrong_password' ? Lang.t('wrongPassword') : result?.error === 'invalid_totp_code' ? Lang.t('invalidMfaCode') : Lang.t('updateDisabledOrUnreachable'));
+                await AdminBoard.renderUpdateStatus();
+            };
         }
-        // Rollback-Button: nur sichtbar, wenn der Updater einen Commit von vor dem letzten
-        // erfolgreichen Update kennt (siehe ops/host-updater, run_update).
+        // Zurueck auf die Version vor dem letzten Update (Daten bleiben erhalten).
         if (status.rollbackAvailable && !job?.running) {
-            area.insertAdjacentHTML('beforeend', `
-                <div class="setting-row">
-                    <span class="hint">${Lang.format('rollbackHint', { commit: `<code>${Utils.esc((status.rollbackCommit || '').slice(0, 12))}</code>` })}</span>
-                    <button class="btn-secondary btn-sm" id="sys-update-rollback" type="button">${Icon('undo-2', 15)}${Lang.t('rollback')}</button>
-                </div>`);
+            area.insertAdjacentHTML('beforeend', `<div class="setting-row"><span class="hint">${Lang.format('rollbackHint', { commit: `<code>${short(status.rollbackCommit)}</code>` })}</span>
+                <button class="btn-secondary btn-sm" id="sys-update-rollback" type="button">${Icon('undo-2', 15)}${Lang.t('rollback')}</button></div>`);
             q('#sys-update-rollback').onclick = async () => {
                 const stepUp = await AdminBoard.confirmStepUp(Lang.t('rollbackConfirmMessage'), (status.rollbackCommit || '').slice(0, 12));
                 if (!stepUp) return;
                 q('#sys-update-rollback').disabled = true;
                 const result = await Store.runRollback(status.rollbackCommit, stepUp.password, stepUp.totpCode);
-                if (!result || ![200, 202].includes(result.httpStatus)) {
-                    UI.toast(result?.error === 'wrong_password' ? Lang.t('wrongPassword') : result?.error === 'invalid_totp_code' ? Lang.t('invalidMfaCode') : Lang.t('rollbackFailed'));
-                    await AdminBoard.renderUpdateStatus();
-                    return;
-                }
-                UI.toast(Lang.t('rollbackStarted'));
+                UI.toast(result && [200, 202].includes(result.httpStatus) ? Lang.t('rollbackStarted')
+                    : result?.error === 'wrong_password' ? Lang.t('wrongPassword') : result?.error === 'invalid_totp_code' ? Lang.t('invalidMfaCode') : Lang.t('rollbackFailed'));
                 await AdminBoard.renderUpdateStatus();
             };
         }
         if (window.lucide) lucide.createIcons();
-        if (job?.running) {
-            AdminBoard.updatePollTimer = setTimeout(() => AdminBoard.renderUpdateStatus(), 4000);
+        if (job?.running) AdminBoard.updatePollTimer = setTimeout(() => AdminBoard.renderUpdateStatus(), 4000);
+    },
+
+    // Review 11/2026, Punkt 2: brauchen Admin-Konten keinen zweiten Faktor, sieht jeder Superadmin
+    // einen Hinweis mit Direktlink in die Sicherheitseinstellungen (je Person ausblendbar).
+    showMfaPolicyHint: async () => {
+        const security = (await Store.getSettings()).securityConfig || {};
+        const viaMode = ['totp', 'passkey', 'either', 'both'].includes(security.mfaMode) && ['all', 'admin', undefined].includes(security.mfaRoles);
+        const viaForce = ['all', 'admin'].includes(security.force2FA);
+        const prefs = await Store.getPersonalPreferences().catch(() => ({}));
+        if (viaMode || viaForce || prefs.mfaHintDismissed || q('#mfa-policy-hint')) return;
+        const hint = document.createElement('div');
+        hint.id = 'mfa-policy-hint';
+        hint.className = 'callout callout-warning mfa-policy-hint';
+        hint.setAttribute('role', 'status');
+        hint.innerHTML = `${Icon('shield-alert', 18)}<div><strong>${Lang.t('mfaHintTitle')}</strong><p>${Lang.t('mfaHintText')}</p></div>
+            <div class="mfa-policy-hint-actions"><button type="button" class="btn-primary btn-sm" data-act="open">${Lang.t('mfaHintOpen')}</button>
+            <button type="button" class="btn-ghost btn-sm" data-act="dismiss">${Lang.t('mfaHintLater')}</button></div>`;
+        q('main.container')?.prepend(hint);
+        hint.querySelector('[data-act="open"]').onclick = async () => {
+            await AdminBoard.openSystemSettings();
+            q('.sys-settings-nav [data-tab="sys-security"]')?.click();
+        };
+        hint.querySelector('[data-act="dismiss"]').onclick = () => {
+            hint.remove();
+            Store.patchPersonalPreferences({ mfaHintDismissed: true }).catch(error => UI.toast(error.message));
+        };
+        if (window.lucide) lucide.createIcons();
+    },
+
+    // Arbeitsansichten ueber dem Board; Auswahl und "Geschlossene anzeigen" merkt sich der Browser.
+    boardQueue: (() => { try { return localStorage.getItem('board-queue') || 'open'; } catch { return 'open'; } })(),
+    showClosed: (() => { try { return localStorage.getItem('board-show-closed') === '1'; } catch { return false; } })(),
+    boardQueues: (user, deadlines, now) => {
+        const open = t => t.status !== 'Geschlossen';
+        const atRisk = t => {
+            const due = deadlines.get(t.id);
+            return open(t) && !String(t.status).startsWith('Warten') && due !== null && due !== undefined && due - now < 4 * 3600000;
+        };
+        return {
+            open: { icon: 'layers', label: 'queueOpen', match: open },
+            mine: { icon: 'user-check', label: 'queueMine', match: t => open(t) && t.owner === user?.username },
+            unassigned: { icon: 'user-x', label: 'queueUnassigned', match: t => open(t) && !t.owner },
+            reply: { icon: 'message-circle-reply', label: 'queueReply', match: t => open(t) && !!t.awaitingReply },
+            sla: { icon: 'alarm-clock', label: 'queueSla', match: atRisk }
+        };
+    },
+    renderQueueBar: (tickets, queues) => {
+        const tools = q('#kanban-view .board-tools');
+        if (!tools) return;
+        let bar = q('#board-queues');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'board-queues';
+            bar.className = 'board-queues';
+            bar.setAttribute('role', 'toolbar');
+            bar.setAttribute('aria-label', Lang.t('queueToolbar'));
+            tools.appendChild(bar);
         }
+        bar.innerHTML = Object.entries(queues).map(([key, queue]) => {
+            const count = tickets.filter(queue.match).length;
+            const active = AdminBoard.boardQueue === key;
+            return `<button type="button" class="queue-chip${active ? ' is-active' : ''}${key === 'sla' && count ? ' is-alert' : ''}" data-queue="${key}" aria-pressed="${active}">${Icon(queue.icon, 15)}<span>${Utils.esc(Lang.t(queue.label))}</span><span class="queue-count">${count}</span></button>`;
+        }).join('') + `<label class="check-row compact queue-closed"><input type="checkbox" id="board-show-closed"${AdminBoard.showClosed ? ' checked' : ''}${AdminBoard.boardQueue === 'open' ? '' : ' disabled'}><span>${Utils.esc(Lang.t('queueShowClosed'))}</span></label>`;
+        bar.querySelectorAll('[data-queue]').forEach(btn => btn.onclick = () => {
+            AdminBoard.boardQueue = btn.dataset.queue;
+            try { localStorage.setItem('board-queue', AdminBoard.boardQueue); } catch { /* nur Komfort */ }
+            AdminBoard.render();
+        });
+        bar.querySelector('#board-show-closed').onchange = event => {
+            AdminBoard.showClosed = event.target.checked;
+            try { localStorage.setItem('board-show-closed', AdminBoard.showClosed ? '1' : '0'); } catch { /* nur Komfort */ }
+            AdminBoard.render();
+        };
+        if (window.lucide) lucide.createIcons();
     },
 
     openSystemSettings: async () => {
@@ -2824,22 +2895,12 @@ export const AdminBoard = {
                             <div class="settings-section-title">${Lang.t('sysInfoTitle')}</div>
                             <div id="sys-info"><div class="empty-state compact">${Lang.t('notCheckedYet')}</div></div>
                             <div class="settings-section-title">${Lang.t('update')}</div>
-                            <div class="callout">${Lang.t('updateTabCallout')}</div>
                             <div class="update-status" id="sys-update-status">
                                 <div class="empty-state compact">${Lang.t('notCheckedYet')}</div>
                             </div>
-                            <div class="setting-row">
-                                <span class="hint">${Lang.t('onlySuperadminsCanStartUpdates')}</span>
-                                <div class="button-row">
-                                    <button class="btn-secondary btn-sm" id="sys-update-check" type="button">${Icon('refresh-cw', 15)}${Lang.t('check')}</button>
-                                    <button class="btn-primary btn-sm" id="sys-update-run" type="button">${Icon('download-cloud', 15)}${Lang.t('installUpdate')}</button>
-                                </div>
-                            </div>
-                            <div class="setting-row">
-                                <span class="hint">${Lang.t('dbBehindCodeHint')}</span>
-                                <div class="button-row">
-                                    <button class="btn-secondary btn-sm" id="sys-update-migrate" type="button">${Icon('database', 15)}${Lang.t('runDbMigrations')}</button>
-                                </div>
+                            <div class="upd-actions">
+                                <button class="btn-secondary btn-sm" id="sys-update-check" type="button">${Icon('refresh-cw', 15)}${Lang.t('check')}</button>
+                                <button class="btn-primary" id="sys-update-run" type="button" hidden>${Icon('download-cloud', 16)}${Lang.t('updRunNow')}</button>
                             </div>
                             <div class="settings-section-title">${Lang.t('backupSectionTitle')}</div>
                             <div class="callout">${Lang.t('backupSectionCallout')}</div>
@@ -2951,6 +3012,7 @@ export const AdminBoard = {
                                 </select>
                                 <div class="hint">${Lang.t('avatarModeHint')}</div>
                             </div>
+                            <label class="check-row"><input type="checkbox" id="sys-require-activity"><span>${Lang.t('requireTimerActivity')}</span></label>
                             <div class="field">
                                 <label>${Lang.t('defaultPriorityForNewTickets')}</label>
                                 <select id="sys-default-prio">
@@ -3141,10 +3203,6 @@ export const AdminBoard = {
                     });
                 });
             });
-            const updateInfo = updatePanel.querySelector('.callout');
-            const migrationInfo = updatePanel.querySelector('#sys-update-migrate').closest('.setting-row').querySelector('.hint');
-            const rolesInfo = updatePanel.querySelector('#sys-update-run').closest('.setting-row').querySelector('.hint');
-            for (const info of [rolesInfo, migrationInfo]) { const p = document.createElement('p'); p.textContent = info.textContent; updateInfo.appendChild(p); info.remove(); }
 
             // Einstellungssuche: zeigt alle passenden Abschnitte aller Bereiche untereinander; aufgeklappt
             // wird nur fuer die Suche (der gespeicherte Auf-/Zuklapp-Zustand bleibt unveraendert).
@@ -3205,7 +3263,7 @@ export const AdminBoard = {
                 // installieren" der bereits lokale) -- die Person bestätigt damit genau das, was
                 // sie zuletzt auf dem Bildschirm gesehen hat, siehe update.ts Commit-Pinning.
                 const status = AdminBoard._lastUpdateStatus || {};
-                const targetCommit = status.updateAvailable ? status.remoteCommit : status.localCommit;
+                const targetCommit = status.updateAvailable ? status.remoteCommit : null;
                 if (!targetCommit) { UI.toast(Lang.t('noTargetCommitKnown')); return; }
                 const stepUp = await AdminBoard.confirmStepUp(Lang.t('updateConfirmMessage'), targetCommit.slice(0, 12));
                 if (!stepUp) return;
@@ -3223,24 +3281,6 @@ export const AdminBoard = {
                 UI.toast(Lang.t('updateStartedToast'));
                 await AdminBoard.renderUpdateStatus();
             };
-            q('#sys-update-migrate').onclick = async () => {
-                const stepUp = await AdminBoard.confirmStepUp(Lang.t('migrateConfirmMessage'));
-                if (!stepUp) return;
-                const btn = q('#sys-update-migrate');
-                btn.disabled = true;
-                UI.toast(Lang.t('migrationsRunning'));
-                const result = await Store.runMigrate(stepUp.password, stepUp.totpCode);
-                btn.disabled = false;
-                if (!result || result.httpStatus !== 200) {
-                    const msg = result?.error === 'wrong_password' ? Lang.t('wrongPassword')
-                        : result?.error === 'invalid_totp_code' ? Lang.t('invalidMfaCode')
-                        : result?.log ? Lang.format('migrationsFailedWithLog', { log: result.log.slice(0, 200) })
-                        : Lang.t('migrationsFailedUnreachable');
-                    UI.toast(msg);
-                    return;
-                }
-                UI.toast(Lang.t('dbNowUpToDate'));
-            };
         }
 
         const settings = await Store.getSettings();
@@ -3257,6 +3297,7 @@ export const AdminBoard = {
         q('#sys-upload-limit').value = settings.uploadConfig?.maxFileMb || 1024;
         q('#sys-avatars').value = settings.avatarConfig?.enabled === false ? 'off' : 'on';
         q('#sys-default-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(general.defaultPrio) ? general.defaultPrio : 'Normal';
+        q('#sys-require-activity').checked = settings.timeTrackingConfig?.requireActivity !== false;
         q('#sys-wait-remind').value = general.waitingReminderDays ?? 2;
         q('#sys-wait-close').value = general.waitingAutoCloseDays ?? 7;
         if (!q('#sys-wait-action')) {
@@ -3636,6 +3677,7 @@ export const AdminBoard = {
                             return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
                         }).filter(value => /^\d{4}-\d{2}-\d{2}$/.test(value))
                     },
+                    timeTrackingConfig: { requireActivity: !!q('#sys-require-activity').checked },
                     securityConfig: {
                         mfaMode: q('#sys-mfa-mode').value,
                         mfaRoles: q('#sys-mfa-roles').value,
@@ -6700,6 +6742,7 @@ export const AdminBoard = {
             const isSuper = user && user.role === 'superadmin';
 
             q('#m-title').textContent = `${t.ticketNumber || t.id} · ${t.title}${t.archived ? ' [ARCHIVIERT]' : ''}`;
+            AdminBoard.ensureTicketLinkButton(t);
             q('#m-desc').textContent = t.desc || 'Keine Beschreibung';
             {
                 const fieldsSettings = await Store.getSettings();
@@ -7018,7 +7061,37 @@ export const AdminBoard = {
         });
     },
 
-    closeModal: () => {
+    // Ungesendete Texte in Chat, interner Kommunikation oder Loesung?
+    // Dauerhaft sichtbare Ticketnummer mit kopierbarem Link (oeffnet das Ticket direkt).
+    ensureTicketLinkButton: (ticket) => {
+        let btn = q('#m-copy-link');
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.id = 'm-copy-link';
+            btn.type = 'button';
+            btn.className = 'btn-ghost btn-icon';
+            btn.innerHTML = Icon('link', 16);
+            q('#m-print')?.before(btn);
+            if (window.lucide) lucide.createIcons();
+        }
+        btn.title = Lang.t('copyTicketLink');
+        btn.setAttribute('aria-label', Lang.t('copyTicketLink'));
+        btn.onclick = async () => {
+            const url = new URL('/admin.html', location.origin);
+            url.searchParams.set('ticket', ticket.id);
+            try { await navigator.clipboard.writeText(url.toString()); UI.toast(Lang.format('ticketLinkCopied', { number: ticket.ticketNumber || ticket.id })); }
+            catch { UI.toast(url.toString()); }
+        };
+    },
+    unsentTicketInput: () => ['#m-chat-input', '#m-admin-new-comment', '#m-new-comment'].some(selector => (q(selector)?.value || '').trim()),
+    closeModal: (event) => {
+        if (event !== 'force' && AdminBoard.unsentTicketInput()) {
+            UI.confirm(Lang.t('ticketUnsentConfirm'), () => {
+                ['#m-chat-input', '#m-admin-new-comment', '#m-new-comment'].forEach(selector => { if (q(selector)) q(selector).value = ''; });
+                AdminBoard.closeModal('force');
+            });
+            return;
+        }
         q('#ticket-modal').classList.remove('open');
         if (q('#m-admin-mention-picker')) q('#m-admin-mention-picker').hidden = true;
         const sidebar = q('#m-history-sidebar');

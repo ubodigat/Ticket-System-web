@@ -3,7 +3,8 @@
 Dieses Verzeichnis enthält den Docker-Stack mit MariaDB, Anwendung, Caddy und der isolierten
 Office-Dokumentkonvertierung (`office`, Gotenberg/LibreOffice). Der Office-Dienst hat keine
 Host-Ports, Secrets oder Datenbankverbindung und darf keine externen Inhalte nachladen.
-Die aktuelle Installations- und Update-Anleitung steht in der [README](../../README.md).
+Installation und Bedienung: [README](../../README.md); Update, Sicherung, Wiederherstellung und
+Schlüsselrotation: [docs/OPERATIONS.md](../../docs/OPERATIONS.md).
 
 ## Installation (einmalig)
 
@@ -12,74 +13,50 @@ Die aktuelle Installations- und Update-Anleitung steht in der [README](../../REA
 ```
 
 Das Skript (im Projektwurzelverzeichnis):
-1. erzeugt alle Secrets (DB-Passwort, Cookie-Secret, Installations-ID) – idempotent, läuft ein
-   zweiter Aufruf, werden vorhandene Secrets wiederverwendet statt überschrieben;
-2. erzeugt den KEK (App-seitiger Schlüsselverschlüsselungsschlüssel, `ops/secrets/app.kek`) –
-   siehe `docs/CRYPTOGRAPHY.md`;
-3. erzeugt eine selbstsignierte TLS-Zertifikatskette für die Verbindung App↔MariaDB
-   (`ops/tls/mariadb/`) – siehe `docs/CRYPTOGRAPHY.md` §8;
-4. baut und startet den Stack (`mariadb`, `app`, `office`, `caddy`) über `docker compose`;
-5. wartet auf den Healthcheck der Anwendung;
-6. führt die Datenbankmigrationen aus;
-7. gibt die erreichbare URL aus.
+1. erzeugt alle Secrets (DB-Passwörter, Cookie-Secret, Installations-ID) – idempotent, vorhandene
+   Secrets werden wiederverwendet;
+2. erzeugt den KEK-Schlüsselbund (`ops/secrets/app.kek`), die Schlüssel der Dateiverschlüsselung
+   von MariaDB (`ops/secrets/mariadb-encryption/`) und die TLS-Kette App↔MariaDB (`ops/tls/mariadb/`)
+   – siehe [docs/CRYPTOGRAPHY.md](../../docs/CRYPTOGRAPHY.md);
+3. erzeugt bei der Ersteinrichtung den Sicherungsschlüssel und das Wiederherstellungs-Kit (Pfad und
+   Passphrase werden einmal angezeigt), bei bestehenden Installationen eine Datensicherung;
+4. baut den Stack und bringt die Datenbank auf das aktuelle Schema (`node dist/cli/schema.js`,
+   vorhandene Daten bleiben erhalten);
+5. startet `mariadb`, `app`, `office`, `caddy`, richtet den täglichen Sicherungs-Timer ein und
+   wartet auf den Healthcheck;
+6. gibt die erreichbare URL aus.
 
 Für eine lokale Entwicklungsumgebung ohne öffentliches TLS: `./install.sh --dev`.
 
-**Hinweis zum Stand:** `ops/secrets/` und `ops/tls/` sind bewusst nicht versioniert (siehe
-`.gitignore`) – sie enthalten Installationsspezifische Geheimnisse, keinen Code.
+`ops/secrets/`, `ops/tls/` und `ops/backups/` sind bewusst nicht versioniert (siehe `.gitignore`).
 
 ## Update
 
-Am einfachsten über die Oberfläche: Systemeinstellungen > Update (nur Superadmin) zeigt den
-Versionsstand gegen GitHub und lässt die folgenden Schritte vom Host-Dienst `ops/host-updater`
-(systemd, kein Docker-Socket in einem Container) ausführen. Details: siehe
-[README.md](../../README.md#online-updater-bewusst-aktivieren).
-
-Manuell (falls die Oberfläche nicht erreichbar ist oder In-App-Updates nicht eingerichtet sind):
+Über die Oberfläche: Systemeinstellungen › Info & Updates › **Jetzt aktualisieren** (Sicherung,
+Signaturprüfung, Build, Schema-Abgleich, Neustart, automatisches Zurücksetzen bei Fehlern).
+Manuell:
 
 ```bash
-git pull
-docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env build --no-cache app
-docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env up -d --force-recreate
-docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env exec -T app node dist/db/migrate.js
+bash ops/docker/backup.sh
+bash ops/verify-and-pull.sh
+bash install.sh
 ```
 
-Das harte Neubauen ist wichtig, weil die Weboberflaeche statische Dateien aus `js/` und
-`vendor/` in das App-Image kopiert. Ohne Rebuild kann der Server noch alte HTML-/JS-Dateien
-ausliefern, was sich im Browser als fehlende Icons, `/js/*.js`-404 oder CSP-Fehler zeigt.
-
-Migrationen sind additiv (`up`-Richtung wird bei jedem Update erneut ausgeführt, bereits
-angewendete Migrationen werden von Kysely übersprungen). Ein `ticketctl`-Kommando, das diese
-drei Schritte zusammenfasst, ist gemäß `docs/SPEC.md` §4.3 für eine spätere Phase vorgesehen.
-
-## Backup/Restore
-
-Alle Geschäftsdaten (Tickets, Benutzer, Anhänge, ...) liegen ausschließlich in MariaDB, dort
-bereits AES-256-GCM-verschlüsselt. Ein Backup braucht deshalb zwei Dinge: den Datenbank-Dump
-UND den Schlüssel (`ops/secrets/app.kek`), ohne den der Dump nicht entschlüsselbar ist.
+## Sicherung und Wiederherstellung
 
 ```bash
-./ops/docker/backup.sh
+bash ops/docker/backup.sh                                   # Datensicherung (auch täglich per Timer)
+bash ops/docker/restore.sh --verify <kit> <datensicherung>  # Restore-Test, verändert nichts
+bash ops/docker/restore.sh <kit> <datensicherung>           # Datenbank ersetzen, danach install.sh
 ```
 
-Fragt eine Passphrase ab (oder liest sie aus `BACKUP_PASSPHRASE`) und legt ein einzelnes,
-mit dieser Passphrase verschlüsseltes Archiv unter `ops/backups/` ab (DB-Dump + KEK +
-TLS-Zertifikate). Das Archiv ist ohne die Passphrase nutzlos -- auch wenn es irgendwo offen
-liegt (siehe Anforderung "Offene Backup-Dateien"). `ops/backups/` ist nicht Teil des Git-Repos
-(siehe `.gitignore`); die Datei UND die Passphrase gehören an einen anderen Ort als dieser
-Server (3-2-1-Regel: mindestens eine Kopie extern).
-
-```bash
-./ops/docker/restore.sh ops/backups/ticket-system-backup-<Zeitstempel>.tar.gz.enc
-```
-
-Überschreibt die aktuelle Datenbank und den aktuellen Schlüssel dieser Installation vollständig
-und unwiderruflich (fragt vor dem Ausführen eine Bestätigung ab) -- gedacht für Wiederherstellung
-auf einem leeren/zu ersetzenden System, nicht zum Zusammenführen mit vorhandenen Daten.
+Datensicherungen sind asymmetrisch verschlüsselt und enthalten weder KEK noch `.env`; beides steckt
+im Wiederherstellungs-Kit, das nicht auf dem Server bleibt. Details: [docs/OPERATIONS.md](../../docs/OPERATIONS.md).
 
 ## Logs/Diagnose
 
 ```bash
 docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs -f app
 docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env ps
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env run --rm --no-deps app node dist/cli/schema.js --check
 ```

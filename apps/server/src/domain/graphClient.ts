@@ -109,9 +109,9 @@ export async function loadOutlookAppCredentials(db: Kysely<Database>, env: Env, 
   if (!outlook.tenantId || !outlook.clientId || !row.outlook_client_secret_enc) return null;
 
   const dek = await ensureDek(db, keyProvider, 'app_settings.outlook_client_secret');
-  const clientSecret = fieldCipher.decryptField(row.outlook_client_secret_enc, dek.rawDek, {
-    installationId: env.INSTALLATION_ID, schemaVersion: env.SCHEMA_VERSION,
-    tableName: 'app_settings', recordId: '1', fieldName: 'outlook_client_secret', keyVersion: dek.keyVersion
+  const clientSecret = fieldCipher.decryptField(row.outlook_client_secret_enc, dek, {
+    installationId: env.INSTALLATION_ID,
+    tableName: 'app_settings', recordId: '1', fieldName: 'outlook_client_secret'
   });
   return { tenantId: outlook.tenantId, clientId: outlook.clientId, clientSecret };
 }
@@ -238,9 +238,9 @@ export async function loadOutlookSettings(db: Kysely<Database>, env: Env, keyPro
   if (!outlook.enabled || !outlook.tenantId || !outlook.clientId || !outlook.mailbox || !row.outlook_client_secret_enc) return null;
 
   const dek = await ensureDek(db, keyProvider, 'app_settings.outlook_client_secret');
-  const clientSecret = fieldCipher.decryptField(row.outlook_client_secret_enc, dek.rawDek, {
-    installationId: env.INSTALLATION_ID, schemaVersion: env.SCHEMA_VERSION,
-    tableName: 'app_settings', recordId: '1', fieldName: 'outlook_client_secret', keyVersion: dek.keyVersion
+  const clientSecret = fieldCipher.decryptField(row.outlook_client_secret_enc, dek, {
+    installationId: env.INSTALLATION_ID,
+    tableName: 'app_settings', recordId: '1', fieldName: 'outlook_client_secret'
   });
   return { enabled: true, tenantId: outlook.tenantId, clientId: outlook.clientId, mailbox: outlook.mailbox, clientSecret };
 }

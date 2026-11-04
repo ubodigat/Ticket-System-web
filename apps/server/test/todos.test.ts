@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerTodoRoutes, createAdminTodoSchema } from '../src/http/routes/todos.js';
 import { advanceTodoDate } from '../src/domain/adminTodos.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 vi.mock('../src/http/routes/extras.js', () => ({ createNotification: vi.fn().mockResolvedValue(undefined) }));
 afterEach(() => vi.clearAllMocks());
 
@@ -38,7 +38,7 @@ async function request(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', db: any, pay
   const app = Fastify();
   app.decorate('db', db);
   app.addHook('onRequest', async req => { req.ticketSession = { uid: creator, username: 'creator', role }; });
-  registerTodoRoutes(app, { env: { INSTALLATION_ID: creator, SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+  registerTodoRoutes(app, { env: { INSTALLATION_ID: creator } as any, keyProvider: {} as any });
   try { return await app.inject({ method, url: `/api/v2/todos${method === 'PATCH' || method === 'DELETE' ? '/task-id' : ''}`, payload }); }
   finally { await app.close(); }
 }

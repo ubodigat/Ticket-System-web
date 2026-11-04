@@ -14,7 +14,7 @@ import { requireSession, requireAdmin } from './session.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek, type ResolvedDek } from '../../crypto/dekService.js';
-import { fieldCipher, decryptFieldTolerant, computeBlindIndex } from '../../crypto/fieldCrypto.js';
+import { fieldCipher, blindIndexCandidates } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
 import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
@@ -68,13 +68,11 @@ function encryptTicketField(
   recordId: string,
   fieldName: string
 ): Buffer {
-  return fieldCipher.encryptField(value, dek.rawDek, {
+  return fieldCipher.encryptField(value, dek, {
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'tickets',
     recordId,
-    fieldName,
-    keyVersion: dek.keyVersion
+    fieldName
   });
 }
 
@@ -89,13 +87,11 @@ function decryptTicketFieldTolerant(
   recordId: string,
   fieldName: string
 ): string {
-  return decryptFieldTolerant(stored, dek.rawDek, {
+  return fieldCipher.decryptField(stored, dek, {
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'tickets',
     recordId,
-    fieldName,
-    keyVersion: dek.keyVersion
+    fieldName
   });
 }
 
@@ -106,13 +102,11 @@ function decryptTicketField(
   recordId: string,
   fieldName: string
 ): string {
-  return fieldCipher.decryptField(stored, dek.rawDek, {
+  return fieldCipher.decryptField(stored, dek, {
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'tickets',
     recordId,
-    fieldName,
-    keyVersion: dek.keyVersion
+    fieldName
   });
 }
 
@@ -153,13 +147,11 @@ function decryptCustomFieldsJson(
   recordId: string
 ): string | null {
   if (!stored) return null;
-  return decryptFieldTolerant(stored, dek.rawDek, {
+  return fieldCipher.decryptField(stored, dek, {
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'tickets',
     recordId,
-    fieldName: 'custom_fields_json',
-    keyVersion: dek.keyVersion
+    fieldName: 'custom_fields_json'
   });
 }
 
@@ -261,15 +253,14 @@ async function loadMessageDeks(app: FastifyInstance, keyProvider: KeyProvider): 
 function encryptMessage(deps: TicketsRouteDeps, deks: MessageDeks, recordId: string, content: string, contentHtml: string | null) {
   const ctxBase = {
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'ticket_messages',
     recordId
   };
   const sanitizedHtml = contentHtml !== null ? sanitizeServerHtml(contentHtml) : null;
   return {
-    content: fieldCipher.encryptField(content, deks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: deks.content.keyVersion }),
+    content: fieldCipher.encryptField(content, deks.content, { ...ctxBase, fieldName: 'content' }),
     content_html: sanitizedHtml !== null && sanitizedHtml.length > 0
-      ? fieldCipher.encryptField(sanitizedHtml, deks.contentHtml.rawDek, { ...ctxBase, fieldName: 'content_html', keyVersion: deks.contentHtml.keyVersion })
+      ? fieldCipher.encryptField(sanitizedHtml, deks.contentHtml, { ...ctxBase, fieldName: 'content_html' })
       : null
   };
 }
@@ -281,15 +272,14 @@ function decryptMessage<T extends { id: string; content: Buffer; content_html: B
 ) {
   const ctxBase = {
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'ticket_messages',
     recordId: row.id
   };
   return {
     ...row,
-    content: fieldCipher.decryptField(row.content, deks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: deks.content.keyVersion }),
+    content: fieldCipher.decryptField(row.content, deks.content, { ...ctxBase, fieldName: 'content' }),
     content_html: row.content_html
-      ? fieldCipher.decryptField(row.content_html, deks.contentHtml.rawDek, { ...ctxBase, fieldName: 'content_html', keyVersion: deks.contentHtml.keyVersion })
+      ? fieldCipher.decryptField(row.content_html, deks.contentHtml, { ...ctxBase, fieldName: 'content_html' })
       : null
   };
 }
@@ -299,26 +289,22 @@ async function loadNoteDek(app: FastifyInstance, keyProvider: KeyProvider): Prom
 }
 
 function encryptNote(deps: TicketsRouteDeps, dek: ResolvedDek, recordId: string, content: string): Buffer {
-  return fieldCipher.encryptField(content, dek.rawDek, {
+  return fieldCipher.encryptField(content, dek, {
     installationId: deps.env.INSTALLATION_ID,
-    schemaVersion: deps.env.SCHEMA_VERSION,
     tableName: 'ticket_notes',
     recordId,
-    fieldName: 'content',
-    keyVersion: dek.keyVersion
+    fieldName: 'content'
   });
 }
 
 function decryptNote<T extends { id: string; content: Buffer }>(row: T, dek: ResolvedDek, deps: TicketsRouteDeps) {
   return {
     ...row,
-    content: fieldCipher.decryptField(row.content, dek.rawDek, {
+    content: fieldCipher.decryptField(row.content, dek, {
       installationId: deps.env.INSTALLATION_ID,
-      schemaVersion: deps.env.SCHEMA_VERSION,
       tableName: 'ticket_notes',
       recordId: row.id,
-      fieldName: 'content',
-      keyVersion: dek.keyVersion
+      fieldName: 'content'
     })
   };
 }
@@ -372,8 +358,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     for (const person of staff) {
       let name = '';
       try {
-        name = fieldCipher.decryptField(person.name_enc, nameDek.rawDek, { installationId: deps.env.INSTALLATION_ID,
-          schemaVersion: deps.env.SCHEMA_VERSION, tableName: 'users', recordId: person.id, fieldName: 'name', keyVersion: nameDek.keyVersion });
+        name = fieldCipher.decryptField(person.name_enc, nameDek, { installationId: deps.env.INSTALLATION_ID, tableName: 'users', recordId: person.id, fieldName: 'name' });
       } catch { name = ''; }
       for (const handle of [person.username, name]) if (handle) handles.push({ handle: handle.toLocaleLowerCase('de-DE'), id: person.id });
     }
@@ -399,8 +384,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
     for (const row of rows) {
       try {
-        const name = fieldCipher.decryptField(row.name_enc, nameDek.rawDek, { installationId: deps.env.INSTALLATION_ID,
-          schemaVersion: deps.env.SCHEMA_VERSION, tableName: 'users', recordId: row.id, fieldName: 'name', keyVersion: nameDek.keyVersion });
+        const name = fieldCipher.decryptField(row.name_enc, nameDek, { installationId: deps.env.INSTALLATION_ID, tableName: 'users', recordId: row.id, fieldName: 'name' });
         if (name) names.set(row.id, name);
       } catch { /* Name nicht entschluesselbar: Benutzername bleibt sichtbar. */ }
     }
@@ -418,9 +402,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     for (const att of rows) {
       let name = 'Anhang';
       try {
-        name = fieldCipher.decryptField(att.filename, filenameDek.rawDek, {
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'attachments', recordId: att.id, fieldName: 'filename', keyVersion: filenameDek.keyVersion
+        name = fieldCipher.decryptField(att.filename, filenameDek, {
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'attachments', recordId: att.id, fieldName: 'filename'
         });
       } catch { /* Name nicht entschluesselbar: Anhang bleibt mit neutralem Namen erreichbar. */ }
       const key = att[parent]!;
@@ -1084,15 +1068,15 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       const msgDeks = await loadMessageDeks(app, deps.keyProvider);
       const ctxBase = {
-        installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
+        installationId: deps.env.INSTALLATION_ID,
         tableName: 'ticket_messages', recordId: messageId
       };
       // Nur echte inhaltliche Aenderungen werden gespeichert und als "bearbeitet" markiert.
       let previous: string | null = null;
-      try { previous = fieldCipher.decryptField(existing.content, msgDeks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: msgDeks.content.keyVersion }); } catch { previous = null; }
+      try { previous = fieldCipher.decryptField(existing.content, msgDeks.content, { ...ctxBase, fieldName: 'content' }); } catch { previous = null; }
       if (previous !== parsed.data.content) {
         await app.db.updateTable('ticket_messages')
-          .set({ content: fieldCipher.encryptField(parsed.data.content, msgDeks.content.rawDek, { ...ctxBase, fieldName: 'content', keyVersion: msgDeks.content.keyVersion }),
+          .set({ content: fieldCipher.encryptField(parsed.data.content, msgDeks.content, { ...ctxBase, fieldName: 'content' }),
             content_html: null, edited_at: mysqlTimestamp() })
           .where('id', '=', messageId)
           .execute();
@@ -1233,9 +1217,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const filenameDek = await ensureDek(app.db, deps.keyProvider, 'attachments.filename');
       const attachments = rows.map(row => ({
         ...row,
-        filename: fieldCipher.decryptField(row.filename, filenameDek.rawDek, {
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'attachments', recordId: row.id, fieldName: 'filename', keyVersion: filenameDek.keyVersion
+        filename: fieldCipher.decryptField(row.filename, filenameDek, {
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'attachments', recordId: row.id, fieldName: 'filename'
         })
       }));
       return reply.send({ attachments });
@@ -1313,20 +1297,20 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   // Verlauf in ticket_approvals (Migration 0063): Anfrage und Entscheidung bleiben am Ticket
   // sichtbar. tickets.approval_* haelt weiterhin den aktuellen Stand (Board-Kennzeichnung, Sperren).
 
-  const approvalTextCtx = (approvalId: string, field: 'request_text' | 'decision_text', keyVersion: number) => ({
-    installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-    tableName: 'ticket_approvals', recordId: approvalId, fieldName: field, keyVersion
+  const approvalTextCtx = (approvalId: string, field: 'request_text' | 'decision_text') => ({
+    installationId: deps.env.INSTALLATION_ID,
+    tableName: 'ticket_approvals', recordId: approvalId, fieldName: field
   });
   async function encryptApprovalText(approvalId: string, field: 'request_text' | 'decision_text', value: string | undefined) {
     if (!value) return null;
     const dek = await ensureDek(app.db, deps.keyProvider, `ticket_approvals.${field}`);
-    return fieldCipher.encryptField(value, dek.rawDek, approvalTextCtx(approvalId, field, dek.keyVersion));
+    return fieldCipher.encryptField(value, dek, approvalTextCtx(approvalId, field));
   }
   async function decryptApprovalText(approvalId: string, field: 'request_text' | 'decision_text', value: Buffer | null) {
     if (!value) return null;
     try {
       const dek = await ensureDek(app.db, deps.keyProvider, `ticket_approvals.${field}`);
-      return fieldCipher.decryptField(value, dek.rawDek, approvalTextCtx(approvalId, field, dek.keyVersion));
+      return fieldCipher.decryptField(value, dek, approvalTextCtx(approvalId, field));
     } catch { return null; }
   }
   // Neue Anfrage: eine noch offene Anfrage desselben Tickets gilt als ersetzt.
@@ -1351,9 +1335,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
     return rows.map(att => {
       let name = 'Anhang';
       try {
-        name = fieldCipher.decryptField(att.filename, filenameDek.rawDek, {
-          installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-          tableName: 'attachments', recordId: att.id, fieldName: 'filename', keyVersion: filenameDek.keyVersion
+        name = fieldCipher.decryptField(att.filename, filenameDek, {
+          installationId: deps.env.INSTALLATION_ID,
+          tableName: 'attachments', recordId: att.id, fieldName: 'filename'
         });
       } catch { /* Name nicht entschluesselbar: Anhang bleibt mit neutralem Namen erreichbar. */ }
       return { id: att.id, name, type: att.mime_type, size: Number(att.size_bytes) };
@@ -1593,9 +1577,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       if (entries.some(entry => entry.note_enc)) {
         const dek = await ensureDek(app.db, deps.keyProvider, 'ticket_time_entries.note');
         for (const entry of entries) if (entry.note_enc) {
-          entry.note = fieldCipher.decryptField(entry.note_enc, dek.rawDek, {
-            installationId: deps.env.INSTALLATION_ID, schemaVersion: deps.env.SCHEMA_VERSION,
-            tableName: 'ticket_time_entries', recordId: entry.id, fieldName: 'note', keyVersion: dek.keyVersion
+          entry.note = fieldCipher.decryptField(entry.note_enc, dek, {
+            installationId: deps.env.INSTALLATION_ID,
+            tableName: 'ticket_time_entries', recordId: entry.id, fieldName: 'note'
           });
         }
       }
@@ -1643,14 +1627,12 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
   async function loadTodoDek() {
     return ensureDek(app.db, deps.keyProvider, 'ticket_todos.content');
   }
-  function todoCtx(recordId: string, keyVersion: number) {
+  function todoCtx(recordId: string) {
     return {
       installationId: deps.env.INSTALLATION_ID,
-      schemaVersion: deps.env.SCHEMA_VERSION,
       tableName: 'ticket_todos',
       recordId,
-      fieldName: 'content',
-      keyVersion
+      fieldName: 'content'
     };
   }
 
@@ -1665,7 +1647,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
 
       const rows = await app.db.selectFrom('ticket_todos').selectAll().where('ticket_id', '=', id).orderBy('created_at', 'asc').execute();
       const dek = await loadTodoDek();
-      const todos = rows.map(row => ({ ...row, content: fieldCipher.decryptField(row.content, dek.rawDek, todoCtx(row.id, dek.keyVersion)) }));
+      const todos = rows.map(row => ({ ...row, content: fieldCipher.decryptField(row.content, dek, todoCtx(row.id)) }));
       return reply.send({ todos });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -1684,7 +1666,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       await app.db.insertInto('ticket_todos').values({
         id: todoId,
         ticket_id: id,
-        content: fieldCipher.encryptField(parsed.data.content, dek.rawDek, todoCtx(todoId, dek.keyVersion)),
+        content: fieldCipher.encryptField(parsed.data.content, dek, todoCtx(todoId)),
         assignee_user_id: parsed.data.assignee_user_id ?? null,
         assignee_username: parsed.data.assignee_username ?? null,
         done: false,
@@ -1712,7 +1694,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const updates: Record<string, unknown> = {};
       if (isAdmin && parsed.data.content !== undefined) {
         const dek = await loadTodoDek();
-        updates.content = fieldCipher.encryptField(parsed.data.content, dek.rawDek, todoCtx(todoId, dek.keyVersion));
+        updates.content = fieldCipher.encryptField(parsed.data.content, dek, todoCtx(todoId));
       }
       if (isAdmin && parsed.data.assignee_user_id !== undefined) updates.assignee_user_id = parsed.data.assignee_user_id;
       if (isAdmin && parsed.data.assignee_username !== undefined) updates.assignee_username = parsed.data.assignee_username;
@@ -1929,10 +1911,10 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         try { allowedDomains = JSON.parse(settingsRow?.config_json || '{}').outlookConfig?.externalDomains ?? []; } catch { allowedDomains = []; }
         const allowed = new Set(allowedDomains.map(domain => String(domain).toLowerCase()));
         const blindDek = await ensureDek(app.db, deps.keyProvider, 'blind-index.users.email');
-        const indexOf = (email: string) => computeBlindIndex(blindDek.rawDek, email);
+        const candidates = (email: string) => blindIndexCandidates(blindDek, email);
         const known = new Set((await app.db.selectFrom('users').select('email_blind_idx')
-          .where('email_blind_idx', 'in', attendees.map(indexOf)).where('account_archived', '=', false).execute()).map(row => row.email_blind_idx));
-        const rejected = attendees.filter(email => !known.has(indexOf(email)) && !allowed.has(email.split('@').pop()!));
+          .where('email_blind_idx', 'in', attendees.flatMap(candidates)).where('account_archived', '=', false).execute()).map(row => row.email_blind_idx));
+        const rejected = attendees.filter(email => !candidates(email).some(hash => known.has(hash)) && !allowed.has(email.split('@').pop()!));
         if (rejected.length) {
           return reply.code(403).send({ error: 'attendee_domain_not_allowed', domains: [...new Set(rejected.map(email => email.split('@').pop()))] });
         }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { notifyUser } from '../src/domain/notifications.js';
 
-vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ rawDek: Buffer.alloc(32, 7), keyVersion: 1 }) }));
+vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 vi.mock('../src/mail/mailer.js', () => ({ isSmtpConfigured: async () => false, sendMail: async () => undefined }));
 
 function fakeDb(user: Record<string, unknown> | undefined, policy: Record<string, unknown> = {}) {
@@ -16,7 +16,7 @@ function fakeDb(user: Record<string, unknown> | undefined, policy: Record<string
   };
   return { db, inserted };
 }
-const deps = (db: any) => ({ db, env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+const deps = (db: any) => ({ db, env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any });
 const person = (extra: Record<string, unknown> = {}) => ({ id: 'u1', username: 'anna', role: 'user', account_archived: false,
   locked_permanent: false, account_valid_until: null, notif_prefs_json: null, ...extra });
 

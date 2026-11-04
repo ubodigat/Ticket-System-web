@@ -11,8 +11,8 @@ async function fixture() {
   const db = memoryDb(tables), app = Fastify(); app.decorate('db', db);
   const actor = { uid, username: 'admin', role: 'superadmin' as 'superadmin' | 'user' }; let authenticated = true;
   app.addHook('onRequest', async req => { req.ticketSession = authenticated ? actor : null; });
-  const deps = { db, env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any,
-    keyProvider: { wrapDek: async (value: Buffer) => value, unwrapDek: async (value: Buffer) => value } as any };
+  const deps = { db, env: { INSTALLATION_ID: 'test' } as any,
+    keyProvider: { currentKekVersion: async () => 1, wrapDek: async (value: Buffer) => value, unwrapDek: async (value: Buffer) => value } as any };
   registerUsersV2Routes(app, deps); registerKnowledgeRoutes(app, deps);
   const plan = (start: number, end: number, substitute = sid) => app.inject({ method: 'POST', url: '/api/v2/users/me/absence', payload: {
     active: true, append: true, from_at: new Date(Date.now() + start * 86400000).toISOString(), until_at: new Date(Date.now() + end * 86400000).toISOString(), substitute_user_id: substitute, visible: true } });

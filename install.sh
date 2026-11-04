@@ -13,6 +13,11 @@ set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/ubodigat/Ticket-System-web.git}"
 INSTALL_MANIFEST_SHA256="${INSTALL_MANIFEST_SHA256:-}"
+# Vertrauensanker (Review 11/2026, Punkt 6): Installation eines signierten Release-Tags. Der
+# Fingerabdruck des Signaturschluessels wird an einer zweiten, vom Repository unabhaengigen Stelle
+# veroeffentlicht und hier uebergeben -- ein kompromittiertes Repository allein reicht dann nicht.
+INSTALL_REF="${INSTALL_REF:-}"
+INSTALL_SIGNER_FINGERPRINT="${INSTALL_SIGNER_FINGERPRINT:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/ticket-system}"
 DEV_MODE=false
 ASSUME_YES=true
@@ -23,6 +28,9 @@ ENABLE_OFFICE_VIEWER=false
 PUBLIC_DOMAIN_ARG=""
 ACME_EMAIL_ARG=""
 OFFICE_DOMAIN_ARG=""
+BACKUP_PUBLIC_KEY_ARG=""
+RECOVERY_KIT_PATH=""
+RECOVERY_KIT_PASSPHRASE=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -35,6 +43,7 @@ for arg in "$@"; do
     --domain=*) PUBLIC_DOMAIN_ARG="${arg#--domain=}" ;;
     --acme-email=*) ACME_EMAIL_ARG="${arg#--acme-email=}" ;;
     --office-domain=*) OFFICE_DOMAIN_ARG="${arg#--office-domain=}" ;;
+    --backup-public-key=*) BACKUP_PUBLIC_KEY_ARG="${arg#--backup-public-key=}" ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -83,6 +92,15 @@ print_installation_summary() {
   printf '\n  Setup-Token (vertraulich):\n'
   printf '  %s%s%s\n' "$bold" "$setup_token" "$reset"
   printf '  Bis zum Abschluss der Einrichtung geheim halten.\n'
+
+  if [[ -n "${RECOVERY_KIT_PATH:-}" ]]; then
+    printf '\n  %sWIEDERHERSTELLUNGS-KIT (nur jetzt sichtbar)%s\n' "$bold" "$reset"
+    printf '  Datei       %s\n' "${RECOVERY_KIT_PATH:-}"
+    printf '  Passphrase  %s%s%s\n' "$bold" "${RECOVERY_KIT_PASSPHRASE:-}" "$reset"
+    printf '  Ohne Kit und Passphrase lassen sich Datensicherungen nicht einspielen.\n'
+    printf '  Datei jetzt vom Server herunterladen, getrennt von der Passphrase\n'
+    printf '  aufbewahren und danach auf dem Server löschen.\n'
+  fi
 
   printf '\n  %sBEI VERBINDUNGSPROBLEMEN%s\n' "$bold" "$reset"
   printf '  Die vollständige HTTPS-Adresse verwenden, nicht nur die IP.\n'
@@ -147,6 +165,17 @@ run_root() {
   else
     echo "This step needs root permissions. Run the installer as root or install sudo." >&2
     exit 1
+  fi
+}
+
+# Wie run_root, reicht aber genau eine Umgebungsvariable durch (sudo verwirft sie sonst) --
+# Geheimnisse landen so nie in der Prozessliste.
+run_root_keep_env() {
+  local name="$1"; shift
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  else
+    sudo --preserve-env="$name" "$@"
   fi
 }
 
@@ -292,6 +321,15 @@ install_host_updater() {
   printf 'enabled=1\n' | run_root tee "$UPDATE_BRIDGE_HOST_DIR/state/agent.env" >/dev/null
 }
 
+# Taegliche, verschluesselte Datensicherung (systemd-Timer).
+install_backup_timer() {
+  command -v systemctl >/dev/null 2>&1 || { warn "systemd not found -- schedule 'bash ops/docker/backup.sh' yourself (e.g. cron)."; return 0; }
+  sed "s#@REPO_DIR@#$SCRIPT_DIR#g" "$SCRIPT_DIR/ops/docker/ticket-system-backup.service" | run_root tee /etc/systemd/system/ticket-system-backup.service >/dev/null
+  run_root install -m 0644 "$SCRIPT_DIR/ops/docker/ticket-system-backup.timer" /etc/systemd/system/ticket-system-backup.timer
+  run_root systemctl daemon-reload
+  run_root systemctl enable --now ticket-system-backup.timer >/dev/null
+}
+
 remove_host_updater() {
   if command -v systemctl >/dev/null 2>&1; then
     run_root systemctl disable --now ticket-system-updater.path >/dev/null 2>&1 || true
@@ -411,6 +449,28 @@ verify_installation() {
   )
 }
 
+# Prueft, dass INSTALL_REF ein vom erwarteten Schluessel signierter Tag ist und auf HEAD zeigt.
+verify_release_tag() {
+  local dir="$1" home fpr rc=0
+  [[ -n "$INSTALL_REF" ]] || return 0
+  [[ "$INSTALL_SIGNER_FINGERPRINT" =~ ^[A-Fa-f0-9]{40}$ ]] || { echo "INSTALL_SIGNER_FINGERPRINT (40 Hex-Zeichen) fehlt -- ohne unabhaengig veroeffentlichten Fingerabdruck keine Tag-Installation." >&2; return 1; }
+  [[ -f "$dir/ops/release-signing-key.asc" ]] || { echo "ops/release-signing-key.asc fehlt im Release." >&2; return 1; }
+  home="$(mktemp -d)"; chmod 0700 "$home"
+  GNUPGHOME="$home" gpg --batch --quiet --import "$dir/ops/release-signing-key.asc" 2>/dev/null || rc=1
+  fpr="$(GNUPGHOME="$home" gpg --batch --with-colons --fingerprint 2>/dev/null | awk -F: '/^fpr:/ {print $10; exit}')"
+  if [[ "$rc" == 0 && "${fpr^^}" != "${INSTALL_SIGNER_FINGERPRINT^^}" ]]; then
+    echo "Der Signaturschluessel im Repository passt NICHT zum veroeffentlichten Fingerabdruck. Abbruch." >&2; rc=1
+  fi
+  if [[ "$rc" == 0 ]] && ! GNUPGHOME="$home" git -C "$dir" -c safe.directory="$dir" verify-tag "$INSTALL_REF" >/dev/null 2>&1; then
+    echo "Release-Tag $INSTALL_REF ist nicht gueltig signiert. Abbruch." >&2; rc=1
+  fi
+  if [[ "$rc" == 0 && "$(git -C "$dir" -c safe.directory="$dir" rev-parse "$INSTALL_REF^{commit}")" != "$(git -C "$dir" -c safe.directory="$dir" rev-parse HEAD)" ]]; then
+    echo "Ausgecheckter Stand entspricht nicht dem Release-Tag $INSTALL_REF. Abbruch." >&2; rc=1
+  fi
+  rm -rf "$home"
+  return "$rc"
+}
+
 rerun_from_clone_if_needed() {
   if [[ -f "$SCRIPT_DIR/ops/docker/docker-compose.yml" && -f "$SCRIPT_DIR/package.json" ]]; then
     if [[ -n "$INSTALL_MANIFEST_SHA256" ]]; then
@@ -438,20 +498,30 @@ rerun_from_clone_if_needed() {
     # last known commit right before every pull makes that class of failure impossible: it only
     # discards tracked-file drift (which should never be intentional here), never the untracked,
     # gitignored secrets.
-    retry_root 5 bash -c 'git -C "$1" reset --hard HEAD >/dev/null && git -C "$1" pull --ff-only' _ "$INSTALL_DIR" \
-      || { print_clone_help; exit 1; }
+    if [[ -n "$INSTALL_REF" ]]; then
+      retry_root 5 bash -c 'git -C "$1" reset --hard HEAD >/dev/null && git -C "$1" fetch --tags origin && git -C "$1" switch --detach "$2"' _ "$INSTALL_DIR" "$INSTALL_REF" \
+        || { print_clone_help; exit 1; }
+    else
+      retry_root 5 bash -c 'git -C "$1" reset --hard HEAD >/dev/null && git -C "$1" pull --ff-only' _ "$INSTALL_DIR" \
+        || { print_clone_help; exit 1; }
+    fi
   else
     run_root mkdir -p "$(dirname "$INSTALL_DIR")"
     if [[ -e "$INSTALL_DIR" && ! -d "$INSTALL_DIR/.git" ]]; then
       echo "Installation directory exists but is not a Git repository: $INSTALL_DIR" >&2
       exit 1
     fi
-    retry_root 5 git clone "$REPO_URL" "$INSTALL_DIR" || { print_clone_help; exit 1; }
+    if [[ -n "$INSTALL_REF" ]]; then
+      retry_root 5 git clone --branch "$INSTALL_REF" "$REPO_URL" "$INSTALL_DIR" || { print_clone_help; exit 1; }
+    else
+      retry_root 5 git clone "$REPO_URL" "$INSTALL_DIR" || { print_clone_help; exit 1; }
+    fi
   fi
 
   run_root chown -R "$(id -u):$(id -g)" "$INSTALL_DIR" 2>/dev/null || true
+  verify_release_tag "$INSTALL_DIR" || exit 1
   verify_installation "$INSTALL_DIR"
-  export INSTALL_MANIFEST_SHA256
+  export INSTALL_MANIFEST_SHA256 INSTALL_REF INSTALL_SIGNER_FINGERPRINT
   log "Continuing installation from $INSTALL_DIR"
   exec bash "$INSTALL_DIR/install.sh" "$@"
 }
@@ -614,10 +684,28 @@ if [[ -f "$KEK_PATH" ]]; then
   log "Existing KEK found; keeping it"
 else
   log "Generating KEK"
-  openssl rand -base64 32 > "$KEK_PATH"
+  ( umask 077; printf '1:%s\n' "$(openssl rand -base64 32)" > "$KEK_PATH" )
   chmod 600 "$KEK_PATH"
 fi
 run_root chown 10001 "$KEK_PATH" 2>/dev/null || true
+
+# Schluessel fuer die Dateiverschluesselung von MariaDB (Review 11/2026, Punkt 7). Format nach
+# MariaDB-Dokumentation: "<id>;<hex>" je Zeile, mit einem zufaelligen Dateischluessel verschluesselt.
+DB_ENC_DIR="$SECRETS_DIR/mariadb-encryption"
+if [[ -f "$DB_ENC_DIR/keyfile.enc" && -f "$DB_ENC_DIR/keyfile.key" ]]; then
+  log "Existing database encryption keys found; keeping them"
+else
+  log "Generating database encryption keys (encryption at rest)"
+  run_root install -d -m 0700 "$DB_ENC_DIR"
+  ( umask 077
+    openssl rand -hex 64 | run_root tee "$DB_ENC_DIR/keyfile.key" >/dev/null
+    printf '1;%s\n2;%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" \
+      | run_root openssl enc -aes-256-cbc -md sha1 -pass "file:$DB_ENC_DIR/keyfile.key" -out "$DB_ENC_DIR/keyfile.enc" )
+fi
+# Lesbar nur fuer den Benutzer "mysql" (uid 999) im MariaDB-Container.
+run_root chown -R 999:999 "$DB_ENC_DIR"
+run_root chmod 0500 "$DB_ENC_DIR"
+run_root chmod 0400 "$DB_ENC_DIR/keyfile.key" "$DB_ENC_DIR/keyfile.enc"
 
 CA_KEY="$TLS_DIR/ca-key.pem"
 CA_CERT="$TLS_DIR/ca.pem"
@@ -679,15 +767,31 @@ done
 log "Provisioning and verifying runtime database credentials"
 run_root sh "$SCRIPT_DIR/ops/docker/provision-db.sh" "$SCRIPT_DIR"
 
-log "Running database migrations"
+# Sicherungsschluessel: der oeffentliche bleibt auf dem Server, der private nur im
+# Wiederherstellungs-Kit (Review 11/2026, Punkt 4).
+BACKUP_RECIPIENT="$SECRETS_DIR/backup-recipient.asc"
+if [[ -n "$BACKUP_PUBLIC_KEY_ARG" ]]; then
+  log "Using the provided public backup key"
+  run_root install -m 0644 "$BACKUP_PUBLIC_KEY_ARG" "$BACKUP_RECIPIENT"
+elif [[ ! -f "$BACKUP_RECIPIENT" ]]; then
+  log "Creating backup encryption keys and the recovery kit"
+  RECOVERY_KIT_PASSPHRASE="$(openssl rand -base64 30 | tr -d '/+=' | cut -c1-32)"
+  export BACKUP_KIT_PASSPHRASE="$RECOVERY_KIT_PASSPHRASE"
+  RECOVERY_KIT_PATH="$(run_root_keep_env BACKUP_KIT_PASSPHRASE bash "$SCRIPT_DIR/ops/docker/backup.sh" --init-keys | sed -n 's/^==> Wiederherstellungs-Kit: //p')"
+  unset BACKUP_KIT_PASSPHRASE
+elif run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" ps app --format json 2>/dev/null | grep -q '"State":"running"'; then
+  log "Backing up the database before changing the installation"
+  run_root bash "$SCRIPT_DIR/ops/docker/backup.sh" || { echo "Backup failed -- nothing was changed. Fix the backup or the offsite target first." >&2; exit 1; }
+fi
+
+log "Preparing the database schema (existing data is kept)"
 run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" stop --timeout 30 app
-# Security-Audit N9: DB_USER/DB_PASSWORD (volle DDL-Rechte) stehen nicht mehr in der staendigen
-# Service-Umgebung von "app" (siehe docker-compose.yml) -- nur fuer diesen einen, kurzlebigen
-# Migrations-Aufruf per -e injiziert.
+# DB_USER/DB_PASSWORD (volle DDL-Rechte) stehen nicht in der staendigen Service-Umgebung von
+# "app" (siehe docker-compose.yml) -- nur fuer diesen kurzlebigen Aufruf, per stdin.
 printf '%s\n%s\n' "$(grep '^DB_USER=' "$ENV_FILE" | cut -d= -f2-)" \
   "$(grep '^DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)" \
   | run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps -T \
-    app sh -c 'set -eu; IFS= read -r DB_USER; IFS= read -r DB_PASSWORD; export DB_USER DB_PASSWORD; exec node dist/db/migrate.js'
+    app sh -c 'set -eu; IFS= read -r DB_USER; IFS= read -r DB_PASSWORD; export DB_USER DB_PASSWORD; exec node dist/cli/schema.js'
 
 remove_legacy_updater_container
 
@@ -701,6 +805,7 @@ if grep -q '^UPDATE_ALLOW_MAIN_DEPLOY=true$' "$ENV_FILE"; then
 else
   remove_host_updater
 fi
+install_backup_timer
 if [[ "$ENABLE_ANTIVIRUS" == "true" ]]; then
   run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" --profile antivirus up -d --force-recreate clamav
 fi

@@ -10,6 +10,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import helmet from '@fastify/helmet';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
+import { createRateLimitStore } from './rateLimitStore.js';
 import type { Kysely } from 'kysely';
 import type { Env } from '../config/env.js';
 import type { Database } from '../db/types.js';
@@ -69,6 +70,9 @@ export interface AppDeps {
   env: Env;
   db: Kysely<Database>;
   keyProvider: KeyProvider;
+  // Zaehler-Speicher fuer Rate-Limits; Standard: enge Routen-Limits in der Datenbank (rateLimitStore.ts).
+  // Tests mit Datenbank-Attrappe nutzen ohne Angabe den Speicher-Store des Plugins.
+  rateLimitStore?: unknown;
 }
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
@@ -116,7 +120,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(helmet, {
     contentSecurityPolicy: { directives: CSP_DIRECTIVES },
     crossOriginEmbedderPolicy: true,
-    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true }
+    hsts: { maxAge: 31536000, includeSubDomains: true, preload: false }
   });
 
   await app.register(cookie, {
@@ -212,6 +216,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     // wie Setup/Login/MFA behalten eigene engere Limits in den jeweiligen Route-Configs.
     max: 1000,
     timeWindow: '1 minute',
+    ...(deps.rateLimitStore || deps.env.NODE_ENV !== 'test'
+      ? { store: (deps.rateLimitStore ?? createRateLimitStore(deps.db)) as never }
+      : {}),
     // Security-Audit R-10 / CVE-2026-15144: Vor 11.2.0 bildete @fastify/rate-limit den Zähler
     // aus dem rohen Text von req.ip -- eine IPv6-Adresse hat beliebig viele gültige
     // Schreibweisen und ein Anschluss verfügt meist über ein ganzes /64-Netz, wodurch jede neue

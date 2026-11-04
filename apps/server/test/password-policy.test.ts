@@ -36,7 +36,7 @@ describe('configurable password requirements', () => {
     } };
     app.decorate('db', db);
     app.addHook('onRequest', async req => { req.ticketSession = { uid: 'root', username: 'root', role: 'superadmin' }; });
-    registerUsersV2Routes(app, { env: { INSTALLATION_ID: 'test', SCHEMA_VERSION: 1 } as any, keyProvider: {} as any });
+    registerUsersV2Routes(app, { env: { INSTALLATION_ID: 'test' } as any, keyProvider: {} as any });
     try {
       const response = await app.inject({ method: 'POST', url: action === 'create' ? '/api/v2/users' : '/api/v2/users/target/change-password',
         payload: action === 'create' ? { username: 'new', name: 'New User', email: 'new@example.org', role: 'user', password: 'long lower password' }

@@ -1,6 +1,6 @@
 # Multi-stage Build -- Node 26 (per Dependabot gehoben, Security-Audit R-22: CI testet dieselbe
 # Version, siehe .github/workflows/ci.yml). Läuft als dedizierte, nicht-root
-# UID/GID gemäß docs/adr/0002-key-storage-container-uids.md.
+# UID/GID (KEK-Datei gehoert uid 10001, siehe docs/CRYPTOGRAPHY.md).
 FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS build
 WORKDIR /build
 COPY package.json package-lock.json ./
@@ -39,10 +39,8 @@ ENV NODE_ENV=production
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-# Security-Audit N9: Migrationen laufen NICHT mehr automatisch beim Start dieses Containers --
-# der lang laufende App-Prozess bekommt nur noch das eingeschraenkte DB_RUNTIME_*-Konto (siehe
-# docker-compose.yml), das keine DDL-Rechte (ALTER/CREATE TABLE) hat. Migrationen laufen separat,
-# mit dem vollen DB_USER/DB_PASSWORD-Konto nur fuer den kurzlebigen Migrations-Aufruf (siehe
-# install.sh/ops/host-updater: "docker compose run --rm -e DB_USER=... -e DB_PASSWORD=... app
-# node dist/db/migrate.js"), bevor dieser Container ueberhaupt startet.
+# Der Schema-Abgleich laeuft NICHT beim Start dieses Containers: der lang laufende App-Prozess
+# bekommt nur das eingeschraenkte DB_RUNTIME_*-Konto ohne DDL-Rechte. "node dist/cli/schema.js"
+# laeuft vorher separat mit dem vollen DB_USER/DB_PASSWORD-Konto (per stdin, siehe install.sh und
+# ops/host-updater); die App startet nur, wenn die Datenbank zum Schema passt.
 CMD ["node", "dist/index.js"]
