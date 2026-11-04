@@ -79,8 +79,10 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                     <i class="requests-banner-arrow" data-lucide="arrow-right"></i>
                 </button>
             </section>
-            <button type="button" class="btn-primary" id="btn-admin-create-ticket"><i data-lucide="plus"></i>Neues Ticket</button>
-            <button type="button" class="btn-secondary" id="btn-admin-create-incident"><i data-lucide="siren"></i>Störung erstellen</button>
+            <div class="board-create">
+                <button type="button" class="btn-secondary" id="btn-admin-create-incident"><i data-lucide="siren"></i>Störung erstellen</button>
+                <button type="button" class="btn-primary" id="btn-admin-create-ticket"><i data-lucide="plus"></i>Neues Ticket</button>
+            </div>
         </div>
 
         <!-- Listenansicht mit Filtern, gespeicherten Ansichten und Mehrfachauswahl -->
@@ -88,8 +90,9 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 
         <div id="kanban-view">
             <div class="board-tools">
-                <div>
-                    <label for="admin-ticket-search">Tickets durchsuchen</label>
+                <div class="board-search">
+                    <label for="admin-ticket-search" class="sr-only">Tickets durchsuchen</label>
+                    <i data-lucide="search" aria-hidden="true"></i>
                     <input type="search" id="admin-ticket-search" class="section-search" placeholder="Titel, Beschreibung, Benutzer oder Ticket-ID...">
                 </div>
             </div>
@@ -167,7 +170,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 
                     <div id="tab-details" class="tab-content active">
                         <div class="meta-grid ticket-meta-grid">
-                            <div class="meta-item"><strong>Von</strong><span id="m-author" class="meta-value">-</span></div>
+                            <div class="meta-item"><strong data-i18n="from">Von</strong><span id="m-author" class="meta-value">-</span></div>
                             <div class="meta-item"><strong>Datum</strong><span id="m-date" class="meta-value">-</span></div>
                             <div class="meta-item" id="m-sla-item" hidden><strong data-i18n="deadline">Frist</strong><span class="sla-item-row"><span id="m-sla-badge" class="sla-badge"></span><button type="button" id="m-sla-edit" class="btn-ghost btn-icon btn-xs" data-i18n-title="setCustomDeadline" data-i18n-aria-label="setCustomDeadline" title="Eigene Frist setzen" aria-label="Eigene Frist setzen"><i data-lucide="pencil"></i></button><button type="button" id="m-calendar-event-btn" data-module="outlook" class="btn-ghost btn-icon btn-xs" data-i18n-title="createOutlookEventTitle" data-i18n-aria-label="createOutlookEventTitle" title="Outlook-Termin erstellen" aria-label="Outlook-Termin erstellen"><i data-lucide="calendar-plus"></i></button></span></div>
                             <div class="meta-item">
@@ -195,6 +198,8 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                                 <div id="m-cat-container"></div>
                             </div>
                         </div>
+
+                        <div id="m-assessment" class="request-assessment" hidden></div>
 
                         <div id="m-approval-pending" class="waiting-request" hidden>
                             <strong><i data-lucide="hourglass"></i> <span data-i18n="awaitingApproval">Wartet auf Genehmigung</span></strong>

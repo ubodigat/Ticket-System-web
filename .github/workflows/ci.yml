@@ -57,6 +57,9 @@ jobs:
       - name: Signed release regressions (release tags, foreign keys, release assets)
         run: bash ops/tests/release-signature.sh
 
+      - name: Online updates toggle (one command on/off, fingerprint check)
+        run: bash ops/tests/online-updates.sh
+
       - name: Backup and restore regressions (asymmetric backups, recovery kit)
         run: bash ops/tests/backup-roundtrip.sh
 

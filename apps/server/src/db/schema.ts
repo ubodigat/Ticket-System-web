@@ -158,7 +158,11 @@ export const TABLES: readonly TableDefinition[] = [
       ['locked', 'tinyint(1) NOT NULL DEFAULT 0'],
       ['archived', 'tinyint(1) NOT NULL DEFAULT 0'],
       ['created_at', 'timestamp NOT NULL DEFAULT current_timestamp()'],
-      ['updated_at', 'timestamp NOT NULL DEFAULT current_timestamp()']
+      ['updated_at', 'timestamp NOT NULL DEFAULT current_timestamp()'],
+      // Kachel in der Themenleiste des Benutzer-Dashboards ("Wie koennen wir helfen?").
+      ['show_in_portal', 'tinyint(1) NOT NULL DEFAULT 1'],
+      // Schnelle Tipps (F&A) vor dem Ticketformular, siehe domain/categoryFaq.ts.
+      ['faq_json', 'mediumtext DEFAULT NULL']
     ],
     primaryKey: ['id'],
     indexes: [
@@ -813,7 +817,10 @@ export const TABLES: readonly TableDefinition[] = [
       ['waiting_message', 'mediumblob DEFAULT NULL'],
       ['waiting_reminder_sent', 'tinyint(1) NOT NULL DEFAULT 0'],
       ['merged_into_ticket_id', 'char(36) DEFAULT NULL'],
-      ['archived_author_ack', 'tinyint(1) NOT NULL DEFAULT 0']
+      ['archived_author_ack', 'tinyint(1) NOT NULL DEFAULT 0'],
+      // Angaben der anfragenden Person (1..3): wer betroffen ist und wie dringend es ist.
+      ['impact', 'tinyint(1) DEFAULT NULL'],
+      ['urgency', 'tinyint(1) DEFAULT NULL']
     ],
     primaryKey: ['id'],
     indexes: [

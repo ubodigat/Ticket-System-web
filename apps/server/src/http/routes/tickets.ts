@@ -24,6 +24,7 @@ import { canAccessTicket, loadTicketScope, recipientsWithAccess, scopeAllowsTick
 import { approverCandidates } from '../../domain/approvalRouting.js';
 import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
+import { priorityFromImpact } from '../../domain/categoryFaq.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { sanitizeServerHtml } from '../../domain/sanitizer.js';
 import { loadOutlookSettings, getGraphAccessToken, createCalendarEvent } from '../../domain/graphClient.js';
@@ -160,6 +161,9 @@ const createTicketSchema = z.object({
   description: z.string().trim().min(1).max(50000),
   priority: z.enum(['Niedrig', 'Normal', 'Hoch', 'Kritisch']).default('Normal'),
   category: z.string().trim().max(128).optional(),
+  // "Wer ist betroffen?" / "Wie dringend ist es?" (1..3); beide zusammen bestimmen die Prioritaet.
+  impact: z.number().int().min(1).max(3).optional(),
+  urgency: z.number().int().min(1).max(3).optional(),
   type: z.enum(['ticket', 'incident']).default('ticket'),
   incident_notice: z.string().trim().max(2000).optional(),
   custom_fields: z.record(z.string(), z.unknown()).optional(),
@@ -445,7 +449,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
           'sla_due_at', 'custom_due_at', 'archived_at', 'closed_at', 'archived_author_ack',
           'approval_status', 'approval_requested_by', 'approval_reviewer_id', 'approval_text',
           'incident_id', 'incident_notice', 'filed_by_user_id', 'filed_by_username',
-          'waiting_since', 'waiting_message', 'custom_fields_json', 'created_at', 'updated_at',
+          'waiting_since', 'waiting_message', 'custom_fields_json', 'created_at', 'updated_at', 'impact', 'urgency',
           eb.selectFrom('ticket_messages')
             .select('sender_role')
             .whereRef('ticket_messages.ticket_id', '=', 'tickets.id')
@@ -593,6 +597,17 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const ticketType = isAdminActor ? parsed.data.type : 'ticket';
       const incidentNoticeInput = isAdminActor ? parsed.data.incident_notice : undefined;
 
+      // Benutzer muessen eine bestehende, aktive Kategorie waehlen (Pflichtfeld im Formular).
+      if (!isAdminActor) {
+        const category = parsed.data.category
+          ? await app.db.selectFrom('categories').select('id').where('name', '=', parsed.data.category).where('archived', '=', false).executeTakeFirst()
+          : undefined;
+        if (!category) return reply.code(400).send({ error: 'category_required' });
+      }
+      // Prioritaet aus Auswirkung und Dringlichkeit serverseitig ableiten (nicht dem Client vertrauen).
+      const hasImpact = parsed.data.impact !== undefined && parsed.data.urgency !== undefined;
+      if (hasImpact) parsed.data.priority = priorityFromImpact(parsed.data.impact!, parsed.data.urgency!);
+
       const newId = randomUUID();
       const deks = await loadTicketDeks(app, deps.keyProvider);
       const titleEnc = encryptTicketField(parsed.data.title, deks.title, deps, newId, 'title');
@@ -662,6 +677,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
             description: descriptionEnc,
             priority: parsed.data.priority,
             category: parsed.data.category ?? null,
+            impact: hasImpact ? parsed.data.impact! : null,
+            urgency: hasImpact ? parsed.data.urgency! : null,
             type: ticketType,
             incident_notice: incidentNoticeEnc,
             created_by_user_id: authorUserId,

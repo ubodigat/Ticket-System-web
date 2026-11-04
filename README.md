@@ -12,7 +12,7 @@ für den optionalen Virenscanner zusätzlich 1-2 GB, für die Office-Oberfläche
 `--enable-office-viewer` aktiviert (Anleitung unten).
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7fbd607a49a5948269177c442a2124a4581ffef071ebd2ed70182be752b08b1d" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=db2ab6be6bd6d256ad7daff8cfaa8c8be1fdf11cbc2548f7d8c9a7931c511fc5 bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "2e2f3925b0fd19c3e6a23cd57747a99e5568e3cd506910de9404c87c49583a60" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=175310fc94b6885b06f52638db32819165a14baf3ad2282b9ee3bc5535ace948 bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -54,7 +54,7 @@ nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
 DNS muss bereits auf den Server zeigen. Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7fbd607a49a5948269177c442a2124a4581ffef071ebd2ed70182be752b08b1d" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=db2ab6be6bd6d256ad7daff8cfaa8c8be1fdf11cbc2548f7d8c9a7931c511fc5 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "2e2f3925b0fd19c3e6a23cd57747a99e5568e3cd506910de9404c87c49583a60" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=175310fc94b6885b06f52638db32819165a14baf3ad2282b9ee3bc5535ace948 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
 ### Was enthalten ist
@@ -97,7 +97,7 @@ Bei der Erstinstallation diesen verifizierten Befehl verwenden und `--domain=…
 hinter `--enable-office-viewer` ergänzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "7fbd607a49a5948269177c442a2124a4581ffef071ebd2ed70182be752b08b1d" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=db2ab6be6bd6d256ad7daff8cfaa8c8be1fdf11cbc2548f7d8c9a7931c511fc5 bash "$f" --enable-office-viewer'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "2e2f3925b0fd19c3e6a23cd57747a99e5568e3cd506910de9404c87c49583a60" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=175310fc94b6885b06f52638db32819165a14baf3ad2282b9ee3bc5535ace948 bash "$f" --enable-office-viewer'
 ```
 
 Bei einem bereits aktualisierten Checkout auf dem Server:
@@ -361,25 +361,26 @@ eng begrenzte Anfragen (Status, Update auf den angezeigten Commit, erneut ausrol
 Ziel-Commits bzw. eines darauf zeigenden Release-Tags (`v…` oder `release-…`). Kein Container
 hat Zugriff auf den Docker-Socket.
 
-Den öffentlichen Release-Signaturschlüssel über einen vertrauenswürdigen Kanal beziehen und
-seinen Fingerprint unabhängig prüfen. Anschließend auf dem Host importieren:
+Ein Befehl richtet alles ein; danach läuft jedes Update über die Oberfläche
+(System › Info & Updates):
 
 ```bash
-mkdir -p ops/docker/update-keys
-chmod 700 ops/docker/update-keys
-gpg --homedir "$PWD/ops/docker/update-keys" --import /root/release-signing-key.asc
-bash install.sh --enable-updates
+cd /opt/ticket-system
+sudo bash ops/online-updates.sh enable
 ```
 
-Der Installer kopiert den Schlüsselbund nach `/etc/ticket-system-updater/keys` (nur für root
-lesbar). Nach Schlüsseländerungen `bash install.sh` erneut ausführen. Unsignierte Stände und
-unbekannte Signaturen werden abgelehnt. Rollbacks mit Schemaänderungen sind gesperrt und
-erfordern eine Wiederherstellung mit passendem Datenbank-Backup.
+Das Skript nimmt den Signaturschlüssel aus `ops/release-signing-key.asc` (oder
+`--key=/pfad/schluessel.asc`), verlangt genau einen Schlüssel, zeigt dessen Fingerabdruck und fragt
+nach einer Bestätigung. Ohne Terminal (Automatisierung) den unabhängig veröffentlichten
+Fingerabdruck mitgeben: `sudo bash ops/online-updates.sh enable --fingerprint=<40 Hex-Zeichen>`.
+Der Schlüssel landet in `/etc/ticket-system-updater/keys` (nur für root lesbar), der Host-Dienst
+wird als systemd-Unit eingerichtet. Solange Online-Updates aktiv sind, zeigt die Oberfläche einen
+Warnhinweis. `sudo bash ops/online-updates.sh status` zeigt den Zustand.
 
-Den Fingerprint vor dem Import mit `gpg --show-keys --with-fingerprint /root/release-signing-key.asc`
-anzeigen und über einen zweiten, unabhängigen Kanal vergleichen. Commits, die direkt auf GitHub
-entstehen (Copilot Autofix, Merge-Button), sind mit GitHubs eigenem Schlüssel signiert und werden
-abgelehnt, solange kein signierter Release-Tag darauf zeigt.
+Unsignierte Stände und unbekannte Signaturen werden abgelehnt. Rollbacks mit Schemaänderungen sind
+gesperrt und erfordern eine Wiederherstellung mit passendem Datenbank-Backup. Commits, die direkt
+auf GitHub entstehen (Copilot Autofix, Merge-Button), sind mit GitHubs eigenem Schlüssel signiert
+und werden abgelehnt, solange kein signierter Release-Tag darauf zeigt.
 
 **Releases signieren (Maintainer):** entweder jeden Commit signieren
 (`git config commit.gpgsign true`) oder Releases als signierten Tag veröffentlichen
@@ -388,20 +389,19 @@ Signaturschlüssels an einer zweiten, unabhängigen Stelle veröffentlichen.
 
 ### Online-Updater wieder deaktivieren
 
-Entfernt den systemd-Dienst samt Konfiguration und setzt `UPDATE_ALLOW_MAIN_DEPLOY=false`.
-Daten und Einstellungen bleiben erhalten. Ein noch vorhandener Updater-Container älterer
-Versionen wird bei jedem Installer-Lauf entfernt:
+Entfernt den systemd-Dienst, seine Konfiguration und die hinterlegten Schlüssel und setzt
+`UPDATE_ALLOW_MAIN_DEPLOY=false`. Daten und Einstellungen bleiben erhalten:
 
 ```bash
 cd /opt/ticket-system
-bash install.sh --disable-updates
+sudo bash ops/online-updates.sh disable
 ```
 
-Ein Lauf von `install.sh` ohne diese Optionen behält den jeweiligen Zustand bei.
+Ein Lauf von `install.sh` behält den jeweiligen Zustand bei.
 
 ### Weitere Optionen
 
-- `--enable-updates` / `--disable-updates`: Online-Updater (systemd-Dienst auf dem Host) ein- bzw. vollständig wieder ausschalten, siehe oben.
+- `--enable-updates` / `--disable-updates`: wie `ops/online-updates.sh`, aber als Teil eines vollständigen Installer-Laufs (Schlüssel vorher hinterlegen).
 - `--enable-office-viewer` und optional `--office-domain=office.example.com`: Office-Oberfläche unter eigener Subdomain, siehe oben.
 - `--enable-antivirus`: ClamAV aktivieren; ohne funktionierenden Scanner schlagen Uploads bei aktivierter Prüfung fehl.
 - `--dev`: lokale Testkonfiguration, nicht für öffentliche Produktionsinstallationen.

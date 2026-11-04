@@ -16,6 +16,7 @@ import { renderPdfPreview } from './pdf-preview.js';
 import { UserDash } from './user-dash.js';
 import { WorkTimer } from './work-timer.js';
 import { KbSearch } from './kb-search.js';
+import { CategoryFaq } from './category-faq.js';
 import { getStatusColorClass, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable, insertMarkdownList,
     TICKET_NUMBER_TOKENS, ticketNumberFormatProblem, ticketCategoryCode, buildTicketNumberPreview } from './ticket-helpers.js';
 
@@ -427,16 +428,18 @@ export const AdminBoard = {
                     btn.onclick = AdminBoard.openUserManager;
                     actions.insertBefore(btn, q('#theme-toggle') || q('#btn-settings') || q('#logout'));
                 }
-                if (isSuper && !q('#btn-sys-settings')) {
-                    const btn = document.createElement('button');
-                    btn.id = 'btn-sys-settings';
-                    btn.className = 'btn-ghost';
-                    btn.innerHTML = `${Icon('sliders', 16)}${Lang.t('system')}`;
-                    btn.onclick = AdminBoard.openSystemSettings;
-                    actions.insertBefore(btn, q('#theme-toggle') || q('#btn-settings') || q('#logout'));
-                }
                 AdminBoard.orderTopbar();
             }
+        }
+        // Systemeinstellungen: Superadmins sowie Admins mit mindestens einem Einstellungsbereich.
+        if (AdminBoard.settingsTabs(user).length && !q('#btn-sys-settings') && q('.topbar-right')) {
+            const btn = document.createElement('button');
+            btn.id = 'btn-sys-settings';
+            btn.className = 'btn-ghost';
+            btn.innerHTML = `${Icon('sliders', 16)}${Lang.t('system')}`;
+            btn.onclick = () => AdminBoard.openSystemSettings();
+            q('.topbar-right').insertBefore(btn, q('#theme-toggle') || q('#btn-settings') || q('#logout'));
+            AdminBoard.orderTopbar();
         }
         if (isSuper || user?.canViewLogs) {
             const btnLogs = q('#btn-global-logs');
@@ -1117,14 +1120,16 @@ export const AdminBoard = {
     },
 
     // User Manager Logic
-    openUserManager: async () => {
+    // view: 'users' | 'admins' | 'groups'. Kategorien liegen in den Systemeinstellungen (Querverweis per Symbol).
+    openUserManager: async (view = 'users') => {
         const modal = q('#user-man-modal');
         modal.classList.add('open');
-        await AdminBoard.renderUserManager('users'); // Default tab
 
         // Setup UM Tabs
         const user = await Store.currentUser();
         const isSuper = user && user.role === 'superadmin';
+        if (!isSuper || typeof view !== 'string') view = 'users';
+        await AdminBoard.renderUserManager(view);
 
         let tabs = modal.querySelector('.um-tabs');
         if (tabs) tabs.remove();
@@ -1133,10 +1138,9 @@ export const AdminBoard = {
         tabs.className = 'um-tabs tabs';
 
         tabs.innerHTML = `
-            <div class="tab-btn active" data-view="users">Benutzer</div>
-            ${isSuper ? `<div class="tab-btn" data-view="admins">Admins</div>` : ''}
-            ${isSuper ? `<div class="tab-btn" data-view="groups">Gruppen</div>` : ''}
-            ${isSuper ? `<div class="tab-btn" data-view="cats">Kategorien</div>` : ''}
+            <div class="tab-btn${view === 'users' ? ' active' : ''}" data-view="users">${Utils.esc(Lang.t('usersTab'))}</div>
+            ${isSuper ? `<div class="tab-btn${view === 'admins' ? ' active' : ''}" data-view="admins">${Utils.esc(Lang.t('adminsTab'))}</div>` : ''}
+            ${isSuper ? `<div class="tab-btn${view === 'groups' ? ' active' : ''}" data-view="groups">${Utils.esc(Lang.t('groupsTab'))}</div>` : ''}
         `;
 
         const header = modal.querySelector('.modal-header');
@@ -1200,11 +1204,10 @@ export const AdminBoard = {
                 };
             }
         } else if (view === 'groups') {
-            actions.innerHTML = `<button class="btn-primary" id="btn-add-group">${Icon('plus', 16)}Neue Gruppe</button>`;
+            actions.innerHTML = `<button class="btn-secondary" id="btn-goto-cats" title="${Utils.esc(Lang.t('manageCategoriesLink'))}">${Icon('tags', 16)}${Utils.esc(Lang.t('categoriesLabel'))}</button>
+                <button class="btn-primary" id="btn-add-group">${Icon('plus', 16)}${Utils.esc(Lang.t('newGroup'))}</button>`;
             actions.querySelector('#btn-add-group').onclick = () => AdminBoard.openEditGroupModal(null);
-        } else {
-            actions.innerHTML = `<button class="btn-primary" id="btn-add-cat">${Icon('plus', 16)}Neue Kategorie</button>`;
-            actions.querySelector('#btn-add-cat').onclick = () => AdminBoard.openEditCategoryModal(null);
+            actions.querySelector('#btn-goto-cats').onclick = () => AdminBoard.openSystemSettings('sys-categories');
         }
 
         if (view === 'groups') {
@@ -1224,12 +1227,14 @@ export const AdminBoard = {
                         <span class="badge">${(g.members || []).length} ${(g.members || []).length === 1 ? Lang.t('member') : Lang.t('members')}</span>
                     </div>
                     <div class="user-manager-actions">
+                        <button class="btn-ghost btn-icon cats-g" title="${Utils.esc(Lang.t('categoriesOfGroup'))}" aria-label="${Utils.esc(Lang.t('categoriesOfGroup'))}">${Icon('tags', 16)}</button>
                         <button class="btn-ghost btn-icon members-g" title="${Lang.t('viewMembers')}" aria-label="${Lang.t('viewMembers')}">${Icon('list', 16)}</button>
                         <button class="btn-ghost btn-icon edit-g" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>
                         <button class="btn-ghost btn-icon btn-danger del-g" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
                     </div>
                 `;
                 el.querySelector('.members-g').onclick = () => AdminBoard.openGroupMembers(g);
+                el.querySelector('.cats-g').onclick = () => AdminBoard.openSystemSettings('sys-categories', { groupId: g.id });
                 el.querySelector('.edit-g').onclick = () => AdminBoard.openEditGroupModal(g);
                 el.querySelector('.del-g').onclick = () => {
                     UI.confirm(Lang.format('confirmDeleteGroup', { name: g.name }), async () => {
@@ -1244,32 +1249,6 @@ export const AdminBoard = {
             return;
         }
 
-        if (view === 'cats') {
-            const categories = (await Store.getCategories()).filter(c => !c.archived);
-            categories.filter(c => Utils.matchesSearch(searchTerm, c.name)).forEach(c => {
-                const el = document.createElement('div');
-                el.className = 'table-row user-manager-row';
-                el.innerHTML = `
-                    <div class="user-manager-text">
-                        <span class="user-manager-name">${Icon('tag', 15)}${Utils.esc(c.name)}</span>
-                    </div>
-                    <div class="user-manager-actions">
-                        <button class="btn-ghost btn-icon edit-c" title="${Lang.t('edit')}" aria-label="${Lang.t('edit')}">${Icon('pencil', 16)}</button>
-                        <button class="btn-ghost btn-icon btn-danger del-c" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
-                    </div>
-                `;
-                el.querySelector('.edit-c').onclick = () => AdminBoard.openEditCategoryModal(c);
-                el.querySelector('.del-c').onclick = () => {
-                    UI.confirm(Lang.format('confirmDeleteCategory', { name: c.name }), async () => {
-                        if (!(await Store.updateCategory(c.id, { archived: true }))) return UI.toast(Lang.t('categoryDeleteFailed'));
-                        AdminBoard.renderUserManager('cats');
-                    });
-                };
-                list.appendChild(el);
-            });
-            if (window.lucide) lucide.createIcons();
-            return;
-        }
 
         const users = await Store.getUsers();
         const groups = await Store.getGroups();
@@ -1450,24 +1429,28 @@ export const AdminBoard = {
     // category: Kategorie-Objekt aus Store.getCategories() (oder null für "Neu"). Die alte
     // "Admins dieser Kategorie"-Zuordnung gibt es im Backend nicht (nur auto_assign_group_id
     // für eine ganze Gruppe) und wurde entfernt, statt etwas Ungespeichertes vorzutäuschen.
-    openEditCategoryModal: async (category) => {
+    openEditCategoryModal: async (category, { onSaved = null } = {}) => {
         const modal = q('#generic-modal') || AdminBoard.createGenericModal();
         const title = modal.querySelector('h3');
         const content = modal.querySelector('.modal-body');
         const confirmBtn = modal.querySelector('.btn-primary');
 
         const groups = await Store.getGroups();
-
-        title.textContent = category ? 'Kategorie bearbeiten' : 'Neue Kategorie';
+        const actor = await Store.currentUser();
+        title.textContent = category ? Lang.t('editCategory') : Lang.t('newCategory');
         content.innerHTML = `
             <div class="field">
-                <label>${Lang.t('name')}</label>
-                <input type="text" id="g-input" value="${Utils.esc(category?.name || '')}" placeholder="${Lang.t('egTechnik')}">
+                <label for="g-input">${Lang.t('name')}</label>
+                <input type="text" id="g-input" maxlength="128" value="${Utils.esc(category?.name || '')}" placeholder="${Lang.t('egTechnik')}">
             </div>
             <div class="field">
-                <label>${Lang.t('autoAssignToGroup')}</label>
+                <div class="label-row"><label>${Lang.t('autoAssignToGroup')}</label>
+                    ${actor?.role === 'superadmin' ? `<button type="button" class="btn-ghost btn-icon btn-xs" id="cat-goto-groups" title="${Utils.esc(Lang.t('manageGroupsLink'))}" aria-label="${Utils.esc(Lang.t('manageGroupsLink'))}">${Icon('users-round', 14)}</button>` : ''}</div>
                 <div id="cat-auto-group"></div>
             </div>
+            <label class="check-row"><input type="checkbox" id="cat-show-portal"${category?.showInPortal === false ? '' : ' checked'}><span class="check-text"><strong>${Lang.t('showInServiceBar')}</strong><span>${Lang.t('showInServiceBarHint')}</span></span></label>
+            ${category ? `<div class="setting-row"><span class="hint">${Utils.esc(Lang.format('faqTipCount', { count: category.faq?.items?.length || 0 }))}</span>
+                <button type="button" class="btn-secondary btn-sm" id="cat-edit-faq">${Icon('lightbulb', 15)}${Lang.t('faqEdit')}</button></div>` : ''}
             <div class="field field-wide">
                 <label>${Lang.t('customFieldsForCategory')}</label>
                 <p class="hint">${Lang.t('customFieldsHint')}</p>
@@ -1476,6 +1459,8 @@ export const AdminBoard = {
             </div>
         `;
         const autoGroupPicker = UI.createMultiSelect(q('#cat-auto-group'), groups.map(g => ({ value: g.id, label: g.label || g.name })), category?.autoAssignGroupId || '', null, { single: true, emptyLabel: Lang.t('none') });
+        q('#cat-goto-groups')?.addEventListener('click', () => { modal.classList.remove('open'); AdminBoard.openUserManager('groups'); });
+        q('#cat-edit-faq')?.addEventListener('click', () => { modal.classList.remove('open'); CategoryFaq.edit(category, { onSaved: () => (onSaved ? onSaved() : AdminBoard.renderCategorySettings()) }); });
 
         const existingFields = category?.customFields ? category.customFields.slice() : [];
         const fieldsContainer = q('#cat-custom-fields');
@@ -1567,16 +1552,82 @@ export const AdminBoard = {
                 options: row.querySelector('.cf-type').value === 'select' ? [...row.querySelectorAll('.cf-option-input')].map(i => i.value.trim()).filter(Boolean) : []
             })).filter(f => f.label);
             const autoAssignGroupId = autoGroupPicker.getValue() || null;
+            const showInPortal = q('#cat-show-portal').checked;
 
             const ok = category
-                ? await Store.updateCategory(category.id, { name: val, autoAssignGroupId, customFields: collectedFields })
-                : await Store.createCategory({ name: val, autoAssignGroupId, customFields: collectedFields });
+                ? await Store.updateCategory(category.id, { name: val, autoAssignGroupId, customFields: collectedFields, showInPortal })
+                : await Store.createCategory({ name: val, autoAssignGroupId, customFields: collectedFields, showInPortal });
             if (!ok) return UI.toast(Lang.t('categorySaveFailed'));
 
             modal.classList.remove('open');
-            AdminBoard.renderUserManager('cats');
+            if (onSaved) await onSaved(); else await AdminBoard.renderCategorySettings();
             UI.toast(category ? Lang.t('categoryEdited') : Lang.t('categoryCreated'));
         };
+    },
+
+    // Systemeinstellungen > Kategorien: Liste mit Suche, Gruppenfilter, Themenleiste je Kategorie,
+    // F&A und Querverweis zur Gruppe. groupId filtert auf Kategorien mit automatischer Zuweisung an diese Gruppe.
+    categoryFilterGroupId: null,
+    renderCategorySettings: async (groupId) => {
+        const panel = q('#sys-categories-list');
+        if (!panel) return;
+        if (groupId !== undefined) AdminBoard.categoryFilterGroupId = groupId;
+        const filterGroup = AdminBoard.categoryFilterGroupId;
+        const [categories, groups, actor] = await Promise.all([Store.getCategories(), Store.getGroups(), Store.currentUser()]);
+        const isSuper = actor?.role === 'superadmin';
+        const term = (q('#sys-cat-search')?.value || '').trim().toLocaleLowerCase();
+        const groupLabel = id => { const g = groups.find(item => item.id === id); return g ? (g.label || g.name) : ''; };
+        const active = categories.filter(c => !c.archived);
+        const visible = active.filter(c => (!filterGroup || c.autoAssignGroupId === filterGroup)
+            && (!term || `${c.name} ${groupLabel(c.autoAssignGroupId)}`.toLocaleLowerCase().includes(term)));
+        const note = q('#sys-cat-filter-note');
+        if (note) {
+            note.hidden = !filterGroup;
+            note.innerHTML = filterGroup ? `${Icon('filter', 14)}<span>${Utils.esc(Lang.format('categoryFilterGroup', { name: groupLabel(filterGroup) || '–' }))}</span>
+                <button type="button" class="btn-ghost btn-sm" id="sys-cat-filter-clear">${Icon('x', 14)}${Utils.esc(Lang.t('removeFilter'))}</button>` : '';
+            q('#sys-cat-filter-clear')?.addEventListener('click', () => AdminBoard.renderCategorySettings(null));
+        }
+        panel.innerHTML = visible.length ? visible.map(c => `
+            <div class="cat-row" data-id="${Utils.esc(c.id)}">
+                <span class="cat-row-icon">${Icon(CategoryFaq.iconFor(c.name), 18)}</span>
+                <div class="cat-row-main">
+                    <strong>${Utils.esc(c.name)}</strong>
+                    <span class="cat-row-meta">
+                        <span>${Icon('users-round', 12)}${Utils.esc(groupLabel(c.autoAssignGroupId) || Lang.t('noAutoAssignment'))}</span>
+                        <span>${Icon('list', 12)}${Utils.esc(Lang.format('customFieldCount', { count: c.customFields.length }))}</span>
+                        <span>${Icon('lightbulb', 12)}${Utils.esc(Lang.format('faqTipCount', { count: c.faq.items.length }))}</span>
+                    </span>
+                </div>
+                <label class="cat-row-switch" title="${Utils.esc(Lang.t('showInServiceBar'))}"><input type="checkbox" data-portal${c.showInPortal ? ' checked' : ''}><span class="module-switch" aria-hidden="true"></span><span class="cat-row-switch-label">${Utils.esc(Lang.t('serviceBarShort'))}</span></label>
+                <div class="cat-row-actions">
+                    ${isSuper && c.autoAssignGroupId ? `<button type="button" class="btn-ghost btn-icon btn-sm" data-group title="${Utils.esc(Lang.t('manageGroupsLink'))}" aria-label="${Utils.esc(Lang.t('manageGroupsLink'))}">${Icon('users-round', 16)}</button>` : ''}
+                    <button type="button" class="btn-ghost btn-icon btn-sm" data-faq title="${Utils.esc(Lang.t('faqEdit'))}" aria-label="${Utils.esc(Lang.t('faqEdit'))}">${Icon('lightbulb', 16)}</button>
+                    <button type="button" class="btn-ghost btn-icon btn-sm" data-edit title="${Utils.esc(Lang.t('edit'))}" aria-label="${Utils.esc(Lang.t('edit'))}">${Icon('pencil', 16)}</button>
+                    <button type="button" class="btn-ghost btn-icon btn-sm btn-danger" data-delete title="${Utils.esc(Lang.t('delete'))}" aria-label="${Utils.esc(Lang.t('delete'))}">${Icon('trash-2', 16)}</button>
+                </div>
+            </div>`).join('') : `<div class="empty-state compact">${Utils.esc(Lang.t(active.length ? 'noCategoriesFound' : 'noCategoriesCreated'))}</div>`;
+        panel.querySelectorAll('.cat-row').forEach(row => {
+            const category = categories.find(c => c.id === row.dataset.id);
+            row.querySelector('[data-portal]').onchange = async event => {
+                if (!(await Store.updateCategory(category.id, { showInPortal: event.target.checked }))) {
+                    event.target.checked = !event.target.checked;
+                    return UI.toast(Lang.t('categorySaveFailed'));
+                }
+                UI.toast(Lang.format(event.target.checked ? 'categoryShownInBar' : 'categoryHiddenFromBar', { name: category.name }));
+            };
+            row.querySelector('[data-group]')?.addEventListener('click', async () => {
+                const group = groups.find(g => g.id === category.autoAssignGroupId);
+                await AdminBoard.openUserManager('groups');
+                if (group) AdminBoard.openEditGroupModal(group);
+            });
+            row.querySelector('[data-faq]').onclick = () => CategoryFaq.edit(category, { onSaved: () => AdminBoard.renderCategorySettings() });
+            row.querySelector('[data-edit]').onclick = () => AdminBoard.openEditCategoryModal(category);
+            row.querySelector('[data-delete]').onclick = () => UI.confirm(Lang.format('confirmDeleteCategory', { name: category.name }), async () => {
+                if (!(await Store.updateCategory(category.id, { archived: true }))) return UI.toast(Lang.t('categoryDeleteFailed'));
+                await AdminBoard.renderCategorySettings();
+            });
+        });
+        if (window.lucide) lucide.createIcons();
     },
 
     openGroupMembers: async (group) => {
@@ -1739,10 +1790,77 @@ export const AdminBoard = {
             UI.toast(group ? Lang.t('groupSavedToast') : Lang.t('groupCreatedToast'));
         };
         modal.classList.add('open');
+        // Querverweis: Kategorien, die automatisch an diese Gruppe gehen (Systemeinstellungen > Kategorien).
+        if (group) {
+            const linked = (await Store.getCategories()).filter(c => !c.archived && c.autoAssignGroupId === group.id);
+            const box = document.createElement('div');
+            box.className = 'setting-row group-category-link';
+            box.innerHTML = `<span class="hint">${Icon('tags', 14)} ${Utils.esc(linked.length ? Lang.format('groupLinkedCategories', { list: linked.map(c => c.name).join(', ') }) : Lang.t('groupNoLinkedCategories'))}</span>
+                <button type="button" class="btn-secondary btn-sm">${Icon('tags', 15)}${Utils.esc(Lang.t('manageCategoriesLink'))}</button>`;
+            box.querySelector('button').onclick = () => { modal.classList.remove('open'); AdminBoard.openSystemSettings('sys-categories', { groupId: group.id }); };
+            content.appendChild(box);
+        }
         if (window.lucide) lucide.createIcons();
     },
 
     openEditUserModal: async (user, viewContext) => AdminBoard.openUserWizard({ user, viewContext }),
+
+    // Rechte fuer Admin-Konten mit Oberbegriffen (Server: domain/adminPermissions.ts PERMISSION_GROUPS).
+    // [Schluessel, Beschriftung, Hinweis, Modul]; die vier Verwaltungsrechte stehen am Benutzerobjekt selbst.
+    ADMIN_FLAGS: ['canManageRequests', 'canManageUsers', 'canManage2FA', 'canViewLogs'],
+    PERMISSION_GROUPS: [
+        { key: 'administration', icon: 'shield', label: 'permGroupAdministration', items: [
+            ['canManageRequests', 'manageAccountRequests'], ['canManageUsers', 'userManagementUsersOnly'],
+            ['canManage2FA', 'resetUsersMfaPermission'], ['canViewLogs', 'viewSystemLogs']] },
+        { key: 'features', icon: 'sparkles', label: 'permGroupFeatures', items: [
+            ['textBlocks', 'manageTextBlocks'], ['reports', 'viewReports'], ['recurring', 'manageRecurringTickets'],
+            ['categoryFaq', 'permCategoryFaq', 'permCategoryFaqHint']] },
+        { key: 'modules', icon: 'blocks', label: 'permGroupModules', items: [
+            ['approvals', 'decideApprovals', null, 'approvals'], ['settingsApprovals', 'permSettingsApprovals', 'permSettingsApprovalsHint', 'approvals'],
+            ['settingsSla', 'permSettingsSla', 'permSettingsSlaHint', 'sla']] },
+        { key: 'settings', icon: 'sliders', label: 'permGroupSettings', items: [
+            ['settingsGeneral', 'permSettingsGeneral', 'permSettingsGeneralHint'], ['settingsTicketForm', 'permSettingsTicketForm', 'permSettingsTicketFormHint'],
+            ['settingsCategories', 'permSettingsCategories', 'permSettingsCategoriesHint'], ['settingsCompany', 'permSettingsCompany', 'permSettingsCompanyHint'],
+            ['settingsTicketNumbers', 'permSettingsTicketNumbers', 'permSettingsTicketNumbersHint'], ['settingsNotifications', 'permSettingsNotifications', 'permSettingsNotificationsHint']] }
+    ],
+    permissionsMarkup: (user) => {
+        const isOn = key => AdminBoard.ADMIN_FLAGS.includes(key) ? !!user?.[key] : !!user?.permissions?.[key];
+        return `
+            <div class="perm-toolbar">
+                <button type="button" class="btn-ghost btn-sm" data-perm-all>${Icon('check-check', 14)}${Utils.esc(Lang.t('permSelectAll'))}</button>
+                <button type="button" class="btn-ghost btn-sm" data-perm-none>${Icon('x', 14)}${Utils.esc(Lang.t('permSelectNone'))}</button>
+            </div>
+            <div class="perm-groups">${AdminBoard.PERMISSION_GROUPS.map(group => `
+                <fieldset class="perm-group" data-group="${group.key}">
+                    <legend><label class="perm-group-head"><input type="checkbox" data-perm-group="${group.key}"><span>${Icon(group.icon, 15)}${Utils.esc(Lang.t(group.label))}</span><small class="perm-group-count"></small></label></legend>
+                    <div class="perm-list">${group.items.map(([key, label, hint, module]) => `
+                        <label class="check-row"${module ? ` data-module="${module}"` : ''}><input type="checkbox" data-perm="${key}"${isOn(key) ? ' checked' : ''}>
+                            <span class="check-text"><strong>${Utils.esc(Lang.t(label))}</strong>${hint ? `<span>${Utils.esc(Lang.t(hint))}</span>` : ''}</span></label>`).join('')}
+                    </div>
+                    ${group.key === 'features' ? `<div class="field perm-kb"><label for="uw-kb">${Lang.t('knowledgeBase')}</label><select id="uw-kb">
+                        <option value="none">${Lang.t('noAccess')}</option><option value="read">${Lang.t('readOnly')}</option><option value="edit">${Lang.t('readAndEdit')}</option></select></div>` : ''}
+                </fieldset>`).join('')}
+            </div>`;
+    },
+    // Sammel-Haekchen je Oberbegriff (alle / einige / keine) und "Alle"/"Keine".
+    bindPermissionGroups: (root) => {
+        const sync = () => root.querySelectorAll('.perm-group').forEach(fieldset => {
+            const boxes = [...fieldset.querySelectorAll('[data-perm]')].filter(box => !box.closest('[data-module]') || Store.modules[box.closest('[data-module]').dataset.module] !== false);
+            const on = boxes.filter(box => box.checked).length;
+            const head = fieldset.querySelector('[data-perm-group]');
+            head.checked = !!boxes.length && on === boxes.length;
+            head.indeterminate = on > 0 && on < boxes.length;
+            fieldset.querySelector('.perm-group-count').textContent = `${on}/${boxes.length}`;
+        });
+        root.querySelectorAll('[data-perm-group]').forEach(head => head.onchange = () => {
+            head.closest('.perm-group').querySelectorAll('[data-perm]').forEach(box => { box.checked = head.checked; });
+            sync();
+        });
+        root.querySelectorAll('[data-perm]').forEach(box => box.addEventListener('change', sync));
+        root.querySelector('[data-perm-all]')?.addEventListener('click', () => { root.querySelectorAll('[data-perm]').forEach(box => { box.checked = true; }); sync(); });
+        root.querySelector('[data-perm-none]')?.addEventListener('click', () => { root.querySelectorAll('[data-perm]').forEach(box => { box.checked = false; }); sync(); });
+        sync();
+    },
 
     // Vorschlag fuer einen freien Benutzernamen aus dem Namen ("Max Muster" -> "max.muster").
     suggestUsername: (name, users) => {
@@ -1862,18 +1980,7 @@ export const AdminBoard = {
                 </section>
                 <section class="wizard-page" data-page="rights" hidden>
                     <p class="hint">${Utils.esc(Lang.t('uwRightsHint'))}</p>
-                    <div class="settings-section-title">${Lang.t('administration')}</div>
-                    <div class="perm-grid">
-                        <label class="check-row"><input type="checkbox" id="uw-can-manage-req"${user?.canManageRequests ? ' checked' : ''}><span>${Lang.t('manageAccountRequests')}</span></label>
-                        <label class="check-row"><input type="checkbox" id="uw-can-manage-users"${user?.canManageUsers ? ' checked' : ''}><span>${Lang.t('userManagementUsersOnly')}</span></label>
-                        <label class="check-row"><input type="checkbox" id="uw-can-view-logs"${user?.canViewLogs ? ' checked' : ''}><span>${Lang.t('viewSystemLogs')}</span></label>
-                        <label class="check-row"><input type="checkbox" id="uw-can-manage-2fa"${user?.canManage2FA ? ' checked' : ''}><span>${Lang.t('resetUsersMfaPermission')}</span></label>
-                    </div>
-                    <div class="settings-section-title">${Lang.t('additionalFeatures')}</div>
-                    <div class="perm-grid">${[['textBlocks', 'manageTextBlocks'], ['reports', 'viewReports'], ['approvals', 'decideApprovals'], ['recurring', 'manageRecurringTickets']].map(([key, label]) =>
-                        `<label class="check-row"${key === 'approvals' ? ' data-module="approvals"' : ''}><input type="checkbox" data-perm="${key}"${user?.permissions?.[key] ? ' checked' : ''}><span>${Lang.t(label)}</span></label>`).join('')}</div>
-                    <div class="field"><label for="uw-kb">${Lang.t('knowledgeBase')}</label><select id="uw-kb">
-                        <option value="none">${Lang.t('noAccess')}</option><option value="read">${Lang.t('readOnly')}</option><option value="edit">${Lang.t('readAndEdit')}</option></select></div>
+                    ${AdminBoard.permissionsMarkup(user)}
                 </section>
                 <section class="wizard-page" data-page="review" hidden><div id="uw-review"></div></section>
                 <div class="wizard-footer">
@@ -1886,6 +1993,7 @@ export const AdminBoard = {
         const $ = selector => modal.querySelector(selector);
         if ($('#uw-role')) $('#uw-role').value = user?.role || (viewContext === 'admins' ? 'admin' : 'user');
         if ($('#uw-kb')) $('#uw-kb').value = user?.permissions?.kb || 'none';
+        AdminBoard.bindPermissionGroups(modal.querySelector('[data-page="rights"]'));
         UI.bindPasswordRequirements($('#uw-pass'));
         const validityPicker = canSetValidity ? UI.bindDateField('uw-valid-until', { initialMs: user?.accountValidUntil ? new Date(`${user.accountValidUntil}T12:00:00`).getTime() : null }) : null;
         if (canSetValidity && user?.accountValidUntil) $('#uw-valid-until').value = user.accountValidUntil.split('-').reverse().join('.');
@@ -1962,8 +2070,10 @@ export const AdminBoard = {
             modal.querySelectorAll('.uw-day').forEach(row => {
                 if (row.querySelector('.uw-day-on').checked) days[row.dataset.day] = { start: row.querySelector('.uw-day-start').value, end: row.querySelector('.uw-day-end').value };
             });
+            const permBoxes = [...modal.querySelectorAll('[data-page="rights"] [data-perm]')];
+            const permOn = key => role() === 'admin' && !!permBoxes.find(box => box.dataset.perm === key)?.checked;
             const permissions = role() === 'admin' && isSuper ? {
-                ...Object.fromEntries([...modal.querySelectorAll('[data-page="rights"] [data-perm]')].map(box => [box.dataset.perm, box.checked])),
+                ...Object.fromEntries(permBoxes.filter(box => !AdminBoard.ADMIN_FLAGS.includes(box.dataset.perm)).map(box => [box.dataset.perm, box.checked])),
                 kb: $('#uw-kb').value
             } : {};
             return {
@@ -1980,10 +2090,10 @@ export const AdminBoard = {
                     work_days: days, availability_note: $('#uw-availability').value.trim()
                 },
                 permissions,
-                canManageRequests: role() === 'admin' && !!$('#uw-can-manage-req')?.checked,
-                canManageUsers: role() === 'admin' && !!$('#uw-can-manage-users')?.checked,
-                canViewLogs: role() === 'admin' && !!$('#uw-can-view-logs')?.checked,
-                canManage2FA: role() === 'admin' && !!$('#uw-can-manage-2fa')?.checked
+                canManageRequests: permOn('canManageRequests'),
+                canManageUsers: permOn('canManageUsers'),
+                canViewLogs: permOn('canViewLogs'),
+                canManage2FA: permOn('canManage2FA')
             };
         };
         // Prueft einen Schritt; liefert eine Meldung samt Feld oder null.
@@ -2013,12 +2123,11 @@ export const AdminBoard = {
             const nameOf = id => { const u = allUsers.find(x => x.id === id); return u ? (u.name || u.username) : ''; };
             const groupNames = data.groupIds.map(id => groups.find(g => g.id === id)).filter(Boolean).map(g => g.label || g.name).join(', ');
             const schedule = DAYS.filter(day => data.profile.work_days[day]).map(day => `${dayName(day)} ${data.profile.work_days[day].start}–${data.profile.work_days[day].end}`).join(', ');
-            const rights = data.role === 'admin' && isSuper ? [
-                data.canManageRequests && Lang.t('manageAccountRequests'), data.canManageUsers && Lang.t('userManagementUsersOnly'),
-                data.canViewLogs && Lang.t('viewSystemLogs'), data.canManage2FA && Lang.t('resetUsersMfaPermission'),
-                ...['textBlocks', 'reports', 'approvals', 'recurring'].filter(key => data.permissions[key]).map(key => Lang.t({ textBlocks: 'manageTextBlocks', reports: 'viewReports', approvals: 'decideApprovals', recurring: 'manageRecurringTickets' }[key])),
-                `${Lang.t('knowledgeBase')}: ${Lang.t({ none: 'noAccess', read: 'readOnly', edit: 'readAndEdit' }[data.permissions.kb] || 'noAccess')}`
-            ].filter(Boolean).join(', ') : '';
+            const rights = data.role === 'admin' && isSuper ? AdminBoard.PERMISSION_GROUPS.map(group => {
+                const granted = group.items.filter(([key]) => AdminBoard.ADMIN_FLAGS.includes(key) ? data[key] : data.permissions[key]).map(([, label]) => Lang.t(label));
+                if (group.key === 'features') granted.push(`${Lang.t('knowledgeBase')}: ${Lang.t({ none: 'noAccess', read: 'readOnly', edit: 'readAndEdit' }[data.permissions.kb] || 'noAccess')}`);
+                return granted.length ? `${Lang.t(group.label)}: ${granted.join(', ')}` : '';
+            }).filter(Boolean).join(' · ') : '';
             const section = (stepKey, labelKey, rows) => `
                 <div class="uw-review-section">
                     <div class="uw-review-head"><strong>${Utils.esc(Lang.t(labelKey))}</strong><button type="button" class="btn-ghost btn-sm" data-goto="${stepKey}">${Icon('pencil', 14)}${Utils.esc(Lang.t('edit'))}</button></div>
@@ -2563,12 +2672,11 @@ export const AdminBoard = {
             ${p('updateGuideSecurityText2')}
             <div class="callout callout-info">${Utils.esc(Lang.t('updateGuideSecurityRecommendation'))}</div>
             ${title('updateGuideEnableTitle')}
-            ${p('updateGuideEnablePrereq')}
+            ${p('updateGuideEnableOneText')}
             <ol class="update-guide-steps">
                 ${step('updateGuideEnableStep1', cd)}
-                ${step('updateGuideEnableStep2', 'gpg --show-keys --with-fingerprint /root/release-signing-key.asc')}
-                ${step('updateGuideEnableStep3', 'mkdir -p ops/docker/update-keys\nchmod 700 ops/docker/update-keys\ngpg --homedir "$PWD/ops/docker/update-keys" --import /root/release-signing-key.asc')}
-                ${step('updateGuideEnableStep4', 'bash install.sh --enable-updates')}
+                ${step('updateGuideEnableOne', 'sudo bash ops/online-updates.sh enable')}
+                ${step('updateGuideEnableFingerprint', 'sudo bash ops/online-updates.sh enable --fingerprint=<FINGERABDRUCK>')}
                 ${step('updateGuideEnableStep5')}
             </ol>
             ${p('updateGuideSigningNote')}
@@ -2578,8 +2686,8 @@ export const AdminBoard = {
             ${p('updateGuideDisableText')}
             <ol class="update-guide-steps">
                 ${step('updateGuideDisableStep1', cd)}
-                ${step('updateGuideDisableStep2', 'bash install.sh --disable-updates')}
-                ${step('updateGuideDisableStep3', 'rm -rf ops/docker/update-keys')}
+                ${step('updateGuideDisableOne', 'sudo bash ops/online-updates.sh disable')}
+                ${step('updateGuideStatusOne', 'sudo bash ops/online-updates.sh status')}
             </ol>
             ${p('updateGuideStateNote')}
             ${title('updateGuideManualTitle')}
@@ -2611,8 +2719,9 @@ export const AdminBoard = {
             if (window.lucide) lucide.createIcons();
         };
         if (status.httpStatus === 0) return notice('danger', Lang.t('serverUnreachableRetry'), true);
-        if (status.error === 'update_service_disabled' || status.error === 'update_service_not_configured') return notice('info', Lang.t('onlineUpdatesDisabled'));
-        if (status.error === 'update_signature_not_configured') return notice('info', Lang.t('updatesLockedNoSignature'));
+        const command = text => `<div class="code-copy"><pre class="update-guide-code"><code>${Utils.esc(text)}</code></pre>${AdminBoard.copyButton()}</div>`;
+        if (status.error === 'update_service_disabled' || status.error === 'update_service_not_configured') return notice('info', `${Utils.esc(Lang.t('onlineUpdatesDisabled'))}<p>${Utils.esc(Lang.t('onlineUpdatesEnableHow'))}</p>${command('sudo bash ops/online-updates.sh enable')}`);
+        if (status.error === 'update_signature_not_configured') return notice('warning', `${Utils.esc(Lang.t('updatesLockedNoSignature'))}${command('sudo bash ops/online-updates.sh enable --key=/pfad/release-signing-key.asc')}`);
         if (status.error === 'update_runner_disabled' || status.enabled === false) return notice('info', Lang.t('updaterDeploymentDisabled'));
         if ([502, 503, 504].includes(status.httpStatus)) return notice('danger', Lang.format('updaterNotResponding', { code: Utils.esc(String(status.httpStatus)) }), true);
         if (status.error === 'github_unreachable') return notice('danger', Lang.t('githubUnreachable'), true);
@@ -2645,7 +2754,11 @@ export const AdminBoard = {
                 ${AdminBoard.renderUpdateProgress(job)}
                 <details${job.failed ? ' open' : ''}><summary>${Lang.t('updShowLog')}</summary><pre>${Utils.esc((job.log || []).slice(-30).join('\n'))}</pre></details>
             </div>` : '';
-        area.innerHTML = `${kitWarning}${hero}${AdminBoard.renderBackupState(status)}${jobBox}`;
+        // Online-Updates sind aktiv: deutlich darauf hinweisen und zeigen, wie man sie wieder abschaltet.
+        const enabledWarning = `<div class="callout callout-warning upd-enabled-warning">${Icon('shield-alert', 18)}<div>
+                <strong>${Utils.esc(Lang.t('onlineUpdatesActiveTitle'))}</strong><p>${Utils.esc(Lang.t('onlineUpdatesActiveText'))}</p>
+                ${command('sudo bash ops/online-updates.sh disable')}</div></div>`;
+        area.innerHTML = `${kitWarning}${enabledWarning}${hero}${AdminBoard.renderBackupState(status)}${jobBox}`;
 
         if (runBtn) {
             runBtn.hidden = !updateAvailable || !!job?.running;
@@ -2757,7 +2870,52 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    openSystemSettings: async () => {
+    // Einstellungsbereiche je Recht (Server: domain/adminPermissions.ts SETTINGS_SECTION_KEYS).
+    SETTINGS_SECTION_KEYS: {
+        settingsGeneral: ['portalName', 'autoArchiveClosedAfterDays', 'uploadConfig', 'avatarConfig', 'timeTrackingConfig', 'defaultPrio',
+            'waitingReminderDays', 'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled'],
+        settingsTicketForm: ['ticketFormConfig'],
+        settingsSla: ['slaHoursByPriority', 'showSlaToUsers', 'businessHours'],
+        settingsApprovals: ['approvalWorkflow'],
+        settingsCompany: ['companyName', 'companyBrandingConfig'],
+        settingsTicketNumbers: ['ticketNumberFormat', 'ticketNumberCategoryFormats', 'ticketNumberCategoryCodes'],
+        settingsNotifications: ['notifPolicy', 'notifConfig']
+    },
+    SETTINGS_TAB_PERMISSIONS: {
+        'sys-general': ['settingsGeneral'], 'sys-ticketform': ['settingsTicketForm'], 'sys-categories': ['settingsCategories'],
+        'sys-sla': ['settingsSla'], 'sys-approvals': ['settingsApprovals'], 'sys-notifications': ['settingsNotifications'],
+        'sys-company': ['settingsCompany', 'settingsTicketNumbers']
+    },
+    // Reiter der Systemeinstellungen, die eine Person oeffnen darf (Superadmin: alle).
+    settingsTabs: (user) => {
+        const all = ['sys-general', 'sys-ticketform', 'sys-categories', 'sys-modules', 'sys-sla', 'sys-approvals', 'sys-outlook', 'sys-security',
+            'sys-profiles', 'sys-notifications', 'sys-email', 'sys-ldap', 'sys-company', 'sys-update'];
+        if (user?.role === 'superadmin') return all;
+        if (user?.role !== 'admin') return [];
+        // Reiter abgeschalteter Module gibt es fuer Admins nicht (nur Superadmins schalten Module um).
+        const moduleOff = { 'sys-sla': Store.modules.sla === false, 'sys-approvals': Store.modules.approvals === false };
+        return all.filter(tab => !moduleOff[tab] && (AdminBoard.SETTINGS_TAB_PERMISSIONS[tab] || []).some(perm => user.permissions?.[perm] === true));
+    },
+    // Konto-Selbstverwaltung (Felder wie Store.SELF_SERVICE_FIELDS) und Kontaktangaben fuer Admins.
+    SELF_FIELD_GROUPS: [
+        ['uwStepAccount', [['name', 'name'], ['email', 'email']]],
+        ['uwStepOrg', [['department', 'uwDepartment'], ['jobTitle', 'jobTitle'], ['officeLocation', 'uwOffice'], ['building', 'uwBuilding'], ['room', 'uwRoom'],
+            ['employeeNumber', 'uwEmployeeNumber'], ['costCenter', 'uwCostCenter'], ['entryDate', 'uwEntryDate']]],
+        ['uwStepContact', [['phone', 'phone'], ['mobile', 'mobile'], ['workDays', 'uwWorkDays'], ['availability', 'uwAvailability']]]
+    ],
+    CONTACT_FIELDS: [['email', 'email'], ['phone', 'phone'], ['mobile', 'mobile'], ['department', 'uwDepartment'], ['jobTitle', 'jobTitle'],
+        ['officeLocation', 'uwOffice'], ['building', 'uwBuilding'], ['room', 'uwRoom'], ['supervisor', 'supervisor'], ['groups', 'userGroupsLabel'],
+        ['workTimes', 'uwWorkDays'], ['availability', 'uwAvailability'], ['employeeNumber', 'uwEmployeeNumber'], ['costCenter', 'uwCostCenter'], ['entryDate', 'uwEntryDate']],
+    DEFAULT_CONTACT_FIELDS: ['email', 'phone', 'mobile', 'department', 'jobTitle', 'officeLocation', 'building', 'room', 'supervisor', 'groups', 'workTimes', 'availability'],
+
+    // tab: Reiter, der geoeffnet werden soll (z. B. 'sys-categories'); options.groupId filtert die Kategorien.
+    openSystemSettings: async (tab = null, options = {}) => {
+        if (typeof tab !== 'string') tab = null;
+        const actor = await Store.currentUser();
+        const isSuper = actor?.role === 'superadmin';
+        const allowedTabs = AdminBoard.settingsTabs(actor);
+        if (!allowedTabs.length) return UI.toast(Lang.t('noSettingsPermission'));
+        const can = perm => isSuper || actor?.permissions?.[perm] === true;
         let apprFallbackPicker;
         let modal = q('#sys-settings-modal');
         if (!modal) {
@@ -2779,6 +2937,12 @@ export const AdminBoard = {
                         <button class="tab-btn active" data-tab="sys-general">
                             <i data-lucide="sliders"></i><span>${Lang.t('general')}</span>
                         </button>
+                        <button class="tab-btn" data-tab="sys-ticketform">
+                            <i data-lucide="file-pen-line"></i><span>${Lang.t('ticketFormTab')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-categories">
+                            <i data-lucide="tags"></i><span>${Lang.t('categoriesLabel')}</span>
+                        </button>
                         <button class="tab-btn" data-tab="sys-modules">
                             <i data-lucide="blocks"></i><span>${Lang.t('modulesTab')}</span>
                         </button>
@@ -2794,7 +2958,10 @@ export const AdminBoard = {
                         </button>
                         <div class="sys-nav-group-label">${Lang.t('settingsSystemGroup')}</div>
                         <button class="tab-btn" data-tab="sys-security">
-                            <i data-lucide="shield"></i><span>Sicherheit</span>
+                            <i data-lucide="shield"></i><span>${Lang.t('security')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-profiles">
+                            <i data-lucide="contact-round"></i><span>${Lang.t('profilesTab')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-notifications">
                             <i data-lucide="bell"></i><span>Benachrichtigungen</span>
@@ -2856,15 +3023,57 @@ export const AdminBoard = {
                             </div>
                             <div class="settings-section-title">${Lang.t('passwordRequirementsTitle')}</div>
                             <div class="form-grid">${Object.entries({ minLength: 'passwordLength', minLowercase: 'passwordLowercase', minUppercase: 'passwordUppercase', minDigits: 'passwordDigits', minSpecial: 'passwordSpecial' }).map(([key, label]) => `<div class="field"><label for="sys-pw-${key}">${Lang.t(label)}</label><input id="sys-pw-${key}" type="number" min="${key === 'minLength' ? 14 : 0}" max="${key === 'minLength' ? 128 : 16}" required></div>`).join('')}</div>
+                        </div>
+
+                        <!-- Ticketformular im Benutzer-Dashboard -->
+                        <div id="sys-ticketform" class="tab-content">
+                            <div class="settings-section-title">${Lang.t('priorityModeTitle')}</div>
+                            <p class="hint">${Lang.t('priorityModeHint')}</p>
+                            <div class="choice-cards" role="radiogroup" aria-label="${Utils.esc(Lang.t('priorityModeTitle'))}">
+                                <label class="choice-card"><input type="radio" name="sys-prio-mode" value="impact">
+                                    <span class="choice-card-body"><strong>${Icon('users', 16)}${Lang.t('priorityModeImpact')}</strong><span>${Lang.t('priorityModeImpactHint')}</span>
+                                    <span class="choice-preview"><span>${Lang.t('impactQuestion')}</span><span>${Lang.t('urgencyQuestion')}</span></span></span></label>
+                                <label class="choice-card"><input type="radio" name="sys-prio-mode" value="priority">
+                                    <span class="choice-card-body"><strong>${Icon('signal', 16)}${Lang.t('priorityModePriority')}</strong><span>${Lang.t('priorityModePriorityHint')}</span>
+                                    <span class="choice-preview"><span>${Lang.t('low')}</span><span>${Lang.t('normal')}</span><span>${Lang.t('high')}</span></span></span></label>
+                            </div>
+                            <div class="settings-section-title">${Lang.t('serviceBarTitle')}</div>
+                            <label class="check-row"><input type="checkbox" id="sys-show-service-bar"><span class="check-text"><strong>${Lang.t('serviceBarShow')}</strong><span>${Lang.t('serviceBarShowHint')}</span></span></label>
+                            <div class="setting-row"><span class="hint">${Lang.t('serviceBarCategoriesHint')}</span>
+                                <button type="button" class="btn-secondary btn-sm" id="sys-goto-categories">${Icon('tags', 15)}${Lang.t('categoriesLabel')}</button></div>
+                        </div>
+
+                        <!-- Kategorien (vorher Benutzerverwaltung) -->
+                        <div id="sys-categories" class="tab-content">
+                            <div class="settings-section-title">${Lang.t('categoriesLabel')}</div>
+                            <p class="hint">${Lang.t('categoriesSettingsHint')}</p>
+                            <div class="cat-settings-toolbar">
+                                <div class="module-search">${Icon('search', 16)}<input type="search" id="sys-cat-search" class="section-search" placeholder="${Utils.esc(Lang.t('categorySearchPlaceholder'))}" aria-label="${Utils.esc(Lang.t('categorySearchPlaceholder'))}"></div>
+                                <button type="button" class="btn-secondary btn-sm" id="sys-cat-groups" hidden>${Icon('users-round', 15)}${Lang.t('groupsTab')}</button>
+                                <button type="button" class="btn-primary btn-sm" id="sys-cat-add">${Icon('plus', 15)}${Lang.t('newCategory')}</button>
+                            </div>
+                            <div class="callout callout-info cat-filter-note" id="sys-cat-filter-note" hidden></div>
+                            <div id="sys-categories-list" class="cat-settings-list"></div>
+                        </div>
+
+                        <!-- Kontaktdaten & Profile (nur Superadmin) -->
+                        <div id="sys-profiles" class="tab-content">
                             <div class="settings-section-title">${Lang.t('accountSelfManagement')}</div>
-                            <div class="hint">${Lang.t('accountSelfManagementHint')}</div>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-name"><span>${Lang.t('name')}</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-email"><span>${Lang.t('email')}</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-dept"><span>${Lang.t('department')}</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-phone"><span>${Lang.t('phone')}</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-mobile"><span>${Lang.t('mobile')}</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-jobTitle"><span>${Lang.t('jobTitle')}</span></label>
-                            <label class="check-row"><input type="checkbox" id="sys-acc-officeLocation"><span>${Lang.t('location')}</span></label>
+                            <p class="hint">${Lang.t('accountSelfManagementHintExtended')}</p>
+                            <div class="field-group-grid">${AdminBoard.SELF_FIELD_GROUPS.map(([group, fields]) => `
+                                <fieldset class="field-group"><legend>${Lang.t(group)}</legend>
+                                    ${fields.map(([key, label]) => `<label class="check-row compact"><input type="checkbox" data-self-field="${key}"><span>${Lang.t(label)}</span></label>`).join('')}
+                                </fieldset>`).join('')}</div>
+                            <div class="settings-section-title">${Lang.t('contactVisibilityTitle')}</div>
+                            <p class="hint">${Lang.t('contactVisibilityHint')}</p>
+                            <div class="field"><label>${Lang.t('contactVisibilityDefaults')}</label>
+                                <div class="perm-grid">${AdminBoard.CONTACT_FIELDS.map(([key, label]) => `<label class="check-row compact"><input type="checkbox" data-cv-default="${key}"><span>${Lang.t(label)}</span></label>`).join('')}</div></div>
+                            <div class="field field-wide"><label>${Lang.t('contactVisibilityGroups')}</label>
+                                <div id="sys-cv-groups" class="cv-rule-list"></div>
+                                <button type="button" class="btn-secondary btn-sm" id="sys-cv-group-add">${Icon('plus', 15)}${Lang.t('contactVisibilityAddGroup')}</button></div>
+                            <div class="field field-wide"><label>${Lang.t('contactVisibilityUsers')}</label>
+                                <div id="sys-cv-users" class="cv-rule-list"></div>
+                                <button type="button" class="btn-secondary btn-sm" id="sys-cv-user-add">${Icon('plus', 15)}${Lang.t('contactVisibilityAddUser')}</button></div>
                         </div>
 
                         <!-- Benachrichtigungen -->
@@ -3184,7 +3393,7 @@ export const AdminBoard = {
             if (approval) moveFrom(approval, modal.querySelector('#sys-approvals'));
             const slaHeading = [...modal.querySelectorAll('#sys-general .settings-section-title')].find(heading => heading.textContent === Lang.t('resolutionDeadlinePerPriority'));
             if (slaHeading) moveFrom(slaHeading, modal.querySelector('#sys-sla'));
-            void numbering;
+            if (numbering) numbering.dataset.permission = 'settingsTicketNumbers';
             const updatePanel = modal.querySelector('#sys-update');
             const preferences = await Store.getPersonalPreferences(true);
             modal.querySelectorAll('.tab-content').forEach(panel => {
@@ -3198,6 +3407,8 @@ export const AdminBoard = {
                     const details = document.createElement('details');
                     details.className = 'settings-section';
                     details.dataset.preferenceKey = key;
+                    if (heading.dataset.permission) details.dataset.permission = heading.dataset.permission;
+                    else if (panel.id === 'sys-company') details.dataset.permission = 'settingsCompany';
                     details.open = !preferences.collapsedSections?.[key];
                     const summary = document.createElement('summary');
                     while (heading.firstChild) summary.appendChild(heading.firstChild);
@@ -3227,11 +3438,11 @@ export const AdminBoard = {
                 let total = 0;
                 panels.forEach(panel => {
                     const nav = modal.querySelector(`.sys-settings-nav [data-tab="${panel.id}"]`);
-                    const moduleOff = nav?.dataset.module && Store.modules[nav.dataset.module] === false;
+                    const moduleOff = (nav?.dataset.module && Store.modules[nav.dataset.module] === false) || panel.dataset.locked === '1';
                     let hits = 0;
                     panel.querySelectorAll('details.settings-section').forEach(section => {
                         if (term && !('searchOpen' in section.dataset)) section.dataset.searchOpen = section.open ? '1' : '0';
-                        const match = !!term && !moduleOff && `${panel.dataset.searchTitle} ${section.textContent}`.toLocaleLowerCase().includes(term);
+                        const match = !!term && !moduleOff && !section.dataset.locked && `${panel.dataset.searchTitle} ${section.textContent}`.toLocaleLowerCase().includes(term);
                         section.classList.toggle('search-miss', !!term && !match);
                         if (match) { hits++; section._preferenceOpen = true; section.open = true; }
                         if (!term && 'searchOpen' in section.dataset) {
@@ -3259,6 +3470,7 @@ export const AdminBoard = {
                     q('#' + btn.dataset.tab).classList.add('active');
                     if (btn.dataset.tab === 'sys-update') { AdminBoard.renderSystemInfo(); AdminBoard.renderUpdateStatus(); }
                     else clearTimeout(AdminBoard.updatePollTimer);
+                    if (btn.dataset.tab === 'sys-categories') AdminBoard.renderCategorySettings();
                     if (window.lucide) lucide.createIcons();
                 };
             });
@@ -3268,6 +3480,19 @@ export const AdminBoard = {
                 clearTimeout(AdminBoard.updatePollTimer);
             });
             q('#sys-update-check').onclick = () => AdminBoard.renderUpdateStatus();
+            q('#sys-goto-categories').onclick = () => modal.querySelector('.sys-settings-nav [data-tab="sys-categories"]')?.click();
+            q('#sys-cat-search').oninput = () => AdminBoard.renderCategorySettings();
+            q('#sys-cat-add').onclick = () => AdminBoard.openEditCategoryModal(null);
+            q('#sys-cat-groups').hidden = !isSuper;
+            q('#sys-cat-groups').onclick = () => AdminBoard.openUserManager('groups');
+            // Nur freigegebene Reiter und Abschnitte zeigen (Server prueft zusaetzlich jeden Schluessel).
+            modal.querySelectorAll('.sys-settings-nav .tab-btn').forEach(btn => { btn.hidden = !allowedTabs.includes(btn.dataset.tab); });
+            modal.querySelectorAll('.sys-settings-content > .tab-content').forEach(panel => { if (!allowedTabs.includes(panel.id)) panel.dataset.locked = '1'; });
+            modal.querySelectorAll('details[data-permission]').forEach(section => { if (!can(section.dataset.permission)) { section.hidden = true; section.dataset.locked = '1'; } });
+            modal.querySelectorAll('.sys-nav-group-label').forEach(label => {
+                const buttons = []; for (let node = label.nextElementSibling; node && !node.classList.contains('sys-nav-group-label'); node = node.nextElementSibling) buttons.push(node);
+                label.hidden = !buttons.some(btn => !btn.hidden);
+            });
             q('#sys-update-run').onclick = async () => {
                 // Commit-Pinning: der Ziel-Commit ist IMMER der zuletzt angezeigte Stand (bei
                 // "neues Update verfügbar" der entfernte, bei "letztes Update erneut
@@ -3406,6 +3631,28 @@ export const AdminBoard = {
                     AdminBoard.renderTicketNumberPreviews(modal);
                 };
             });
+            // Ab 5 Kategorien: Suche ueber der Liste der Kategorieformate.
+            q('#sys-ticket-cat-search-box')?.remove();
+            if (categories.length >= 5) {
+                const searchBox = document.createElement('div');
+                searchBox.id = 'sys-ticket-cat-search-box';
+                searchBox.className = 'module-search ticket-cat-search';
+                searchBox.innerHTML = `${Icon('search', 16)}<input type="search" class="section-search" placeholder="${Utils.esc(Lang.t('categorySearchPlaceholder'))}" aria-label="${Utils.esc(Lang.t('categorySearchPlaceholder'))}">`;
+                categoryFormatList.before(searchBox);
+                const empty = document.createElement('div');
+                empty.className = 'empty-state compact'; empty.hidden = true; empty.textContent = Lang.t('noCategoriesFound');
+                categoryFormatList.appendChild(empty);
+                searchBox.querySelector('input').oninput = event => {
+                    const term = event.target.value.trim().toLocaleLowerCase();
+                    let hits = 0;
+                    categoryFormatList.querySelectorAll('.ticket-number-category-row:not(.is-head)').forEach(row => {
+                        const match = !term || row.querySelector('label').textContent.toLocaleLowerCase().includes(term);
+                        row.hidden = !match;
+                        if (match) hits++;
+                    });
+                    empty.hidden = hits > 0;
+                };
+            }
             ['#sys-ticket-number-format', '#sys-ticket-number-prefix', '#sys-ticket-number-padding', '#sys-company-timezone'].forEach(selector => q(selector)?.addEventListener('input', () => AdminBoard.renderTicketNumberPreviews(modal)));
             q('#sys-company-timezone')?.addEventListener('change', () => AdminBoard.renderTicketNumberPreviews(modal));
             categoryFormatList.addEventListener('input', () => AdminBoard.renderTicketNumberPreviews(modal));
@@ -3451,7 +3698,7 @@ export const AdminBoard = {
         q('#sys-outlook-domains').value = (outlook.externalDomains || []).join('\n');
         q('#sys-outlook-sync').checked = !!outlook.syncIncoming;
         q('#sys-outlook-create').checked = !!outlook.createTicketsFromMail;
-        const outlookServer = await Store.getOutlookConfig();
+        const outlookServer = isSuper ? await Store.getOutlookConfig() : null;
         q('#sys-outlook-secret').value = '';
         q('#sys-outlook-secret').placeholder = outlookServer?.hasClientSecret ? Lang.t('leaveEmptyUnchanged') : Lang.t('enterClientSecret');
         q('#sys-outlook-status').textContent = outlookServer?.enabled && outlookServer?.hasClientSecret
@@ -3483,13 +3730,53 @@ export const AdminBoard = {
         };
 
         const accEditable = settings.accountConfig?.editable || {};
-        q('#sys-acc-name').checked = accEditable.name !== false;
-        q('#sys-acc-email').checked = accEditable.email !== false;
-        q('#sys-acc-dept').checked = !!accEditable.department;
-        q('#sys-acc-phone').checked = !!accEditable.phone;
-        q('#sys-acc-mobile').checked = !!accEditable.mobile;
-        q('#sys-acc-jobTitle').checked = !!accEditable.jobTitle;
-        q('#sys-acc-officeLocation').checked = !!accEditable.officeLocation;
+        qa('#sys-profiles [data-self-field]').forEach(box => { box.checked = !!accEditable[box.dataset.selfField]; });
+
+        // Ticketformular
+        const prioMode = general.priorityMode === 'priority' ? 'priority' : 'impact';
+        qa('input[name="sys-prio-mode"]').forEach(radio => { radio.checked = radio.value === prioMode; });
+        q('#sys-show-service-bar').checked = general.showServiceBar !== false;
+
+        // Sichtbarkeit von Kontaktdaten: Standard, je Gruppe, je Admin-Konto (genaueste Regel gilt).
+        {
+            const visibility = settings.contactVisibility || {};
+            const defaults = Array.isArray(visibility.defaults) ? visibility.defaults : AdminBoard.DEFAULT_CONTACT_FIELDS;
+            qa('#sys-profiles [data-cv-default]').forEach(box => { box.checked = defaults.includes(box.dataset.cvDefault); });
+            const [cvGroups, cvUsers] = isSuper ? await Promise.all([Store.getGroups(), Store.getUsers()]) : [[], []];
+            const fieldOptions = AdminBoard.CONTACT_FIELDS.map(([value, label]) => ({ value, label: Lang.t(label) }));
+            const targets = {
+                groups: cvGroups.map(g => ({ value: g.id, label: g.label || g.name })),
+                users: cvUsers.filter(u => u.role === 'admin' && !u.accountArchived).map(u => ({ value: u.id, label: `${u.name || u.username} (${u.username})` }))
+            };
+            const rules = {
+                groups: Object.entries(visibility.groups || {}).map(([target, fields]) => ({ target, fields })),
+                users: Object.entries(visibility.users || {}).map(([target, fields]) => ({ target, fields }))
+            };
+            const renderRules = kind => {
+                const list = q(kind === 'groups' ? '#sys-cv-groups' : '#sys-cv-users');
+                list.innerHTML = rules[kind].length ? rules[kind].map((rule, index) => `
+                    <div class="cv-rule-row" data-index="${index}">
+                        <select class="cv-rule-target" aria-label="${Utils.esc(Lang.t(kind === 'groups' ? 'fallbackRuleGroup' : 'contactVisibilityUser'))}">
+                            <option value="">${Utils.esc(Lang.t('pleaseChoose'))}</option>
+                            ${targets[kind].map(o => `<option value="${Utils.esc(o.value)}"${o.value === rule.target ? ' selected' : ''}>${Utils.esc(o.label)}</option>`).join('')}
+                        </select>
+                        <div class="cv-rule-fields"></div>
+                        <button type="button" class="btn-ghost btn-icon btn-sm btn-danger cv-rule-remove" title="${Utils.esc(Lang.t('fallbackRuleRemove'))}" aria-label="${Utils.esc(Lang.t('fallbackRuleRemove'))}">${Icon('trash-2', 15)}</button>
+                    </div>`).join('') : `<p class="hint">${Utils.esc(Lang.t('contactVisibilityNoRules'))}</p>`;
+                list.querySelectorAll('.cv-rule-row').forEach(row => {
+                    const rule = rules[kind][Number(row.dataset.index)];
+                    row.querySelector('.cv-rule-target').onchange = event => { rule.target = event.target.value; };
+                    UI.createMultiSelect(row.querySelector('.cv-rule-fields'), fieldOptions, rule.fields, value => { rule.fields = value; }, { emptyLabel: Lang.t('contactVisibilityNothing') });
+                    row.querySelector('.cv-rule-remove').onclick = () => { rules[kind].splice(Number(row.dataset.index), 1); renderRules(kind); };
+                });
+                if (window.lucide) lucide.createIcons();
+            };
+            q('#sys-cv-group-add').onclick = () => { rules.groups.push({ target: '', fields: [...defaults] }); renderRules('groups'); };
+            q('#sys-cv-user-add').onclick = () => { rules.users.push({ target: '', fields: [...defaults] }); renderRules('users'); };
+            renderRules('groups');
+            renderRules('users');
+            modal._contactRules = rules;
+        }
 
         q('#sys-module-sla').checked = settings.modules?.sla !== false;
         q('#sys-module-approvals').checked = settings.modules?.approvals !== false;
@@ -3548,7 +3835,7 @@ export const AdminBoard = {
             modal._approvalRules = rules;
         }
 
-        const smtp = await Store.getSmtpConfig();
+        const smtp = isSuper ? await Store.getSmtpConfig() : null;
         q('#sys-smtp-host').value = smtp?.host || '';
         q('#sys-smtp-port').value = smtp?.port || 587;
         q('#sys-smtp-secure').value = smtp?.secure ? 'true' : 'false';
@@ -3579,7 +3866,7 @@ export const AdminBoard = {
             q('#sys-smtp-status').textContent = Lang.t('smtpConfigured');
         };
 
-        const ldap = await Store.getLdapConfig();
+        const ldap = isSuper ? await Store.getLdapConfig() : null;
         q('#sys-ldap-enabled').checked = !!ldap?.enabled;
         q('#sys-ldap-url').value = ldap?.url || '';
         q('#sys-ldap-base-dn').value = ldap?.baseDn || '';
@@ -3616,7 +3903,12 @@ export const AdminBoard = {
 
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
-        if (q('#sys-update')?.classList.contains('active')) AdminBoard.renderUpdateStatus();
+        // Gewuenschten bzw. ersten erlaubten Reiter oeffnen.
+        AdminBoard.categoryFilterGroupId = options.groupId || null;
+        const activeTab = modal.querySelector('.sys-settings-nav .tab-btn.active')?.dataset.tab;
+        const targetTab = tab && allowedTabs.includes(tab) ? tab : (allowedTabs.includes(activeTab) && !tab ? activeTab : allowedTabs[0]);
+        modal.querySelector(`.sys-settings-nav [data-tab="${targetTab}"]`)?.click();
+        if (targetTab !== 'sys-categories') AdminBoard.renderCategorySettings();
 
         const personalPreferences = await Store.getPersonalPreferences(true);
         modal.querySelectorAll('details[data-preference-key]').forEach(details => {
@@ -3627,7 +3919,7 @@ export const AdminBoard = {
             const padding = Math.max(1, Math.min(12, parseInt(q('#sys-ticket-number-padding').value, 10) || 5));
             q('#sys-ticket-number-padding').classList.remove('is-invalid');
             q('#sys-ticket-number-padding').removeAttribute('aria-invalid');
-            const ticketNumberIssue = AdminBoard.renderTicketNumberPreviews(modal);
+            const ticketNumberIssue = can('settingsTicketNumbers') ? AdminBoard.renderTicketNumberPreviews(modal) : null;
             if (ticketNumberIssue) {
                 modal.querySelector(`.sys-settings-nav [data-tab="${ticketNumberIssue.input.closest('.tab-content')?.id || 'sys-company'}"]`)?.click();
                 ticketNumberIssue.input.focus();
@@ -3635,18 +3927,32 @@ export const AdminBoard = {
             }
             const approvalRules = modal._approvalRules || [];
             const ruleKeys = approvalRules.map(rule => `${rule.type}:${rule.target}`);
-            if (approvalRules.some(rule => !rule.target || !rule.userId) || new Set(ruleKeys).size !== ruleKeys.length) {
+            if (can('settingsApprovals') && (approvalRules.some(rule => !rule.target || !rule.userId) || new Set(ruleKeys).size !== ruleKeys.length)) {
                 modal.querySelector('.sys-settings-nav [data-tab="sys-approvals"]')?.click();
                 return UI.toast(Lang.t('fallbackRulesInvalid'));
             }
             const uploadLimitMb = Number(q('#sys-upload-limit').value);
-            if (!Number.isInteger(uploadLimitMb) || uploadLimitMb < 500 || uploadLimitMb > 2000) {
+            if (can('settingsGeneral') && (!Number.isInteger(uploadLimitMb) || uploadLimitMb < 500 || uploadLimitMb > 2000)) {
+                modal.querySelector('.sys-settings-nav [data-tab="sys-general"]')?.click();
                 q('#sys-upload-limit').focus();
                 return UI.toast(Lang.t('uploadLimitInvalid'));
             }
-            const accFieldIdMap = { department: 'dept' };
-            const accountSelfServiceFields = ['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation'].filter(f => q(`#sys-acc-${accFieldIdMap[f] || f}`).checked);
-            const ok = await Store.updateServerSettings({
+            const accountSelfServiceFields = qa('#sys-profiles [data-self-field]').filter(box => box.checked).map(box => box.dataset.selfField);
+            const contactRules = modal._contactRules || { groups: [], users: [] };
+            const contactRuleIssue = ['groups', 'users'].find(kind => {
+                const targets = contactRules[kind].map(rule => rule.target);
+                return targets.some(target => !target) || new Set(targets).size !== targets.length;
+            });
+            if (isSuper && contactRuleIssue) {
+                modal.querySelector('.sys-settings-nav [data-tab="sys-profiles"]')?.click();
+                return UI.toast(Lang.t('contactVisibilityInvalid'));
+            }
+            const contactVisibility = {
+                defaults: qa('#sys-profiles [data-cv-default]').filter(box => box.checked).map(box => box.dataset.cvDefault),
+                groups: Object.fromEntries(contactRules.groups.map(rule => [rule.target, rule.fields])),
+                users: Object.fromEntries(contactRules.users.map(rule => [rule.target, rule.fields]))
+            };
+            const payload = {
                 companyName: q('#sys-company-name').value.trim(),
                 portalName: q('#sys-portal-name').value.trim() || 'Support Portal',
                 config: {
@@ -3757,6 +4063,11 @@ export const AdminBoard = {
                             .filter(([, code]) => code)
                     ),
                     accountSelfServiceFields,
+                    contactVisibility,
+                    ticketFormConfig: {
+                        priorityMode: q('input[name="sys-prio-mode"]:checked')?.value === 'priority' ? 'priority' : 'impact',
+                        showServiceBar: q('#sys-show-service-bar').checked
+                    },
                     modules: { sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked, outlook: q('#sys-module-outlook').checked },
                     approvalWorkflow: {
                         enabled: q('#sys-appr-enabled').checked,
@@ -3765,7 +4076,20 @@ export const AdminBoard = {
                         fallbackRules: approvalRules.map(rule => ({ type: rule.type, target: rule.target, userId: rule.userId }))
                     }
                 }
-            });
+            };
+            // Admins senden nur die Bereiche, fuer die sie ein Recht haben.
+            if (!isSuper) {
+                const allowed = new Set(Object.entries(AdminBoard.SETTINGS_SECTION_KEYS).filter(([perm]) => can(perm)).flatMap(([, keys]) => keys));
+                Object.keys(payload.config).forEach(key => { if (!allowed.has(key)) delete payload.config[key]; });
+                if (!allowed.has('companyName')) delete payload.companyName;
+                if (!allowed.has('portalName')) delete payload.portalName;
+                // Nur Kategorien/Tipps freigegeben: die speichern sofort, hier gibt es nichts zu senden.
+                if (!Object.keys(payload.config).length && payload.companyName === undefined && payload.portalName === undefined) {
+                    modal.classList.remove('open');
+                    return UI.toast(Lang.t('systemSettingsSaved'));
+                }
+            }
+            const ok = await Store.updateServerSettings(payload);
             if (!ok) {
                 const message = AdminBoard.settingsSaveErrorMessage(Store.lastError);
                 let error = {};
@@ -3782,10 +4106,10 @@ export const AdminBoard = {
                 }
                 return UI.toast(message);
             }
-            Store.applyAvatarSetting(q('#sys-avatars').value !== 'off');
-            Store.applyModules({ sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked, outlook: q('#sys-module-outlook').checked });
+            if (can('settingsGeneral')) Store.applyAvatarSetting(q('#sys-avatars').value !== 'off');
+            if (isSuper) Store.applyModules({ sla: q('#sys-module-sla').checked, approvals: q('#sys-module-approvals').checked, outlook: q('#sys-module-outlook').checked });
             const outlookSecret = q('#sys-outlook-secret').value;
-            if (outlookSecret && !await Store.updateOutlookSecret(outlookSecret)) return UI.toast(Lang.t('saveFailed'));
+            if (isSuper && outlookSecret && !await Store.updateOutlookSecret(outlookSecret)) return UI.toast(Lang.t('saveFailed'));
             q('#sys-outlook-secret').value = '';
             if (q('.kanban-board')) await AdminBoard.render();
             if (q('#user-tickets')) await UserDash.renderList();
@@ -6048,17 +6372,17 @@ export const AdminBoard = {
                         </div>
                     </div>
                     <div class="modal-body form-grid">
-                        <div class="field field-wide">
+                        <div class="field field-wide is-required">
                             <label for="act-on-behalf-search">${Lang.t('onBehalfOf')}</label>
                             <input type="text" id="act-on-behalf-search" placeholder="${Lang.t('searchByNameOrUsername')}">
                             <div id="act-on-behalf-list" class="user-picker-list"></div>
                             <p class="hint">${Lang.t('personNotListedHint')}</p>
                         </div>
-                        <div class="field field-wide">
+                        <div class="field field-wide is-required">
                             <label for="act-title">${Lang.t('subject')}</label>
-                            <input id="act-title" type="text" placeholder="${Lang.t('titlePlaceholder')}">
+                            <input id="act-title" type="text" maxlength="255" placeholder="${Lang.t('titlePlaceholder')}">
                         </div>
-                        <div class="field field-wide">
+                        <div class="field field-wide is-required">
                             <label for="act-desc">${Lang.t('description')}</label>
                             <textarea id="act-desc" rows="6" placeholder="${Lang.t('whatIsThisAboutPlaceholder')}"></textarea>
                         </div>
@@ -6071,8 +6395,8 @@ export const AdminBoard = {
                                 <option value="Kritisch">${Lang.t('critical')}</option>
                             </select>
                         </div>
-                        <div class="field">
-                            <label>${Lang.t('category')}</label>
+                        <div class="field is-required">
+                            <label id="act-cat-label">${Lang.t('category')}</label>
                             <div id="act-cat-container"></div>
                         </div>
                         <div id="act-custom-fields" class="field-wide custom-fields-fill"></div>
@@ -6162,16 +6486,24 @@ export const AdminBoard = {
         UI.bindFileDrop(q('#admin-create-ticket-modal .modal'), addActFiles);
         UI.bindPasteFiles(q('#act-desc'), addActFiles);
         const settings = await Store.getSettings();
-        const categories = settings.categories && settings.categories.length ? settings.categories : ['Allgemein'];
-        const refreshActCustomFields = (selectedCats) => {
-            UI.renderCustomFieldsForm(q('#act-custom-fields'), Store.getCustomFieldsForCategories(selectedCats, settings));
+        // Kategorie ist Pflicht und bewusst nicht vorausgewaehlt (wie im Benutzer-Dashboard).
+        const categories = settings.categories || [];
+        const refreshActCustomFields = (selected) => {
+            UI.renderCustomFieldsForm(q('#act-custom-fields'), Store.getCustomFieldsForCategories(selected ? [selected] : [], settings));
         };
-        AdminBoard.createTicketCategoryInstance = UI.createMultiSelect(q('#act-cat-container'), categories, [categories[0]], refreshActCustomFields);
-        refreshActCustomFields([categories[0]]);
+        AdminBoard.createTicketCategoryInstance = UI.createMultiSelect(q('#act-cat-container'), categories, '', refreshActCustomFields, { single: true, emptyLabel: Lang.t('pleaseChoose') });
+        q('#act-cat-container .multi-select-header')?.setAttribute('aria-labelledby', 'act-cat-label');
+        refreshActCustomFields('');
+        modal.querySelectorAll('.field.is-invalid').forEach(field => field.classList.remove('is-invalid'));
         q('#act-submit').onclick = async () => {
             const title = q('#act-title').value.trim();
             const desc = q('#act-desc').value.trim();
-            if (!title) return UI.toast(Lang.t('enterATitle'));
+            const missing = [[q('#act-title'), title, 'subject'], [q('#act-desc'), desc, 'description'], [q('#act-cat-container'), AdminBoard.createTicketCategoryInstance.getValue(), 'category']]
+                .filter(([el, value]) => { el.closest('.field').classList.toggle('is-invalid', !value); return !value; });
+            if (missing.length) {
+                (missing[0][0].querySelector?.('.multi-select-header') || missing[0][0]).focus();
+                return UI.toast(Lang.format('requiredFieldsMissing', { fields: missing.map(([, , label]) => Lang.t(label)).join(', ') }));
+            }
             const { values: customFieldValues, missing: missingFields } = UI.readCustomFieldsForm(q('#act-custom-fields'));
             if (missingFields.length) return UI.toast(Lang.format('requiredFieldsMissing', { fields: missingFields.join(', ') }));
             const onBehalfUser = users.find(u => u.username === selectedBehalfUsername);
@@ -6186,8 +6518,7 @@ export const AdminBoard = {
                 if (choice === undefined) return;
                 linkedIncidentId = choice;
             }
-            const cat = AdminBoard.createTicketCategoryInstance.getValue();
-            const category = cat.length ? cat : ['Allgemein'];
+            const category = [AdminBoard.createTicketCategoryInstance.getValue()];
             const newTicket = await Store.createTicket({
                 title, desc, prio: q('#act-prio').value, category,
                 onBehalfOfUserId: onBehalfUser.id, customFieldValues
@@ -6953,8 +7284,9 @@ export const AdminBoard = {
             if (chatInput) chatInput.disabled = t.archived || !!t.authorArchived;
             if (chatSend) chatSend.disabled = t.archived || !!t.authorArchived;
 
-            // Metadata
-            if (q('#m-author')) q('#m-author').textContent = t.authorName || t.author;
+            // Metadata: Name mit Menue (Kontaktdaten oder Ticket-Historie), Einschaetzung der Person.
+            AdminBoard.renderPersonMenu(q('#m-author'), { userId: t.authorUserId, name: t.authorName || t.author, username: t.author, ticketId: t.id });
+            AdminBoard.renderRequestAssessment(t, '#m-assessment');
             if (q('#m-date')) q('#m-date').textContent = Utils.fmtDate(t.createdAt);
 
             // Lösungsfrist: Badge mit verbleibender/überschrittener Zeit, dazu ein dezenter
@@ -7038,14 +7370,6 @@ export const AdminBoard = {
 
             if (btnLogs) btnLogs.onclick = () => UI.showLogs(t.id);
 
-            // History Toggle
-            const authorEl = q('#m-author');
-            if (authorEl) {
-                authorEl.classList.add('link');
-                authorEl.title = 'Historie anzeigen';
-                authorEl.onclick = () => AdminBoard.renderHistory(t.author, t.id);
-            }
-
             q('#ticket-modal').classList.add('open');
         } catch (e) {
             console.error('Error opening modal:', e);
@@ -7107,6 +7431,85 @@ export const AdminBoard = {
         const sidebar = q('#m-history-sidebar');
         if (sidebar) sidebar.classList.remove('open');
         AdminBoard.currentTicketId = null;
+    },
+
+    // "Wer ist betroffen?" und "Wie dringend?" deutlich sichtbar (Stufe 1..3 farblich abgesetzt).
+    renderRequestAssessment: (ticket, selector) => {
+        const box = q(selector);
+        if (!box) return;
+        const impactKeys = { 1: 'impactMe', 2: 'impactTeam', 3: 'impactDepartment' };
+        const urgencyKeys = { 1: 'urgencyLow', 2: 'urgencyMedium', 3: 'urgencyHigh' };
+        const impact = impactKeys[ticket?.impact];
+        const urgency = urgencyKeys[ticket?.urgency];
+        box.hidden = !impact && !urgency;
+        if (box.hidden) { box.innerHTML = ''; return; }
+        const chip = (icon, label, value, level) => `<div class="assessment-chip level-${level}">
+            <span class="assessment-icon">${Icon(icon, 18)}</span>
+            <span class="assessment-text"><small>${Utils.esc(Lang.t(label))}</small><strong>${Utils.esc(Lang.t(value))}</strong></span>
+            <span class="assessment-level" aria-label="${Utils.esc(Lang.format('assessmentLevel', { level }))}">${[1, 2, 3].map(step => `<i class="${step <= level ? 'on' : ''}"></i>`).join('')}</span>
+        </div>`;
+        box.innerHTML = `${impact ? chip('users', 'impactQuestion', impact, ticket.impact) : ''}${urgency ? chip('gauge', 'urgencyQuestion', urgency, ticket.urgency) : ''}`;
+        if (window.lucide) lucide.createIcons();
+    },
+
+    // Name einer Person mit Ausklappmenue (Hover, Fokus oder Klick): Kontaktdaten oder Ticket-Historie.
+    renderPersonMenu: (el, { userId, name, username, ticketId }) => {
+        if (!el) return;
+        el.classList.remove('link');
+        el.removeAttribute('title');
+        el.onclick = null;
+        el.innerHTML = `<span class="person-menu">
+            <button type="button" class="person-menu-trigger" aria-haspopup="menu" aria-expanded="false">${Icon('user-round', 14)}<span>${Utils.esc(name || username || '-')}</span>${Icon('chevron-down', 13)}</button>
+            <span class="person-menu-list" role="menu">
+                ${userId ? `<button type="button" role="menuitem" data-act="contact">${Icon('contact-round', 15)}<span>${Utils.esc(Lang.t('showContactDetails'))}</span></button>` : ''}
+                <button type="button" role="menuitem" data-act="history">${Icon('history', 15)}<span>${Utils.esc(Lang.t('showTicketHistory'))}</span></button>
+            </span>
+        </span>`;
+        const menu = el.querySelector('.person-menu');
+        const trigger = el.querySelector('.person-menu-trigger');
+        const setOpen = open => { menu.classList.toggle('is-open', open); trigger.setAttribute('aria-expanded', String(open)); };
+        trigger.onclick = event => { event.stopPropagation(); setOpen(!menu.classList.contains('is-open')); };
+        menu.addEventListener('mouseleave', () => setOpen(false));
+        menu.addEventListener('keydown', event => { if (event.key === 'Escape') { setOpen(false); trigger.focus(); } });
+        menu.addEventListener('focusout', event => { if (!menu.contains(event.relatedTarget)) setOpen(false); });
+        menu.querySelector('[data-act="contact"]')?.addEventListener('click', () => { setOpen(false); AdminBoard.openContactCard(userId, { username, ticketId }); });
+        menu.querySelector('[data-act="history"]').addEventListener('click', () => { setOpen(false); AdminBoard.renderHistory(username, ticketId); });
+        if (window.lucide) lucide.createIcons();
+    },
+
+    // Kontaktkarte: nur die Angaben, die Systemeinstellungen > Kontaktdaten fuer die eigene Person freigeben.
+    openContactCard: async (userId, { username = '', ticketId = null } = {}) => {
+        const card = await Store.getContactCard(userId);
+        if (!card) return UI.toast(Lang.t('contactCardFailed'));
+        const f = card.fields || {};
+        const days = [1, 2, 3, 4, 5, 6, 0];
+        const workTimes = f.workTimes ? days.filter(day => f.workTimes[day]).map(day => `${Lang.t(`uwDay${day}`)} ${f.workTimes[day].start}–${f.workTimes[day].end}`).join(', ') : '';
+        const tel = value => String(value).replace(/[^\d+]/g, '');
+        const rows = (list) => list.filter(([, value]) => value).map(([label, value, href]) => `<div><dt>${Utils.esc(Lang.t(label))}</dt><dd>${href ? `<a href="${Utils.esc(href)}">${Utils.esc(value)}</a>` : Utils.esc(value)}</dd></div>`).join('');
+        const sections = [
+            ['contactSectionContact', 'phone', rows([['email', f.email, f.email ? `mailto:${encodeURIComponent(f.email).replace(/%40/g, '@')}` : ''], ['phone', f.phone, f.phone ? `tel:${tel(f.phone)}` : ''], ['mobile', f.mobile, f.mobile ? `tel:${tel(f.mobile)}` : '']])],
+            ['contactSectionOrg', 'building-2', rows([['uwDepartment', f.department], ['jobTitle', f.jobTitle], ['supervisor', f.supervisor], ['userGroupsLabel', (f.groups || []).join(', ')],
+                ['uwOffice', f.officeLocation], ['uwBuilding', f.building], ['uwRoom', f.room], ['uwEmployeeNumber', f.employeeNumber], ['uwCostCenter', f.costCenter],
+                ['uwEntryDate', f.entryDate ? f.entryDate.split('-').reverse().join('.') : '']])],
+            ['contactSectionAvailability', 'clock', rows([['uwWorkDays', workTimes], ['uwAvailability', f.availability]])]
+        ].filter(([, , html]) => html);
+        const modal = AdminBoard.openDialog({
+            id: 'contact-card-modal',
+            title: card.name || card.username,
+            icon: 'contact-round',
+            size: 'sm',
+            body: `
+                <div class="contact-card-head">
+                    ${(Utils.setAvatar(card, card.avatar), Utils.avatarImg(card.username, 'contact-card-avatar'))}
+                    <div><strong>${Utils.esc(card.name || card.username)}</strong>
+                        <span class="hint">${Utils.esc(card.username)} · ${Utils.esc({ user: 'User', admin: 'Admin', superadmin: 'Superadmin' }[card.role] || card.role)}${card.account_archived ? ` · ${Utils.esc(Lang.t('archived'))}` : ''}</span></div>
+                </div>
+                ${sections.length ? sections.map(([label, icon, html]) => `<div class="contact-card-section"><h4>${Icon(icon, 14)}${Utils.esc(Lang.t(label))}</h4><dl class="uw-review-list">${html}</dl></div>`).join('')
+                    : `<div class="empty-state compact">${Utils.esc(Lang.t('contactCardEmpty'))}</div>`}
+                <div class="contact-card-actions"><button type="button" class="btn-secondary btn-sm" id="cc-history">${Icon('history', 15)}${Utils.esc(Lang.t('showTicketHistory'))}</button></div>`
+        });
+        modal.querySelector('#cc-history').onclick = () => { modal.remove(); AdminBoard.renderHistory(username || card.username, ticketId); };
+        if (window.lucide) lucide.createIcons();
     },
 
     renderHistory: async (username, currentId) => {

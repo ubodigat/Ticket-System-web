@@ -23,6 +23,8 @@ import { MAIL_SECRET_KEYS, readMailSecrets, encryptMailSecrets } from '../../mai
 import { buildTicketNumber, ticketNumberFormatProblem, TICKET_CATEGORY_CODE_PATTERN, TICKET_NUMBER_MAX_LENGTH } from '../../domain/ticketNumber.js';
 import { modulesFromConfig } from '../../domain/modules.js';
 import { MAX_UPLOAD_LIMIT_MB, MIN_UPLOAD_LIMIT_MB, uploadLimitBytesFromConfig } from '../../domain/uploadLimits.js';
+import { contactVisibilitySchema, forbiddenSettingsKey, hasPermission, loadPermissions, SELF_SERVICE_FIELDS } from '../../domain/adminPermissions.js';
+import { categoryFaqSchema, parseCategoryFaq } from '../../domain/categoryFaq.js';
 
 export interface SettingsRouteDeps {
   env: Env;
@@ -40,13 +42,15 @@ const customFieldSchema = z.object({
 const createCategorySchema = z.object({
   name: z.string().trim().min(1).max(128),
   auto_assign_group_id: z.string().nullable().optional(),
-  custom_fields: z.array(customFieldSchema).max(50).default([])
+  custom_fields: z.array(customFieldSchema).max(50).default([]),
+  show_in_portal: z.boolean().default(true)
 });
 
 const updateCategorySchema = z.object({
   name: z.string().trim().min(1).max(128).optional(),
   auto_assign_group_id: z.string().nullable().optional(),
   custom_fields: z.array(customFieldSchema).max(50).optional(),
+  show_in_portal: z.boolean().optional(),
   locked: z.boolean().optional(),
   archived: z.boolean().optional()
 });
@@ -99,7 +103,15 @@ const settingsConfigSchema = z.object({
   })).optional(),
   // Eigenes Kuerzel je Kategorie fuer {category} (z.B. "HW" statt "HARDWARE").
   ticketNumberCategoryCodes: z.record(z.string().max(128), z.string().trim().regex(TICKET_CATEGORY_CODE_PATTERN, 'invalid_code')).optional(),
-  accountSelfServiceFields: z.array(z.enum(['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation'])).optional(),
+  accountSelfServiceFields: z.array(z.enum(SELF_SERVICE_FIELDS)).max(SELF_SERVICE_FIELDS.length).optional(),
+  // Ticketformular im Benutzer-Dashboard: Prioritaet aus "Wer ist betroffen?"/"Wie dringend?"
+  // (impact) oder direkte Auswahl Niedrig/Normal/Hoch (priority); Themenleiste ein/aus.
+  ticketFormConfig: z.object({
+    priorityMode: z.enum(['impact', 'priority']).optional(),
+    showServiceBar: z.boolean().optional()
+  }).strict().optional(),
+  // Welche Kontaktangaben Admins in Tickets sehen (domain/adminPermissions.ts).
+  contactVisibility: contactVisibilitySchema.optional(),
   autoArchiveClosedAfterDays: z.number().int().min(0).max(3650).optional(),
   waitingReminderDays: z.number().int().min(1).max(365).optional(),
   waitingAutoCloseDays: z.number().int().min(1).max(365).optional(),
@@ -233,7 +245,7 @@ const ldapConfigSchema = z.object({
 // (SLA/Geschäftszeiten/Ticketnummern/Benachrichtigungsregeln/Branding bleiben erhalten).
 // Allowlist: nur ausdruecklich fuer Benutzeroberflaechen gedachte Schluessel. Neue oder alte
 // (Legacy-)Schluessel in config_json gelangen so nie versehentlich an normale Konten.
-const USER_VISIBLE_CONFIG_KEYS = ['slaHoursByPriority', 'showSlaToUsers', 'defaultPrio', 'businessHours', 'ticketNumberFormat',
+const USER_VISIBLE_CONFIG_KEYS = ['slaHoursByPriority', 'showSlaToUsers', 'defaultPrio', 'ticketFormConfig', 'businessHours', 'ticketNumberFormat',
   'ticketNumberCategoryFormats', 'ticketNumberCategoryCodes', 'accountSelfServiceFields', 'autoArchiveClosedAfterDays', 'waitingReminderDays',
   'waitingAutoCloseDays', 'waitingAfterAction', 'waitingReminderEnabled', 'approvalWorkflow', 'notifPolicy', 'companyBrandingConfig', 'notifConfig', 'modules', 'avatarConfig', 'timeTrackingConfig'] as const;
 function removeAdminOnlyConfig(config: Record<string, any>): Record<string, any> {
@@ -298,11 +310,22 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
     }
   });
 
-  // PATCH /api/v2/settings - nur Superadmin (sicherheitsrelevante/globale Einstellungen)
+  // PATCH /api/v2/settings - Superadmin; Admins nur in den Bereichen, fuer die ihnen ein Recht
+  // erteilt wurde (domain/adminPermissions.ts, SETTINGS_SECTION_KEYS). Sicherheit, E-Mail, LDAP,
+  // Outlook, Module, Selbstverwaltung und Sichtbarkeit von Kontaktdaten bleiben Superadmins vorbehalten.
   app.patch('/api/v2/settings', async (req, reply) => {
     try {
-      const session = requireSuperadmin(req);
-      const body = req.body as { companyName?: string; portalName?: string; config?: unknown };
+      const session = requireAdmin(req);
+      const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { companyName?: string; portalName?: string; config?: unknown };
+      const changedKeys = [
+        ...(typeof body.companyName === 'string' ? ['companyName'] : []),
+        ...(typeof body.portalName === 'string' ? ['portalName'] : []),
+        ...(body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? Object.keys(body.config) : [])
+      ];
+      if (session.role !== 'superadmin') {
+        const forbidden = forbiddenSettingsKey(changedKeys, await loadPermissions(app.db, session));
+        if (forbidden || !changedKeys.length) return reply.code(403).send({ error: 'forbidden', field: forbidden });
+      }
       const updates: Record<string, unknown> = { updated_at: mysqlTimestamp() };
 
       if (typeof body.companyName === 'string') updates.company_name = body.companyName.trim().slice(0, 255);
@@ -379,7 +402,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       await app.db.updateTable('app_settings').set(updates).where('id', '=', 1).execute();
       await app.db.insertInto('global_audit_log').values({
         id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
-        action: 'settings.updated', target_type: 'settings', target_id: '1', detail_json: null
+        action: 'settings.updated', target_type: 'settings', target_id: '1', detail_json: JSON.stringify({ keys: changedKeys })
       }).execute();
       return reply.send({ success: true });
     } catch (e: any) {
@@ -616,9 +639,11 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       requireSession(req);
       const categories = await app.db.selectFrom('categories').selectAll().orderBy('name', 'asc').execute();
       return reply.send({
-        categories: categories.map(c => ({
+        categories: categories.map(({ faq_json, ...c }) => ({
           ...c,
-          custom_fields: c.custom_fields_json ? JSON.parse(c.custom_fields_json) : []
+          show_in_portal: c.show_in_portal !== false && (c.show_in_portal as unknown) !== 0,
+          custom_fields: c.custom_fields_json ? JSON.parse(c.custom_fields_json) : [],
+          faq: parseCategoryFaq(faq_json)
         }))
       });
     } catch (e: any) {
@@ -626,9 +651,40 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
     }
   });
 
-  app.post('/api/v2/categories', async (req, reply) => {
+  // Kategorien anlegen/aendern: Superadmin oder Recht "Kategorien" (Systemeinstellungen).
+  async function requireCategoryEditor(req: any) {
+    const session = requireAdmin(req);
+    if (!(await hasPermission(app.db, session, 'settingsCategories'))) throw { statusCode: 403, message: 'forbidden' };
+    return session;
+  }
+
+  // F&A einer Kategorie: zusaetzlich mit dem eigenen Recht "F&A pflegen".
+  app.put('/api/v2/categories/:id/faq', async (req, reply) => {
     try {
       const session = requireAdmin(req);
+      if (!(await hasPermission(app.db, session, 'settingsCategories')) && !(await hasPermission(app.db, session, 'categoryFaq'))) {
+        return reply.code(403).send({ error: 'forbidden' });
+      }
+      const { id } = req.params as { id: string };
+      const parsed = categoryFaqSchema.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+      const category = await app.db.selectFrom('categories').select('id').where('id', '=', id).executeTakeFirst();
+      if (!category) return reply.code(404).send({ error: 'not_found' });
+      const empty = !parsed.data.intro && !parsed.data.items.length;
+      await app.db.updateTable('categories').set({ faq_json: empty ? null : JSON.stringify(parsed.data), updated_at: mysqlTimestamp() }).where('id', '=', id).execute();
+      await app.db.insertInto('global_audit_log').values({
+        id: randomUUID(), actor_user_id: session.uid, actor_username: session.username,
+        action: 'category.faq_updated', target_type: 'category', target_id: id, detail_json: JSON.stringify({ items: parsed.data.items.length })
+      }).execute();
+      return reply.send({ success: true, faq: parsed.data });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
+
+  app.post('/api/v2/categories', async (req, reply) => {
+    try {
+      const session = await requireCategoryEditor(req);
       const parsed = createCategorySchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
       const existing = await app.db.selectFrom('categories').select('id').where('name', '=', parsed.data.name).executeTakeFirst();
@@ -639,6 +695,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
         name: parsed.data.name,
         auto_assign_group_id: parsed.data.auto_assign_group_id ?? null,
         custom_fields_json: JSON.stringify(parsed.data.custom_fields),
+        show_in_portal: parsed.data.show_in_portal,
         locked: false,
         archived: false
       }).execute();
@@ -654,7 +711,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
 
   app.patch('/api/v2/categories/:id', async (req, reply) => {
     try {
-      const session = requireAdmin(req);
+      const session = await requireCategoryEditor(req);
       const { id } = req.params as { id: string };
       const parsed = updateCategorySchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
@@ -666,6 +723,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
       if (parsed.data.name !== undefined) updates.name = parsed.data.name;
       if (parsed.data.auto_assign_group_id !== undefined) updates.auto_assign_group_id = parsed.data.auto_assign_group_id;
       if (parsed.data.custom_fields !== undefined) updates.custom_fields_json = JSON.stringify(parsed.data.custom_fields);
+      if (parsed.data.show_in_portal !== undefined) updates.show_in_portal = parsed.data.show_in_portal;
       if (parsed.data.locked !== undefined) updates.locked = parsed.data.locked;
       if (parsed.data.archived !== undefined) updates.archived = parsed.data.archived;
 

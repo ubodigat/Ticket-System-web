@@ -687,9 +687,9 @@ if [[ "$ENABLE_UPDATES" == "true" ]]; then
   log "Enabling in-app updates (host service, signed commits or release tags only)"
   set_env_var "UPDATE_ALLOW_MAIN_DEPLOY" "true" "$ENV_FILE"
   # Ohne geprueften Schluessel lehnt der Updater jedes Update ab -- frueh und deutlich warnen.
-  UPDATE_KEYS="$( { command -v gpg >/dev/null 2>&1 && gpg --homedir "$COMPOSE_DIR/update-keys" --list-keys --with-colons 2>/dev/null; } || true)"
+  UPDATE_KEYS="$( { command -v gpg >/dev/null 2>&1 && { gpg --homedir "$COMPOSE_DIR/update-keys" --list-keys --with-colons 2>/dev/null; run_root env GNUPGHOME=/etc/ticket-system-updater/keys gpg --batch --list-keys --with-colons 2>/dev/null; }; } || true)"
   if ! grep -q '^pub:' <<<"$UPDATE_KEYS" && [[ -z "$INSTALL_REF" ]]; then
-    echo "WARNING: no trusted signing key found in ops/docker/update-keys -- every update will be rejected until a verified key is imported (README: 'Online-Updater bewusst aktivieren')." >&2
+    echo "WARNING: no trusted signing key found -- every update will be rejected until a verified key is stored: sudo bash ops/online-updates.sh enable" >&2
   fi
 fi
 if [[ "$DISABLE_UPDATES" == "true" ]]; then

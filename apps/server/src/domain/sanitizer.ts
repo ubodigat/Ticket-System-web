@@ -6,7 +6,7 @@ import sanitizeHtml from 'sanitize-html';
 const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: [
     'a', 'b', 'blockquote', 'br', 'code', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    'hr', 'i', 'li', 'ol', 'p', 'pre', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'
+    'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span', 'strike', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'
   ],
   // Kein class-Attribut: App-eigene CSS-Klassen (z.B. Modal-Overlays) liessen sich sonst fuer
   // taeuschend echte Oberflaechen-Attrappen in Chat/Wissensdatenbank missbrauchen.

@@ -256,47 +256,127 @@ export const Settings = {
         } catch (error) { area.textContent = error.message; }
     },
 
-    renderAccountArea: (user, settings) => {
+    // Konto: kompakte Uebersicht wie beim Anlegen eines Kontos (Konto / Organisation / Kontakt &
+    // Arbeitszeiten). Je Abschnitt "Bearbeiten" fuer die Felder, die Systemeinstellungen > Kontaktdaten
+    // & Profile freigeben; alles andere ist mit Schloss als "vom Support gepflegt" erkennbar.
+    renderAccountArea: async (user, settings, editSection = null) => {
         const field = q('#s-account-field');
         const area = q('#s-account-area');
         if (!field || !area) return;
         if (!user) { field.hidden = true; return; }
-        const editable = { name: true, email: true, department: false, phone: false, mobile: false, jobTitle: false, officeLocation: false, ...(settings.accountConfig?.editable || {}) };
-        const rows = [
-            { key: 'name', label: Lang.t('name'), value: user.name || '' },
-            { key: 'email', label: Lang.t('email'), value: user.email || '' },
-            { key: 'department', label: Lang.t('department'), value: user.department || '' },
-            { key: 'phone', label: Lang.t('phone'), value: user.phone || '' },
-            { key: 'mobile', label: Lang.t('mobile'), value: user.mobile || '' },
-            { key: 'jobTitle', label: Lang.t('jobTitle'), value: user.jobTitle || '' },
-            { key: 'officeLocation', label: Lang.t('location'), value: user.officeLocation || '' },
-        ];
-        const anyEditable = rows.some(row => editable[row.key]);
         field.hidden = false;
+        const editable = settings.accountConfig?.editable || {};
+        const profile = user.profile || {};
+        const [directory, groups] = await Promise.all([Store.getUserDirectory().catch(() => []), Store.getGroups().catch(() => [])]);
+        const supervisor = directory.find(u => u.id === user.supervisorUserId);
+        const DAYS = [1, 2, 3, 4, 5, 6, 0];
+        const schedule = days => DAYS.filter(day => days?.[day]).map(day => `${Lang.t(`uwDay${day}`)} ${days[day].start}–${days[day].end}`).join(', ');
+        const sections = [
+            { key: 'account', icon: 'user-round', label: 'uwStepAccount', fields: [
+                { key: 'name', label: 'uwFullName', value: user.name, max: 255 },
+                { key: 'email', label: 'email', value: user.email, type: 'email', max: 255 },
+                { key: 'username', label: 'username', value: user.username, fixed: true },
+                { key: 'role', label: 'role', value: { user: 'User', admin: 'Admin', superadmin: 'Superadmin' }[user.role] || user.role, fixed: true }] },
+            { key: 'org', icon: 'building-2', label: 'uwStepOrg', fields: [
+                { key: 'department', label: 'uwDepartment', value: user.department, max: 255 },
+                { key: 'jobTitle', label: 'jobTitle', value: user.jobTitle, max: 255 },
+                { key: 'officeLocation', label: 'uwOffice', value: user.officeLocation, max: 255 },
+                { key: 'building', label: 'uwBuilding', value: profile.building, profileKey: 'building', max: 128 },
+                { key: 'room', label: 'uwRoom', value: profile.room, profileKey: 'room', max: 64 },
+                { key: 'employeeNumber', label: 'uwEmployeeNumber', value: profile.employee_number, profileKey: 'employee_number', max: 64 },
+                { key: 'costCenter', label: 'uwCostCenter', value: profile.cost_center, profileKey: 'cost_center', max: 64 },
+                { key: 'entryDate', label: 'uwEntryDate', value: profile.entry_date, display: profile.entry_date ? profile.entry_date.split('-').reverse().join('.') : '', profileKey: 'entry_date', type: 'date' },
+                { key: 'supervisor', label: 'supervisor', value: supervisor ? (supervisor.name || supervisor.username) : '', fixed: true },
+                { key: 'groups', label: 'userGroupsLabel', value: (user.groupIds || []).map(id => groups.find(g => g.id === id)).filter(Boolean).map(g => g.label || g.name).join(', '), fixed: true }] },
+            { key: 'contact', icon: 'clock', label: 'uwStepContact', fields: [
+                { key: 'phone', label: 'phone', value: user.phone, type: 'tel', max: 64 },
+                { key: 'mobile', label: 'mobile', value: user.mobile, type: 'tel', max: 64 },
+                { key: 'workDays', label: 'uwWorkDays', value: profile.work_days || {}, display: schedule(profile.work_days), profileKey: 'work_days', type: 'schedule' },
+                { key: 'availability', label: 'uwAvailability', value: profile.availability_note, profileKey: 'availability_note', type: 'textarea', max: 500 }] }
+        ];
+        const canEdit = f => !f.fixed && !!editable[f.key];
+        const lock = `<span class="account-lock" title="${Utils.esc(Lang.t('lockedByAdminTip'))}">${Icon('lock', 12)}<span class="sr-only">${Utils.esc(Lang.t('lockedByAdmin'))}</span></span>`;
+        const show = f => (f.display ?? f.value) ? Utils.esc(f.display ?? f.value) : '<span class="hint">–</span>';
+        const input = f => {
+            const id = `acc-${f.key}`;
+            if (f.type === 'textarea') return `<textarea id="${id}" rows="2" maxlength="${f.max}">${Utils.esc(f.value || '')}</textarea>`;
+            if (f.type === 'schedule') return `<div class="uw-schedule account-schedule" id="${id}">${DAYS.map(day => {
+                const entry = f.value?.[day];
+                return `<div class="uw-day${entry ? ' is-on' : ''}" data-day="${day}">
+                    <label class="check-row"><input type="checkbox" class="uw-day-on"${entry ? ' checked' : ''}><span>${Utils.esc(Lang.t(`uwDay${day}`))}</span></label>
+                    <input type="time" class="uw-day-start" value="${Utils.esc(entry?.start || '08:00')}" aria-label="${Utils.esc(Lang.format('uwStartOf', { day: Lang.t(`uwDay${day}`) }))}"${entry ? '' : ' disabled'}>
+                    <span aria-hidden="true">–</span>
+                    <input type="time" class="uw-day-end" value="${Utils.esc(entry?.end || '17:00')}" aria-label="${Utils.esc(Lang.format('uwEndOf', { day: Lang.t(`uwDay${day}`) }))}"${entry ? '' : ' disabled'}>
+                </div>`;
+            }).join('')}</div>`;
+            return `<input id="${id}" type="${f.type || 'text'}" ${f.max ? `maxlength="${f.max}"` : ''} value="${Utils.esc(f.value || '')}">`;
+        };
+        const anyEditable = sections.some(s => s.fields.some(canEdit));
         area.innerHTML = `
-            <div class="form-grid">
-                ${rows.map(row => editable[row.key]
-                    ? `<div class="field"><label for="acc-${row.key}">${row.label}</label><input id="acc-${row.key}" type="text" value="${Utils.esc(row.value)}"></div>`
-                    : `<div class="field is-locked"><label for="acc-${row.key}">${row.label} ${Icon('lock', 12)}<span class="sr-only">${Lang.t('lockedByAdmin')}</span></label><input id="acc-${row.key}" type="text" value="${Utils.esc(row.value)}" disabled><span class="locked-tip" aria-hidden="true">${Lang.t('lockedByAdminTip')}</span></div>`).join('')}
-            </div>
-            ${anyEditable ? `<div class="setting-row"><span class="hint">${Lang.t('onlyEditableFieldsHint')}</span>
-                <button class="btn-primary btn-sm" id="btn-save-account">${Icon('save', 15)}${Lang.t('saveAccountButton')}</button>
-            </div>` : ''}
-`;
-        q('#btn-save-account')?.addEventListener('click', async () => {
-            const users = await Store.getUsers();
-            const target = users.find(u => u.id === user.id);
-            if (!target) return;
-            const emailValue = q('#acc-email')?.value.trim();
-            if (editable.email && emailValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) return UI.toast(Lang.t('enterValidEmailAddress'));
-            rows.forEach(row => {
-                const el = q(`#acc-${row.key}`);
-                if (el && editable[row.key]) target[row.key] = el.value.trim();
-            });
-            await Store.saveUsers(users);
-            await Store.addGlobalLog('Konto geändert', `Benutzer: ${target.username}`);
-            UI.toast(Lang.t('accountSavedToast'));
+            <p class="hint account-hint">${Icon('lock', 12)} ${Utils.esc(Lang.t(anyEditable ? 'accountOverviewHint' : 'accountOverviewReadonly'))}</p>
+            ${sections.map(section => {
+                const editing = editSection === section.key;
+                return `<div class="uw-review-section account-section${editing ? ' is-editing' : ''}" data-section="${section.key}">
+                    <div class="uw-review-head"><strong>${Icon(section.icon, 15)} ${Utils.esc(Lang.t(section.label))}</strong>
+                        ${!editing && section.fields.some(canEdit) ? `<button type="button" class="btn-ghost btn-sm" data-edit-section="${section.key}">${Icon('pencil', 14)}${Utils.esc(Lang.t('edit'))}</button>` : ''}</div>
+                    <dl class="uw-review-list">${section.fields.map(f => `<div class="${f.type === 'schedule' || f.type === 'textarea' ? 'is-wide' : ''}">
+                        <dt>${editing && canEdit(f) ? `<label for="acc-${f.key}">${Utils.esc(Lang.t(f.label))}</label>` : Utils.esc(Lang.t(f.label))}${canEdit(f) ? '' : lock}</dt>
+                        <dd>${editing && canEdit(f) ? input(f) : show(f)}</dd></div>`).join('')}</dl>
+                    ${editing ? `<div class="account-section-actions"><button type="button" class="btn-secondary btn-sm" data-cancel>${Utils.esc(Lang.t('cancel'))}</button>
+                        <button type="button" class="btn-primary btn-sm" data-save>${Icon('save', 15)}${Utils.esc(Lang.t('saveAccountButton'))}</button></div>` : ''}
+                </div>`;
+            }).join('')}`;
+        area.querySelectorAll('[data-edit-section]').forEach(btn => btn.onclick = () => Settings.renderAccountArea(user, settings, btn.dataset.editSection));
+        const current = area.querySelector('.account-section.is-editing');
+        if (!current) { if (window.lucide) lucide.createIcons(); return; }
+        current.querySelectorAll('.uw-day').forEach(row => {
+            row.querySelector('.uw-day-on').onchange = () => {
+                const on = row.querySelector('.uw-day-on').checked;
+                row.classList.toggle('is-on', on);
+                row.querySelectorAll('input[type="time"]').forEach(time => { time.disabled = !on; });
+            };
         });
+        current.querySelector('[data-cancel]').onclick = () => Settings.renderAccountArea(user, settings);
+        current.querySelector('[data-save]').onclick = async event => {
+            const section = sections.find(s => s.key === editSection);
+            const patch = {};
+            const nextProfile = { ...profile };
+            let profileChanged = false;
+            for (const f of section.fields.filter(canEdit)) {
+                const el = current.querySelector(`#acc-${f.key}`);
+                let value;
+                if (f.type === 'schedule') {
+                    value = {};
+                    for (const row of el.querySelectorAll('.uw-day')) {
+                        if (!row.querySelector('.uw-day-on').checked) continue;
+                        const start = row.querySelector('.uw-day-start').value; const end = row.querySelector('.uw-day-end').value;
+                        if (!start || !end || start >= end) { row.querySelector('.uw-day-start').focus(); return UI.toast(Lang.t('uwWorkTimeInvalid')); }
+                        value[row.dataset.day] = { start, end };
+                    }
+                } else value = el.value.trim();
+                if (f.key === 'name' && !value) { el.focus(); return UI.toast(Lang.t('uwNameMissing')); }
+                if (f.key === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) { el.focus(); return UI.toast(Lang.t('enterValidEmailAddress')); }
+                if (f.profileKey) {
+                    if (JSON.stringify(Store.cleanProfile({ [f.profileKey]: value })) !== JSON.stringify(Store.cleanProfile({ [f.profileKey]: profile[f.profileKey] }))) {
+                        nextProfile[f.profileKey] = value; profileChanged = true;
+                    }
+                } else if (value !== (f.value || '')) {
+                    patch[{ jobTitle: 'job_title', officeLocation: 'office_location' }[f.key] || f.key] = value;
+                }
+            }
+            if (profileChanged) patch.profile = Store.cleanProfile(nextProfile);
+            if (!Object.keys(patch).length) return Settings.renderAccountArea(user, settings);
+            event.currentTarget.disabled = true;
+            if (!(await Store.updateOwnAccount(user.id, patch))) {
+                event.currentTarget.disabled = false;
+                const error = Store.lastError || '';
+                return UI.toast(error.includes('email_taken') ? Lang.t('emailTakenError') : error.includes('field_not_editable') ? Lang.t('fieldNotEditable') : Lang.t('saveFailedGeneric'));
+            }
+            UI.toast(Lang.t('accountSavedToast'));
+            await Settings.renderAccountArea(await Store.currentUser(), settings);
+        };
+        current.querySelector('input, textarea')?.focus();
+        if (window.lucide) lucide.createIcons();
     },
 
     openModal: async () => {

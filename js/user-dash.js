@@ -11,6 +11,7 @@ import { Lang } from './lang.js';
 import { Store, Notifications } from './store.js';
 import { UI } from './ui.js';
 import { AdminBoard } from './admin-board.js';
+import { CategoryFaq } from './category-faq.js';
 import { getStatusColorClass, insertMarkdownText, insertMarkdownLink } from './ticket-helpers.js';
 
 // --- User Dashboard Logic ---
@@ -46,28 +47,92 @@ export const UserDash = {
         }
     },
 
-    // Auswirkung x Dringlichkeit -> Prioritaet (1..3 je Achse).
+    // Auswirkung x Dringlichkeit -> Prioritaet (1..3 je Achse); identisch zu domain/categoryFaq.ts (Server).
     priorityFor: (impact, urgency) => {
         const score = impact + urgency;
         return score >= 5 ? 'Hoch' : score >= 4 ? 'Normal' : 'Niedrig';
     },
 
-    // Kacheln je aktiver Kategorie: waehlt die Kategorie (und damit Zusatzfelder und Zustaendigkeit)
-    // und springt ins Formular.
-    renderServiceTiles: (categories) => {
+    // Kategorie im Formular setzen und dorthin springen (aus Themenleiste bzw. F&A-Seite).
+    chooseCategory: (name) => {
+        UserDash.categoryInstance?.setValue(name);
+        q('#service-tiles')?.querySelectorAll('.service-tile').forEach(tile => tile.classList.toggle('is-active', tile.dataset.category === name));
+        q('#ticket-create-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        q('#t-title')?.focus({ preventScroll: true });
+    },
+
+    // Themenleiste: eine Kachel je aktiver, fuer das Portal freigegebener Kategorie. Ein Klick oeffnet
+    // die F&A-Seite (schnelle Tipps); von dort geht es mit vorausgewaehlter Kategorie ins Formular.
+    // Wer F&A pflegen darf, sieht an jeder Kachel einen Stift.
+    renderServiceTiles: async (settings) => {
+        const section = q('#service-entry');
         const box = q('#service-tiles');
-        if (!box) return;
-        const icons = [['hardware', 'monitor'], ['drucker', 'printer'], ['print', 'printer'], ['zugang', 'key-round'], ['account', 'key-round'], ['konto', 'key-round'],
-            ['software', 'laptop'], ['bestell', 'package'], ['netz', 'wifi'], ['abrechnung', 'receipt'], ['allgemein', 'circle-help']];
-        const iconFor = name => (icons.find(([needle]) => name.toLocaleLowerCase().includes(needle)) || [null, 'folder'])[1];
-        box.innerHTML = categories.map(name => `<button type="button" class="service-tile" data-category="${Utils.esc(name)}">${Icon(iconFor(name), 22)}<span>${Utils.esc(name)}</span></button>`).join('');
+        if (!section || !box) return;
+        const categories = (await Store.getCategories()).filter(c => !c.archived && c.showInPortal);
+        section.hidden = settings.generalConfig?.showServiceBar === false || !categories.length;
+        if (section.hidden) { box.innerHTML = ''; return; }
+        const canEdit = CategoryFaq.canEdit(await Store.currentUser());
+        box.innerHTML = categories.map(c => `
+            <div class="service-tile-wrap">
+                <button type="button" class="service-tile" data-category="${Utils.esc(c.name)}">${Icon(CategoryFaq.iconFor(c.name), 22)}<span>${Utils.esc(c.name)}</span>${c.faq.items.length ? `<small class="service-tile-count">${Utils.esc(Lang.format('faqTipCount', { count: c.faq.items.length }))}</small>` : ''}</button>
+                ${canEdit ? `<button type="button" class="btn-ghost btn-icon btn-xs service-tile-edit" data-edit="${Utils.esc(c.id)}" title="${Utils.esc(Lang.format('faqEditFor', { name: c.name }))}" aria-label="${Utils.esc(Lang.format('faqEditFor', { name: c.name }))}">${Icon('pencil', 13)}</button>` : ''}
+            </div>`).join('');
+        const refresh = () => UserDash.renderServiceTiles(settings);
         box.querySelectorAll('.service-tile').forEach(tile => tile.onclick = () => {
-            UserDash.categoryInstance?.setValue([tile.dataset.category]);
-            box.querySelectorAll('.service-tile').forEach(other => other.classList.toggle('is-active', other === tile));
-            q('#ticket-create-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            q('#t-title')?.focus({ preventScroll: true });
+            const category = categories.find(c => c.name === tile.dataset.category);
+            if (category) CategoryFaq.open(category, { onCreateTicket: chosen => UserDash.chooseCategory(chosen.name), onChanged: refresh });
+        });
+        box.querySelectorAll('[data-edit]').forEach(btn => btn.onclick = () => {
+            const category = categories.find(c => c.id === btn.dataset.edit);
+            if (category) CategoryFaq.edit(category, { onSaved: refresh });
         });
         if (window.lucide) lucide.createIcons();
+    },
+
+    // Variante der Prioritaetsangabe (Systemeinstellungen > Ticketformular).
+    applyPriorityMode: (settings) => {
+        const mode = settings.generalConfig?.priorityMode === 'priority' ? 'priority' : 'impact';
+        UserDash.priorityMode = mode;
+        if (q('#t-impact-fields')) q('#t-impact-fields').hidden = mode !== 'impact';
+        if (q('#t-prio-fields')) q('#t-prio-fields').hidden = mode !== 'priority';
+    },
+
+    // Pflichtfelder pruefen; markiert alle fehlenden Felder und fokussiert das erste.
+    validateCreateForm: () => {
+        const checks = [
+            [q('#u-cat-container'), !!UserDash.categoryInstance?.getValue(), 'category'],
+            [q('#t-title'), !!q('#t-title').value.trim(), 'subject'],
+            [q('#t-desc'), !!q('#t-desc').value.trim(), 'description'],
+            ...(UserDash.priorityMode === 'priority'
+                ? [[q('#t-prio'), !!q('#t-prio').value, 'priority']]
+                : [[q('#t-impact'), !!q('#t-impact').value, 'impactQuestion'], [q('#t-urgency'), !!q('#t-urgency').value, 'urgencyQuestion']])
+        ];
+        const missing = [];
+        checks.forEach(([el, ok, label]) => {
+            const field = el?.closest('.field');
+            field?.classList.toggle('is-invalid', !ok);
+            el?.setAttribute('aria-invalid', String(!ok));
+            if (!ok) missing.push({ el, label: Lang.t(label) });
+        });
+        if (missing.length) {
+            const first = missing[0].el;
+            (first.querySelector?.('.multi-select-header') || first).focus();
+            UI.toast(Lang.format('requiredFieldsMissing', { fields: missing.map(m => m.label).join(', ') }));
+        }
+        return !missing.length;
+    },
+
+    resetCreateForm: (settings) => {
+        q('#t-title').value = '';
+        q('#t-desc').value = '';
+        ['#t-impact', '#t-urgency', '#t-prio'].forEach(selector => { if (q(selector)) q(selector).value = ''; });
+        UserDash.createFiles = [];
+        if (q('#t-files')) q('#t-files').value = '';
+        UserDash.renderCreateFilePreview();
+        UserDash.categoryInstance?.setValue('');
+        q('#service-tiles')?.querySelectorAll('.service-tile').forEach(tile => tile.classList.remove('is-active'));
+        q('#ticket-create-card')?.querySelectorAll('.field.is-invalid').forEach(field => field.classList.remove('is-invalid'));
+        UI.renderCustomFieldsForm(q('#t-custom-fields'), Store.getCustomFieldsForCategories([], settings));
     },
 
     init: async () => {
@@ -94,22 +159,13 @@ export const UserDash = {
             const title = q('#t-title').value.trim();
             const desc = q('#t-desc').value.trim();
             const settings = await Store.getSettings();
-            // Prioritaet aus Auswirkung und Dringlichkeit statt Selbsteinstufung (Bewertung 11/2026, 3.1).
-            const impact = Number(q('#t-impact')?.value) || 1;
-            const urgency = Number(q('#t-urgency')?.value) || 2;
-            const prio = UserDash.priorityFor(impact, urgency);
-            const impactLine = Lang.format('impactSummary', {
-                impact: q('#t-impact')?.selectedOptions[0]?.textContent || '',
-                urgency: q('#t-urgency')?.selectedOptions[0]?.textContent || ''
-            });
-            // Get values from custom multi-select
-            const selectedCats = UserDash.categoryInstance ? UserDash.categoryInstance.getValue() : ['Allgemein'];
-            const cat = selectedCats.length > 0 ? selectedCats : ['Allgemein'];
-
-            if (!title) {
-                UI.toast(Lang.t('titleRequired'));
-                return;
-            }
+            if (!UserDash.validateCreateForm()) return;
+            // Variante "impact": Prioritaet aus Auswirkung x Dringlichkeit (der Server rechnet nach);
+            // Variante "priority": direkte Auswahl Niedrig/Normal/Hoch.
+            const impact = UserDash.priorityMode === 'impact' ? Number(q('#t-impact').value) : null;
+            const urgency = UserDash.priorityMode === 'impact' ? Number(q('#t-urgency').value) : null;
+            const prio = impact ? UserDash.priorityFor(impact, urgency) : q('#t-prio').value;
+            const cat = [UserDash.categoryInstance.getValue()];
 
             const { values: customFieldValues, missing: missingFields } = UI.readCustomFieldsForm(q('#t-custom-fields'));
             if (missingFields.length) {
@@ -132,8 +188,7 @@ export const UserDash = {
                 if (choice === undefined) return;
                 linkedIncidentId = choice;
             }
-            const user = await Store.currentUser();
-            const newTicket = await Store.createTicket({ title, desc: desc ? `${desc}\n\n${impactLine}` : impactLine, prio, category: cat, customFieldValues });
+            const newTicket = await Store.createTicket({ title, desc, prio, impact, urgency, category: cat, customFieldValues });
             if (!newTicket) {
                 UI.toast(Lang.t('ticketCreateFailed'));
                 return;
@@ -154,16 +209,12 @@ export const UserDash = {
             await Notifications.refresh();
 
             UI.toast(Lang.t('ticketCreated'));
-            q('#t-title').value = '';
-            q('#t-desc').value = '';
-            UserDash.createFiles = [];
-            if (q('#t-files')) q('#t-files').value = '';
-            UserDash.renderCreateFilePreview();
-            if (q('#t-impact')) q('#t-impact').value = '1';
-            if (q('#t-urgency')) q('#t-urgency').value = '2';
-            UI.renderCustomFieldsForm(q('#t-custom-fields'), Store.getCustomFieldsForCategories(cat, settings));
+            UserDash.resetCreateForm(settings);
             await UserDash.renderList();
         };
+        // Markierung eines Pflichtfelds verschwindet, sobald es ausgefuellt ist.
+        q('#ticket-create-card')?.addEventListener('input', event => event.target.closest('.field.is-invalid')?.classList.remove('is-invalid'));
+        q('#ticket-create-card')?.addEventListener('change', event => event.target.closest('.field.is-invalid')?.classList.remove('is-invalid'));
 
         const createFileInput = q('#t-files');
         if (createFileInput) createFileInput.onchange = () => {
@@ -200,19 +251,23 @@ export const UserDash = {
         UI.bindFileDrop(q('#t-title')?.closest('.card'), addCreateFiles);
         UI.bindPasteFiles(q('#t-desc'), addCreateFiles);
 
-        // Populate Categories dynamically with Custom Multi-Select
+        // Kategorie: Pflichtfeld, Einfachauswahl mit Suche, bewusst ohne Vorauswahl.
         const catContainer = q('#u-cat-container');
         if (catContainer) {
             const settings = await Store.getSettings();
-            const categories = settings.categories || ['Allgemein', 'Technik', 'Account', 'Abrechnung'];
-            const initial = categories.includes('Allgemein') ? ['Allgemein'] : categories.slice(0, 1);
-            const refreshCustomFields = (selectedCats) => {
-                const fields = Store.getCustomFieldsForCategories(selectedCats, settings);
+            const categories = settings.categories || [];
+            const refreshCustomFields = (selected) => {
+                const fields = Store.getCustomFieldsForCategories(selected ? [selected] : [], settings);
                 UI.renderCustomFieldsForm(q('#t-custom-fields'), fields);
+                catContainer.closest('.field')?.classList.toggle('is-invalid', false);
+                q('#service-tiles')?.querySelectorAll('.service-tile').forEach(tile => tile.classList.toggle('is-active', tile.dataset.category === selected));
             };
-            UserDash.categoryInstance = UI.createMultiSelect(catContainer, categories, initial, refreshCustomFields);
-            refreshCustomFields(initial);
-            UserDash.renderServiceTiles(categories);
+            UserDash.categoryInstance = UI.createMultiSelect(catContainer, categories, '', refreshCustomFields, { single: true, emptyLabel: Lang.t('pleaseChoose') });
+            catContainer.querySelector('.multi-select-header')?.setAttribute('aria-labelledby', 't-category-label');
+            catContainer.querySelector('.multi-select-header')?.setAttribute('aria-required', 'true');
+            refreshCustomFields('');
+            UserDash.applyPriorityMode(settings);
+            await UserDash.renderServiceTiles(settings);
         }
 
         // Modal Events
@@ -444,8 +499,10 @@ export const UserDash = {
                     q('#u-ticket-modal').classList.remove('open');
                     q('#t-title').value = t.title || '';
                     q('#t-desc').value = t.desc || '';
-                    if (q('#t-prio')) q('#t-prio').value = t.prio || 'Normal';
-                    if (UserDash.categoryInstance) UserDash.categoryInstance.setValue(t.category || []);
+                    if (q('#t-prio')) q('#t-prio').value = ['Niedrig', 'Normal', 'Hoch'].includes(t.prio) ? t.prio : '';
+                    if (q('#t-impact')) q('#t-impact').value = t.impact ? String(t.impact) : '';
+                    if (q('#t-urgency')) q('#t-urgency').value = t.urgency ? String(t.urgency) : '';
+                    if (UserDash.categoryInstance) UserDash.categoryInstance.setValue((t.category || [])[0] || '');
                     UI.toast(Lang.t('detailsTakenOver'));
                     q('#t-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 };
@@ -479,6 +536,7 @@ export const UserDash = {
         }
 
         if (q('#u-m-prio')) q('#u-m-prio').innerHTML = `<span class="prio-pill prio-${t.prio}">${Lang.prio(t.prio)}</span>`;
+        AdminBoard.renderRequestAssessment(t, '#u-m-assessment');
         if (q('#u-m-cat')) q('#u-m-cat').textContent = (Array.isArray(t.category) ? t.category.join(', ') : t.category) || '-';
 
         // Bearbeiter = Hauptverantwortlicher + Beteiligte Personen (der Hauptverantwortliche fehlte hier bisher)

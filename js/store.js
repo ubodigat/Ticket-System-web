@@ -542,6 +542,8 @@ export const Store = {
         waitingMessage: t.waiting_message || null,
         slaPausedSince: t.waiting_since || null,
         customFieldValues: t.custom_fields_json ? JSON.parse(t.custom_fields_json) : {},
+        impact: Number(t.impact) || null,
+        urgency: Number(t.urgency) || null,
         approvals: t.approval_status ? [{
             status: t.approval_status,
             approver: t.approval_reviewer_id,
@@ -705,6 +707,8 @@ export const Store = {
                 description: t.desc || '',
                 priority: t.prio || 'Normal',
                 category: Array.isArray(t.category) ? t.category[0] : t.category,
+                impact: t.impact || undefined,
+                urgency: t.urgency || undefined,
                 type: t.isMajorIncident ? 'incident' : 'ticket',
                 incident_notice: t.isMajorIncident && t.incidentNotice ? t.incidentNotice : undefined,
                 custom_fields: t.customFieldValues && Object.keys(t.customFieldValues).length ? t.customFieldValues : undefined,
@@ -799,9 +803,43 @@ export const Store = {
             name: c.name,
             autoAssignGroupId: c.auto_assign_group_id ?? null,
             customFields: c.custom_fields || [],
+            showInPortal: c.show_in_portal !== false,
+            faq: { intro: c.faq?.intro || '', items: Array.isArray(c.faq?.items) ? c.faq.items : [] },
             locked: !!c.locked,
             archived: !!c.archived
         }));
+    },
+    // F&A (schnelle Tipps) einer Kategorie speichern; leer = entfernen.
+    saveCategoryFaq: async (id, faq) => {
+        const res = await fetch(`/api/v2/categories/${encodeURIComponent(id)}/faq`, {
+            method: 'PUT', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ intro: faq.intro || '', items: faq.items || [] })
+        }).catch(() => null);
+        return !!res && res.ok;
+    },
+    // Kontaktkarte fuer Admins: nur die in den Systemeinstellungen freigegebenen Angaben.
+    // Eigenes Konto aendern (Konto-Selbstverwaltung): nur die geaenderten Felder als PATCH.
+    updateOwnAccount: async (userId, patch) => {
+        const res = await fetch(`/api/v2/users/${encodeURIComponent(userId)}`, {
+            method: 'PATCH', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(patch)
+        }).catch(() => null);
+        if (!res || !res.ok) {
+            Store.lastError = await Store.readResponseError(res, 'save_failed');
+            return false;
+        }
+        Store._meCache = null;
+        Store._usersCache = null;
+        Store._directoryCache = null;
+        Store._sessionUserCache = await Store.fetchSessionUser();
+        return true;
+    },
+    getContactCard: async (userId) => {
+        const res = await fetch(`/api/v2/users/${encodeURIComponent(userId)}/contact-card`, { credentials: 'same-origin' }).catch(() => null);
+        if (!res || !res.ok) return null;
+        return (await res.json()).user || null;
     },
     createCategory: async (data) => {
         const res = await fetch('/api/v2/categories', {
@@ -810,7 +848,8 @@ export const Store = {
             body: JSON.stringify({
                 name: data.name,
                 auto_assign_group_id: data.autoAssignGroupId ?? undefined,
-                custom_fields: data.customFields || []
+                custom_fields: data.customFields || [],
+                show_in_portal: data.showInPortal !== false
             })
         }).catch(() => null);
         if (!res || !res.ok) return null;
@@ -821,6 +860,7 @@ export const Store = {
         if (patch.name !== undefined) body.name = patch.name;
         if (patch.autoAssignGroupId !== undefined) body.auto_assign_group_id = patch.autoAssignGroupId;
         if (patch.customFields !== undefined) body.custom_fields = patch.customFields;
+        if (patch.showInPortal !== undefined) body.show_in_portal = patch.showInPortal;
         if (patch.locked !== undefined) body.locked = patch.locked;
         if (patch.archived !== undefined) body.archived = patch.archived;
         const res = await fetch(`/api/v2/categories/${encodeURIComponent(id)}`, {
@@ -837,6 +877,9 @@ export const Store = {
     // Systemeinstellungen > Module (Server: domain/modules.ts). Deaktivierte Module sind in der
     // Oberflaeche nicht vorhanden; Elemente mit data-module blendet style.css ueber diese Klassen aus.
     modules: { sla: true, approvals: true },
+    // Felder der Konto-Selbstverwaltung (Server: domain/adminPermissions.ts SELF_SERVICE_FIELDS).
+    SELF_SERVICE_FIELDS: ['name', 'email', 'department', 'phone', 'mobile', 'jobTitle', 'officeLocation',
+        'building', 'room', 'employeeNumber', 'costCenter', 'entryDate', 'workDays', 'availability'],
     applyModules: (raw = {}) => {
         // Der Server liefert den aufgeloesten Stand; Outlook gilt nur als aktiv, wenn ausdruecklich eingeschaltet.
         Store.modules = { sla: raw?.sla !== false, approvals: raw?.approvals !== false, outlook: raw?.outlook === true };
@@ -883,6 +926,9 @@ export const Store = {
                 waitingAfterAction: cfg.waitingAfterAction || 'close',
                 waitingReminderEnabled: cfg.waitingReminderEnabled !== false,
                 defaultPrio: cfg.defaultPrio || 'Normal',
+                // Ticketformular: Prioritaet aus Auswirkung/Dringlichkeit (impact) oder direkt (priority).
+                priorityMode: cfg.ticketFormConfig?.priorityMode === 'priority' ? 'priority' : 'impact',
+                showServiceBar: cfg.ticketFormConfig?.showServiceBar !== false,
                 showSlaToUsers: !!cfg.showSlaToUsers,
                 notifPolicy: cfg.notifPolicy || {},
                 slaHours: {
@@ -923,17 +969,12 @@ export const Store = {
                 ticketNumberCategoryFormats: cfg.ticketNumberCategoryFormats || {},
                 ticketNumberCategoryCodes: cfg.ticketNumberCategoryCodes || {}
             };
+            // Ohne gespeicherte Auswahl duerfen nur Name und E-Mail selbst geaendert werden (wie serverseitig).
             settings.accountConfig = {
-                editable: {
-                    name: !cfg.accountSelfServiceFields || cfg.accountSelfServiceFields.includes('name'),
-                    email: !cfg.accountSelfServiceFields || cfg.accountSelfServiceFields.includes('email'),
-                    department: !!cfg.accountSelfServiceFields?.includes('department'),
-                    phone: !!cfg.accountSelfServiceFields?.includes('phone'),
-                    mobile: !!cfg.accountSelfServiceFields?.includes('mobile'),
-                    jobTitle: !!cfg.accountSelfServiceFields?.includes('jobTitle'),
-                    officeLocation: !!cfg.accountSelfServiceFields?.includes('officeLocation')
-                }
+                editable: Object.fromEntries(Store.SELF_SERVICE_FIELDS.map(key => [key,
+                    cfg.accountSelfServiceFields ? cfg.accountSelfServiceFields.includes(key) : ['name', 'email'].includes(key)]))
             };
+            settings.contactVisibility = cfg.contactVisibility || null;
             settings.securityConfig = {
                 ...(settings.securityConfig || {}),
                 ...(cfg.securityConfig || {})
@@ -1208,7 +1249,7 @@ export const Store = {
     getKbArticleTickets: async (articleId) => {
         const res = await fetch(`/api/v2/kb/articles/${encodeURIComponent(articleId)}/tickets`, { credentials: 'same-origin' }).catch(() => null);
         if (!res || !res.ok) return [];
-        return ((await res.json()).tickets || []).map(t => ({ id: t.id, ticketNumber: t.ticket_number, status: t.status, archived: !!t.archived }));
+        return ((await res.json()).tickets || []).map(t => ({ id: t.id, ticketNumber: t.ticket_number, title: t.title || '', status: t.status, archived: !!t.archived, linkedAt: t.linked_at || null }));
     },
     // Eigenes Profilbild: Vorlage waehlen, eigenes Bild hochladen (Base64) oder zuruecksetzen.
     setAvatarPreset: async (preset) => Store.avatarRequest('PUT', '/api/v2/users/me/avatar', { preset }),

@@ -6,8 +6,16 @@ Alle Befehle werden als root im Installationsverzeichnis (Standard `/opt/ticket-
 
 ### Online (empfohlen)
 
-Systemeinstellungen › Info & Updates › **Jetzt aktualisieren**. Voraussetzungen: Host-Updater
-aktiviert (`bash install.sh --enable-updates`) und Signaturschlüssel hinterlegt. Ablauf:
+Systemeinstellungen › Info & Updates › **Jetzt aktualisieren**. Voraussetzung: Online-Updates
+eingeschaltet -- ein Befehl, danach läuft alles über die Oberfläche:
+
+```bash
+sudo bash ops/online-updates.sh enable     # prüft und hinterlegt den Signaturschlüssel, startet den Host-Dienst
+sudo bash ops/online-updates.sh disable    # entfernt Host-Dienst, Konfiguration und Schlüssel
+sudo bash ops/online-updates.sh status
+```
+
+Solange Online-Updates aktiv sind, zeigt Info & Updates einen Warnhinweis. Ablauf eines Updates:
 
 1. **Prüfung**: Signatur des Ziel-Commits bzw. Release-Tags, keine lokalen Änderungen, freier Speicher.
 2. **Sicherung**: verschlüsselte Datensicherung der Datenbank.
@@ -95,6 +103,36 @@ Verweildauer eines gelöschten Datensatzes ist deshalb die Aufbewahrungsdauer de
   Nachrichten, Zeiten, persönliche Aufgaben und das eigene Aktivitätsprotokoll. Nicht enthalten sind
   Geheimnisse (Passwort-Hash, TOTP-Geheimnis, Tokens), interne Notizen und Tickets anderer Personen.
 - Jeder Export steht im Systemprotokoll (`privacy.export_self`, `privacy.export_subject`).
+
+## Rechte für Admin-Konten
+
+Superadmins vergeben im Benutzer-Assistenten (Schritt „Rechte“) Rechte in vier Gruppen; je Gruppe
+gibt es ein Sammel-Häkchen:
+
+| Gruppe | Rechte |
+| --- | --- |
+| Verwaltung | Konto-Anfragen, Benutzerverwaltung (nur Benutzer), 2FA zurücksetzen, System-Logs |
+| Funktionen | Textbausteine, Auswertung, wiederkehrende Tickets, Tipps (F&A) pflegen, Wissensdatenbank (keine/lesen/bearbeiten) |
+| Module | Genehmigungen entscheiden, Genehmigungsworkflow einstellen, Lösungsfristen einstellen |
+| Systemeinstellungen | Allgemein, Ticketformular, Kategorien, Unternehmen & Branding, Ticketnummern, Benachrichtigungen |
+
+Ein Admin mit einem Einstellungsrecht sieht in den Systemeinstellungen nur diese Bereiche. Der Server
+prüft jeden geänderten Schlüssel (`domain/adminPermissions.ts`); Sicherheit, E-Mail, LDAP, Outlook,
+Module, Update/Sicherung, Konto-Selbstverwaltung und die Sichtbarkeit von Kontaktdaten bleiben
+Superadmins vorbehalten. Jede Änderung steht mit den geänderten Schlüsseln im Systemprotokoll
+(`settings.updated`).
+
+## Kontaktdaten und Konto-Selbstverwaltung
+
+Systemeinstellungen › Kontaktdaten & Profile (nur Superadmins):
+
+- **Konto-Selbstverwaltung**: welche Angaben Personen unter Einstellungen › Konto selbst ändern
+  (Name, E-Mail, Abteilung, Funktion, Standort, Gebäude, Raum, Personalnummer, Kostenstelle,
+  Eintrittsdatum, Telefon, Mobil, Arbeitszeiten, Erreichbarkeit). Rolle, Gruppen und vorgesetzte
+  Person sind nie selbst änderbar. Der Server übernimmt nur freigegebene Teile.
+- **Kontaktdaten für Admins**: welche Angaben Admins im Ticket (Name › „Kontaktdaten anzeigen“) und
+  im Personenverzeichnis sehen -- Standard, abweichend je Gruppe oder je Admin-Konto (die genaueste
+  Regel gilt). Superadmins und Admins mit Benutzerverwaltung sehen immer alles.
 
 ## Ticket-Sichtbarkeit
 

@@ -1,5 +1,68 @@
 # Änderungen
 
+## 04.11.2026 – Ticketformular, F&A, Kontaktdaten, Rechte, Aufgaben, Wissensdatenbank, Online-Updates
+
+### Board und Ticketformular
+- Board-Leiste neu: Suche links, Arbeitsansichten in einer Zeile daneben, „Neues Ticket“ und
+  „Störung erstellen“ rechts in der Bannerzeile (vorher zerfiel die Leiste in ein Raster mitten in der Seite).
+- Benutzer-Dashboard: Kategorie, Betreff, Beschreibung und die Dringlichkeitsangabe sind Pflichtfelder
+  (markiert, fehlende Felder werden hervorgehoben); keine Kategorie ist mehr vorausgewählt. Der Server
+  verlangt für Benutzer eine bestehende, aktive Kategorie. Dasselbe gilt für „Neues Ticket“ im Admin-Bereich.
+- Systemeinstellungen › Ticketformular: Variante „Wer ist betroffen? / Wie dringend?“ oder direkte
+  Priorität (Niedrig/Normal/Hoch). Auswirkung und Dringlichkeit werden als eigene Felder gespeichert,
+  die Priorität rechnet der Server daraus; im Ticket erscheinen sie deutlich hervorgehoben (Stufe 1–3).
+
+### Themenleiste und F&A
+- Je Kategorie „In der Themenleiste anzeigen“; die ganze Leiste lässt sich ausblenden.
+- Jede Kachel öffnet zuerst eine F&A-Seite mit schnellen Tipps (Suche ab sechs Einträgen), darunter
+  „Ticket erstellen“ mit vorausgewählter Kategorie. Pflege über den Stift an der Kachel oder in den
+  Systemeinstellungen (Rechte „Kategorien“ oder „Tipps (F&A) pflegen“); reiner Text mit einfachem Markdown.
+
+### Kategorien und Gruppen
+- Kategorien liegen jetzt in den Systemeinstellungen (Suche, Gruppenfilter, Schalter für die
+  Themenleiste, Tipps). Symbole verlinken von der Kategorie zur Gruppe und von der Gruppe zu ihren Kategorien.
+- Ticketnummern: ab fünf Kategorien gibt es eine Suche in den Kategorieformaten.
+
+### Kontaktdaten und Konto
+- Im Ticket öffnet der Name ein Menü (Hover, Fokus oder Klick): „Kontaktdaten anzeigen“ oder „Ticket-Historie“.
+- Systemeinstellungen › Kontaktdaten & Profile: welche Angaben Admins sehen (Standard, je Gruppe,
+  je Admin-Konto); gilt serverseitig für Kontaktkarte und Personenverzeichnis. Superadmins und die
+  Benutzerverwaltung sehen alles.
+- Konto in den persönlichen Einstellungen als kompakte Übersicht wie beim Anlegen eines Kontos; jedes
+  Feld (auch Gebäude, Raum, Arbeitszeiten, Erreichbarkeit …) einzeln für die Selbstverwaltung freigebbar.
+  Der Server übernimmt nur freigegebene Teile des Profils und verwirft nie gespeicherte Angaben.
+
+### Rechte
+- Rechte in vier Gruppen mit Sammel-Häkchen: Verwaltung, Funktionen, Module, Systemeinstellungen.
+  Neu: einzelne Einstellungsbereiche (Allgemein, Ticketformular, Kategorien, Unternehmen, Ticketnummern,
+  Benachrichtigungen, Lösungsfristen, Genehmigungsworkflow) und „Tipps (F&A) pflegen“. Der Server prüft
+  jeden geänderten Einstellungsschlüssel; sicherheitsrelevante Bereiche bleiben Superadmins vorbehalten.
+  Kategorien anlegen/ändern verlangt jetzt das Recht „Kategorien“ (vorher jede Admin-Person per API).
+
+### Aufgabenliste
+- Schnelleingabe (Enter), Gruppierung nach Fälligkeit (überfällig, heute, demnächst, ohne Datum),
+  Zähler an den Reitern, klarere Chips für Ticket und Fälligkeit.
+- Als verschiebbares Fenster anheftbar: bleibt über Seitenwechsel sichtbar, Position und Größe werden
+  gemerkt, mit Tastatur verschiebbar, einklappbar.
+
+### Wissensdatenbank
+- Behoben: Anhänge und zugeordnete Tickets wurden nicht angezeigt (Liste war per CSS ausgeblendet).
+- Artikelansicht über die volle Breite: Inhalt, Info-Leiste, Anhänge (mit Größe, Löschen, Ziehen &
+  Ablegen), zugeordnete Tickets mit Titel und Status (Zuordnung lösbar). Kategorie mit Suche.
+- Editor: Überschriften, Absatz, unterstrichen, durchgestrichen, Code, Zitat, Codeblock, Trennlinie,
+  Einzug, Formatierung entfernen, Rückgängig/Wiederholen.
+
+### Systemeinstellungen und Updates
+- Schmalere Eingabefelder, Knöpfe für Sicherung erstellen/einspielen auf einer Höhe.
+- `sudo bash ops/online-updates.sh enable|disable|status`: Online-Updates mit einem Befehl ein- und
+  ausschalten (prüft genau einen Signaturschlüssel und den Fingerabdruck). Solange aktiv, zeigt
+  Info & Updates einen Warnhinweis mit dem Befehl zum Ausschalten. Test: `ops/tests/online-updates.sh` (CI).
+
+### Tests
+- `admin-rights-profiles.test.ts`: delegierte Einstellungen (inkl. Ablehnung fremder Bereiche),
+  Kategorie- und F&A-Rechte, Sichtbarkeit von Kontaktdaten (Person vor Gruppe vor Standard),
+  Selbstverwaltung des Profils, Pflichtkategorie und Priorität aus Auswirkung/Dringlichkeit.
+
 ## 04.11.2026 – Security-Audit (Stand d174169): R-14, R-29, R-30, R-31 und Checkliste
 
 ### R-30 Gruppen-Sichtbarkeit (hoch)

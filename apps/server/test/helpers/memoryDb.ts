@@ -8,6 +8,7 @@ export function memoryDb(tables: Record<string, any[]>) {
     if (op === '<=') return row[key] <= value;
     if (op === 'is not') return row[key] !== value;
     if (op === '!=') return row[key] !== value;
+    if (op === 'in') return Array.isArray(value) && value.includes(row[key]);
     throw new Error('Unsupported test operator ' + op);
   };
   expression.or = (parts: any[]) => (row: any) => parts.some(part => part(row));

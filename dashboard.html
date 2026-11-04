@@ -43,21 +43,28 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 
     <main class="container">
     <!-- Service-Einstieg: zuerst fragen, wobei geholfen werden soll (Bewertung 11/2026, Abschnitt 3.1) -->
-    <section class="card service-entry" aria-labelledby="service-entry-title">
-        <h2 id="service-entry-title" data-i18n="serviceEntryTitle">Wie können wir helfen?</h2>
-        <p class="hint" data-i18n="serviceEntryHint">Wähle ein Thema – das passende Formular und die zuständige Stelle ergeben sich daraus.</p>
+    <section class="card service-entry" id="service-entry" aria-labelledby="service-entry-title" hidden>
+        <div class="service-entry-head">
+            <h2 id="service-entry-title" data-i18n="serviceEntryTitle">Wie können wir helfen?</h2>
+            <p class="hint" data-i18n="serviceEntryHint">Wähle ein Thema – das passende Formular und die zuständige Stelle ergeben sich daraus.</p>
+        </div>
         <div id="service-tiles" class="service-tiles"></div>
     </section>
     <div class="grid-2 dashboard-grid">
         <section class="card" id="ticket-create-card">
             <h2 data-i18n="newTicket">Neues Ticket</h2>
-            <div class="field">
-                <label for="t-title" data-i18n="subject">Betreff</label>
-                <input id="t-title" type="text" data-i18n-placeholder="titlePlaceholder" placeholder="Kurzer Titel">
+            <p class="hint required-legend"><span class="req-mark" aria-hidden="true">*</span> <span data-i18n="requiredLegend">Pflichtfeld</span></p>
+            <div class="field is-required">
+                <label id="t-category-label" data-i18n="category">Kategorie</label>
+                <div id="u-cat-container"></div>
             </div>
-            <div class="field">
+            <div class="field is-required">
+                <label for="t-title" data-i18n="subject">Betreff</label>
+                <input id="t-title" type="text" maxlength="255" required aria-required="true" data-i18n-placeholder="titlePlaceholder" placeholder="Kurzer Titel">
+            </div>
+            <div class="field is-required">
                 <label for="t-desc" data-i18n="description">Beschreibung</label>
-                <textarea id="t-desc" rows="6" data-i18n-placeholder="descriptionPlaceholder" placeholder="Beschreibe dein Anliegen möglichst genau."></textarea>
+                <textarea id="t-desc" rows="6" required aria-required="true" data-i18n-placeholder="descriptionPlaceholder" placeholder="Beschreibe dein Anliegen möglichst genau."></textarea>
             </div>
             <div class="field">
                 <label data-i18n="attachments">Anhänge</label>
@@ -68,26 +75,35 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                 </label>
                 <div id="t-files-preview" class="file-preview"></div>
             </div>
-            <div class="form-grid">
-                <div class="field">
+            <div class="form-grid ticket-form-priority" id="t-impact-fields">
+                <div class="field is-required">
                     <label for="t-impact" data-i18n="impactQuestion">Wer ist betroffen?</label>
-                    <select id="t-impact">
+                    <select id="t-impact" required aria-required="true">
+                        <option value="" hidden data-i18n="pleaseChoose">Bitte wählen</option>
                         <option value="1" data-i18n="impactMe">Nur ich</option>
                         <option value="2" data-i18n="impactTeam">Mein Team</option>
                         <option value="3" data-i18n="impactDepartment">Eine ganze Abteilung oder mehr</option>
                     </select>
                 </div>
-                <div class="field">
+                <div class="field is-required">
                     <label for="t-urgency" data-i18n="urgencyQuestion">Wie dringend ist es?</label>
-                    <select id="t-urgency">
+                    <select id="t-urgency" required aria-required="true">
+                        <option value="" hidden data-i18n="pleaseChoose">Bitte wählen</option>
                         <option value="1" data-i18n="urgencyLow">Kann warten</option>
-                        <option value="2" data-i18n="urgencyMedium" selected>Behindert die Arbeit</option>
+                        <option value="2" data-i18n="urgencyMedium">Behindert die Arbeit</option>
                         <option value="3" data-i18n="urgencyHigh">Arbeiten ist nicht möglich</option>
                     </select>
                 </div>
-                <div class="field">
-                    <label data-i18n="category">Kategorie</label>
-                    <div id="u-cat-container"></div>
+            </div>
+            <div class="form-grid ticket-form-priority" id="t-prio-fields" hidden>
+                <div class="field is-required">
+                    <label for="t-prio" data-i18n="priority">Priorität</label>
+                    <select id="t-prio" required aria-required="true">
+                        <option value="" hidden data-i18n="pleaseChoose">Bitte wählen</option>
+                        <option value="Niedrig" data-i18n="low">Niedrig</option>
+                        <option value="Normal" data-i18n="normal">Normal</option>
+                        <option value="Hoch" data-i18n="high">Hoch</option>
+                    </select>
                 </div>
             </div>
             <div id="t-custom-fields" class="custom-fields-fill"></div>
@@ -141,6 +157,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                         <div class="meta-item"><strong data-i18n="archived">Archiviert</strong><span id="u-m-archived" class="meta-value">-</span></div>
                         <div class="meta-item" id="u-m-sla-item" hidden><strong data-i18n="processingTime">Bearbeitungszeit</strong><span id="u-m-sla-badge" class="sla-badge sla-badge-muted"></span></div>
                     </div>
+                    <div id="u-m-assessment" class="request-assessment" hidden></div>
                     <div id="u-waiting-request" class="waiting-request" hidden>
                         <strong data-i18n="infoNeeded">Wir benötigen noch folgende Angaben</strong>
                         <p id="u-waiting-message"></p>

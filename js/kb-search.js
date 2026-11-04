@@ -37,6 +37,21 @@ const highlight = (text, words) => {
     return html;
 };
 const readingMinutes = text => Math.max(1, Math.round(text.split(/\s+/).filter(Boolean).length / 200));
+const fileSize = bytes => !bytes ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / (1024 * 1024)).toLocaleString(Lang.current === 'en' ? 'en-US' : 'de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MB`;
+const fileIcon = name => {
+    const ext = String(name || '').split('.').pop().toLowerCase();
+    return ['png', 'jpg', 'jpeg'].includes(ext) ? 'file-image' : ['xlsx', 'ods', 'csv'].includes(ext) ? 'file-spreadsheet' : ext === 'pdf' ? 'file-text' : ['txt', 'log'].includes(ext) ? 'file-type' : 'file';
+};
+// Werkzeugleiste des Artikel-Editors: [Befehl, Icon, Beschriftung]; '|' trennt Gruppen.
+const EDITOR_TOOLS = [
+    ['undo', 'undo-2', 'undo'], ['redo', 'redo-2', 'redo'], '|',
+    ['h2', 'heading-2', 'heading2'], ['h3', 'heading-3', 'heading3'], ['p', 'pilcrow', 'paragraph'], '|',
+    ['bold', 'bold', 'bold'], ['italic', 'italic', 'italic'], ['underline', 'underline', 'underline'], ['strikeThrough', 'strikethrough', 'strikethrough'], ['code', 'code', 'inlineCode'], '|',
+    ['insertUnorderedList', 'list', 'list'], ['insertOrderedList', 'list-ordered', 'numberedList'], ['outdent', 'indent-decrease', 'outdent'], ['indent', 'indent-increase', 'indent'], '|',
+    ['blockquote', 'quote', 'quote'], ['pre', 'square-code', 'codeBlock'], ['insertHorizontalRule', 'minus', 'horizontalRule'], ['table', 'table', 'insertTable'], ['link', 'link', 'insertLink'], '|',
+    ['removeFormat', 'remove-formatting', 'clearFormatting']
+];
 const relative = ms => {
     if (!ms) return '–';
     const days = Math.floor((Date.now() - ms) / 86400000);
@@ -218,56 +233,71 @@ export const KbSearch = {
                 { id: 'kba-delete', icon: 'trash-2', title: Lang.t('delete') }
             ] : [],
             body: `
-                <div class="kb-article-view kb-article-layout">
+                <div class="kb-article-view">
                     <article class="kb-article-main">
                         <div class="kb-article-meta-bar">
-                            ${article.category ? `<span class="t-category">${Utils.esc(article.category)}</span>` : `<span class="kb-tile-nocat">${Utils.esc(Lang.t('kbNoCategory'))}</span>`}
+                            <span id="kba-category-chip">${article.category ? `<span class="t-category">${Utils.esc(article.category)}</span>` : `<span class="kb-tile-nocat">${Utils.esc(Lang.t('kbNoCategory'))}</span>`}</span>
                             <span class="hint">${Icon('history', 13)} ${Utils.esc(Lang.format('kbUpdatedOn', { date: Utils.fmtDate(article.updatedAt || article.createdAt) }))}</span>
                             <span class="hint">${Icon('clock', 13)} ${Utils.esc(Lang.format('kbReadingTimeValue', { count: readingMinutes(plainText(article.body)) }))}</span>
                         </div>
                         <div class="desc-text rich-content kb-article-body">${Utils.sanitizeRichHtml(article.body)}</div>
                     </article>
-                    <aside class="kb-article-aside">
-                        <div class="kb-info-card">
-                            <h4 class="section-title">${Icon('info', 14)}${Utils.esc(Lang.t('kbArticleInfo'))}</h4>
-                            <dl class="kb-info-list">
-                                <div><dt>${Utils.esc(Lang.t('kbCreatedBy'))}</dt><dd>${Utils.esc(article.createdByName || '–')}</dd></div>
-                                <div><dt>${Utils.esc(Lang.t('kbCreatedAt'))}</dt><dd>${Utils.esc(Utils.fmtDate(article.createdAt))}</dd></div>
-                                <div><dt>${Utils.esc(Lang.t('kbUpdatedAt'))}</dt><dd>${Utils.esc(Utils.fmtDate(article.updatedAt || article.createdAt))}</dd></div>
-                                <div><dt>${Utils.esc(Lang.t('kbLinkedTickets'))}</dt><dd id="kba-ticket-count">${article.linkedTicketCount || 0}</dd></div>
-                            </dl>
-                            ${canEdit ? `<div class="kb-article-category">
-                                <label for="kba-category">${Utils.esc(Lang.t('kbFilterCategory'))}</label>
-                                <select id="kba-category">${option('', Lang.t('kbNoCategory'), !article.category)}${[...new Set([...categories.map(c => c.name), ...(article.category ? [article.category] : [])])].map(name => option(name, name, name === article.category)).join('')}</select>
-                            </div>` : ''}
-                            <div class="kb-link-action">
-                                ${ticket
-                                    ? `<button type="button" class="btn-primary btn-sm" id="kba-link-current">${Icon('link', 15)}${Utils.esc(Lang.format('kbLinkToThisTicket', { number: ticket.ticketNumber || '' }))}</button>`
-                                    : `<button type="button" class="btn-secondary btn-sm" id="kba-link-pick">${Icon('link', 15)}${Utils.esc(Lang.t('kbLinkToTicket'))}</button>`}
-                            </div>
+                    <section class="kb-info-bar" aria-labelledby="kba-info-title">
+                        <div class="kb-section-head">
+                            <h4 class="section-title" id="kba-info-title">${Icon('info', 14)}${Utils.esc(Lang.t('kbArticleInfo'))}</h4>
+                            ${ticket
+                                ? `<button type="button" class="btn-primary btn-sm" id="kba-link-current">${Icon('link', 15)}${Utils.esc(Lang.format('kbLinkToThisTicket', { number: ticket.ticketNumber || '' }))}</button>`
+                                : `<button type="button" class="btn-secondary btn-sm" id="kba-link-pick">${Icon('link', 15)}${Utils.esc(Lang.t('kbLinkToTicket'))}</button>`}
                         </div>
-                        <div class="kb-article-section" id="kba-attachments-box" hidden>
-                            <div class="kb-section-head">
-                                <h4 class="section-title">${Icon('paperclip', 14)}${Utils.esc(Lang.t('attachments'))}</h4>
-                                ${canEdit ? `<label class="btn btn-secondary btn-sm" id="kba-add-files" tabindex="0">${Icon('upload', 15)}${Utils.esc(Lang.t('kbAddAttachments'))}<input type="file" id="kba-file" hidden multiple></label>` : ''}
-                            </div>
-                            <div class="file-preview" id="kba-attachments"></div>
+                        <dl class="kb-info-grid">
+                            <div><dt>${Icon('user-round', 13)}${Utils.esc(Lang.t('kbCreatedBy'))}</dt><dd>${Utils.esc(article.createdByName || '–')}</dd></div>
+                            <div><dt>${Icon('calendar-plus', 13)}${Utils.esc(Lang.t('kbCreatedAt'))}</dt><dd>${Utils.esc(Utils.fmtDate(article.createdAt))}</dd></div>
+                            <div><dt>${Icon('history', 13)}${Utils.esc(Lang.t('kbUpdatedAt'))}</dt><dd>${Utils.esc(Utils.fmtDate(article.updatedAt || article.createdAt))}</dd></div>
+                            <div><dt>${Icon('ticket', 13)}${Utils.esc(Lang.t('kbLinkedTickets'))}</dt><dd id="kba-ticket-count">${article.linkedTicketCount || 0}</dd></div>
+                            <div class="kb-info-category"><dt>${Icon('folder', 13)}${Utils.esc(Lang.t('kbFilterCategory'))}</dt><dd>${canEdit ? '<div id="kba-category"></div>' : Utils.esc(article.category || Lang.t('kbNoCategory'))}</dd></div>
+                        </dl>
+                    </section>
+                    <section class="kb-article-section" id="kba-attachments-box" hidden>
+                        <div class="kb-section-head">
+                            <h4 class="section-title">${Icon('paperclip', 14)}${Utils.esc(Lang.t('attachments'))}<span class="kb-section-count" id="kba-attachment-count"></span></h4>
+                            ${canEdit ? `<label class="btn btn-secondary btn-sm" id="kba-add-files" tabindex="0">${Icon('upload', 15)}${Utils.esc(Lang.t('kbAddAttachments'))}<input type="file" id="kba-file" hidden multiple></label>` : ''}
                         </div>
-                        <div class="kb-article-section">
-                            <h4 class="section-title">${Icon('ticket', 14)}${Utils.esc(Lang.t('kbLinkedTickets'))}</h4>
-                            <div class="file-preview" id="kba-tickets"><span class="hint">${Utils.esc(Lang.t('kbLoading'))}</span></div>
+                        <div class="kb-attachment-grid" id="kba-attachments"></div>
+                        ${canEdit ? `<p class="hint kb-drop-hint">${Icon('upload-cloud', 13)} ${Utils.esc(Lang.t('kbDropHint'))}</p>` : ''}
+                    </section>
+                    <section class="kb-article-section">
+                        <div class="kb-section-head">
+                            <h4 class="section-title">${Icon('ticket', 14)}${Utils.esc(Lang.t('kbLinkedTickets'))}<span class="kb-section-count" id="kba-ticket-count-head"></span></h4>
                         </div>
-                    </aside>
+                        <div class="kb-ticket-list" id="kba-tickets"><span class="hint">${Utils.esc(Lang.t('kbLoading'))}</span></div>
+                    </section>
                 </div>`
         });
         const renderTickets = async () => {
             const box = modal.querySelector('#kba-tickets');
             const tickets = await Store.getKbArticleTickets(article.id);
-            const countEl = modal.querySelector('#kba-ticket-count');
-            if (countEl) countEl.textContent = String(tickets.length);
-            box.innerHTML = tickets.length ? tickets.map(t => `<button type="button" class="file-chip kba-ticket" data-id="${Utils.esc(t.id)}">${Icon('ticket', 13)}<span>${Utils.esc(t.ticketNumber)}</span>${t.archived ? `<small>${Utils.esc(Lang.t('archivedState'))}</small>` : ''}</button>`).join('')
-                : `<span class="hint">${Utils.esc(Lang.t('kbNoLinkedTickets'))}</span>`;
-            box.querySelectorAll('.kba-ticket').forEach(btn => btn.onclick = () => { modal.remove(); AdminBoard.openModal(btn.dataset.id); });
+            modal.querySelector('#kba-ticket-count').textContent = String(tickets.length);
+            modal.querySelector('#kba-ticket-count-head').textContent = tickets.length ? String(tickets.length) : '';
+            box.innerHTML = tickets.length ? tickets.map(t => `
+                <div class="kb-ticket-row" data-id="${Utils.esc(t.id)}">
+                    <button type="button" class="kb-ticket-open">
+                        <strong>${Utils.esc(t.ticketNumber)}</strong>
+                        <span class="kb-ticket-title">${Utils.esc(t.title || '–')}</span>
+                        <span class="status-badge">${t.archived ? Utils.esc(Lang.t('archivedState')) : Utils.esc(Lang.status(t.status))}</span>
+                    </button>
+                    ${canEdit && !t.archived ? `<button type="button" class="btn-ghost btn-icon btn-xs btn-danger kb-ticket-unlink" title="${Utils.esc(Lang.t('kbUnlinkTicket'))}" aria-label="${Utils.esc(Lang.t('kbUnlinkTicket'))}">${Icon('link-2-off', 14)}</button>` : ''}
+                </div>`).join('')
+                : `<div class="empty-state compact">${Icon('ticket', 18)}<span>${Utils.esc(Lang.t('kbNoLinkedTickets'))}</span></div>`;
+            box.querySelectorAll('.kb-ticket-open').forEach(btn => btn.onclick = () => { modal.remove(); AdminBoard.openModal(btn.closest('[data-id]').dataset.id); });
+            box.querySelectorAll('.kb-ticket-unlink').forEach(btn => btn.onclick = () => {
+                const ticketId = btn.closest('[data-id]').dataset.id;
+                UI.confirm(Lang.t('kbConfirmUnlinkTicket'), async () => {
+                    if (!(await Store.unlinkKbArticle(ticketId, article.id))) return UI.toast(Lang.t('saveFailed'));
+                    await renderTickets();
+                    if (AdminBoard.currentTicketId === ticketId) AdminBoard.renderKbLinks(ticketId);
+                    if (onChange) onChange();
+                });
+            });
             if (window.lucide) lucide.createIcons();
         };
         const link = async (target) => {
@@ -289,31 +319,47 @@ export const KbSearch = {
                 modal.remove();
                 if (onChange) onChange();
             });
-            modal.querySelector('#kba-category').onchange = async event => {
-                if (!(await Store.updateKbArticle(article.id, { category: event.target.value || null }))) return UI.toast(Lang.t('saveFailed'));
-                article.category = event.target.value || null;
+            // Kategorie direkt hier aendern -- Auswahl mit Suche.
+            const names = [...new Set([...categories.map(c => c.name), ...(article.category ? [article.category] : [])])];
+            UI.createMultiSelect(modal.querySelector('#kba-category'), names.map(name => ({ value: name, label: name })), article.category || '', async value => {
+                if (!(await Store.updateKbArticle(article.id, { category: value || null }))) return UI.toast(Lang.t('saveFailed'));
+                article.category = value || null;
+                modal.querySelector('#kba-category-chip').innerHTML = article.category ? `<span class="t-category">${Utils.esc(article.category)}</span>` : `<span class="kb-tile-nocat">${Utils.esc(Lang.t('kbNoCategory'))}</span>`;
+                UI.toast(Lang.t('kbCategorySaved'));
                 if (onChange) onChange();
-            };
+            }, { single: true, emptyLabel: Lang.t('kbNoCategory') });
         }
         const renderAttachments = async () => {
             const attachments = await Store.getKbArticleAttachments(article.id);
             const box = modal.querySelector('#kba-attachments');
             modal.querySelector('#kba-attachments-box').hidden = !attachments.length && !canEdit;
+            modal.querySelector('#kba-attachment-count').textContent = attachments.length ? String(attachments.length) : '';
             box.innerHTML = attachments.length
-                ? attachments.map(file => `<button type="button" class="file-chip kb-att" data-id="${Utils.esc(file.id)}">${Icon('paperclip', 13)}<span>${Utils.esc(file.name)}</span></button>`).join('')
-                : `<span class="hint">${Utils.esc(Lang.t('kbNoAttachments'))}</span>`;
-            box.querySelectorAll('.kb-att').forEach(btn => btn.onclick = async () => {
-                const full = await Store.getKbAttachment(btn.dataset.id);
+                ? attachments.map(file => `<div class="kb-attachment" data-id="${Utils.esc(file.id)}">
+                    <button type="button" class="kb-attachment-open" title="${Utils.esc(Lang.t('showPreview'))}">${Icon(fileIcon(file.name), 20)}<span><strong>${Utils.esc(file.name)}</strong><small>${Utils.esc(fileSize(file.size))}</small></span></button>
+                    ${canEdit ? `<button type="button" class="btn-ghost btn-icon btn-xs btn-danger kb-attachment-delete" title="${Utils.esc(Lang.t('removeFile'))}" aria-label="${Utils.esc(Lang.format('removeFileAriaLabel', { name: file.name }))}">${Icon('trash-2', 14)}</button>` : ''}
+                </div>`).join('')
+                : `<div class="empty-state compact">${Icon('paperclip', 18)}<span>${Utils.esc(Lang.t('kbNoAttachments'))}</span></div>`;
+            box.querySelectorAll('.kb-attachment-open').forEach(btn => btn.onclick = async () => {
+                const full = await Store.getKbAttachment(btn.closest('[data-id]').dataset.id);
                 if (!full) return UI.toast(Lang.t('saveFailed'));
                 // Kleine Dateien ohne ID: die Server-Vorschau gilt nur fuer Ticket-Anhaenge.
                 const { id, ...local } = full;
                 AdminBoard.openAttachmentPreview(full.size > 15 * 1024 * 1024 ? full : local);
             });
+            box.querySelectorAll('.kb-attachment-delete').forEach(btn => btn.onclick = () => UI.confirm(Lang.t('kbConfirmDeleteAttachment'), async () => {
+                if (!(await Store.deleteKbAttachment(btn.closest('[data-id]').dataset.id))) return UI.toast(Lang.t('saveFailed'));
+                await renderAttachments();
+                if (onChange) onChange();
+            }));
             if (window.lucide) lucide.createIcons();
         };
         const uploadToArticle = async (list) => {
             const chosen = Array.from(list || []);
             if (!chosen.length) return;
+            const box = modal.querySelector('#kba-attachments');
+            box.insertAdjacentHTML('beforeend', `<div class="kb-attachment is-uploading">${Icon('loader-circle', 18)}<span>${Utils.esc(Lang.format('kbUploading', { count: chosen.length }))}</span></div>`);
+            if (window.lucide) lucide.createIcons();
             const { saved, errors } = await Store.uploadFiles(chosen, file => Store.saveKbAttachment(article.id, file));
             if (errors.length) UI.toast(errors.join(' '));
             else UI.toast(Lang.format('kbAttachmentsAdded', { count: saved.length }));
@@ -444,13 +490,10 @@ export const KbSearch = {
                         <select id="kbe-category">${option('', Lang.t('kbNoCategory'), !initialCategory)}${allCategories.map(c => option(c.name, c.name, c.name === initialCategory)).join('')}</select></div>
                     <div class="field">
                         <label for="kbe-body">${Lang.t('content')}</label>
-                        <div class="note-toolbar">
-                            <button type="button" class="btn-ghost btn-icon btn-sm" data-fmt="bold" title="${Lang.t('bold')}" aria-label="${Lang.t('bold')}">${Icon('bold', 15)}</button>
-                            <button type="button" class="btn-ghost btn-icon btn-sm" data-fmt="italic" title="${Lang.t('italic')}" aria-label="${Lang.t('italic')}">${Icon('italic', 15)}</button>
-                            <button type="button" class="btn-ghost btn-icon btn-sm" data-fmt="insertUnorderedList" title="${Lang.t('list')}" aria-label="${Lang.t('list')}">${Icon('list', 15)}</button>
-                            <button type="button" class="btn-ghost btn-icon btn-sm" data-fmt="insertOrderedList" title="${Lang.t('numberedList')}" aria-label="${Lang.t('numberedList')}">${Icon('list-ordered', 15)}</button>
-                            <button type="button" class="btn-ghost btn-icon btn-sm" id="kbe-table" title="${Lang.t('insertTable')}" aria-label="${Lang.t('insertTable')}">${Icon('table', 15)}</button>
-                            <button type="button" class="btn-ghost btn-icon btn-sm" id="kbe-link" title="${Lang.t('insertLink')}" aria-label="${Lang.t('insertLink')}">${Icon('link', 15)}</button>
+                        <div class="note-toolbar kb-editor-toolbar" role="toolbar" aria-label="${Utils.esc(Lang.t('formattingToggle'))}">
+                            ${EDITOR_TOOLS.map(tool => tool === '|' ? '<span class="toolbar-sep" aria-hidden="true"></span>'
+                                : `<button type="button" class="btn-ghost btn-icon btn-sm" data-tool="${tool[0]}" title="${Utils.esc(Lang.t(tool[2]))}" aria-label="${Utils.esc(Lang.t(tool[2]))}">${Icon(tool[1], 15)}</button>`).join('')}
+                            <span class="toolbar-sep" aria-hidden="true"></span>
                             <label class="btn btn-ghost btn-icon btn-sm" title="${Lang.t('addAttachment')}" aria-label="${Lang.t('addAttachment')}">${Icon('paperclip', 15)}<input type="file" id="kbe-file" hidden multiple accept="${Utils.esc(Store.uploadAccept())}"></label>
                         </div>
                         <div id="kbe-body" class="rich-editor kb-rich-editor" contenteditable="true" data-placeholder="${Lang.t('richEditorPlaceholder')}">${article ? Utils.sanitizeRichHtml(article.body) : draft ? Utils.sanitizeRichHtml(draft.body || '') : ''}</div>
@@ -483,9 +526,7 @@ export const KbSearch = {
         const bodyInput = modal.querySelector('#kbe-body');
         // Klicks auf die Werkzeugleiste duerfen die Auswahl im Editor nicht aufheben.
         modal.querySelectorAll('.note-toolbar button').forEach(btn => { btn.onmousedown = e => e.preventDefault(); });
-        modal.querySelectorAll('[data-fmt]').forEach(btn => btn.onclick = () => { bodyInput.focus(); document.execCommand(btn.dataset.fmt); });
-        modal.querySelector('#kbe-table').onclick = () => insertMarkdownTable(bodyInput);
-        modal.querySelector('#kbe-link').onclick = async () => {
+        const insertLink = async () => {
             const sel = window.getSelection();
             const savedRange = (sel && sel.rangeCount && bodyInput.contains(sel.anchorNode)) ? sel.getRangeAt(0).cloneRange() : null;
             const selectedText = savedRange ? savedRange.toString() : '';
@@ -499,6 +540,21 @@ export const KbSearch = {
             if (selectedText) document.execCommand('createLink', false, href.trim());
             else document.execCommand('insertHTML', false, `<a href="${Utils.esc(href.trim())}" target="_blank" rel="noopener noreferrer">${Utils.esc(href.trim())}</a>`);
         };
+        // Bloecke ueber formatBlock (Ueberschrift, Absatz, Zitat, Codeblock), Inline-Code als <code>.
+        const blocks = { h2: '<h2>', h3: '<h3>', p: '<p>', blockquote: '<blockquote>', pre: '<pre>' };
+        modal.querySelectorAll('[data-tool]').forEach(btn => btn.onclick = () => {
+            const tool = btn.dataset.tool;
+            bodyInput.focus();
+            if (tool === 'table') return insertMarkdownTable(bodyInput);
+            if (tool === 'link') return insertLink();
+            if (blocks[tool]) return document.execCommand('formatBlock', false, blocks[tool]);
+            if (tool === 'code') {
+                const text = window.getSelection()?.toString() || '';
+                return document.execCommand('insertHTML', false, `<code>${Utils.esc(text || Lang.t('inlineCode'))}</code>&nbsp;`);
+            }
+            if (tool === 'removeFormat') { document.execCommand('removeFormat'); return document.execCommand('formatBlock', false, '<p>'); }
+            document.execCommand(tool);
+        });
         const renderFiles = () => {
             const preview = modal.querySelector('#kbe-files');
             preview.replaceChildren(...files.map((file, index) => AdminBoard.stagedFileChip(file, () => { files.splice(index, 1); renderFiles(); })));

@@ -222,6 +222,8 @@ export interface CategoriesTable {
   archived: ColumnType<boolean, boolean, boolean>;
   created_at: CreatedAt;
   updated_at: UpdatedAt;
+  show_in_portal: ColumnType<boolean, boolean | undefined, boolean>;
+  faq_json: Nullable<string>;
 }
 
 export interface UserAbsencesTable {
@@ -332,6 +334,8 @@ export interface TicketsTable {
   waiting_message: Nullable<Buffer>;
   waiting_reminder_sent: Generated<boolean>;
   merged_into_ticket_id: Nullable<string>;
+  impact: Nullable<number>;
+  urgency: Nullable<number>;
   // Security-Audit N10-Rest: AES-256-GCM-verschlüsselt, Inhalt ist das JSON der tatsächlichen
   // Freitext-/Auswahlwerte (nicht die Feld-Definitionen -- die bleiben in categories.custom_fields_json
   // als Schema-Metadaten unverschlüsselt).

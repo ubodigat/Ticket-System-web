@@ -179,7 +179,7 @@ export const Utils = {
     sanitizeRichHtml: (html = '') => {
         if (window.DOMPurify?.sanitize) {
             const fragment = window.DOMPurify.sanitize(html, {
-                ALLOWED_TAGS: ['a', 'b', 'br', 'code', 'div', 'em', 'i', 'li', 'ol', 'p', 'pre', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'],
+                ALLOWED_TAGS: ['a', 'b', 'blockquote', 'br', 'code', 'div', 'em', 'h2', 'h3', 'h4', 'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'span', 'strike', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'],
                 ALLOWED_ATTR: ['href'],
                 ALLOWED_URI_REGEXP: /^(?:https?|mailto):/i,
                 RETURN_DOM_FRAGMENT: true

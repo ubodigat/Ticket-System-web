@@ -270,19 +270,23 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
     }
   });
 
-  // Tickets, denen ein Artikel zugeordnet ist (Ticketnummer und Status, ohne Inhalte).
+  // Tickets, denen ein Artikel zugeordnet ist (Nummer, Titel, Status) -- nur Tickets im eigenen Sichtbarkeitsbereich.
   app.get('/api/v2/kb/articles/:id/tickets', async (req, reply) => {
     try {
       const session = requireAdmin(req);
       if (!(await hasPermission(session, 'kb'))) return reply.code(403).send({ error: 'forbidden' });
       const { id } = req.params as { id: string };
       const rows = await app.db.selectFrom('ticket_kb_links').innerJoin('tickets', 'tickets.id', 'ticket_kb_links.ticket_id')
-        .select(['tickets.id', 'tickets.ticket_number', 'tickets.status', 'tickets.archived_at', 'tickets.created_by_user_id',
-          'tickets.assigned_to_user_id', 'tickets.assigned_group_id', 'tickets.category'])
+        .select(['tickets.id', 'tickets.ticket_number', 'tickets.title', 'tickets.status', 'tickets.archived_at', 'tickets.created_by_user_id',
+          'tickets.assigned_to_user_id', 'tickets.assigned_group_id', 'tickets.category', 'ticket_kb_links.created_at as linked_at'])
         .where('ticket_kb_links.article_id', '=', id).orderBy('ticket_kb_links.created_at', 'desc').limit(200).execute();
       const scope = await loadTicketScope(app.db, session);
       const tickets = rows.filter(t => scopeAllowsTicket(scope, t));
-      return reply.send({ tickets: tickets.map(t => ({ id: t.id, ticket_number: t.ticket_number, status: t.status, archived: !!t.archived_at })) });
+      const titleDek = await ensureDek(app.db, deps.keyProvider, 'tickets.title');
+      const title = (row: { id: string; title: Buffer }) => {
+        try { return fieldCipher.decryptField(row.title, titleDek, ctx(deps, 'tickets', row.id, 'title')); } catch { return ''; }
+      };
+      return reply.send({ tickets: tickets.map(t => ({ id: t.id, ticket_number: t.ticket_number, title: title(t), status: t.status, archived: !!t.archived_at, linked_at: t.linked_at })) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }

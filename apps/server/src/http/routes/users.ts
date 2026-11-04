@@ -29,6 +29,7 @@ import { loadSecurityPolicy } from '../../domain/securityPolicy.js';
 import { isSourceLocked, recordSourceFailure, clearSourceFailures } from '../../domain/loginThrottle.js';
 import { loadPasswordPolicy, passwordFailures, generatePolicyPassword } from '../../domain/passwordPolicy.js';
 import type { ResolvedDek } from '../../crypto/fieldCrypto.js';
+import { BOOLEAN_PERMISSIONS, loadContactVisibility, SELF_SERVICE_PROFILE_KEYS, userPermissionsSchema } from '../../domain/adminPermissions.js';
 
 export interface UsersRouteDeps {
   env: Env;
@@ -103,21 +104,7 @@ function decryptContactFields(
   };
 }
 
-// Granulare Zusatzrechte fuer normale Admin-Konten -- gab es in der lokalen Version vom
-// 07.10.2026 im Benutzer-Editor ("Verwaltung"/"Zusatzfunktionen"), war in der Serverversion
-// zwischenzeitlich komplett entfernt statt wie das ueberall sonst in diesem Projekt uebliche
-// Muster real angebunden zu werden (siehe z.B. department/ticketNumberFormat).
-const userPermissionsSchema = z.object({
-  canManageRequests: z.boolean().optional(),
-  canManageUsers: z.boolean().optional(),
-  canViewLogs: z.boolean().optional(),
-  canManage2FA: z.boolean().optional(),
-  textBlocks: z.boolean().optional(),
-  reports: z.boolean().optional(),
-  approvals: z.boolean().optional(),
-  recurring: z.boolean().optional(),
-  kb: z.enum(['none', 'read', 'edit']).optional()
-});
+// Granulare Zusatzrechte fuer Admin-Konten: Katalog mit Oberbegriffen in domain/adminPermissions.ts.
 
 const createUserSchema = z.object({
   account_valid_until: z.string().refine(isValidAccountDate, 'invalid_date').nullable().optional(),
@@ -305,18 +292,77 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
   function buildPermissionFields(permissionsJson: string | null) {
     const parsed = parseJsonObject(permissionsJson);
     const { canManageRequests, canManageUsers, canViewLogs, canManage2FA, ...rest } = parsed as Record<string, unknown>;
+    // Nur bekannte Rechte nach aussen (Altlasten in permissions_json bleiben unsichtbar und fallen beim naechsten Speichern weg).
+    const known = new Set<string>([...BOOLEAN_PERMISSIONS, 'kb']);
     return {
       canManageRequests: !!canManageRequests,
       canManageUsers: !!canManageUsers,
       canViewLogs: !!canViewLogs,
       canManage2FA: !!canManage2FA,
-      permissions: rest
+      permissions: Object.fromEntries(Object.entries(rest).filter(([key]) => known.has(key)))
     };
   }
 
   function buildNotificationPrefs(notifPrefsJson: string | null | undefined) {
     return parseJsonObject(notifPrefsJson);
   }
+
+  // Kontaktkarte einer Person fuer Admins (Ticket > Name > "Kontaktdaten anzeigen"): nur die
+  // Angaben, die Systemeinstellungen > Kontaktdaten fuer die ansehende Person freigeben.
+  app.get('/api/v2/users/:id/contact-card', async (req, reply) => {
+    try {
+      const session = requireAdmin(req);
+      const { id } = req.params as { id: string };
+      const row = await app.db.selectFrom('users')
+        .select(['id', 'username', 'name_enc', 'email_enc', 'role', 'avatar_preset', 'avatar_mime', 'avatar_updated_at', 'department', 'phone', 'mobile',
+          'job_title', 'office_location', 'supervisor_user_id', 'account_archived', 'profile_enc'])
+        .where('id', '=', id).executeTakeFirst();
+      if (!row) return reply.code(404).send({ error: 'not_found' });
+      const visible = await loadContactVisibility(app.db, session);
+      const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
+      const emailDek = await ensureDek(app.db, deps.keyProvider, 'users.email');
+      const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
+      const contact = decryptContactFields(row as any, await loadContactDeks(app, deps.keyProvider), deps);
+      const extra = decryptUserProfile(row.profile_enc, await profileCipher(row.id));
+      const fields: Record<string, unknown> = {};
+      const put = (key: string, value: unknown) => {
+        const empty = value === null || value === undefined || value === '' || (Array.isArray(value) && !value.length)
+          || (typeof value === 'object' && value !== null && !Array.isArray(value) && !Object.keys(value).length);
+        if (visible.has(key as any) && !empty) fields[key] = value;
+      };
+      put('email', profile.email);
+      put('phone', contact.phone);
+      put('mobile', contact.mobile);
+      put('department', row.department);
+      put('jobTitle', contact.job_title);
+      put('officeLocation', contact.office_location);
+      put('building', extra.building);
+      put('room', extra.room);
+      put('employeeNumber', extra.employee_number);
+      put('costCenter', extra.cost_center);
+      put('entryDate', extra.entry_date);
+      put('workTimes', extra.work_days);
+      put('availability', extra.availability_note);
+      if (visible.has('supervisor') && row.supervisor_user_id) {
+        const supervisor = await app.db.selectFrom('users').select(['id', 'username', 'name_enc', 'email_enc']).where('id', '=', row.supervisor_user_id).executeTakeFirst();
+        if (supervisor) put('supervisor', safeUserProfileFields(app, deps, supervisor, nameDek, emailDek).name || supervisor.username);
+      }
+      if (visible.has('groups')) {
+        const ids = (await app.db.selectFrom('user_groups').select('group_id').where('user_id', '=', row.id).execute()).map(entry => entry.group_id);
+        const groups = ids.length ? await app.db.selectFrom('groups').select('name').where('id', 'in', ids).execute() : [];
+        put('groups', groups.map(group => group.name).sort((a, b) => a.localeCompare(b, 'de')));
+      }
+      return reply.send({
+        user: {
+          id: row.id, username: row.username, name: profile.name, role: row.role,
+          avatar: avatarDescriptor(row), account_archived: !!row.account_archived, fields
+        },
+        visibleFields: [...visible]
+      });
+    } catch (e: any) {
+      return routeError(app, reply, e);
+    }
+  });
 
   async function loadAccountSelfServiceFields(): Promise<Set<string>> {
     const row = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
@@ -479,23 +525,26 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       }
       const contactDeks = await loadContactDeks(app, deps.keyProvider);
       const groupIds = await loadGroupIds();
+      // Kontaktangaben nur so weit, wie Systemeinstellungen > Kontaktdaten sie freigeben.
+      const visible = await loadContactVisibility(app.db, session);
       const users = rows.map(row => {
         const profile = safeUserProfileFields(app, deps, row, nameDek, emailDek);
         const contact = decryptContactFields(row, contactDeks, deps);
+        const show = <T>(key: string, value: T) => (visible.has(key as any) ? value : null);
         return {
           id: row.id,
           username: row.username,
           name: profile.name,
-          email: profile.email,
+          email: show('email', profile.email),
           role: row.role,
           group_ids: groupIds.get(row.id) ?? [],
           avatar: avatarDescriptor(row),
-          department: row.department,
-          phone: contact.phone,
-          mobile: contact.mobile,
-          job_title: contact.job_title,
-          office_location: contact.office_location,
-          supervisor_user_id: row.supervisor_user_id,
+          department: show('department', row.department),
+          phone: show('phone', contact.phone),
+          mobile: show('mobile', contact.mobile),
+          job_title: show('jobTitle', contact.job_title),
+          office_location: show('officeLocation', contact.office_location),
+          supervisor_user_id: show('supervisor', row.supervisor_user_id),
           account_archived: row.account_archived
         };
       });
@@ -713,10 +762,25 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
           parsed.data.account_archived !== undefined ||
           parsed.data.locked_permanent !== undefined ||
           parsed.data.account_valid_until !== undefined ||
-          parsed.data.permissions !== undefined ||
-          parsed.data.profile !== undefined
+          parsed.data.permissions !== undefined
         ) {
           return reply.code(403).send({ error: 'forbidden' });
+        }
+        // Weitere Angaben (Gebaeude, Raum, Arbeitszeiten ...): nur freigegebene Teile aendern, der
+        // Rest bleibt wie gespeichert -- auch wenn die Oberflaeche das ganze Profil mitschickt.
+        if (parsed.data.profile !== undefined) {
+          const current = await app.db.selectFrom('users').select('profile_enc').where('id', '=', id).executeTakeFirst();
+          const stored = decryptUserProfile(current?.profile_enc, await profileCipher(id)) as Record<string, unknown>;
+          const incoming = parsed.data.profile as Record<string, unknown>;
+          const merged: Record<string, unknown> = { ...stored };
+          for (const [profileKey, field] of Object.entries(SELF_SERVICE_PROFILE_KEYS)) {
+            const before = JSON.stringify(stored[profileKey] ?? null);
+            const after = JSON.stringify(incoming[profileKey] ?? null);
+            if (before === after) continue;
+            if (!allowedFields.has(field)) return reply.code(403).send({ error: 'field_not_editable', field: profileKey });
+            if (incoming[profileKey] === undefined) delete merged[profileKey]; else merged[profileKey] = incoming[profileKey];
+          }
+          parsed.data.profile = merged as typeof parsed.data.profile;
         }
       }
 
