@@ -17,19 +17,19 @@
   "dependencies": {
     "@fastify/cookie": "^11.1.5",
     "@fastify/helmet": "^13.2.0",
-    "@fastify/rate-limit": "^11.2.1",
+    "@fastify/rate-limit": "^11.2.2",
     "@simplewebauthn/browser": "^14.0.0",
     "@simplewebauthn/server": "^14.0.3",
-    "argon2": "^0.45.1",
-    "fastify": "^5.2.1",
+    "argon2": "^0.45.2",
+    "fastify": "^5.12.8",
     "file-type": "^22.3.0",
-    "jose": "^6.2.14",
-    "kysely": "^0.29.7",
+    "jose": "^6.2.15",
+    "kysely": "^0.29.8",
     "ldapts": "^9.2.0",
     "mysql2": "^3.24.6",
     "nodemailer": "^10.3.1",
-    "otpauth": "^9.5.2",
-    "pdfjs-dist": "6.4.299",
+    "otpauth": "^9.6.0",
+    "pdfjs-dist": "6.5.438",
     "pino": "^10.4.0",
     "qrcode": "^1.5.4",
     "sanitize-html": "2.18.1",
@@ -42,7 +42,7 @@
     "@types/sanitize-html": "2.16.2",
     "tsx": "^4.19.2",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=24.0.0"

@@ -7,7 +7,7 @@ import { routeError } from './routeError.js';
 import type { ExtrasRouteDeps } from './extras.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
-import { validateUploadedFile } from '../../domain/fileValidation.js';
+import { HEAD_BYTES, validateUploadedStream } from '../../domain/fileValidation.js';
 import { scanIfConfigured } from '../../domain/antivirus.js';
 import { MAX_UPLOAD_BYTES, dailyUploadQuota, installationDailyUploadQuota, loadUploadLimitBytes } from '../../domain/uploadLimits.js';
 import { canAccessTicket, canReadAttachment } from '../../domain/ticketAccess.js';
@@ -109,7 +109,8 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
     });
   });
   // Pruefung und Virenscan laufen je Konto einzeln und insgesamt hoechstens zweimal gleichzeitig --
-  // vorher blockierte ein einziger Abschluss alle anderen Konten.
+  // vorher blockierte ein einziger Abschluss alle anderen Konten. Security-Audit R-29: die Datei wird
+  // dabei nie als Ganzes gehalten, sondern Teilstueck fuer Teilstueck (je hoechstens 8 MB) geprueft.
   const completing = new Set<string>();
   app.post('/api/v2/uploads/:id/complete', { config: { rateLimit: { max: 12, timeWindow: '10 minutes', keyGenerator: req => req.ticketSession?.uid ?? req.ip } } }, async (req, reply) => {
     let acquiredBy: string | null = null;
@@ -129,28 +130,34 @@ export function registerUploadRoutes(app: FastifyInstance, deps: ExtrasRouteDeps
         const fileDek = await ensureDek(trx, deps.keyProvider, 'file_uploads.filename');
         const chunkDek = await ensureDek(trx, deps.keyProvider, 'file_uploads.data');
         const filename = fieldCipher.decryptField(upload.filename, fileDek, ctx(id, 'filename'));
-        // A single bounded validation buffer, never a 667 MB base64/JSON string.
-        const bytes = Buffer.allocUnsafe(upload.size_bytes);
-        for (let part = 0, offset = 0; offset < bytes.length; part++) {
-          const chunk = await trx.selectFrom('file_upload_chunks').select('data_enc').where('upload_id', '=', id).where('part', '=', part).executeTakeFirstOrThrow();
-          const decoded = Buffer.from(fieldCipher.decryptField(chunk.data_enc, chunkDek, ctx(`${id}:${part}`, 'data')), 'base64');
-          if (decoded.length !== Math.min(UPLOAD_CHUNK_BYTES, bytes.length - offset)) throw new Error('invalid_stored_chunk');
-          decoded.copy(bytes, offset); offset += decoded.length;
+        const size = upload.size_bytes;
+        async function* chunks(): AsyncGenerator<Buffer> {
+          for (let part = 0, offset = 0; offset < size; part++) {
+            const chunk = await trx.selectFrom('file_upload_chunks').select('data_enc').where('upload_id', '=', id).where('part', '=', part).executeTakeFirstOrThrow();
+            const decoded = Buffer.from(fieldCipher.decryptField(chunk.data_enc, chunkDek, ctx(`${id}:${part}`, 'data')), 'base64');
+            if (decoded.length !== Math.min(UPLOAD_CHUNK_BYTES, size - offset)) throw new Error('invalid_stored_chunk');
+            offset += decoded.length;
+            yield decoded;
+          }
         }
-        const validated = await validateUploadedFile({ filename, declaredMimeType: upload.mime_type, data: bytes, maxSizeBytes: MAX_UPLOAD_BYTES });
-        await scanIfConfigured(deps.env, bytes);
+        let head = Buffer.alloc(0);
+        for await (const chunk of chunks()) { head = Buffer.from(chunk.subarray(0, HEAD_BYTES)); break; }
+        const validated = await validateUploadedStream({ filename, totalSize: size, head, open: chunks, maxSizeBytes: MAX_UPLOAD_BYTES });
+        // Vollstaendiger Durchlauf: Virenscan und zugleich Pruefung aller gespeicherten Teilstuecke.
+        if (deps.env.CLAMAV_HOST) await scanIfConfigured(deps.env, chunks());
+        else for await (const chunk of chunks()) void chunk;
         const table = upload.ticket_id ? 'attachments' : 'kb_article_attachments';
         const nameDek = await ensureDek(trx, deps.keyProvider, `${table}.filename`);
         const dataDek = await ensureDek(trx, deps.keyProvider, `${table}.data`);
         const context = (fieldName: string) => ({ ...ctx(id, fieldName), tableName: table });
         const common = { id, uploaded_by_user_id: actor.uid, uploaded_by_username: actor.username, mime_type: validated.mimeType,
-          size_bytes: bytes.length, filename: fieldCipher.encryptField(filename, nameDek, context('filename')),
-          data_b64: fieldCipher.encryptField(JSON.stringify({ storage: 'chunks-v1', size: bytes.length,
-            chunks: Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES) }), dataDek, context('data')) };
+          size_bytes: size, filename: fieldCipher.encryptField(filename, nameDek, context('filename')),
+          data_b64: fieldCipher.encryptField(JSON.stringify({ storage: 'chunks-v1', size,
+            chunks: Math.ceil(size / UPLOAD_CHUNK_BYTES) }), dataDek, context('data')) };
         if (upload.ticket_id) await trx.insertInto('attachments').values({ ...common, ticket_id: upload.ticket_id, message_id: upload.message_id, note_id: upload.note_id }).execute();
         else await trx.insertInto('kb_article_attachments').values({ ...common, kb_article_id: upload.article_id! }).execute();
         await trx.updateTable('file_uploads').set({ completed: true, mime_type: validated.mimeType }).where('id', '=', id).execute();
-        return { id, filename, mime_type: validated.mimeType, size_bytes: bytes.length };
+        return { id, filename, mime_type: validated.mimeType, size_bytes: size };
       });
       return reply.code(201).send(result);
     } catch (error) { return routeError(app, reply, error); }

@@ -21,7 +21,7 @@ import { mysqlTimestamp } from '../../db/date.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
 import { scanIfConfigured } from '../../domain/antivirus.js';
 import { sanitizeServerHtml } from '../../domain/sanitizer.js';
-import { loadTicketScope, scopeAllowsTicket } from '../../domain/ticketAccess.js';
+import { canAccessTicket, loadTicketScope, scopeAllowsTicket } from '../../domain/ticketAccess.js';
 import type { ResolvedDek } from '../../crypto/fieldCrypto.js';
 
 const createKbAttachmentSchema = z.object({
@@ -97,10 +97,20 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const titleDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.title');
       const contentDek = await ensureDek(app.db, deps.keyProvider, 'kb_articles.content');
       const nameDek = await ensureDek(app.db, deps.keyProvider, 'users.name');
-      const linkCounts = new Map((await app.db.selectFrom('ticket_kb_links').select(['article_id', eb => eb.fn.countAll<string>().as('n')])
-        .groupBy('article_id').execute()).map(row => [row.article_id, Number(row.n)]));
+      // Security-Audit R-30: Anzahl verknuepfter Tickets und Quellticket nur aus sichtbaren Tickets.
+      const scope = await loadTicketScope(app.db, session);
+      const ticketColumns = ['tickets.id', 'tickets.created_by_user_id', 'tickets.assigned_to_user_id', 'tickets.assigned_group_id', 'tickets.category'] as const;
+      const links = await app.db.selectFrom('ticket_kb_links').innerJoin('tickets', 'tickets.id', 'ticket_kb_links.ticket_id')
+        .select(['ticket_kb_links.article_id', ...ticketColumns]).execute();
+      const linkCounts = new Map<string, number>();
+      for (const link of links) if (scopeAllowsTicket(scope, link)) linkCounts.set(link.article_id, (linkCounts.get(link.article_id) ?? 0) + 1);
+      const sourceIds = [...new Set(rows.map(row => row.source_ticket_id).filter((value): value is string => !!value))];
+      const visibleSources = new Set(sourceIds.length
+        ? (await app.db.selectFrom('tickets').select([...ticketColumns]).where('tickets.id', 'in', sourceIds).execute()).filter(ticket => scopeAllowsTicket(scope, ticket)).map(ticket => ticket.id)
+        : []);
       const articles = rows.map(({ created_by_name_enc, ...row }) => ({
         ...row,
+        source_ticket_id: row.source_ticket_id && visibleSources.has(row.source_ticket_id) ? row.source_ticket_id : null,
         title: fieldCipher.decryptField(row.title, titleDek, ctx(deps, 'kb_articles', row.id, 'title')),
         content: fieldCipher.decryptField(row.content, contentDek, ctx(deps, 'kb_articles', row.id, 'content')),
         created_by_name: displayName(created_by_name_enc, row.created_by_user_id, nameDek) ?? row.created_by_username,
@@ -119,6 +129,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
       const parsed = createArticleSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
       if (parsed.data.category && !(await categoryExists(parsed.data.category))) return reply.code(400).send({ error: 'invalid_category' });
+      // Quellticket nur, wenn die Person es sehen darf (Security-Audit R-30).
+      if (parsed.data.source_ticket_id && !(await canAccessTicket(app.db, session, parsed.data.source_ticket_id))) return reply.code(400).send({ error: 'invalid_source_ticket' });
 
       // Security-Audit B9: Wissensdatenbank-Inhalte werden roh im Browser gerendert (innerHTML) --
       // ohne serverseitige Bereinigung könnte jedes Konto mit KB-Schreibrecht HTML platzieren,

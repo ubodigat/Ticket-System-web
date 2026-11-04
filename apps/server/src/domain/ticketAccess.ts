@@ -1,15 +1,20 @@
 /*
 The contents of this file are subject to the Common Public Attribution License Version 1.0 (the “License”); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://opensource.org/license/CPAL-1.0.
 */
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Kysely } from 'kysely';
 import type { Database } from '../db/types.js';
+import type { SessionContext } from '../http/routes/session.js';
 
 // Wer welches Ticket sehen darf -- serverseitig, nicht nur in der Oberflaeche (vorher filterte nur
 // AdminBoard.canAccessTicket; ueber die API bekam jede Admin-Person alle Tickets).
 //   - normale Konten: nur eigene Tickets
 //   - Superadmin: alle
-//   - Admin: eigene, nicht zugewiesene, ihr zugewiesene oder beteiligte Tickets, Tickets ihrer
-//     Gruppe (inklusive Ober- und Untergruppen) sowie Tickets der Kategorie "Allgemein".
+//   - Admin: eigene, ihr zugewiesene oder beteiligte Tickets und Tickets ihrer Gruppe (inklusive
+//     Ober- und Untergruppen). Tickets OHNE Gruppe zusaetzlich, wenn sie niemandem zugewiesen
+//     sind oder zur Kategorie "Allgemein" gehoeren. Gruppen sind abgeschottet (Security-Audit
+//     R-30): ein nicht zugewiesenes Ticket der Gruppe "Personal" sieht nur, wer zu "Personal"
+//     gehoert -- nicht jede Admin-Person.
 // Die Regeln entsprechen AdminBoard.canAccessTicket im Frontend.
 
 export interface AccessSession { uid: string; role: string }
@@ -70,10 +75,15 @@ export function scopeAllowsTicket(scope: TicketScope, ticket: AccessTicketRow): 
   if (scope.all) return true;
   if (ticket.created_by_user_id && ticket.created_by_user_id === scope.uid) return true;
   if (!isStaff(scope.role)) return false;
-  if (!ticket.assigned_to_user_id || ticket.assigned_to_user_id === scope.uid) return true;
+  if (ticket.assigned_to_user_id === scope.uid) return true;
   if (scope.participantTicketIds?.has(ticket.id)) return true;
-  if (ticket.assigned_group_id && scope.visibleGroupIds.has(ticket.assigned_group_id)) return true;
-  return !ticket.category || ticket.category === 'Allgemein';
+  if (ticket.assigned_group_id) return scope.visibleGroupIds.has(ticket.assigned_group_id);
+  return openToAllStaff(ticket);
+}
+
+// Ohne Gruppe: nicht zugewiesen oder allgemeine Kategorie.
+function openToAllStaff(ticket: AccessTicketRow): boolean {
+  return !ticket.assigned_group_id && (!ticket.assigned_to_user_id || !ticket.category || ticket.category === 'Allgemein');
 }
 
 // Einzelnes Ticket: null, wenn es nicht existiert (die Route antwortet dann selbst mit 404).
@@ -86,8 +96,46 @@ export async function canAccessTicket(db: Kysely<Database>, session: AccessSessi
   if (ticket.created_by_user_id === session.uid) return true;
   if (session.role !== 'admin') return false;
   // Schnelle Faelle ohne weitere Abfragen.
-  if (!ticket.assigned_to_user_id || ticket.assigned_to_user_id === session.uid || !ticket.category || ticket.category === 'Allgemein') return true;
+  if (ticket.assigned_to_user_id === session.uid || openToAllStaff(ticket)) return true;
   return scopeAllowsTicket(await loadTicketScope(db, session), ticket);
+}
+
+// Empfaenger von Ticket-Hinweisen: nur aktive Konten, die das Ticket auch oeffnen duerfen
+// (Security-Audit R-30) -- sonst verriete eine Benachrichtigung Nummer und Inhalt fremder Tickets.
+export async function recipientsWithAccess(db: Kysely<Database>, ticketId: string, userIds: Array<string | null | undefined>): Promise<string[]> {
+  const unique = [...new Set(userIds.filter((value): value is string => !!value))];
+  if (!unique.length) return [];
+  const users = await db.selectFrom('users').select(['id', 'role']).where('id', 'in', unique).where('account_archived', '=', false).execute();
+  const roleOf = new Map(users.map(user => [user.id, user.role]));
+  const allowed: string[] = [];
+  for (const uid of unique) {
+    const role = roleOf.get(uid);
+    if (role && await canAccessTicket(db, { uid, role }, ticketId)) allowed.push(uid);
+  }
+  return allowed;
+}
+
+// Zentrale Pruefung fuer JEDE Route unter /api/v2/tickets/:id (Security-Audit R-30): wer das Ticket
+// nicht sehen darf, bekommt 404 (verraet nicht, dass es existiert) -- auch fuer Unterrouten (Chat,
+// Notizen, Anhaenge, Zeiten, Aufgaben, Beteiligte, verwandte Tickets, Wissensdatenbank,
+// Zusammenfuehren). Neue Routen sind automatisch erfasst. Einzige Ausnahme: die
+// Genehmigungsentscheidung prueft die eingetragene Person selbst. Die Einzelpruefungen der Routen
+// (Rolle, eigenes Ticket) bleiben zusaetzlich bestehen.
+export const TICKET_ROUTE = /^\/api\/v2\/tickets\/:id(\/|$)/;
+export const TICKET_ACCESS_EXEMPT = new Set(['/api/v2/tickets/:id/approval-decision']);
+
+export function ticketRouteGuard(db: Kysely<Database>) {
+  return async function guardTicketRoute(req: FastifyRequest, reply: FastifyReply) {
+    const url = req.routeOptions?.url;
+    const session: SessionContext | null = req.ticketSession;
+    if (!url || !session || !TICKET_ROUTE.test(url) || TICKET_ACCESS_EXEMPT.has(url)) return;
+    const id = (req.params as { id?: unknown } | undefined)?.id;
+    if (typeof id !== 'string') return;
+    if (await canAccessTicket(db, session, id) === false) {
+      req.log?.warn({ event: 'ticket.access_denied', uid: session.uid, role: session.role, url, method: req.method }, 'Ticketzugriff abgewiesen');
+      return reply.code(404).send({ error: 'not_found' });
+    }
+  };
 }
 
 // Ausstehende Genehmigung: die eingetragene Person darf Ticketkopf und direkte Anhaenge lesen

@@ -1,5 +1,56 @@
 # Änderungen
 
+## 04.11.2026 – Security-Audit (Stand d174169): R-14, R-29, R-30, R-31 und Checkliste
+
+### R-30 Gruppen-Sichtbarkeit (hoch)
+- Zentrale Prüfung `ticketRouteGuard` (domain/ticketAccess.ts) für jede Route unter
+  `/api/v2/tickets/:id` und alle Rollen; ohne Zugriff Antwort 404 (verrät nicht, dass es das Ticket
+  gibt). Neue Routen sind automatisch erfasst; Ausnahme nur die Genehmigungsentscheidung.
+- Gruppen sind abgeschottet: ein nicht zugewiesenes Ticket einer fremden Gruppe ist nicht mehr für jede
+  Admin-Person sichtbar (gleiche Regel im Frontend).
+- `first-response-times` liefert nur sichtbare Tickets und keine Zuordnungsdaten; Zusammenführen prüft
+  Quelle und Ziel; Benachrichtigungen (auch Erwähnungen und die API `POST /notifications`) nur an Konten
+  mit Zugriff; Aufgabenliste, Zeiterfassung, Vertretungsliste, Wissensdatenbank (Zähler, Quellticket)
+  und verknüpfte Großstörungen im Sichtbarkeitsbereich; Zuständige einer Teilaufgabe müssen das Ticket
+  sehen dürfen.
+- Tests: `ticket-route-guard.test.ts` ruft jede Route mit „Admin anderer Gruppe“, „fremdes Konto“ und
+  „Superadmin“ gegen die echte App auf (66 Fälle, Gegenprobe ohne Prüfung schlägt fehl);
+  `security-audit-2026-11-04.test.ts`.
+
+### R-29 Speicherbedarf (mittel)
+- Upload-Abschluss, Typprüfung (file-type als Datenstrom) und Virenscan (clamd INSTREAM) arbeiten
+  Teilstück für Teilstück statt mit einem Puffer in Dateigröße.
+- Sicherung und Wiederherstellung in der Oberfläche komprimieren und verschlüsseln als Datenstrom; beim
+  Einspielen wird der GCM-Tag zuerst über die ganze Datei geprüft, danach stückweise entschlüsselt. Im
+  Speicher liegt höchstens die verschlüsselte Datei. Dabei behoben: Beim Überschreiten der Größengrenze
+  blieb das Erstellen einer Sicherung hängen.
+- Tests: `uploads.test.ts` (keine Allokation in Dateigröße, 500-MiB-Durchlauf), `backup.test.ts`,
+  `security-audit-2026-11-04.test.ts` (Office-Erkennung aus Teilstücken, clamd-Protokoll).
+
+### R-31 Build-Kontext und Laufzeit-Image (niedrig)
+- `.dockerignore` als Positivliste: Schlüssel, Sicherungen, Kits, TLS-Material und `.env`-Dateien
+  erreichen den Docker-Daemon nicht mehr.
+- Laufzeit-Abhängigkeiten aus eigener Stufe (`npm ci --omit=dev`): kein typescript, tsx, vitest oder
+  @types im Image. Geprüft mit einem echten Image-Build.
+
+### R-14 Signierte Releases (niedrig)
+- Behoben: `verify_release_tag` im Installer verglich nur den ersten Fingerabdruck der Schlüsseldatei.
+  Ein angehängter Fremdschlüssel konnte Tags signieren. Jetzt zählt der Hauptschlüssel in der Signatur
+  selbst (VALIDSIG), und die Schlüsseldatei darf genau einen Schlüssel enthalten.
+- `ops/release/create-release.sh` (init/tag) für signierte Tags und Release-Assets; der Installer
+  hinterlegt den geprüften Release-Schlüssel automatisch für Online-Updates.
+- Test: `ops/tests/release-signature.sh` (in der CI), inklusive drei Angriffsvarianten.
+
+### Checkliste und Empfehlungen
+- Warnung in Info & Updates, solange ein Wiederherstellungs-Kit unter `ops/` liegt; deutlichere
+  Aufforderung im Installer.
+- Auskunft und Datenexport (DSGVO Art. 15/20) vom Server: vollständig, entschlüsselt, ohne Geheimnisse,
+  mit Passwort bzw. für andere Personen nur durch Superadmins mit TOTP, protokolliert.
+- Löschkonzept für Sicherungen dokumentiert; lokale Aufbewahrung über `BACKUP_KEEP_LOCAL` in `.env`.
+- Patch-Updates: fastify 5.12.8, @fastify/rate-limit 11.2.2, argon2 0.45.2, jose 6.2.15, kysely 0.29.8,
+  otpauth 9.6.0, vitest 5.1.0, pdfjs-dist 6.5.438 (mit `isEvalSupported: false`), jszip 3.10.2.
+  Prüfsummen der Vendor-Bibliotheken werden jetzt getestet.
+
 ## 04.11.2026 – Schema ohne Migrationen, Online-Update, Review-Fixes und Arbeitsansichten
 
 ### Datenbank und Update

@@ -1,8 +1,7 @@
 import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  BackupError, createPayloadWriter, decodeValue, encodeValue, hashMatches, normalizeHash, openBackup, readBackupHeader,
-  readPayloadLines, sealBackup, sha256Hex
+  BACKUP_MAX_BYTES, BackupError, createBackupWriter, decodeValue, encodeValue, hashMatches, normalizeHash, openBackup, readBackupHeader, sha256Hex
 } from '../src/domain/backup.js';
 import { registerBackupRoutes } from '../src/http/routes/backup.js';
 import { fieldCipher } from '../src/crypto/fieldCrypto.js';
@@ -13,32 +12,41 @@ vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpos
 vi.mock('../src/domain/totp.js', () => ({ verifyAndConsumeTotp: async (_db: unknown, _uid: string, _secret: string, code: string) => code === '123456' }));
 
 const FAST = { N: 2 ** 14, r: 8, p: 1 };
-const meta = { installationId: 'install-a', latestMigration: '0060_ticket_kb_links', createdBy: 'root' };
+const PASS = 'a very long backup passphrase';
+const meta = { installationId: 'install-a', schemaFingerprint: 'fp-1', createdBy: 'root' };
 
-async function samplePayload() {
-  const writer = createPayloadWriter();
+async function sampleBackup(passphrase = PASS, header = meta) {
+  const writer = await createBackupWriter(passphrase, header, FAST);
   await writer.write({ kind: 'meta', tables: [{ name: 'groups', columns: ['id', 'name', 'blob', 'created_at'] }] });
   await writer.write({ t: 'groups', r: ['g1', 'IT', Buffer.from([1, 2, 3]), new Date('2026-10-31T10:00:00Z')].map(encodeValue) });
-  return writer.finish();
+  const sealed = await writer.finish();
+  const file = Buffer.concat(sealed.chunks);
+  expect(sealed.size).toBe(file.length);
+  expect(sealed.sha256).toBe(sha256Hex(file));
+  return file;
 }
 
 describe('backup file format', () => {
   it('round-trips the encrypted payload and keeps the header readable', async () => {
-    const payload = await samplePayload();
-    const file = await sealBackup(payload, 'a very long backup passphrase', meta, FAST);
-    expect(readBackupHeader(file).header).toMatchObject({ installationId: 'install-a', latestMigration: '0060_ticket_kb_links', createdBy: 'root' });
+    const file = await sampleBackup();
+    expect(readBackupHeader(file).header).toMatchObject({ installationId: 'install-a', schemaFingerprint: 'fp-1', createdBy: 'root' });
     expect(file.includes(Buffer.from('IT'))).toBe(false);
-    const opened = await openBackup(file, 'a very long backup passphrase');
+    const opened = await openBackup(file, PASS);
+    // Jeder Durchlauf entschluesselt erneut (Pruefen, dann Schreiben).
+    for (let pass = 0; pass < 2; pass++) {
+      const lines = [];
+      for await (const line of opened.lines()) lines.push(line);
+      expect(lines).toHaveLength(2);
+    }
     const lines = [];
-    for await (const line of readPayloadLines(opened.payload)) lines.push(line);
-    expect(lines).toHaveLength(2);
+    for await (const line of opened.lines()) lines.push(line);
     const row = (lines[1] as { r: unknown[] }).r.map(decodeValue);
     expect(row[2]).toEqual(Buffer.from([1, 2, 3]));
     expect((row[3] as Date).toISOString()).toBe('2026-10-31T10:00:00.000Z');
   });
 
   it('rejects a wrong passphrase, a modified header and a modified body', async () => {
-    const file = await sealBackup(await samplePayload(), 'a very long backup passphrase', meta, FAST);
+    const file = await sampleBackup();
     await expect(openBackup(file, 'another long passphrase!!')).rejects.toMatchObject({ code: 'backup_decrypt_failed' });
     const header = Buffer.from(file);
     const at = header.indexOf(Buffer.from('install-a'));
@@ -50,11 +58,29 @@ describe('backup file format', () => {
   });
 
   it('refuses short passphrases, foreign files and expensive key-derivation headers', async () => {
-    await expect(sealBackup(Buffer.from('x'), 'short', meta, FAST)).rejects.toBeInstanceOf(BackupError);
+    await expect(createBackupWriter('short', meta, FAST)).rejects.toBeInstanceOf(BackupError);
     expect(() => readBackupHeader(Buffer.from('not a backup at all, definitely not'))).toThrow(BackupError);
-    const file = await sealBackup(Buffer.from('x'), 'a very long backup passphrase', meta, FAST);
+    const file = await sampleBackup();
     const tampered = Buffer.from(file.toString('latin1').replace('"N":16384', '"N":1048577'), 'latin1');
     expect(() => readBackupHeader(tampered)).toThrow(BackupError);
+  });
+
+  it('stops at the size limit instead of collecting an oversized file (R-29)', async () => {
+    const limit = 4 * 1024 * 1024;
+    const writer = await createBackupWriter(PASS, meta, FAST, limit);
+    await writer.write({ kind: 'meta', tables: [{ name: 'blobs', columns: ['data'] }] });
+    const noise = Buffer.alloc(1024 * 1024);
+    let rejected: unknown = null;
+    try {
+      for (let written = 0; written <= 2 * limit; written += noise.length) {
+        // Zufallsdaten lassen sich nicht komprimieren -- die Datei waechst wie der Inhalt.
+        (await import('node:crypto')).randomFillSync(noise);
+        await writer.write({ t: 'blobs', r: [encodeValue(noise)] });
+      }
+      await writer.finish();
+    } catch (error) { rejected = error; }
+    expect(rejected).toMatchObject({ code: 'backup_too_large' });
+    expect(BACKUP_MAX_BYTES).toBe(512 * 1024 * 1024);
   });
 
   it('compares the SHA-256 hash exactly, ignoring only formatting', async () => {
@@ -124,7 +150,7 @@ describe('backup routes', () => {
 
   it('refuses a restore without the exact hash, confirmation and matching installation -- and logs each attempt', async () => {
     const { app, audit } = backupApp('superadmin', true);
-    const file = await sealBackup(await samplePayload(), 'a very long backup passphrase', { ...meta, installationId: 'install-b' }, FAST);
+    const file = await sampleBackup(PASS, { ...meta, installationId: 'install-b' });
     const upload = await app.inject({ method: 'PUT', url: '/api/v2/system/backup/upload', headers: { 'content-type': 'application/octet-stream' }, payload: file });
     expect(upload.statusCode).toBe(200);
     expect(upload.body).not.toContain(sha256Hex(file));

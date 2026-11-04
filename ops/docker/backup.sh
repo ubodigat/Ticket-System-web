@@ -35,13 +35,16 @@ ENV_FILE="$SCRIPT_DIR/.env"
 SECRETS_DIR="$SCRIPT_DIR/../secrets"
 RECIPIENT_KEY="$SECRETS_DIR/backup-recipient.asc"
 BACKUP_DIR="${BACKUP_DIR:-$SCRIPT_DIR/../backups}"
-KEEP_LOCAL="${BACKUP_KEEP_LOCAL:-14}"
 STATE_DIR="${UPDATE_BRIDGE_HOST_DIR:-/var/lib/ticket-system-update}/state"
 
 die() { echo "$*" >&2; exit 1; }
 [[ -f "$ENV_FILE" ]] || die "Nicht gefunden: $ENV_FILE -- zuerst install.sh ausführen."
 command -v gpg >/dev/null 2>&1 || die "gpg nicht gefunden -- 'apt-get install -y gnupg' und erneut versuchen."
 env_value() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2- || true; }
+# Aufbewahrung lokal (Loeschkonzept, docs/OPERATIONS.md): die neuesten N Datensicherungen.
+KEEP_LOCAL="${BACKUP_KEEP_LOCAL:-$(env_value BACKUP_KEEP_LOCAL)}"
+KEEP_LOCAL="${KEEP_LOCAL:-14}"
+[[ "$KEEP_LOCAL" =~ ^[1-9][0-9]{0,3}$ ]] || die "BACKUP_KEEP_LOCAL muss eine Zahl von 1 bis 9999 sein."
 
 # Privates Arbeitsverzeichnis neben den Sicherungen statt im gemeinsam genutzten /tmp.
 mkdir -p "$BACKUP_DIR"

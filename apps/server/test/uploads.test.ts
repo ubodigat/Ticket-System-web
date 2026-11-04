@@ -121,6 +121,28 @@ describe('bounded encrypted attachment uploads', () => {
       expect((await f.app.inject({ method: 'GET', url: `/api/v2/uploads/${id}/content` })).statusCode).toBe(403);
     } finally { await f.app.close(); }
   });
+  it('validates a completed upload chunk by chunk without a buffer of the full file size (R-29)', async () => {
+    const f = fixture();
+    try {
+      const size = 2 * UPLOAD_CHUNK_BYTES + 4096;
+      const id = (await f.start(size)).json().id;
+      const block = Buffer.alloc(UPLOAD_CHUNK_BYTES, 0x61);
+      for (let offset = 0, part = 0; offset < size; offset += UPLOAD_CHUNK_BYTES, part++) {
+        expect((await f.chunk(id, part, block.subarray(0, Math.min(UPLOAD_CHUNK_BYTES, size - offset)))).statusCode).toBe(200);
+      }
+      const sizes: number[] = [];
+      const allocUnsafe = vi.spyOn(Buffer, 'allocUnsafe');
+      const alloc = vi.spyOn(Buffer, 'alloc');
+      try {
+        const complete = await f.app.inject({ method: 'POST', url: `/api/v2/uploads/${id}/complete` });
+        expect(complete.statusCode).toBe(201);
+        expect(complete.json().size_bytes).toBe(size);
+        sizes.push(...alloc.mock.calls.map(call => Number(call[0])), ...allocUnsafe.mock.calls.map(call => Number(call[0])));
+      } finally { allocUnsafe.mockRestore(); alloc.mockRestore(); }
+      expect(Math.max(0, ...sizes)).toBeLessThan(size);
+    } finally { await f.app.close(); }
+  });
+
   it('rejects missing, repeated, foreign and incorrectly sized blocks', async () => {
     const f = fixture();
     try {

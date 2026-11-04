@@ -12,6 +12,7 @@
 // 8. Danach werden alle Sitzungen, gemerkten MFA-Geraete und offenen Auftraege verworfen.
 // 9. Jede Aktion (auch abgelehnte Versuche) landet im globalen Audit-Log.
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { sql, type Kysely } from 'kysely';
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
@@ -19,8 +20,8 @@ import { requireSuperadmin } from './session.js';
 import { routeError } from './routeError.js';
 import { requireStepUp } from './stepUp.js';
 import {
-  BACKUP_MAX_BYTES, BACKUP_PASSPHRASE_MIN, BackupError, type BackupTableMeta, createPayloadWriter, decodeValue,
-  encodeValue, hashMatches, openBackup, readBackupHeader, readPayloadLines, sealBackup, sha256Hex
+  BACKUP_MAX_BYTES, BACKUP_PASSPHRASE_MIN, BackupError, type BackupTableMeta, createBackupWriter, decodeValue,
+  encodeValue, hashMatches, openBackup, readBackupHeader, sha256Hex
 } from '../../domain/backup.js';
 import type { Database } from '../../db/types.js';
 import { appliedSchemaFingerprint } from '../../db/schemaSync.js';
@@ -115,7 +116,9 @@ export function registerBackupRoutes(app: FastifyInstance, deps: BackupRouteDeps
       const parsed = createSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'passphrase_too_short' });
       const result = await exclusive(async () => {
-        const writer = createPayloadWriter();
+        const writer = await createBackupWriter(parsed.data.passphrase, {
+          installationId: deps.env.INSTALLATION_ID, schemaFingerprint: await appliedSchemaFingerprint(app.db), createdBy: session.username
+        });
         let rowCount = 0;
         const tables = await loadTableSchemas(app.db);
         await app.db.transaction().setIsolationLevel('repeatable read').execute(async trx => {
@@ -133,20 +136,18 @@ export function registerBackupRoutes(app: FastifyInstance, deps: BackupRouteDeps
             }
           }
         });
-        const file = await sealBackup(await writer.finish(), parsed.data.passphrase, {
-          installationId: deps.env.INSTALLATION_ID, schemaFingerprint: await appliedSchemaFingerprint(app.db), createdBy: session.username
-        });
-        return { file, rowCount, tableCount: tables.length };
+        return { file: await writer.finish(), rowCount, tableCount: tables.length };
       });
-      const hash = sha256Hex(result.file);
-      await audit(app, session, 'system.backup_created', { sha256: hash, size: result.file.length, tables: result.tableCount, rows: result.rowCount });
+      const hash = result.file.sha256;
+      await audit(app, session, 'system.backup_created', { sha256: hash, size: result.file.size, tables: result.tableCount, rows: result.rowCount });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       return reply
         .header('content-type', 'application/octet-stream')
         .header('content-disposition', `attachment; filename="ticketsystem-sicherung-${stamp}.tsbackup"`)
         .header('cache-control', 'no-store')
         .header('x-backup-sha256', hash)
-        .send(result.file);
+        .header('content-length', result.file.size)
+        .send(Readable.from(result.file.chunks));
     } catch (error) {
       if (error instanceof BackupError) return reply.code(error.code === 'backup_too_large' ? 413 : 400).send({ error: error.code });
       return routeError(app, reply, error);
@@ -211,13 +212,13 @@ export function registerBackupRoutes(app: FastifyInstance, deps: BackupRouteDeps
       if (header.installationId !== deps.env.INSTALLATION_ID) return reject('backup_installation_mismatch');
 
       const stats = await exclusive(async () => {
-        const { payload } = await openBackup(upload.file, parsed.data.passphrase);
+        const backup = await openBackup(upload.file, parsed.data.passphrase);
         const current = new Map((await loadTableSchemas(app.db)).map(table => [table.name, table]));
         // Durchlauf 1: nur pruefen. Die Sicherung muss ins aktuelle Schema passen (backupFitsSchema),
         // jede Zeile muss vollstaendig und dekodierbar sein.
         let meta: BackupTableMeta[] | null = null;
         let rows = 0;
-        for await (const line of readPayloadLines(payload)) {
+        for await (const line of backup.lines()) {
           if (!meta) {
             if (!('kind' in line) || line.kind !== 'meta' || !Array.isArray(line.tables)) throw new BackupError('backup_invalid_content');
             meta = line.tables;
@@ -250,7 +251,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: BackupRouteDeps
               batch = []; batchBytes = 0;
             };
             let first = true;
-            for await (const line of readPayloadLines(payload)) {
+            for await (const line of backup.lines()) {
               if (first) { first = false; continue; }
               if (!('t' in line)) throw new BackupError('backup_invalid_content');
               const table = tableMeta.find(item => item.name === line.t)!;

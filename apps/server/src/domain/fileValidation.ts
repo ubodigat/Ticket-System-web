@@ -1,7 +1,7 @@
 /*
 The contents of this file are subject to the Common Public Attribution License Version 1.0 (the “License”); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://opensource.org/license/CPAL-1.0.
 */
-import { fileTypeFromBuffer } from 'file-type';
+import { fileTypeFromBuffer, fileTypeFromStream, type FileTypeResult } from 'file-type';
 
 export interface ValidatedFile {
   safeFilename: string;
@@ -63,7 +63,44 @@ export async function validateUploadedFile(params: {
   data?: Buffer;
   maxSizeBytes?: number;
 }): Promise<ValidatedFile> {
-  const maxBytes = params.maxSizeBytes ?? 15 * 1024 * 1024;
+  let buffer: Buffer;
+  try {
+    buffer = params.data ?? Buffer.from(params.dataB64 || '', 'base64');
+  } catch {
+    throw { statusCode: 400, message: 'invalid_base64' };
+  }
+  const checked = await validateFileContent({ filename: params.filename, head: buffer.subarray(0, HEAD_BYTES), totalSize: buffer.length,
+    maxSizeBytes: params.maxSizeBytes ?? 15 * 1024 * 1024, detect: () => fileTypeFromBuffer(buffer) });
+  return { ...checked, buffer };
+}
+
+// Security-Audit R-29: grosse Uploads ohne Puffer in Dateigroesse pruefen. Gebraucht werden nur der
+// Dateianfang (Magic Bytes, Skript-Muster) und fuer die Typerkennung ein Datenstrom -- file-type liest
+// daraus nur so viel wie noetig (bei ZIP-basierten Formaten die Eintraege der Reihe nach).
+export async function validateUploadedStream(params: {
+  filename: string;
+  totalSize: number;
+  head: Buffer;
+  open: () => AsyncIterable<Buffer>;
+  maxSizeBytes: number;
+}): Promise<Omit<ValidatedFile, 'buffer'>> {
+  return validateFileContent({ filename: params.filename, head: params.head.subarray(0, HEAD_BYTES), totalSize: params.totalSize,
+    maxSizeBytes: params.maxSizeBytes, detect: async () => {
+      const stream = ReadableStream.from(params.open());
+      try { return await fileTypeFromStream(stream); } finally { await stream.cancel().catch(() => {}); }
+    } });
+}
+
+export const HEAD_BYTES = 8192;
+
+async function validateFileContent(params: {
+  filename: string;
+  head: Buffer;
+  totalSize: number;
+  maxSizeBytes: number;
+  detect: () => Promise<FileTypeResult | undefined>;
+}): Promise<Omit<ValidatedFile, 'buffer'>> {
+  const maxBytes = params.maxSizeBytes;
 
   // 1. Dateiname bereinigen und prüfen
   const rawFilename = (params.filename || '').trim();
@@ -86,19 +123,13 @@ export async function validateUploadedFile(params: {
     throw { statusCode: 400, message: 'blocked_extension' };
   }
 
-  // 2. Base64 dekodieren und Größenprüfung
-  let buffer: Buffer;
-  try {
-    buffer = params.data ?? Buffer.from(params.dataB64 || '', 'base64');
-  } catch {
-    throw { statusCode: 400, message: 'invalid_base64' };
-  }
-
-  if (buffer.length === 0) {
+  // 2. Größenprüfung (der Dateianfang reicht fuer die folgenden Byte-Pruefungen)
+  const buffer = params.head;
+  if (params.totalSize === 0 || buffer.length === 0) {
     throw { statusCode: 400, message: 'file_empty' };
   }
 
-  if (buffer.length > maxBytes) {
+  if (params.totalSize > maxBytes) {
     throw { statusCode: 413, message: 'file_too_large' };
   }
 
@@ -127,7 +158,7 @@ export async function validateUploadedFile(params: {
   }
 
   // 4. Inhaltsanalyse auf Skripte, PHP-Tags und Web-Payloads in den ersten 8 KB
-  const headText = buffer.subarray(0, 8192).toString('utf8').toLowerCase();
+  const headText = buffer.subarray(0, HEAD_BYTES).toString('utf8').toLowerCase();
   if (
     headText.includes('<?php') ||
     headText.includes('<?=') ||
@@ -144,7 +175,7 @@ export async function validateUploadedFile(params: {
   }
 
   // 5. Tiefe MIME-Erkennung mit file-type & strikte Allowlist (B7)
-  const detected = await fileTypeFromBuffer(buffer);
+  const detected = await params.detect();
 
   // Strikte Whitelist erlaubter Dokument-, Bild- und Textformate
   const ALLOWED_EXTENSIONS = new Map<string, string>([
@@ -193,8 +224,7 @@ export async function validateUploadedFile(params: {
 
   return {
     safeFilename,
-    buffer,
     mimeType: finalMime,
-    sizeBytes: buffer.length
+    sizeBytes: params.totalSize
   };
 }

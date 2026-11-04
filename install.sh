@@ -98,8 +98,10 @@ print_installation_summary() {
     printf '  Datei       %s\n' "${RECOVERY_KIT_PATH:-}"
     printf '  Passphrase  %s%s%s\n' "$bold" "${RECOVERY_KIT_PASSPHRASE:-}" "$reset"
     printf '  Ohne Kit und Passphrase lassen sich Datensicherungen nicht einspielen.\n'
-    printf '  Datei jetzt vom Server herunterladen, getrennt von der Passphrase\n'
-    printf '  aufbewahren und danach auf dem Server löschen.\n'
+    printf '  %sJETZT ERLEDIGEN:%s Datei vom Server herunterladen, getrennt von der\n' "$bold" "$reset"
+    printf '  Passphrase aufbewahren und danach auf dem Server löschen:\n'
+    printf '    shred -u %s\n' "${RECOVERY_KIT_PATH:-}"
+    printf '  Solange das Kit auf dem Server liegt, warnt die Oberfläche (Info & Updates).\n'
   fi
 
   printf '\n  %sBEI VERBINDUNGSPROBLEMEN%s\n' "$bold" "$reset"
@@ -299,6 +301,16 @@ ensure_update_bridge() {
   run_root chmod 0700 "$UPDATE_BRIDGE_HOST_DIR/requests"
 }
 
+# Security-Audit R-14: lief die Installation ueber einen signierten Release-Tag, gilt derselbe (per
+# Fingerabdruck gepruefte) Schluessel auch fuer Online-Updates -- ohne manuelles Hinterlegen.
+trust_release_key_for_updates() {
+  local key="$SCRIPT_DIR/ops/release-signing-key.asc"
+  [[ -n "$INSTALL_REF" && -f "$key" ]] || return 0
+  release_key_matches "$key" || { echo "Release-Schluessel passt nicht zum Fingerabdruck -- nicht fuer Online-Updates hinterlegt." >&2; return 1; }
+  run_root env GNUPGHOME=/etc/ticket-system-updater/keys gpg --batch --quiet --import "$key"
+  log "Release signing key $INSTALL_SIGNER_FINGERPRINT trusted for online updates"
+}
+
 install_host_updater() {
   if ! command -v systemctl >/dev/null 2>&1; then
     echo "In-App-Updates benoetigen systemd auf dem Host (Host-Updater)." >&2
@@ -309,6 +321,7 @@ install_host_updater() {
   if [[ -d "$COMPOSE_DIR/update-keys" ]]; then
     run_root cp -a "$COMPOSE_DIR/update-keys/." /etc/ticket-system-updater/keys/
   fi
+  trust_release_key_for_updates
   run_root install -d -m 0755 /usr/local/libexec
   run_root install -m 0755 "$SCRIPT_DIR/ops/host-updater/ticket-system-updater.sh" /usr/local/libexec/ticket-system-updater
   printf 'REPO_DIR=%q\nBRIDGE_DIR=%q\nUPDATE_BRANCH=main\nALLOW_MAIN_DEPLOY=true\nKEY_DIR=/etc/ticket-system-updater/keys\n' \
@@ -449,20 +462,36 @@ verify_installation() {
   )
 }
 
+# Genau ein Hauptschluessel in der Datei, und es ist der veroeffentlichte. Gibt 0 zurueck, wenn ja.
+release_key_matches() {
+  local key="$1" home pubs fpr rc=0
+  home="$(mktemp -d)"; chmod 0700 "$home"
+  GNUPGHOME="$home" gpg --batch --quiet --import "$key" 2>/dev/null || rc=1
+  pubs="$(GNUPGHOME="$home" gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '$1=="pub" {n++} END {print n+0}')"
+  fpr="$(GNUPGHOME="$home" gpg --batch --with-colons --fingerprint 2>/dev/null | awk -F: '/^fpr:/ {print $10; exit}')"
+  rm -rf "$home"
+  [[ "$rc" == 0 && "$pubs" == 1 && "${fpr^^}" == "${INSTALL_SIGNER_FINGERPRINT^^}" ]]
+}
+
 # Prueft, dass INSTALL_REF ein vom erwarteten Schluessel signierter Tag ist und auf HEAD zeigt.
+# Massgeblich ist der Fingerabdruck des Hauptschluessels in der Signatur selbst (VALIDSIG) -- ein an
+# release-signing-key.asc angehaengter Fremdschluessel genuegt damit nicht (Security-Audit R-14).
 verify_release_tag() {
-  local dir="$1" home fpr rc=0
+  local dir="$1" home status rc=0
   [[ -n "$INSTALL_REF" ]] || return 0
   [[ "$INSTALL_SIGNER_FINGERPRINT" =~ ^[A-Fa-f0-9]{40}$ ]] || { echo "INSTALL_SIGNER_FINGERPRINT (40 Hex-Zeichen) fehlt -- ohne unabhaengig veroeffentlichten Fingerabdruck keine Tag-Installation." >&2; return 1; }
   [[ -f "$dir/ops/release-signing-key.asc" ]] || { echo "ops/release-signing-key.asc fehlt im Release." >&2; return 1; }
+  if ! release_key_matches "$dir/ops/release-signing-key.asc"; then
+    echo "Der Signaturschluessel im Repository passt NICHT zum veroeffentlichten Fingerabdruck (oder enthaelt weitere Schluessel). Abbruch." >&2
+    return 1
+  fi
   home="$(mktemp -d)"; chmod 0700 "$home"
   GNUPGHOME="$home" gpg --batch --quiet --import "$dir/ops/release-signing-key.asc" 2>/dev/null || rc=1
-  fpr="$(GNUPGHOME="$home" gpg --batch --with-colons --fingerprint 2>/dev/null | awk -F: '/^fpr:/ {print $10; exit}')"
-  if [[ "$rc" == 0 && "${fpr^^}" != "${INSTALL_SIGNER_FINGERPRINT^^}" ]]; then
-    echo "Der Signaturschluessel im Repository passt NICHT zum veroeffentlichten Fingerabdruck. Abbruch." >&2; rc=1
-  fi
-  if [[ "$rc" == 0 ]] && ! GNUPGHOME="$home" git -C "$dir" -c safe.directory="$dir" verify-tag "$INSTALL_REF" >/dev/null 2>&1; then
-    echo "Release-Tag $INSTALL_REF ist nicht gueltig signiert. Abbruch." >&2; rc=1
+  if [[ "$rc" == 0 ]]; then
+    status="$(GNUPGHOME="$home" git -C "$dir" -c safe.directory="$dir" verify-tag --raw "$INSTALL_REF" 2>&1 >/dev/null || true)"
+    if ! awk -v want="${INSTALL_SIGNER_FINGERPRINT^^}" '$1 == "[GNUPG:]" && $2 == "VALIDSIG" && toupper($NF) == want { ok = 1 } END { exit !ok }' <<<"$status"; then
+      echo "Release-Tag $INSTALL_REF ist nicht mit dem veroeffentlichten Schluessel signiert. Abbruch." >&2; rc=1
+    fi
   fi
   if [[ "$rc" == 0 && "$(git -C "$dir" -c safe.directory="$dir" rev-parse "$INSTALL_REF^{commit}")" != "$(git -C "$dir" -c safe.directory="$dir" rev-parse HEAD)" ]]; then
     echo "Ausgecheckter Stand entspricht nicht dem Release-Tag $INSTALL_REF. Abbruch." >&2; rc=1
@@ -659,7 +688,7 @@ if [[ "$ENABLE_UPDATES" == "true" ]]; then
   set_env_var "UPDATE_ALLOW_MAIN_DEPLOY" "true" "$ENV_FILE"
   # Ohne geprueften Schluessel lehnt der Updater jedes Update ab -- frueh und deutlich warnen.
   UPDATE_KEYS="$( { command -v gpg >/dev/null 2>&1 && gpg --homedir "$COMPOSE_DIR/update-keys" --list-keys --with-colons 2>/dev/null; } || true)"
-  if ! grep -q '^pub:' <<<"$UPDATE_KEYS"; then
+  if ! grep -q '^pub:' <<<"$UPDATE_KEYS" && [[ -z "$INSTALL_REF" ]]; then
     echo "WARNING: no trusted signing key found in ops/docker/update-keys -- every update will be rejected until a verified key is imported (README: 'Online-Updater bewusst aktivieren')." >&2
   fi
 fi

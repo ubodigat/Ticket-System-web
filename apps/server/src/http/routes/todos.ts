@@ -9,6 +9,7 @@ import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import type { ExtrasRouteDeps } from './extras.js';
 import { insertAdminTodo } from '../../domain/adminTodos.js';
+import { loadTicketScope, scopeAllowsTicket } from '../../domain/ticketAccess.js';
 
 export const createAdminTodoSchema = z.object({
   content: z.string().trim().min(1).max(5000),
@@ -82,7 +83,8 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
         .innerJoin('admin_todo_members as m', 'm.todo_id', 't.id')
         .selectAll('t').where('m.user_id', '=', actor.uid).where('m.hidden', '=', false).execute();
       const tasks = await app.db.selectFrom('ticket_todos as t').innerJoin('tickets as k', 'k.id', 't.ticket_id')
-        .select(['t.id', 't.content', 't.done', 't.done_at', 't.ticket_id', 'k.title', 'k.ticket_number', 'k.custom_due_at', 'k.sla_due_at', 'k.status', 'k.closed_at'])
+        .select(['t.id', 't.content', 't.done', 't.done_at', 't.ticket_id', 'k.title', 'k.ticket_number', 'k.custom_due_at', 'k.sla_due_at', 'k.status', 'k.closed_at',
+          'k.created_by_user_id', 'k.assigned_to_user_id', 'k.assigned_group_id', 'k.category'])
         .where('k.archived_at', 'is', null)
         .where(eb => eb.or([
           eb('t.assignee_user_id', '=', actor.uid),
@@ -90,6 +92,9 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
           eb('k.assigned_to_user_id', '=', actor.uid),
           eb.and([eb('k.assigned_to_user_id', 'is', null), eb('k.assigned_to_username', '=', actor.username)])
         ])).execute();
+      // Security-Audit R-30: Titel fremder Tickets nicht ueber die Aufgabenliste preisgeben.
+      const scope = await loadTicketScope(app.db, actor);
+      const visibleTasks = tasks.filter(task => scopeAllowsTicket(scope, { ...task, id: task.ticket_id }));
       const [personalDek, taskDek, titleDek] = await Promise.all([
         ensureDek(app.db, deps.keyProvider, 'admin_todos.content'),
         ensureDek(app.db, deps.keyProvider, 'ticket_todos.content'),
@@ -101,7 +106,7 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
       return reply.send({ todos: [
         ...own.map(t => ({ id: t.id, kind: 'personal', content: decrypt(t.content, 'admin_todos', 'content', t.id, personalDek),
           done: !!t.done, done_at: t.done_at ?? null, due_at: t.due_at, creator_id: t.created_by_user_id })),
-        ...tasks.map(t => ({ id: t.id, kind: 'ticket', content: decrypt(t.content, 'ticket_todos', 'content', t.id, taskDek),
+        ...visibleTasks.map(t => ({ id: t.id, kind: 'ticket', content: decrypt(t.content, 'ticket_todos', 'content', t.id, taskDek),
           done: !!t.done, done_at: t.done_at ?? null, due_at: slaModuleActive ? t.custom_due_at || t.sla_due_at : null, ticket_id: t.ticket_id, ticket_number: t.ticket_number,
           ticket_closed: t.status === 'Geschlossen', ticket_closed_at: t.status === 'Geschlossen' ? t.closed_at ?? null : null,
           ticket_title: decrypt(t.title, 'tickets', 'title', t.ticket_id, titleDek) }))

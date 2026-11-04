@@ -18,6 +18,8 @@ ops/docker/caddy-sites/*.caddy
 ops/backups/
 # Wiederherstellungs-Kit (enthaelt KEK und privaten Sicherungsschluessel) -- nie versionieren
 ops/recovery-kit-*
+# Von ops/release/create-release.sh erzeugte Release-Assets (werden an das GitHub-Release gehaengt).
+release-assets/
 # Security-Audit N9: von install.sh generiertes SQL mit dem echten Laufzeit-DB-Passwort.
 ops/docker/mariadb/initdb.d/*.sql
 *.kek

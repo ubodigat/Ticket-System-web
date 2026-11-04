@@ -123,7 +123,9 @@ export function registerUpdateRoutes(app: FastifyInstance, deps: UpdateRouteDeps
     const job = jobFrom(await bridge.read('job.env'), await readJobLog(dir));
     if (!state) return { enabled: true, error: 'update_service_unreachable', job };
     const enabled = state.enabled === '1';
-    if (enabled && state.signingKeys !== '1') return { enabled: false, error: 'update_signature_not_configured', job };
+    // Ein Wiederherstellungs-Kit (KEK, .env, privater Sicherungsschluessel) gehoert nicht auf den Server.
+    const recoveryKits = Math.max(0, Number(state.recoveryKits) || 0);
+    if (enabled && state.signingKeys !== '1') return { enabled: false, error: 'update_signature_not_configured', job, recoveryKits };
     const commit = (value: string | undefined) => (value && /^[0-9a-f]{40}$/.test(value) ? value : null);
     const localCommit = commit(state.localCommit);
     const remoteCommit = commit(state.remoteCommit);
@@ -132,7 +134,7 @@ export function registerUpdateRoutes(app: FastifyInstance, deps: UpdateRouteDeps
       enabled, branch: state.branch || null, localCommit, remoteCommit,
       localSubject: state.localSubject || null, remoteSubject: state.remoteSubject || null,
       localDate: isoDate(state.localDate), remoteDate: isoDate(state.remoteDate),
-      backupReady: state.backupReady === '1', freeMb: Number(state.freeMb) || null,
+      backupReady: state.backupReady === '1', freeMb: Number(state.freeMb) || null, recoveryKits,
       changes: parseChanges(await readStateLines(dir, 'changes.log', 30)),
       backup: backupStateFrom(await bridge.read('backup.env')),
       updateAvailable: !!localCommit && !!remoteCommit && localCommit !== remoteCommit,

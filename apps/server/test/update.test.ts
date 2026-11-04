@@ -34,7 +34,7 @@ function buildDb() {
 }
 
 // Simuliert den Host-Dienst (ops/host-updater): beantwortet Anfragen aus requests/ in state/.
-async function fakeHost(options: { remote?: string; accept?: string; silent?: boolean } = {}) {
+async function fakeHost(options: { remote?: string; accept?: string; silent?: boolean; signingKeys?: 0 | 1; extra?: string } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'update-bridge-'));
   await mkdir(join(dir, 'requests')); await mkdir(join(dir, 'state'));
   await writeFile(join(dir, 'state', 'agent.env'), 'enabled=1\n');
@@ -47,7 +47,7 @@ async function fakeHost(options: { remote?: string; accept?: string; silent?: bo
       handled.push(line);
       const [action, nonce] = line.split(' ');
       if (action === 'status') {
-        await writeFile(join(dir, 'state', 'status.env'), `nonce=${nonce}\nenabled=1\nsigningKeys=1\nbranch=main\nlocalCommit=${other}\nremoteCommit=${options.remote ?? commit}\ncommitsBehind=1\n`);
+        await writeFile(join(dir, 'state', 'status.env'), `nonce=${nonce}\nenabled=1\nsigningKeys=${options.signingKeys ?? 1}\nbranch=main\nlocalCommit=${other}\nremoteCommit=${options.remote ?? commit}\ncommitsBehind=1\n${options.extra ?? ''}`);
       } else {
         await writeFile(join(dir, 'state', 'accepted.env'), `nonce=${nonce}\nresult=${options.accept ?? 'started'}\n`);
         await writeFile(join(dir, 'state', 'job.env'), `nonce=${nonce}\naction=${action}\nrunning=0\nok=1\nfailed=0\nstep=done\n`);
@@ -95,6 +95,15 @@ describe('update routes (host updater bridge, Security-Audit N-3)', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ enabled: true, remoteCommit: commit, localCommit: other, updateAvailable: true, commitsBehind: 1 });
     expect(host.handled[0]).toMatch(/^status [0-9a-f]{32} -$/);
+  });
+
+  it('warns while a recovery kit is still on the server, also before updates are unlocked', async () => {
+    const withKit = await fakeHost({ extra: 'recoveryKits=2\n' });
+    expect((await request(withKit.dir, 'superadmin', 'GET', 'status')).response.json()).toMatchObject({ enabled: true, recoveryKits: 2 });
+    const locked = await fakeHost({ signingKeys: 0, extra: 'recoveryKits=1\n' });
+    expect((await request(locked.dir, 'superadmin', 'GET', 'status')).response.json()).toMatchObject({ error: 'update_signature_not_configured', recoveryKits: 1 });
+    const clean = await fakeHost({ extra: 'recoveryKits=garbage\n' });
+    expect((await request(clean.dir, 'superadmin', 'GET', 'status')).response.json()).toMatchObject({ recoveryKits: 0 });
   });
 
   it('requires the step-up password before anything reaches the host', async () => {

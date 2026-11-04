@@ -6,6 +6,7 @@ import { requireAdmin } from './session.js';
 import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher } from '../../crypto/fieldCrypto.js';
 import { routeError } from './routeError.js';
+import { canAccessTicket } from '../../domain/ticketAccess.js';
 
 export function timerMinutes(start: Date, stop: Date) {
   return Math.max(1, Math.ceil((stop.getTime() - start.getTime()) / 60000));
@@ -32,9 +33,12 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
   });
   app.post('/api/v2/work-timer', async (req, reply) => {
     try {
-      const { uid } = requireAdmin(req);
+      const session = requireAdmin(req);
+      const { uid } = session;
       const parsed = z.object({ ticketId: z.uuid() }).strict().safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_ticket' });
+      // Security-Audit R-30: nur Tickets, die die Person sehen darf.
+      if (!(await canAccessTicket(app.db, session, parsed.data.ticketId))) return reply.code(404).send({ error: 'ticket_not_available' });
       const result = await app.db.transaction().execute(async trx => {
         await trx.selectFrom('users').select('id').where('id', '=', uid).forUpdate().executeTakeFirstOrThrow();
         const previous = await trx.selectFrom('ticket_work_timers').selectAll().where('user_id', '=', uid).executeTakeFirst();

@@ -98,6 +98,7 @@ do_status() {
   chmod 0644 "$tmp"; mv -f "$tmp" "$STATE_DIR/changes.log"
   write_state status.env "nonce=$nonce" "enabled=$([[ "$ALLOW_MAIN_DEPLOY" == "true" ]] && echo 1 || echo 0)" "signingKeys=$signed" \
     "backupReady=$(backup_ready && echo 1 || echo 0)" "freeMb=$(df -Pm "$REPO_DIR" | awk 'NR==2 {print $4}')" \
+    "recoveryKits=$(find "$REPO_DIR/ops" -maxdepth 1 -type f -name 'recovery-kit-*' 2>/dev/null | wc -l | tr -d ' ')" \
     "branch=$UPDATE_BRANCH" "localCommit=$local_commit" "remoteCommit=$remote_commit" \
     "localSubject=$(git_repo log -1 --pretty=%s HEAD 2>/dev/null || true)" \
     "remoteSubject=$(git_repo log -1 --pretty=%s "origin/$UPDATE_BRANCH" 2>/dev/null || true)" \

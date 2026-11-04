@@ -1,0 +1,31 @@
+# Build-Kontext von ops/docker/Dockerfile.server ist die Repository-Wurzel (Security-Audit R-31).
+# Positivliste: an den Docker-Daemon geht nur, was das Dockerfile kopiert -- nie Schluessel
+# (ops/secrets, *.kek), Sicherungen (ops/backups), Wiederherstellungs-Kits, TLS-Material, .env-Dateien
+# oder lokale node_modules. Neue Build-Eingaben muessen hier ausdruecklich freigegeben werden.
+*
+
+!package.json
+!package-lock.json
+!tsconfig.base.json
+
+!apps/server/package.json
+!apps/server/tsconfig.json
+!apps/server/src/**
+
+!index.html
+!dashboard.html
+!admin.html
+!script.js
+!style.css
+!js/**
+!picture/**
+!vendor/**
+
+# Auch innerhalb freigegebener Verzeichnisse nie Geheimnisse oder lokale Artefakte.
+**/.env
+**/.env.*
+**/*.kek
+**/*.pem
+**/*.key
+**/node_modules
+**/dist

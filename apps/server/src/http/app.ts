@@ -35,10 +35,11 @@ import { registerOfficeViewerRoutes } from './routes/officeViewer.js';
 import { registerStaticAssetRoutes } from './routes/staticAssets.js';
 import { registerSystemInfoRoutes } from './routes/systemInfo.js';
 import { registerBackupRoutes } from './routes/backup.js';
+import { registerPrivacyRoutes } from './routes/privacy.js';
 import { loadSecurityPolicy } from '../domain/securityPolicy.js';
 import { isAccountExpired } from '../domain/accountValidity.js';
 import { recordActivity } from '../domain/activityLog.js';
-import { canAccessTicket } from '../domain/ticketAccess.js';
+import { ticketRouteGuard } from '../domain/ticketAccess.js';
 
 function timestampMillis(value: Date | string | null | undefined): number {
   if (!value) return 0;
@@ -236,21 +237,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     catch (err) { req.log.error({ err }, 'Aktivitaet konnte nicht protokolliert werden'); }
   });
 
-  // Ticket-Zugriff serverseitig: Admin-Konten erreichen ueber /api/v2/tickets/:id/... nur Tickets,
-  // die sie laut Sichtbarkeitsregeln sehen duerfen (domain/ticketAccess.ts) -- auch Unterrouten
-  // (Chat, Notizen, Anhaenge, verwandte Tickets, Wissensdatenbank-Zuordnungen ...). Normale Konten
-  // pruefen die Routen selbst (nur eigene Tickets). Die Genehmigungsentscheidung prueft die
-  // eingetragene Person selbst, sie braucht keinen Ticketzugriff.
-  const TICKET_ROUTE = /^\/api\/v2\/tickets\/:id(\/|$)/;
-  const TICKET_ACCESS_EXEMPT = new Set(['/api/v2/tickets/:id/approval-decision']);
-  app.addHook('preHandler', async (req, reply) => {
-    const url = req.routeOptions?.url;
-    const session = req.ticketSession;
-    if (!url || !session || session.role !== 'admin' || !TICKET_ROUTE.test(url) || TICKET_ACCESS_EXEMPT.has(url)) return;
-    const id = (req.params as { id?: unknown } | undefined)?.id;
-    if (typeof id !== 'string') return;
-    if (await canAccessTicket(deps.db, session, id) === false) return reply.code(403).send({ error: 'forbidden' });
-  });
+  // Ticket-Zugriff serverseitig fuer jede Route unter /api/v2/tickets/:id, alle Rollen
+  // (domain/ticketAccess.ts ticketRouteGuard).
+  app.addHook('preHandler', ticketRouteGuard(deps.db));
 
   registerHealthRoutes(app);
   registerSetupRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
@@ -273,6 +262,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerUpdateRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerSystemInfoRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerBackupRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
+  registerPrivacyRoutes(app, { env: deps.env, keyProvider: deps.keyProvider });
   registerStaticAssetRoutes(app);
 
   return app;

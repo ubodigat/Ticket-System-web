@@ -8,6 +8,12 @@
 // gzip-komprimierte Inhalt (NDJSON), verschluesselt mit AES-256-GCM; der Schluessel entsteht per
 // scrypt aus der Sicherungs-Passphrase, die nie gespeichert wird. Zusaetzlich verlangt das
 // Einspielen den SHA-256-Hash der gesamten Datei, der beim Erstellen angezeigt wurde.
+//
+// Speicherbedarf (Security-Audit R-29): Komprimieren und Verschluesseln laufen als Datenstrom; im
+// Speicher liegt hoechstens die fertige verschluesselte Datei (bis BACKUP_MAX_BYTES), nie zusaetzlich
+// der Klartext oder eine zusammengesetzte Kopie. Beim Einspielen wird zuerst der GCM-Tag ueber die
+// ganze Datei geprueft (ohne den Klartext zu behalten), danach wird fuer jeden Durchlauf erneut
+// stueckweise entschluesselt.
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { createGunzip, createGzip } from 'node:zlib';
 import { Readable } from 'node:stream';
@@ -66,9 +72,15 @@ function headerBlock(header: BackupHeader): Buffer {
   return Buffer.concat([BACKUP_MAGIC, length, json]);
 }
 
-export async function sealBackup(payload: Buffer, passphrase: string,
+export interface SealedBackup { chunks: Buffer[]; size: number; sha256: string }
+
+const SLICE_BYTES = 1024 * 1024;
+
+// Schreibt NDJSON-Zeilen gzip-komprimiert und direkt verschluesselt in eine Liste von Teilstuecken
+// (mit Groessenlimit). Der Kopf steht vorab fest (Salz, IV), damit er als AAD dienen kann.
+export async function createBackupWriter(passphrase: string,
   meta: Pick<BackupHeader, 'installationId' | 'schemaFingerprint' | 'createdBy'>,
-  params: { N: number; r: number; p: number } = SCRYPT): Promise<Buffer> {
+  params: { N: number; r: number; p: number } = SCRYPT, maxBytes = BACKUP_MAX_BYTES) {
   if (passphrase.length < BACKUP_PASSPHRASE_MIN) throw new BackupError('passphrase_too_short');
   const salt = randomBytes(16);
   const iv = randomBytes(12);
@@ -79,10 +91,43 @@ export async function sealBackup(payload: Buffer, passphrase: string,
   const prefix = headerBlock(header);
   const cipher = createCipheriv('aes-256-gcm', await deriveKey(passphrase, salt, params), iv);
   cipher.setAAD(prefix);
-  const body = Buffer.concat([cipher.update(payload), cipher.final()]);
-  const file = Buffer.concat([prefix, body, cipher.getAuthTag()]);
-  if (file.length > BACKUP_MAX_BYTES) throw new BackupError('backup_too_large');
-  return file;
+  const gzip = createGzip({ level: 6 });
+  const chunks: Buffer[] = [];
+  const hash = createHash('sha256');
+  let size = 0;
+  let failed: Error | null = null;
+  const push = (chunk: Buffer) => {
+    if (!chunk.length || failed) return;
+    size += chunk.length;
+    // 16 Byte bleiben fuer den GCM-Tag frei.
+    if (size + 16 > maxBytes && chunk.length !== 16) { failed = new BackupError('backup_too_large'); gzip.destroy(); chunks.length = 0; return; }
+    hash.update(chunk);
+    chunks.push(chunk);
+  };
+  push(prefix);
+  gzip.on('data', (chunk: Buffer) => push(cipher.update(chunk)));
+  return {
+    async write(line: BackupLine) {
+      if (failed) throw failed;
+      // Nach Ueberschreiten der Grenze ist gzip zerstoert und meldet nie mehr "drain" -- auch auf
+      // "close" warten, sonst bliebe die Sicherung haengen.
+      if (!gzip.write(JSON.stringify(line) + '\n')) {
+        await new Promise<void>(resolve => {
+          const done = () => { gzip.off('drain', done); gzip.off('close', done); resolve(); };
+          gzip.once('drain', done); gzip.once('close', done);
+        });
+      }
+      if (failed) throw failed;
+    },
+    async finish(): Promise<SealedBackup> {
+      if (failed) throw failed;
+      await new Promise<void>((resolve, reject) => { gzip.once('end', () => resolve()); gzip.once('error', reject); gzip.end(); });
+      push(cipher.final());
+      if (failed) throw failed;
+      push(cipher.getAuthTag());
+      return { chunks, size, sha256: hash.digest('hex') };
+    }
+  };
 }
 
 // Liest nur den (unverschluesselten) Kopf -- fuer Pruefungen vor dem teuren Entschluesseln.
@@ -101,22 +146,30 @@ export function readBackupHeader(file: Buffer): { header: BackupHeader; prefixLe
   return { header, prefixLength };
 }
 
-export async function openBackup(file: Buffer, passphrase: string): Promise<{ header: BackupHeader; payload: Buffer }> {
+// Prueft Passphrase und Unversehrtheit der ganzen Datei; lines() liefert danach die Zeilen (jeder
+// Aufruf entschluesselt erneut stueckweise -- die Datei im Speicher ist unveraenderlich und bereits
+// authentifiziert).
+export async function openBackup(file: Buffer, passphrase: string): Promise<{ header: BackupHeader; lines: () => AsyncGenerator<BackupLine> }> {
   const { header, prefixLength } = readBackupHeader(file);
   const iv = Buffer.from(header.iv, 'base64');
   const salt = Buffer.from(header.kdf.salt, 'base64');
   if (iv.length !== 12 || salt.length < 16) throw new BackupError('backup_invalid_file');
   const key = await deriveKey(passphrase, salt, header.kdf);
-  const decipher = createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAAD(file.subarray(0, prefixLength));
-  decipher.setAuthTag(file.subarray(file.length - 16));
+  const body = file.subarray(prefixLength, file.length - 16);
+  async function* decrypted(): AsyncGenerator<Buffer> {
+    const decipher = createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAAD(file.subarray(0, prefixLength));
+    decipher.setAuthTag(file.subarray(file.length - 16));
+    for (let offset = 0; offset < body.length; offset += SLICE_BYTES) yield decipher.update(body.subarray(offset, offset + SLICE_BYTES));
+    yield decipher.final();
+  }
   try {
-    const payload = Buffer.concat([decipher.update(file.subarray(prefixLength, file.length - 16)), decipher.final()]);
-    return { header, payload };
+    for await (const slice of decrypted()) void slice;
   } catch {
     // Falsche Passphrase und manipulierte Datei sind bei GCM nicht unterscheidbar.
     throw new BackupError('backup_decrypt_failed');
   }
+  return { header, lines: () => readPayloadLines(decrypted()) };
 }
 
 // --- Zeilen-Kodierung: Binaerdaten, Zeitpunkte und grosse Zahlen verlustfrei als JSON ---
@@ -152,36 +205,10 @@ export function decodeValue(value: unknown): unknown {
 export interface BackupTableMeta { name: string; columns: string[] }
 export type BackupLine = { kind: 'meta'; tables: BackupTableMeta[] } | { t: string; r: unknown[] };
 
-// Schreibt NDJSON-Zeilen gzip-komprimiert in einen Puffer (mit Groessenlimit).
-export function createPayloadWriter() {
-  const gzip = createGzip({ level: 6 });
-  const chunks: Buffer[] = [];
-  let size = 0;
-  let failed: Error | null = null;
-  gzip.on('data', (chunk: Buffer) => {
-    size += chunk.length;
-    if (size > BACKUP_MAX_BYTES) { failed = new BackupError('backup_too_large'); gzip.destroy(); return; }
-    chunks.push(chunk);
-  });
-  return {
-    async write(line: BackupLine) {
-      if (failed) throw failed;
-      if (!gzip.write(JSON.stringify(line) + '\n')) await new Promise<void>(resolve => gzip.once('drain', () => resolve()));
-      if (failed) throw failed;
-    },
-    async finish(): Promise<Buffer> {
-      if (failed) throw failed;
-      await new Promise<void>((resolve, reject) => { gzip.once('end', () => resolve()); gzip.once('error', reject); gzip.end(); });
-      if (failed) throw failed;
-      return Buffer.concat(chunks);
-    }
-  };
-}
-
 // Liest die NDJSON-Zeilen aus dem entschluesselten, gzip-komprimierten Inhalt -- gestreamt,
-// damit der entpackte Inhalt nie vollstaendig im Speicher liegen muss.
-export async function* readPayloadLines(payload: Buffer): AsyncGenerator<BackupLine> {
-  const gunzip = Readable.from([payload]).pipe(createGunzip());
+// damit weder der Klartext noch der entpackte Inhalt vollstaendig im Speicher liegen muss.
+export async function* readPayloadLines(payload: AsyncIterable<Buffer>): AsyncGenerator<BackupLine> {
+  const gunzip = Readable.from(payload).pipe(createGunzip());
   let inflated = 0;
   let pending: Buffer[] = [];
   let pendingSize = 0;

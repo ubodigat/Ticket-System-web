@@ -1226,6 +1226,18 @@ export const Store = {
         return (await res.json()).avatar || null;
     },
     // Datenbank-Sicherung (nur Superadmin, siehe apps/server/src/http/routes/backup.ts).
+    // Auskunft/Datenexport (DSGVO Art. 15/20): eigene Daten oder -- nur Superadmin -- die einer anderen Person.
+    exportPersonalData: async (userId, password, totpCode) => {
+        const res = await fetch(`/api/v2/users/${userId ? encodeURIComponent(userId) : 'me'}/export`, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ password, totp_code: totpCode || undefined })
+        }).catch(() => null);
+        if (!res) return { error: 'network' };
+        if (!res.ok) return { error: (await res.json().catch(() => ({}))).error || (res.status === 429 ? 'rate_limited' : 'failed') };
+        const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '')?.[1] || 'personenbezogene-daten.json';
+        return { blob: await res.blob(), name };
+    },
     createBackup: async (body) => {
         const res = await fetch('/api/v2/system/backup', {
             method: 'POST', credentials: 'same-origin',

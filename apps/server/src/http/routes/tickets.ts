@@ -20,7 +20,7 @@ import { createNotification } from './extras.js';
 import { calculateSlaDueAt } from '../../domain/sla.js';
 import { loadModules, maskTicketModules, modulesFromConfig, requireModule } from '../../domain/modules.js';
 import { groupWithDescendants } from '../../domain/groups.js';
-import { canAccessTicket, loadTicketScope, scopeAllowsTicket } from '../../domain/ticketAccess.js';
+import { canAccessTicket, loadTicketScope, recipientsWithAccess, scopeAllowsTicket } from '../../domain/ticketAccess.js';
 import { approverCandidates } from '../../domain/approvalRouting.js';
 import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
@@ -341,11 +341,24 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       .select('ticket_participants.user_id').where('ticket_participants.ticket_id', '=', ticketId)
       .where('users.role', 'in', ['admin', 'superadmin']).where('users.account_archived', '=', false).execute()).map(r => r.user_id);
   }
+  // Security-Audit R-30: nur an Konten, die das Ticket oeffnen duerfen (Gruppen sind abgeschottet;
+  // auch Erwaehnungen und der Fallback "alle Admins" erreichen niemanden ausserhalb).
   async function notifyMany(ids: Array<string | null | undefined>, params: { type: string; ticketId: string; ticketNumber: string | null;
     message: string; actorUserId: string }) {
-    for (const recipientUserId of new Set(ids.filter((value): value is string => !!value))) {
+    for (const recipientUserId of await recipientsWithAccess(app.db, params.ticketId, ids)) {
       await createNotification(app, deps, { recipientUserId, ...params });
     }
+  }
+
+  // Zustaendige Person einer Teilaufgabe: aktives Admin-Konto mit Zugriff auf das Ticket; der
+  // Benutzername kommt aus der Datenbank (nie ungeprueft vom Client).
+  async function todoAssignee(ticketId: string, userId: string | null | undefined, username: string | null | undefined) {
+    if (!userId && !username) return { assignee_user_id: null, assignee_username: null };
+    const lookup = app.db.selectFrom('users').select(['id', 'username', 'role'])
+      .where('role', 'in', ['admin', 'superadmin']).where('account_archived', '=', false);
+    const user = userId ? await lookup.where('id', '=', userId).executeTakeFirst() : await lookup.where('username', '=', username as string).executeTakeFirst();
+    if (!user || !(await canAccessTicket(app.db, { uid: user.id, role: user.role }, ticketId))) throw { statusCode: 400, message: 'invalid_assignee' };
+    return { assignee_user_id: user.id, assignee_username: user.username };
   }
   // @-Erwaehnungen wie im Frontend ("@Vollstaendiger Name" oder "@benutzername"); laengster Treffer
   // gewinnt, damit "@Max Mustermann" nicht zusaetzlich eine Person namens "Max" erwaehnt.
@@ -540,6 +553,7 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         .select(eb => [
           'id',
           'created_at',
+          'created_by_user_id', 'assigned_to_user_id', 'assigned_group_id', 'category',
           eb.selectFrom('ticket_messages')
             .select('created_at')
             .whereRef('ticket_messages.ticket_id', '=', 'tickets.id')
@@ -548,8 +562,15 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
             .limit(1)
             .as('first_response_at')
         ]);
-      if (since) query = query.where('created_at', '>=', new Date(since));
-      const rows = await query.execute();
+      if (since) {
+        const sinceDate = new Date(since);
+        if (Number.isNaN(sinceDate.getTime())) return reply.code(400).send({ error: 'invalid_since' });
+        query = query.where('created_at', '>=', sinceDate);
+      }
+      // Security-Audit R-30: nur Tickets, die die Person auch sehen darf (vorher alle IDs).
+      const scope = await loadTicketScope(app.db, session);
+      const rows = (await query.execute()).filter(row => scopeAllowsTicket(scope, row))
+        .map(row => ({ id: row.id, created_at: row.created_at, first_response_at: row.first_response_at }));
       return reply.send({ tickets: rows });
     } catch (e: any) {
       return routeError(app, reply, e);
@@ -1279,8 +1300,10 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const isAdmin = session.role === 'admin' || session.role === 'superadmin';
       if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
 
-      const incident = await app.db.selectFrom('tickets').select(['id', 'type']).where('id', '=', parsed.data.incident_id).executeTakeFirst();
+      const incident = await app.db.selectFrom('tickets').select(['id', 'type', 'status', 'archived_at']).where('id', '=', parsed.data.incident_id).executeTakeFirst();
       if (!incident || incident.type !== 'incident') return reply.code(400).send({ error: 'not_an_incident' });
+      const publicIncident = !incident.archived_at && incident.status !== 'Geschlossen';
+      if (!publicIncident && !(await canAccessTicket(app.db, session, incident.id))) return reply.code(400).send({ error: 'not_an_incident' });
 
       await app.db.updateTable('tickets').set({ incident_id: parsed.data.incident_id, updated_at: mysqlTimestamp() }).where('id', '=', id).execute();
       await app.db.insertInto('ticket_audit_log').values({
@@ -1661,14 +1684,14 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const parsed = createTodoSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
+      const assignee = await todoAssignee(id, parsed.data.assignee_user_id, parsed.data.assignee_username);
       const todoId = randomUUID();
       const dek = await loadTodoDek();
       await app.db.insertInto('ticket_todos').values({
         id: todoId,
         ticket_id: id,
         content: fieldCipher.encryptField(parsed.data.content, dek, todoCtx(todoId)),
-        assignee_user_id: parsed.data.assignee_user_id ?? null,
-        assignee_username: parsed.data.assignee_username ?? null,
+        ...assignee,
         done: false,
         created_by_user_id: session.uid
       }).execute();
@@ -1696,8 +1719,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         const dek = await loadTodoDek();
         updates.content = fieldCipher.encryptField(parsed.data.content, dek, todoCtx(todoId));
       }
-      if (isAdmin && parsed.data.assignee_user_id !== undefined) updates.assignee_user_id = parsed.data.assignee_user_id;
-      if (isAdmin && parsed.data.assignee_username !== undefined) updates.assignee_username = parsed.data.assignee_username;
+      if (isAdmin && (parsed.data.assignee_user_id !== undefined || parsed.data.assignee_username !== undefined)) {
+        Object.assign(updates, await todoAssignee(id, parsed.data.assignee_user_id, parsed.data.assignee_username));
+      }
       if (parsed.data.done !== undefined) {
         updates.done = parsed.data.done;
         // Zeigt in der Oberfläche an, wann die Teilaufgabe erledigt wurde; beim erneuten
@@ -1973,7 +1997,10 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const { id } = req.params as { id: string };
       const parsed = mergeTicketSchema.safeParse(req.body);
       if (!parsed.success || parsed.data.target_ticket_id === id) return reply.code(400).send({ error: 'invalid_body' });
-      if (await canAccessTicket(app.db, session, parsed.data.target_ticket_id) === false) return reply.code(403).send({ error: 'forbidden' });
+      // Security-Audit R-30: Quelle und Ziel -- sonst liesse sich ein fremdes Ticket in ein eigenes ziehen.
+      if (await canAccessTicket(app.db, session, id) === false || await canAccessTicket(app.db, session, parsed.data.target_ticket_id) === false) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
 
       // Security-Audit N11: lief bisher als Folge unabhängiger Einzel-Updates ohne Transaktion --
       // ein Fehler/Absturz mittendrin konnte Nachrichten/Notizen bereits auf das Zielticket

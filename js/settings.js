@@ -691,44 +691,33 @@ export const Settings = {
     // rechtegeprueften Schnittstellen -- enthalten ist nur, was die Person ohnehin sehen darf:
     // Profil, persoenliche Einstellungen, Benachrichtigungen und die selbst erstellten Tickets samt
     // Nachrichtenverlauf. Interne Notizen des Supports gehoeren nicht dazu.
+    // Vollstaendiger Export vom Server (alle Daten zum Konto, entschluesselt); verlangt das Passwort
+    // und -- falls eingerichtet -- den zweiten Faktor, weil er alles auf einmal herausgibt.
     exportMyData: async (button) => {
+        const stepUp = await AdminBoard.confirmStepUp(Lang.t('dataExportConfirm'));
+        if (!stepUp) return;
         if (button) button.disabled = true;
         try {
-            const get = async url => {
-                const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store' }).catch(() => null);
-                return res && res.ok ? res.json() : null;
-            };
-            const me = (await get('/api/v2/users/me'))?.user;
-            if (!me) throw new Error('profile');
-            const [active, archived, preferences, notifications, absences] = await Promise.all([
-                get('/api/v2/tickets'), get('/api/v2/tickets/archived'), get('/api/v2/users/me/preferences'),
-                get('/api/v2/notifications'), get('/api/v2/users/me/absences')
-            ]);
-            const own = [...(active?.tickets || []), ...(archived?.tickets || [])].filter(ticket => ticket.created_by_user_id === me.id);
-            const tickets = [];
-            for (const ticket of own) tickets.push({ ...ticket, messages: (await get(`/api/v2/tickets/${encodeURIComponent(ticket.id)}/messages`))?.messages || [] });
-            const data = {
-                exportedAt: new Date().toISOString(),
-                profile: me,
-                preferences: preferences?.preferences || {},
-                absences: absences?.absences || [],
-                notifications: notifications?.notifications || [],
-                tickets
-            };
-            const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `meine-daten-${new Date().toISOString().slice(0, 10)}.json`;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 30000);
-            UI.toast(Lang.t('dataExportDone'));
-        } catch {
-            UI.toast(Lang.t('dataExportFailed'));
+            await Settings.downloadPersonalData(null, stepUp);
         } finally {
             if (button) button.disabled = false;
         }
+    },
+    downloadPersonalData: async (userId, stepUp) => {
+        const result = await Store.exportPersonalData(userId, stepUp.password, stepUp.totpCode);
+        if (!result.blob) {
+            const known = { wrong_password: 'wrongPassword', totp_code_required: 'backupTotpRequired', step_up_required: 'passwordRequired', invalid_totp_code: 'invalidMfaCode', mfa_required: 'dataExportMfaRequired', rate_limited: 'tooManyAttemptsRetryLater', too_many_attempts: 'tooManyAttemptsRetryLater' };
+            return UI.toast(Lang.t(known[result.error] || 'dataExportFailed'));
+        }
+        const url = URL.createObjectURL(result.blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = result.name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        UI.toast(Lang.t('dataExportDone'));
     },
 
     // Profilbild: automatische Vorlage, eine der sechs Vorlagen oder ein eigenes Bild.

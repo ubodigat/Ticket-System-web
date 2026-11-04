@@ -41,16 +41,19 @@ export const AdminBoard = {
         });
     },
 
+    // Gleiche Regeln wie der Server (domain/ticketAccess.ts) -- dort wird verbindlich geprueft, die
+    // Ticketlisten kommen bereits gefiltert. Hier nur fuer Vorschlaege (z.B. @-Erwaehnungen anderer
+    // Personen): eigene, zugewiesene oder beteiligte Tickets, Tickets der eigenen Gruppe (mit Ober-
+    // und Untergruppen); ohne Gruppe zusaetzlich nicht zugewiesene und allgemeine Tickets.
     canAccessTicket: (user, ticket) => {
         if (!user || !ticket || !['admin', 'superadmin'].includes(user.role)) return false;
         if (user.role === 'superadmin') return true;
-        if (!ticket.owner && !(ticket.assignees || []).length) return true;
-        const assignedUsers = [ticket.owner, ticket.assignee, ...(ticket.assignees || []), ...(ticket.participants || [])];
-        if (assignedUsers.includes(user.username)) return true;
-        if (ticket.team && AdminBoard.inTicketGroup(user, ticket.team)) return true;
-        const departments = Array.isArray(user.dept) ? user.dept : [user.dept || 'Allgemein'];
-        const categories = Array.isArray(ticket.category) ? ticket.category : [ticket.category || 'Allgemein'];
-        return departments.includes('All') || categories.some(category => departments.includes(category));
+        if ((ticket.authorUserId && ticket.authorUserId === user.id) || (!ticket.authorUserId && ticket.author === user.username)) return true;
+        const involved = [ticket.owner, ticket.assignee, ...(ticket.assignees || []), ...(ticket.participants || [])];
+        if (involved.includes(user.username)) return true;
+        if (ticket.team) return AdminBoard.inTicketGroup(user, ticket.team);
+        const categories = Array.isArray(ticket.category) ? ticket.category : [ticket.category].filter(Boolean);
+        return (!ticket.owner && !(ticket.assignees || []).length) || !categories.length || categories.includes('Allgemein');
     },
     // Mitglieder der zustaendigen Gruppe sehen das Ticket -- ebenso Mitglieder einer uebergeordneten
     // Gruppe ("IT" umfasst "IT › Netzwerk") und, wie bei den Server-Benachrichtigungen, Mitglieder
@@ -146,8 +149,8 @@ export const AdminBoard = {
     refreshOverdueIndicator: async (tickets, user, settings) => {
         const button = q('#btn-overdue-tickets');
         if (!button) return;
-        const visibleTickets = tickets.filter(ticket => !ticket.archived &&
-            (user?.role !== 'admin' || AdminBoard.canAccessTicket(user, ticket)));
+        // Die Liste kommt vom Server bereits nach Sichtbarkeit gefiltert.
+        const visibleTickets = tickets.filter(ticket => !ticket.archived);
         const count = visibleTickets.filter(ticket => Store.isTicketOverdue(ticket, settings)).length;
         const section = q('#overdue-board');
         if (section) section.hidden = count === 0;
@@ -180,8 +183,7 @@ export const AdminBoard = {
         const user = await Store.currentUser();
         const settings = await Store.getSettings();
         const tickets = (await Store.getTickets()).filter(ticket =>
-            !ticket.archived && (user?.role !== 'admin' || AdminBoard.canAccessTicket(user, ticket)) &&
-            Store.isTicketOverdue(ticket, settings)
+            !ticket.archived && Store.isTicketOverdue(ticket, settings)
         ).sort((a, b) => Store.ticketSlaDueAt(a, settings) - Store.ticketSlaDueAt(b, settings));
         const list = q('#sla-overdue-list');
         const users = await Store.getUsers();
@@ -225,6 +227,7 @@ export const AdminBoard = {
         if (!menu || !input) return;
         if (menu.parentElement !== document.body) document.body.appendChild(menu);
         const currentUser = await Store.currentUser();
+        if (!Store._groupTree.length) await Store.getGroups().catch(() => []);
         AdminBoard.mentionCandidates = (await Store.getUsers()).filter(user =>
             user.username !== currentUser?.username && AdminBoard.canAccessTicket(user, ticket)
         );
@@ -739,9 +742,7 @@ export const AdminBoard = {
         const rawTickets = await Store.getTickets();
         let tickets = rawTickets.filter(t => !t.archived);
 
-        // Sichtbarkeit fuer normale Admins (Gruppe, Zuweisung, Abteilung) -- braucht den Gruppenbaum.
-        if (user?.role === 'admin' && !Store._groupTree.length) await Store.getGroups().catch(() => []);
-        if (user?.role === 'admin') tickets = tickets.filter(ticket => AdminBoard.canAccessTicket(user, ticket));
+        // Sichtbarkeit (Gruppe, Zuweisung, Beteiligung) prueft der Server; die Liste ist bereits gefiltert.
         const slaSettings = await Store.getSettings();
         await AdminBoard.refreshOverdueIndicator(tickets, user, slaSettings);
         AdminBoard.refreshAbsenceBadge().catch(() => {});
@@ -1315,6 +1316,7 @@ export const AdminBoard = {
                 </div>
                 <div class="user-manager-actions">
                     ${(isSuper || canManage2FA) && u.twoFactorEnabled ? `<button class="btn-ghost btn-sm reset-2fa" title="${Lang.t('reset2FA')}">${Icon('unlock-keyhole', 15)}2FA</button>` : ''}
+                    ${isSuper && u.id !== currentUser?.id ? `<button class="btn-ghost btn-icon export-u" title="${Lang.t('dataExportForUser')}" aria-label="${Lang.t('dataExportForUser')}">${Icon('file-down', 16)}</button>` : ''}
                     ${(isSuper || (canManage2FA && u.role === 'user')) && !u.twoFactorEnabled && !u.accountArchived && u.id !== currentUser?.id ? `<button class="btn-ghost btn-icon enroll-2fa" title="${Lang.t('mfaEnrollCodeCreate')}" aria-label="${Lang.t('mfaEnrollCodeCreate')}">${Icon('key-round', 16)}</button>` : ''}
                     ${canManageUsers && u.username !== 'admin' && !u.accountArchived ? `<button class="btn-ghost btn-icon lock-u" title="${u.accountLocked ? Lang.t('unlock') : Lang.t('lock')}" aria-label="${u.accountLocked ? Lang.t('unlock') : Lang.t('lock')}">${Icon(u.accountLocked ? 'lock-open' : 'lock', 16)}</button>` : ''}
                     ${canManageUsers && u.username !== 'admin' ? `<button class="btn-ghost btn-icon archive-u" title="${u.accountArchived ? Lang.t('reactivate') : Lang.t('archiveAction')}" aria-label="${u.accountArchived ? Lang.t('reactivate') : Lang.t('archiveAction')}">${Icon(u.accountArchived ? 'archive-restore' : 'archive', 16)}</button>` : ''}
@@ -1357,6 +1359,11 @@ export const AdminBoard = {
                     AdminBoard.renderUserManager(view);
                 });
             };
+
+            el.querySelector('.export-u')?.addEventListener('click', async () => {
+                const stepUp = await AdminBoard.confirmStepUp(Lang.format('dataExportForUserConfirm', { username: u.username }));
+                if (stepUp) await Settings.downloadPersonalData(u.id, stepUp);
+            });
 
             const enrollBtn = el.querySelector('.enroll-2fa');
             if (enrollBtn) enrollBtn.onclick = () => UI.confirm(Lang.format('mfaEnrollCodeConfirm', { username: u.username }), async () => {
@@ -2594,8 +2601,12 @@ export const AdminBoard = {
         area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} ${Lang.t('updateStatusChecking')}</div>`;
         const status = await Store.getUpdateStatus();
         if (!q('#sys-update-status')) return;
+        // Solange ein Wiederherstellungs-Kit auf dem Server liegt, deutlich warnen (Security-Audit 11/2026).
+        const kitWarning = Number(status.recoveryKits) > 0
+            ? `<div class="callout callout-danger upd-kit">${Icon('key-round', 16)}<div><strong>${Lang.t('recoveryKitOnServerTitle')}</strong><p>${Lang.t('recoveryKitOnServerText')}</p><code>shred -u ops/recovery-kit-*</code></div></div>`
+            : '';
         const notice = (kind, text, retry = false) => {
-            area.innerHTML = `<div class="callout callout-${kind}">${text}</div>${retry ? `<button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}${Lang.t('checkAgain')}</button>` : ''}`;
+            area.innerHTML = `${kitWarning}<div class="callout callout-${kind}">${text}</div>${retry ? `<button class="btn-secondary btn-sm" id="sys-update-retry" type="button">${Icon('refresh-cw', 15)}${Lang.t('checkAgain')}</button>` : ''}`;
             q('#sys-update-retry')?.addEventListener('click', () => AdminBoard.renderUpdateStatus());
             if (window.lucide) lucide.createIcons();
         };
@@ -2634,7 +2645,7 @@ export const AdminBoard = {
                 ${AdminBoard.renderUpdateProgress(job)}
                 <details${job.failed ? ' open' : ''}><summary>${Lang.t('updShowLog')}</summary><pre>${Utils.esc((job.log || []).slice(-30).join('\n'))}</pre></details>
             </div>` : '';
-        area.innerHTML = `${hero}${AdminBoard.renderBackupState(status)}${jobBox}`;
+        area.innerHTML = `${kitWarning}${hero}${AdminBoard.renderBackupState(status)}${jobBox}`;
 
         if (runBtn) {
             runBtn.hidden = !updateAvailable || !!job?.running;
@@ -3986,7 +3997,6 @@ export const AdminBoard = {
         const slaRiskOnly = Store.modules.sla !== false && q('#lv-sla-risk').checked;
 
         let visible = tickets.filter(t => !t.archived);
-        if (actor?.role === 'admin') visible = visible.filter(t => AdminBoard.canAccessTicket(actor, t));
         if (search.trim()) visible = visible.filter(t => Utils.matchesSearch(search, t));
         if (statusFilter) visible = visible.filter(t => t.status === statusFilter);
         if (prioFilter) visible = visible.filter(t => t.prio === prioFilter);

@@ -18,7 +18,7 @@ import { ensureDek } from '../../crypto/dekService.js';
 import { fieldCipher, blindIndexCandidates } from '../../crypto/fieldCrypto.js';
 import { queueMail as sendMail, queueMailIfConfigured as sendMailSafe } from '../../mail/queue.js';
 import { notifyUser } from '../../domain/notifications.js';
-import { canAccessTicket, canReadAttachment } from '../../domain/ticketAccess.js';
+import { canAccessTicket, canReadAttachment, recipientsWithAccess } from '../../domain/ticketAccess.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { convertOfficePreview, discardOfficePreview } from '../../documents/officePreview.js';
 import { validateUploadedFile } from '../../domain/fileValidation.js';
@@ -164,8 +164,16 @@ export function registerExtrasV2Routes(app: FastifyInstance, deps: ExtrasRouteDe
       const ticket = parsed.data.ticket_id
         ? await app.db.selectFrom('tickets').select('ticket_number').where('id', '=', parsed.data.ticket_id).executeTakeFirst()
         : null;
+      // Security-Audit R-30: Hinweise zu einem Ticket nur, wenn die absendende Person es sehen darf --
+      // und nur an Konten, die es ebenfalls sehen duerfen.
+      let recipientIds = parsed.data.recipient_user_ids;
+      if (parsed.data.ticket_id) {
+        if (!ticket || !(await canAccessTicket(app.db, session, parsed.data.ticket_id))) return reply.code(404).send({ error: 'not_found' });
+        recipientIds = await recipientsWithAccess(app.db, parsed.data.ticket_id, recipientIds);
+        if (!recipientIds.length) return reply.code(201).send({ success: true });
+      }
       const recipients = await app.db.selectFrom('users').select(['id', 'username'])
-        .where('id', 'in', parsed.data.recipient_user_ids).execute();
+        .where('id', 'in', recipientIds).execute();
 
       for (const r of recipients) {
         if (r.id === session.uid) continue;

@@ -2,9 +2,9 @@ import type { Kysely } from 'kysely';
 import type { Database } from '../db/types.js';
 
 // Maximale Dateigroesse je Anhang (Systemeinstellungen > Allgemein). Der Superadmin waehlt einen Wert
-// zwischen 500 MB und 2000 MB; ohne Auswahl gilt 1 GB. Die Obergrenze bleibt unter 2 GiB, weil die
-// Pruefung beim Abschluss die ganze Datei in einem Puffer haelt und ClamAV groessere Streams nicht
-// mehr vollstaendig prueft (ops/docker/clamav/clamd.conf).
+// zwischen 500 MB und 2000 MB; ohne Auswahl gilt 1 GB. Die Obergrenze bleibt unter 2 GiB, weil ClamAV
+// groessere Streams nicht mehr vollstaendig prueft (ops/docker/clamav/clamd.conf). Die Pruefung beim
+// Abschluss streamt die Teilstuecke und haelt nie die ganze Datei im Speicher (Security-Audit R-29).
 export const MB = 1024 * 1024;
 export const MIN_UPLOAD_LIMIT_MB = 500;
 export const MAX_UPLOAD_LIMIT_MB = 2000;

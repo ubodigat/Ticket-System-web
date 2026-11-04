@@ -3,9 +3,10 @@ import { Icon } from './utils.js';
 export async function renderPdfPreview(bytes, host) {
     const pdfjs = await import('/vendor/pdfjs/pdf.mjs');
     pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.mjs';
+    // isEvalSupported: false -- kein eval() fuer Schriften (CVE-2024-4367-Klasse), zusaetzlich zur CSP.
     // verbosity ERRORS: Hinweise wie "TT: undefined function" (fehlerhafte, aber darstellbare
     // Schriften im Dokument) sind kein Fehler der Anwendung.
-    const loading = pdfjs.getDocument({ data: new Uint8Array(bytes), useWasm: false, verbosity: pdfjs.VerbosityLevel.ERRORS,
+    const loading = pdfjs.getDocument({ data: new Uint8Array(bytes), useWasm: false, isEvalSupported: false, verbosity: pdfjs.VerbosityLevel.ERRORS,
         standardFontDataUrl: '/vendor/pdfjs/standard_fonts/', cMapUrl: '/vendor/pdfjs/cmaps/', cMapPacked: true });
     const documentPdf = await loading.promise.catch(error => { void loading.destroy(); throw error; });
     const visiblePages = Math.min(documentPdf.numPages, 500);

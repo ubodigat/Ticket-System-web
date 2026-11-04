@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import * as argon2 from 'argon2';
 import { requireSession, requireAdmin } from './session.js';
+import { loadTicketScope, scopeAllowsTicket } from '../../domain/ticketAccess.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
 import { ensureDek } from '../../crypto/dekService.js';
@@ -1370,14 +1371,16 @@ export function registerUsersV2Routes(app: FastifyInstance, deps: UsersRouteDeps
       }
       const rows = await app.db.selectFrom('ticket_audit_log')
         .innerJoin('tickets', 'tickets.id', 'ticket_audit_log.ticket_id')
-        .select(['tickets.id as ticket_id'])
+        .select(['tickets.id as ticket_id', 'tickets.created_by_user_id', 'tickets.assigned_to_user_id', 'tickets.assigned_group_id', 'tickets.category'])
         .where('ticket_audit_log.action', '=', 'reassigned_absence')
         .where('ticket_audit_log.old_value', '=', id)
         .where('tickets.archived_at', 'is', null)
         .where('tickets.assigned_to_user_id', '!=', id)
         .distinct()
         .execute();
-      return reply.send({ ticketIds: rows.map(r => r.ticket_id) });
+      // Security-Audit R-30: nur Tickets, die die anfragende Person sehen darf.
+      const scope = await loadTicketScope(app.db, session);
+      return reply.send({ ticketIds: rows.filter(r => scopeAllowsTicket(scope, { ...r, id: r.ticket_id })).map(r => r.ticket_id) });
     } catch (e: any) {
       return routeError(app, reply, e);
     }
