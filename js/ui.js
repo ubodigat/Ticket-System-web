@@ -480,6 +480,7 @@ export const UI = {
                             <button class="btn-ghost btn-icon" id="logs-modal-close" title="${Lang.t('close')}" aria-label="${Lang.t('close')}">${Icon('x', 16)}</button>
                         </div>
                     </div>
+                    <div class="log-search-bar"><input type="search" id="ticket-log-search" placeholder="${Utils.esc(Lang.t('search'))}" aria-label="${Utils.esc(Lang.t('search'))}"></div>
                     <div class="modal-body flush" id="logs-body"></div>
                 </div>`;
             document.body.appendChild(modal);
@@ -501,17 +502,20 @@ export const UI = {
         const body = q('#logs-body');
         body.innerHTML = '';
         const logs = await Store.getTicketAuditLog(id);
-        if (!logs.length) {
-            body.innerHTML = `<div class="empty-state">${Lang.t('noEntriesAvailable')}</div>`;
-        } else {
-            body.innerHTML = logs.slice().reverse().map(l => UI.logRow({
+        const search = q('#ticket-log-search'); search.value = '';
+        const render = () => {
+            const visible = logs.filter(entry => Utils.matchesSearch(search.value, entry.user, entry.action, entry.details, Utils.fmtDate(entry.date)));
+            body.innerHTML = visible.length ? visible.slice().reverse().map(l => UI.logRow({
                 icon: iconForLog(l.action),
                 user: l.user,
                 date: l.date,
                 action: l.action,
                 details: l.details
-            })).join('');
-        }
+            })).join('') : `<div class="empty-state">${Lang.t(logs.length ? 'noEntriesFound' : 'noEntriesAvailable')}</div>`;
+            if (window.lucide) lucide.createIcons();
+        };
+        search.oninput = render; render();
+        modal.style.zIndex = String(Math.max(300, ...[...document.querySelectorAll('.modal-overlay.open')].filter(el => el !== modal).map(el => Number(getComputedStyle(el).zIndex) || 100)) + 1);
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
     },
@@ -701,10 +705,13 @@ export const UI = {
             </div>
         </div>`,
 
-    // Aufklappende Listen öffnen immer nach unten; die Höhe richtet sich nach dem Platz im Fenster
+    // Native pickers may flip above the field; keep them inside the visible viewport.
     dropdownMaxHeight: (anchor) => {
-        const below = window.innerHeight - anchor.getBoundingClientRect().bottom - 18;
-        return Math.max(120, Math.min(260, Math.floor(below)));
+        const rect = anchor.getBoundingClientRect();
+        const viewport = window.visualViewport;
+        const top = viewport?.offsetTop || 0;
+        const bottom = top + (viewport?.height || window.innerHeight);
+        return Math.max(24, Math.min(260, Math.floor(Math.max(rect.top - top, bottom - rect.bottom) - 16)));
     },
 
     // Reicht der Platz unter dem Feld nicht, wird der nächste scrollbare Bereich (oder die Seite) nachgezogen
@@ -989,15 +996,20 @@ export const UI = {
         if (root.id) popover.id = `${root.id}-popover`;
         const positionPopover = () => {
             const rect = (anchor || trigger).getBoundingClientRect();
-            const popH = popover.offsetHeight || 420;
-            const popW = popover.offsetWidth || 280;
+            const viewport = window.visualViewport;
+            const edgeTop = (viewport?.offsetTop || 0) + 8;
+            const edgeBottom = (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight) - 8;
+            const popW = Math.min(Math.max(rect.width, 280), window.innerWidth - 16);
+            popover.style.width = `${popW}px`;
+            popover.style.maxHeight = `${Math.max(24, edgeBottom - edgeTop)}px`;
+            popover.style.overflowY = 'auto';
+            const popH = popover.offsetHeight || Math.min(420, edgeBottom - edgeTop);
             let top = rect.bottom + 6;
-            if (top + popH > window.innerHeight - 8) top = Math.max(8, rect.top - popH - 6);
+            if (top + popH > edgeBottom) top = Math.max(edgeTop, rect.top - popH - 6);
             let left = rect.left;
             if (left + popW > window.innerWidth - 8) left = Math.max(8, window.innerWidth - popW - 8);
-            popover.style.top = `${top}px`;
+            popover.style.top = `${Math.min(top, edgeBottom - popH)}px`;
             popover.style.left = `${left}px`;
-            popover.style.width = `${rect.width < 240 ? 280 : rect.width}px`;
         };
         const close = () => {
             root.classList.remove('open');
@@ -1021,6 +1033,7 @@ export const UI = {
         if (root._dtpReposition) window.removeEventListener('resize', root._dtpReposition);
         root._dtpReposition = () => { if (root.classList.contains('open')) positionPopover(); };
         window.addEventListener('resize', root._dtpReposition);
+        window.addEventListener('scroll', root._dtpReposition, true);
 
         renderGrid();
         renderLabel();
@@ -1049,6 +1062,7 @@ export const UI = {
                 close();
                 window.removeEventListener('click', root._dtpOutside);
                 window.removeEventListener('resize', root._dtpReposition);
+                window.removeEventListener('scroll', root._dtpReposition, true);
                 popover.remove();
             }
         };
@@ -1181,8 +1195,11 @@ export const UI = {
         container.appendChild(dropdown);
         updateHeader();
 
+        let ownerObserver;
         const close = () => {
+            ownerObserver?.disconnect();
             container.classList.remove('open');
+            if (typeof dropdown.hidePopover === 'function' && dropdown.matches(':popover-open')) dropdown.hidePopover();
             dropdown.classList.remove('open');
             header.setAttribute('aria-expanded', 'false');
             window.removeEventListener('resize', position);
@@ -1196,14 +1213,17 @@ export const UI = {
         const position = () => {
             if (!header.isConnected) { close(); return; }
             const rect = header.getBoundingClientRect();
-            const below = window.innerHeight - rect.bottom - 14, above = rect.top - 14;
+            const viewport = window.visualViewport;
+            const edgeTop = (viewport?.offsetTop || 0) + 8;
+            const edgeBottom = (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight) - 8;
+            const below = edgeBottom - rect.bottom - 6, above = rect.top - edgeTop - 6;
             const upwards = below < 180 && above > below;
-            const height = Math.max(40, Math.min(300, upwards ? above : below));
+            const height = Math.max(24, Math.min(300, upwards ? above : below));
             dropdown.style.position = 'fixed'; dropdown.style.width = `${Math.min(rect.width, window.innerWidth - 16)}px`;
             dropdown.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8))}px`;
             dropdown.style.maxHeight = `${height}px`;
-            dropdown.style.top = upwards ? 'auto' : `${Math.max(8, rect.bottom + 6)}px`;
-            dropdown.style.bottom = upwards ? `${window.innerHeight - rect.top + 6}px` : 'auto';
+            dropdown.style.top = `${Math.max(edgeTop, Math.min(upwards ? rect.top - height - 6 : rect.bottom + 6, edgeBottom - height))}px`;
+            dropdown.style.bottom = 'auto'; dropdown.style.right = 'auto'; dropdown.style.margin = '0';
         };
 
         // Das Dropdown wird beim Öffnen an <body> angehängt (fixed positioniert über dem Feld) --
@@ -1214,9 +1234,13 @@ export const UI = {
                 if (d !== dropdown) { if (d._closeOwner) d._closeOwner(); else d.classList.remove('open'); }
             });
             document.body.appendChild(dropdown);
+            if (typeof dropdown.showPopover === 'function') { dropdown.setAttribute('popover', 'manual'); dropdown.showPopover(); }
             position();
             window.addEventListener('resize', position);
             window.addEventListener('scroll', position, true);
+            ownerObserver?.disconnect();
+            ownerObserver = new MutationObserver(() => { if (!header.isConnected) close(); });
+            ownerObserver.observe(document.body, { childList: true, subtree: true });
             container.classList.add('open');
             dropdown.classList.add('open');
             header.setAttribute('aria-expanded', 'true');

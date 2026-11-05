@@ -41,6 +41,7 @@ const SECTIONS: readonly Section[] = [
     'type', 'custom_fields_json', 'approval_status', 'created_at', 'updated_at', 'closed_at', 'archived_at'], orderBy: 'created_at' },
   { key: 'messagesWritten', table: 'ticket_messages', owner: 'sender_user_id', columns: ['id', 'ticket_id', 'content', 'created_at', 'edited_at'], orderBy: 'created_at' },
   { key: 'timeEntries', table: 'ticket_time_entries', owner: 'user_id', columns: ['id', 'ticket_id', 'minutes', 'note_enc', 'created_at'], orderBy: 'created_at' },
+  { key: 'personalTodoTimeEntries', table: 'admin_todo_time_entries', owner: 'user_id', columns: ['id', 'todo_id', 'minutes', 'note_enc', 'created_at'], orderBy: 'created_at' },
   { key: 'personalTodos', table: 'admin_todos', owner: 'created_by_user_id', columns: ['id', 'content', 'done', 'due_at', 'done_at', 'created_at'], orderBy: 'created_at' },
   { key: 'activity', table: 'global_audit_log', owner: 'actor_user_id', columns: ['action', 'target_type', 'target_id', 'detail_json', 'created_at'], orderBy: 'created_at' }
 ];

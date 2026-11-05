@@ -26,6 +26,7 @@ import { isValidTicketStatus } from '../../domain/status.js';
 import { buildTicketNumber } from '../../domain/ticketNumber.js';
 import { priorityFromImpact } from '../../domain/categoryFaq.js';
 import { mysqlTimestamp } from '../../db/date.js';
+import { hasPermission } from '../../domain/adminPermissions.js';
 import { sanitizeServerHtml } from '../../domain/sanitizer.js';
 import { loadOutlookSettings, getGraphAccessToken, createCalendarEvent } from '../../domain/graphClient.js';
 
@@ -315,12 +316,7 @@ function decryptNote<T extends { id: string; content: Buffer }>(row: T, dek: Res
 
 export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRouteDeps): void {
   async function hasAdminPermission(session: { uid: string; role: string }, key: 'approvals' | 'reports'): Promise<boolean> {
-    if (session.role === 'superadmin') return true;
-    if (session.role !== 'admin') return false;
-    const row = await app.db.selectFrom('users').select('permissions_json').where('id', '=', session.uid).executeTakeFirst();
-    let permissions: Record<string, unknown> = {};
-    try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
-    return permissions[key] === true;
+    return hasPermission(app.db, session, key);
   }
 
   // GET /api/v2/tickets - Alle Tickets (RBAC: Admins sehen alle, Users nur eigene)
@@ -1312,22 +1308,42 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const parsed = linkIncidentSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
 
-      const ticket = await app.db.selectFrom('tickets').select('created_by_user_id').where('id', '=', id).executeTakeFirst();
-      if (!ticket) return reply.code(404).send({ error: 'not_found' });
-      const isAdmin = session.role === 'admin' || session.role === 'superadmin';
-      if (!isAdmin && ticket.created_by_user_id !== session.uid) return reply.code(403).send({ error: 'forbidden' });
+      // Link and status must commit together for every role, not via an extra admin-only PATCH.
+      const result = await app.db.transaction().execute(async trx => {
+        const rows = await trx.selectFrom('tickets')
+          .select(['id', 'type', 'status', 'created_by_user_id', 'archived_at', 'incident_id'])
+          .where('id', 'in', [id, parsed.data.incident_id]).orderBy('id', 'asc').forUpdate().execute();
+        const ticket = rows.find(row => row.id === id);
+        if (!ticket) throw { statusCode: 404, message: 'not_found' };
+        const isAdmin = session.role === 'admin' || session.role === 'superadmin';
+        if (!isAdmin && ticket.created_by_user_id !== session.uid) throw { statusCode: 403, message: 'forbidden' };
+        if (ticket.archived_at) throw { statusCode: 409, message: 'ticket_archived' };
+        const incident = rows.find(row => row.id === parsed.data.incident_id);
+        if (!incident || incident.type !== 'incident' || ticket.type === 'incident' || id === incident.id || !isValidTicketStatus(incident.status)) {
+          throw { statusCode: 400, message: 'not_an_incident' };
+        }
+        const publicIncident = !incident.archived_at && incident.status !== 'Geschlossen';
+        if (!publicIncident && !(await canAccessTicket(trx, session, incident.id))) throw { statusCode: 400, message: 'not_an_incident' };
 
-      const incident = await app.db.selectFrom('tickets').select(['id', 'type', 'status', 'archived_at']).where('id', '=', parsed.data.incident_id).executeTakeFirst();
-      if (!incident || incident.type !== 'incident') return reply.code(400).send({ error: 'not_an_incident' });
-      const publicIncident = !incident.archived_at && incident.status !== 'Geschlossen';
-      if (!publicIncident && !(await canAccessTicket(app.db, session, incident.id))) return reply.code(400).send({ error: 'not_an_incident' });
-
-      await app.db.updateTable('tickets').set({ incident_id: parsed.data.incident_id, updated_at: mysqlTimestamp() }).where('id', '=', id).execute();
-      await app.db.insertInto('ticket_audit_log').values({
-        id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
-        action: 'linked_incident', field: 'incident_id', old_value: null, new_value: parsed.data.incident_id
-      }).execute();
-      return reply.send({ success: true });
+        const previousStatus = ticket.status, previousIncidentId = ticket.incident_id;
+        const changed = previousStatus !== incident.status;
+        const now = mysqlTimestamp();
+        await trx.updateTable('tickets').set({ incident_id: incident.id, status: incident.status, updated_at: now,
+          ...(changed ? { closed_at: incident.status === 'Geschlossen' ? now : null,
+            waiting_since: incident.status.startsWith('Warten auf') ? now : null,
+            waiting_reminder_sent: false, waiting_message: null } : {})
+        }).where('id', '=', id).execute();
+        if (previousIncidentId !== incident.id) await trx.insertInto('ticket_audit_log').values({
+          id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
+          action: 'linked_incident', field: 'incident_id', old_value: previousIncidentId || null, new_value: incident.id
+        }).execute();
+        if (changed) await trx.insertInto('ticket_audit_log').values({
+          id: randomUUID(), ticket_id: id, actor_user_id: session.uid, actor_username: session.username,
+          action: 'updated', field: 'status', old_value: previousStatus, new_value: incident.status
+        }).execute();
+        return { success: true, status: incident.status };
+      });
+      return reply.send(result);
     } catch (e: any) {
       return routeError(app, reply, e);
     }

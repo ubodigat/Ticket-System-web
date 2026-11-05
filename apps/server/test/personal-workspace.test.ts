@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { randomBytes, createHash } from 'node:crypto';
 import { registerPreferenceRoutes } from '../src/http/routes/preferences.js';
 import { registerWorkTimerRoutes, timerMinutes } from '../src/http/routes/workTimers.js';
+import { registerTodoRoutes } from '../src/http/routes/todos.js';
 import { beginAdvancedMfa, registerPasskeyRoutes } from '../src/http/routes/passkeys.js';
 import { mfaSatisfied } from '../src/domain/mfaPolicy.js';
 import { signOfficeSource, verifyOfficeSource } from '../src/documents/officeTokens.js';
@@ -27,12 +28,43 @@ async function fixture() {
   const deps = { env: { INSTALLATION_ID: 'test', COOKIE_SECRET: secret, WEBAUTHN_ORIGIN: 'http://localhost' } as any,
     keyProvider: { currentKekVersion: async () => 1, wrapDek: async (value: Buffer) => value, unwrapDek: async (value: Buffer) => value } as any };
   registerPreferenceRoutes(app, deps); registerWorkTimerRoutes(app, deps); registerOfficeViewerRoutes(app, deps);
+  registerTodoRoutes(app, deps);
   registerPasskeyRoutes(app, deps, async () => { finished++; return { success: true }; });
   const post = (url: string, payload: any = {}) => app.inject({ method: 'POST', url, payload });
   return { app, db, tables, actor, deps, post, finished: () => finished, anonymous: () => { authenticated = false; } };
 }
 
 describe('personal workspace routes', () => {
+  it('tracks personal todos once per user, encrypts activities and isolates time records', async () => {
+    const f = await fixture();
+    const todoId = '33333333-3333-4333-8333-333333333333';
+    try {
+      f.tables.admin_todos = [{ id: todoId, done: false }];
+      f.tables.admin_todo_members = [{ todo_id: todoId, user_id: uid, hidden: false }];
+      expect((await f.post('/api/v2/work-timer', { ticketId: tid, todoId })).statusCode).toBe(400);
+      const started = await f.post('/api/v2/work-timer', { todoId });
+      expect(started.statusCode).toBe(201);
+      const timer = started.json().timer;
+      expect(timer.ticket_id).toBeNull();
+      expect((await f.post('/api/v2/work-timer', { ticketId: tid })).statusCode).toBe(409);
+      await f.post(`/api/v2/work-timer/${timer.id}/stop`);
+      expect((await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: '   ' })).statusCode).toBe(400);
+      expect((await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: 'Planning', solution: 'private solution' })).statusCode).toBe(400);
+      const completed = await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: 'Private planning', minutes: 12 });
+      expect(completed.statusCode).toBe(201);
+      expect(f.tables.admin_todo_time_entries).toHaveLength(1);
+      expect(f.tables.admin_todo_time_entries![0].note_enc.toString()).not.toContain('Private planning');
+      const history = await f.app.inject(`/api/v2/todos/${todoId}/time-entries`);
+      expect(history.json().entries[0]).toMatchObject({ activity: 'Private planning', minutes: 12 });
+      const outsider = '44444444-4444-4444-8444-444444444444';
+      f.tables.users!.push({ id: outsider, role: 'admin', username: 'outsider' });
+      f.actor.uid = outsider;
+      expect((await f.app.inject(`/api/v2/todos/${todoId}/time-entries`)).statusCode).toBe(404);
+      expect((await f.post('/api/v2/work-timer', { todoId })).statusCode).toBe(404);
+      f.actor.uid = uid; f.tables.admin_todo_members[0].hidden = true;
+      expect((await f.post('/api/v2/work-timer', { todoId })).statusCode).toBe(404);
+    } finally { await f.app.close(); }
+  });
   it('encrypts appearance, merges partial changes and isolates two users', async () => {
     const f = await fixture();
     try {

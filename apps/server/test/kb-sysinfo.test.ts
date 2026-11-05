@@ -3,6 +3,8 @@ import { Kysely, DummyDriver, MysqlAdapter, MysqlIntrospector, MysqlQueryCompile
 import { describe, expect, it, vi } from 'vitest';
 import { registerSystemInfoRoutes } from '../src/http/routes/systemInfo.js';
 import { registerKnowledgeRoutes } from '../src/http/routes/knowledge.js';
+import { fieldCipher } from '../src/crypto/fieldCrypto.js';
+import { testDek } from './helpers/testDek.js';
 
 vi.mock('../src/crypto/dekService.js', () => ({ ensureDek: async () => ({ purpose: 'test', keyVersion: 1, rawDek: Buffer.alloc(32, 7), keys: new Map([[1, Buffer.alloc(32, 7)]]) }) }));
 const deps = { env: { INSTALLATION_ID: 'test', NODE_ENV: 'test' } as any, keyProvider: {} as any };
@@ -36,17 +38,18 @@ describe('system information', () => {
   });
 });
 
-function kbDb(state: { ticketCategories: any[]; kbCategories: any[] }) {
+function kbDb(state: { ticketCategories: any[]; kbCategories: any[] }, permissions: unknown, links: any[]) {
   const inserted: any[] = [];
   const db: any = {
     selectFrom: (table: string) => {
       const filters: any[] = [];
       const chain: any = {
-        select: () => chain, selectAll: () => chain, orderBy: () => chain, leftJoin: () => chain,
+        select: () => chain, selectAll: () => chain, orderBy: () => chain, leftJoin: () => chain, innerJoin: () => chain,
         where: (...args: any[]) => { filters.push(args); return chain; },
-        execute: async () => table === 'categories' ? state.ticketCategories : table === 'kb_categories' ? state.kbCategories : [],
+        execute: async () => table === 'categories' ? state.ticketCategories : table === 'kb_categories' ? state.kbCategories : table === 'ticket_kb_links' ? links : [],
         executeTakeFirst: async () => {
-          if (table === 'users') return { permissions_json: JSON.stringify({ kb: 'edit' }) };
+          if (table === 'users') return { permissions_json: permissions };
+          if (table === 'tickets') return { id: 'ticket', archived_at: null };
           const name = filters.find(f => f[0] === 'name')?.[2];
           const source = table === 'categories' ? state.ticketCategories : table === 'kb_categories' ? state.kbCategories : [];
           return source.find(c => c.name === name);
@@ -58,9 +61,9 @@ function kbDb(state: { ticketCategories: any[]; kbCategories: any[] }) {
   };
   return { db, inserted };
 }
-async function kbRequest(method: 'GET' | 'POST', url: string, payload?: any, role: 'user' | 'admin' | 'superadmin' = 'superadmin') {
+async function kbRequest(method: 'GET' | 'POST', url: string, payload?: any, role: 'user' | 'admin' | 'superadmin' = 'superadmin', permissions: unknown = JSON.stringify({ kb: 'edit' }), links: any[] = []) {
   const state = { ticketCategories: [{ id: 't1', name: 'Netzwerk' }], kbCategories: [{ id: 'k1', name: 'Anleitungen' }, { id: 'k2', name: 'netzwerk' }] };
-  const { db, inserted } = kbDb(state);
+  const { db, inserted } = kbDb(state, permissions, links);
   const app = Fastify(); app.decorate('db', db);
   app.addHook('onRequest', async req => { req.ticketSession = { uid: 'admin', username: 'admin', role }; });
   registerKnowledgeRoutes(app, deps);
@@ -69,6 +72,16 @@ async function kbRequest(method: 'GET' | 'POST', url: string, payload?: any, rol
 }
 
 describe('knowledge base categories', () => {
+  it('returns linked solution titles with decoded read permissions, without granting write access', async () => {
+    const title = fieldCipher.encryptField('Linked printer solution', testDek(), { installationId: 'test', tableName: 'kb_articles', recordId: 'article', fieldName: 'title' });
+    for (const permissions of [{ kb: 'read' }, JSON.stringify({ kb: 'read' })]) {
+      const result = await kbRequest('GET', '/api/v2/tickets/ticket/kb-links', undefined, 'admin', permissions,
+        [{ id: 'article', title, category: 'Drucker', linked_at: new Date() }]);
+      expect(result.response.statusCode).toBe(200);
+      expect(result.response.json().links[0]).toMatchObject({ article_id: 'article', title: 'Linked printer solution' });
+      expect((await kbRequest('POST', '/api/v2/kb/articles', { title: 'No', content: 'No' }, 'admin', permissions)).response.statusCode).toBe(403);
+    }
+  });
   it('denies requesters (role user) every knowledge base read endpoint', async () => {
     for (const url of ['/api/v2/kb/articles', '/api/v2/kb/categories', '/api/v2/kb/articles/a1/attachments', '/api/v2/kb/attachments/f1']) {
       expect((await kbRequest('GET', url, undefined, 'user')).response.statusCode).toBe(403);

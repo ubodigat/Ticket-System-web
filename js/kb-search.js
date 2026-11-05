@@ -494,12 +494,16 @@ export const KbSearch = {
                             ${EDITOR_TOOLS.map(tool => tool === '|' ? '<span class="toolbar-sep" aria-hidden="true"></span>'
                                 : `<button type="button" class="btn-ghost btn-icon btn-sm" data-tool="${tool[0]}" title="${Utils.esc(Lang.t(tool[2]))}" aria-label="${Utils.esc(Lang.t(tool[2]))}">${Icon(tool[1], 15)}</button>`).join('')}
                             <span class="toolbar-sep" aria-hidden="true"></span>
-                            <label class="btn btn-ghost btn-icon btn-sm" title="${Lang.t('addAttachment')}" aria-label="${Lang.t('addAttachment')}">${Icon('paperclip', 15)}<input type="file" id="kbe-file" hidden multiple accept="${Utils.esc(Store.uploadAccept())}"></label>
                         </div>
                         <div id="kbe-body" class="rich-editor kb-rich-editor" contenteditable="true" data-placeholder="${Lang.t('richEditorPlaceholder')}">${article ? Utils.sanitizeRichHtml(article.body) : draft ? Utils.sanitizeRichHtml(draft.body || '') : ''}</div>
-                        <div id="kbe-existing" class="file-preview"></div>
-                        <div id="kbe-files" class="file-preview"></div>
                     </div>
+                    <section class="kb-editor-attachments" aria-labelledby="kbe-attachments-title">
+                        <div class="label-row"><h4 id="kbe-attachments-title">${Utils.esc(Lang.t('attachments'))} <span id="kbe-file-count" class="badge">0</span></h4>
+                            <button type="button" class="btn-secondary btn-sm" id="kbe-add-file">${Icon('paperclip', 15)}${Utils.esc(Lang.t('addAttachment'))}</button></div>
+                        <input type="file" id="kbe-file" hidden multiple accept="${Utils.esc(Store.uploadAccept())}">
+                        <div id="kbe-existing" class="file-preview"></div>
+                        <div id="kbe-files" class="file-preview" aria-live="polite"></div>
+                    </section>
                 </div>`,
             onSave: async m => {
                 const title = m.querySelector('#kbe-title').value.trim();
@@ -558,6 +562,8 @@ export const KbSearch = {
         const renderFiles = () => {
             const preview = modal.querySelector('#kbe-files');
             preview.replaceChildren(...files.map((file, index) => AdminBoard.stagedFileChip(file, () => { files.splice(index, 1); renderFiles(); })));
+            modal.querySelector('#kbe-file-count').textContent = String(files.length);
+            preview.hidden = false;
             if (window.lucide) lucide.createIcons();
         };
         // Unpassende Dateien sofort mit Grund ablehnen (Typ, Groesse), statt erst beim Speichern.
@@ -568,6 +574,7 @@ export const KbSearch = {
             renderFiles();
         };
         modal.querySelector('#kbe-file').onchange = event => { addFiles(Array.from(event.target.files || [])); event.target.value = ''; };
+        modal.querySelector('#kbe-add-file').onclick = () => modal.querySelector('#kbe-file').click();
         UI.bindFileDrop(modal.querySelector('.kb-editor-form'), addFiles);
         UI.bindPasteFiles(bodyInput, addFiles);
         if (article) {

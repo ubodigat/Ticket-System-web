@@ -27,6 +27,21 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
     installationId: deps.env.INSTALLATION_ID,
     tableName, fieldName, recordId
   });
+  app.get('/api/v2/todos/:id/time-entries', async (req, reply) => {
+    try {
+      const actor = requireAdmin(req);
+      const { id } = req.params as { id: string };
+      const member = await app.db.selectFrom('admin_todo_members').select('todo_id').where('todo_id', '=', id)
+        .where('user_id', '=', actor.uid).where('hidden', '=', false).executeTakeFirst();
+      if (!member) return reply.code(404).send({ error: 'not_found' });
+      const entries = await app.db.selectFrom('admin_todo_time_entries').selectAll()
+        .where('todo_id', '=', id).where('user_id', '=', actor.uid).orderBy('created_at', 'desc').execute();
+      const dek = await ensureDek(app.db, deps.keyProvider, 'admin_todo_time_entries.note');
+      reply.header('Cache-Control', 'no-store');
+      return { entries: entries.map(entry => ({ id: entry.id, minutes: entry.minutes, created_at: entry.created_at,
+        activity: entry.note_enc ? fieldCipher.decryptField(entry.note_enc, dek, context('admin_todo_time_entries', 'note', entry.id)) : '' })) };
+    } catch (error) { return routeError(app, reply, error); }
+  });
   app.get('/api/v2/todos/recurring', async (req, reply) => {
     try {
       const actor = requireAdmin(req);

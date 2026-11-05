@@ -1,5 +1,70 @@
 # Änderungen
 
+## 05.11.2026 – Status bei Zuordnung zu einer Großstörung
+
+- Der Server übernimmt bei der Zuordnung den aktuellen Status der Großstörung auch für normale
+  Benutzerkonten. Verbindung, Status und Protokoll werden gemeinsam in einer Transaktion gespeichert.
+- Warte-/Abschlusszeitpunkte werden konsistent gesetzt; private Texte der Großstörung werden nicht
+  kopiert. Erneute identische Zuordnung setzt weder die Wartefrist zurück noch verdoppelt sie den Verlauf.
+- Der Admin-Bereich benötigt keinen zusätzlichen Status-PATCH. Der Benutzerbereich zeigt eine
+  fehlgeschlagene Zuordnung ausdrücklich an, statt nur eine allgemeine Erfolgsmeldung auszugeben.
+- Zehn Regressionstests prüfen aktive Statuswerte, Wiederholung, Zugriffsgrenzen, Zeitstempel und Rollback.
+
+## 05.11.2026 – Wissensartikel, Suchfunktionen und Datenschutz
+
+- Neue Wissensartikel zeigen gewählte Anhänge in einem eigenen Bereich mit Anzahl und Entfernen.
+- Wissensdatenbankrechte verstehen JSON-Text und dekodierte Objekte. Zugeordnete Lösungen werden
+  mit Anzahl angezeigt; Ladefehler erscheinen als Fehler statt als vermeintlich leere Liste.
+- Ticketprotokoll mit Suche nach Person, Aktion, Details und Datum. Kategorie-F&A immer mit Suche.
+- Auswertungen mit 7-/30-/90-/365-Tage-Fenstern, aktuellem/vorherigem Monat, Jahr, Gesamtzeitraum
+  und freien Von-/Bis-Daten. Der letzte Kalendertag ist vollständig enthalten; nachfolgende Daten
+  sind ausgeschlossen. Das neue Browsermodul ist auch im Server-Assetverzeichnis registriert.
+- Todo-Optionen öffnen ein eigenes Editorfenster. Das Formular wird beim Schließen zurückgelegt,
+  damit Optionen, Bearbeiten und Wiederholungsregeln auch beim erneuten Öffnen funktionieren.
+- Kategorien-/Gruppen-Querverweise holen Ziel- und Editorfenster in beide Richtungen nach vorn.
+  Gruppenmitglieder mit Suche und kompakter, begrenzter Scroll-Liste; Auswahl bleibt beim Filtern erhalten.
+- Persönlicher Export umfasst eigene Todo-Zeiten und entschlüsselte Tätigkeitsnotizen.
+  Diagnosen enthalten keine URL-Abfrageparameter, SQL-/Fehlertexte oder Kontoidentifikatoren;
+  Docker-Diagnosen werden pro Dienst größenbegrenzt rotiert.
+- Datenschutzdokumentation beschreibt Verschlüsselung, technische Fristen und Betreiberpflichten.
+  Kein pauschales Konformitätsversprechen für alle Länder oder Einsatzbereiche.
+- Typecheck, Build, 618 Tests erfolgreich (ein Test übersprungen), 23 JS-Dateien syntaktisch geprüft.
+  Formulartests verwenden DOM-Testersatz; kein neuer visueller Browser-/Docker-Gesamttest.
+
+## 05.11.2026 – Formulare, Gruppen und Todo-Zeiterfassung
+
+- Kategorie beim Anlegen von Benutzer- und Admin-Tickets unter die Anhänge verschoben.
+- Auswahllisten dürfen nach oben ausweichen; schwebende Personenmenüs und Mehrfachauswahlen
+  werden aus dem scrollbaren Dialog gelöst. Kalender berücksichtigen die verfügbare Fenstergröße.
+- Kontaktkarte verbreitert, Todo-Hintergrund stärker abgedunkelt und weichgezeichnet,
+  Arbeitszeiten kompakter und Einschätzungen zu Auswirkung/Dringlichkeit dezenter gestaltet.
+- Untergruppen einzeln aufklappbar; Benutzerlisten zeigen zunächst zwei Gruppen und einen
+  aufklappbaren Rest. Rechte in der Benutzerzusammenfassung nach Bereichen getrennt.
+- Überlaufende Gruppenaktionen umbrechen; Systemeinstellungen nutzen ihre Inhaltsbreite,
+  Board-Spalten richten ihre Höhe nach dem tatsächlichen Platz unter der Werkzeugleiste.
+- Teilaufgaben per Enter erstellen, Fehler beim Speichern anzeigen und danach die eigene
+  Person wieder vorauswählen. Doppelte Button-ID zwischen Ticket und Todo-Liste beseitigt.
+- Todo-Zeiterfassung: Play/Stop je Aufgabe; Teilaufgaben verwenden die Ticket-Zeiterfassung,
+  eigene Todos erhalten eigene, verschlüsselt dokumentierte Zeiteinträge samt Verlaufsansicht.
+  Pro Admin ist insgesamt nur ein Timer aktiv; Mitgliedschaft und Sichtbarkeit werden geprüft.
+- Genehmigungsrechte und Benutzerprofil unterstützen JSON-Text und vom Treiber dekodierte
+  Objekte; nicht berechtigte Konten erhalten keinen ausführbaren Anfordern-Button.
+- Typecheck, Build und 610 Tests erfolgreich (ein Test übersprungen); 22 JS-Dateien syntaktisch
+  geprüft. Browserkontrolle vom Computer-Use-Werkzeug abgebrochen; kein visueller Gesamtnachweis
+  und kein vollständiger Neuinstallationstest mit Docker/MariaDB in diesem lokalen Lauf.
+
+## 04.11.2026 – HTTPS und LAN-Domains
+
+- Explizite TLS-Auswahl mit `--tls=internal|acme|auto`; bestehende Ports, Bind-Adresse
+  und TLS-Auswahl bleiben beim erneuten Konfigurieren erhalten.
+- `--web-only` repariert die bestehende Domain-/Webkonfiguration mit vorheriger Sicherung
+  und Caddy-Validierung, ohne Image-Build oder Datenbankabgleich.
+- Lokale Webprüfung mit passendem Hostnamen/SNI und CA-Prüfung, öffentliche interne CA
+  zum Einrichten des Client-Vertrauens exportiert; keine unsichere TLS-Ausweichlösung.
+- Bootstrap bricht bei lokalen Quellcodeänderungen ab, statt sie per Reset zu löschen.
+- LAN-Anleitung, Prüfgrenzen und Shell-Regressionsprüfung ergänzt; Manifestgenerator
+  erhält die Argumente der Installationsbefehle beim Aktualisieren der Prüfsummen.
+
 ## 04.11.2026 – Ticketformular, F&A, Kontaktdaten, Rechte, Aufgaben, Wissensdatenbank, Online-Updates
 
 ### Board und Ticketformular

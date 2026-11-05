@@ -1,5 +1,12 @@
 name: ticket-system
 
+# Bounded diagnostics; database audit retention is configured separately.
+x-diagnostics: &diagnostics
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 networks:
   internal:
     driver: bridge
@@ -37,6 +44,7 @@ volumes:
 
 services:
   mariadb:
+    logging: *diagnostics
     image: mariadb:12.3@sha256:99c125f103f5d081ebbc9ffe064e63daf7f688ac33a5f7f29af2d7260a96debf
     restart: unless-stopped
     networks: [internal]
@@ -65,6 +73,7 @@ services:
       start_period: 30s
 
   app:
+    logging: *diagnostics
     build:
       context: ../..
       dockerfile: ops/docker/Dockerfile.server
@@ -144,6 +153,7 @@ services:
   # laufend ca. 1-2GB RAM, daher nicht standardmaessig aktiv.
   clamav:
     image: clamav/clamav-debian:1.4@sha256:c7df83a4c9794aeb43b7cff296fc9f42a0f47cbf0e96704510e7e5b57b2f4913
+    logging: *diagnostics
     restart: unless-stopped
     profiles: ["antivirus"]
     networks: [clamav, clamav-egress]
@@ -163,6 +173,7 @@ services:
 
   office:
     image: gotenberg/gotenberg:8.38.1@sha256:aa552cc115db488e0f0bcb07446aac13071ad51505b642c84bb894500907b42b
+    logging: *diagnostics
     restart: unless-stopped
     networks: [office]
     cap_drop: [ALL]
@@ -182,6 +193,7 @@ services:
   # Optional native Office UI; isolated from the Internet and Docker socket.
   documentserver:
     image: onlyoffice/documentserver:10.0.0.1@sha256:ca17889f10b11141cc6441836aebdd2835cf3e1b49681b2fd6e155c94b7850b3
+    logging: *diagnostics
     profiles: ["office-viewer"]
     restart: unless-stopped
     networks: [office, office-edge]
@@ -205,6 +217,7 @@ services:
 
   caddy:
     image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    logging: *diagnostics
     restart: unless-stopped
     networks: [edge, office-edge]
     depends_on: [app]

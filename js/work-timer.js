@@ -42,6 +42,7 @@ export const WorkTimer = {
         return WorkTimer.ticket;
     },
     ticketLabel() {
+        if (WorkTimer.timer?.todo_id) return t('Eigene Aufgabe', 'Personal task');
         const ticket = WorkTimer.ticket;
         if (!ticket) return t('Ticket wird geladen …', 'Loading ticket …');
         return [ticket.ticketNumber, ticket.title].filter(Boolean).join(' · ');
@@ -52,6 +53,7 @@ export const WorkTimer = {
         await WorkTimer.loadTicket();
         WorkTimer.renderButton();
         WorkTimer.renderIndicator();
+        document.dispatchEvent(new Event('work-timer-changed'));
         if (WorkTimer.timer?.stopped_at) WorkTimer.requireActivity();
     },
     // Rote, gut sichtbare Anzeige in der Navigationsleiste, solange eine Zeiterfassung laeuft oder
@@ -89,9 +91,20 @@ export const WorkTimer = {
         pill.title = label;
         pill.setAttribute('aria-label', label);
         // Auf dem Benutzer-Dashboard gibt es kein Admin-Ticketfenster -- dann zum Admin-Board wechseln.
-        pill.onclick = () => stopped ? WorkTimer.requireActivity()
+        pill.onclick = () => stopped ? WorkTimer.requireActivity() : timer.todo_id ? WorkTimer.toggleTarget({ todoId: timer.todo_id })
             : q('#ticket-modal') ? AdminBoard.openModal(timer.ticket_id) : window.location.assign('admin.html');
         if (!stopped) WorkTimer.indicatorTick = setInterval(update, 1000);
+    },
+    async toggleTarget(target) {
+        await WorkTimer.refresh();
+        if (WorkTimer.timer?.stopped_at) return WorkTimer.requireActivity();
+        const matches = WorkTimer.timer && (target.ticketId ? WorkTimer.timer.ticket_id === target.ticketId : WorkTimer.timer.todo_id === target.todoId);
+        if (WorkTimer.timer && !matches) return UI.toast(t('Beende zuerst die laufende Zeiterfassung.', 'Finish the running timer first.'));
+        WorkTimer.timer = matches ? (await request(`/${WorkTimer.timer.id}/stop`, {})).timer : (await request('', target)).timer;
+        await WorkTimer.loadTicket(); WorkTimer.renderButton(); WorkTimer.renderIndicator();
+        document.dispatchEvent(new Event('work-timer-changed'));
+        if (WorkTimer.timer.stopped_at) WorkTimer.requireActivity();
+        else UI.toast(t('Zeiterfassung läuft.', 'Timer started.'));
     },
     renderButton(ticketId = AdminBoard.currentTicketId) {
         const print = document.querySelector('#m-print');
@@ -111,14 +124,7 @@ export const WorkTimer = {
             button.disabled = true;
             try {
                 if (WorkTimer.timer?.stopped_at) return WorkTimer.requireActivity();
-                WorkTimer.timer = WorkTimer.timer
-                    ? (await request(`/${WorkTimer.timer.id}/stop`, {})).timer
-                    : (await request('', { ticketId })).timer;
-                await WorkTimer.loadTicket();
-                WorkTimer.renderButton(ticketId);
-                WorkTimer.renderIndicator();
-                if (WorkTimer.timer?.stopped_at) WorkTimer.requireActivity();
-                else UI.toast(t('Zeiterfassung läuft.', 'Timer started.'));
+                await WorkTimer.toggleTarget({ ticketId });
             } catch (error) { UI.toast(error.message); await WorkTimer.refresh(); }
             finally { button.disabled = false; }
         };
@@ -157,6 +163,7 @@ export const WorkTimer = {
             </fieldset><p role="alert"></p>
             <div class="modal-footer"><button class="btn-primary" type="submit">${t('Zeit und Dokumentation speichern', 'Save time and documentation')}</button></div></div></form>`;
         const solutionInput = overlay.querySelector('#work-solution');
+        if (timer.todo_id) overlay.querySelector('.work-solution').hidden = true;
         overlay.querySelectorAll('[data-format]').forEach(btn => btn.onclick = () => {
             if (btn.dataset.format === 'bold') insertMarkdownText(solutionInput, '**');
             else if (btn.dataset.format === 'italic') insertMarkdownText(solutionInput, '*');
@@ -203,7 +210,8 @@ export const WorkTimer = {
                 WorkTimer.timer = null; WorkTimer.ticket = null;
                 WorkTimer.renderButton();
                 WorkTimer.renderIndicator();
-                if (q('#ticket-modal')) await AdminBoard.openModal(result.ticketId);
+                document.dispatchEvent(new Event('work-timer-changed'));
+                if (result.ticketId && q('#ticket-modal')) await AdminBoard.openModal(result.ticketId);
                 UI.toast(t('Zeit und Dokumentation gespeichert.', 'Time and documentation saved.'));
             } catch (error) {
                 if (error.message === 'timer_not_stopped') await WorkTimer.refresh().catch(() => {});

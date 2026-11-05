@@ -1244,7 +1244,7 @@ option {
 
     ::picker(select) {
         position-area: block-end span-inline-end;
-        position-try-fallbacks: none;
+        position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
         position-try-order: normal;
         max-height: var(--picker-max, 260px);
         overflow-y: auto;
@@ -5973,6 +5973,10 @@ button:disabled {
 .uw-schedule-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .uw-schedule { display: flex; flex-direction: column; gap: 6px; }
 .uw-day { display: grid; grid-template-columns: minmax(130px, 170px) minmax(0, 120px) auto minmax(0, 120px); gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; }
+.uw-day > label.check-row { width: auto; min-width: 0; min-height: 0; padding: 0; margin: 0; border: 0; background: transparent; }
+.uw-day > label.check-row > span { white-space: nowrap; overflow-wrap: normal; }
+.uw-day > label.check-row > input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; }
+.uw-day > input[type="time"] { width: 100%; min-width: 0; }
 .uw-day.is-on { border-color: rgba(var(--primary-rgb), .45); background: rgba(var(--primary-rgb), .05); }
 .uw-day input[type="time"]:disabled { opacity: .45; }
 .uw-review-section { padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; margin-bottom: 10px; background: var(--card-bg); }
@@ -6006,10 +6010,10 @@ button:disabled {
 }
 
 /* Systemeinstellungen: breiter und etwas hoeher als die uebrigen grossen Dialoge (Punkt 3.1). */
-#sys-settings-modal > .modal { max-width: min(1320px, 96vw); max-height: 92vh; }
+#sys-settings-modal > .modal { max-width: min(1200px, 96vw); max-height: 92vh; }
 #sys-settings-modal .sys-settings-shell { grid-template-columns: 220px minmax(0, 1fr); min-height: 600px; }
 #sys-settings-modal .sys-settings-content { max-height: 72vh; }
-#sys-settings-modal .sys-settings-content .tab-content { max-width: 940px; }
+#sys-settings-modal .sys-settings-content .tab-content { max-width: none; width: 100%; }
 /* Einzelne Eingabefelder nicht ueber die ganze Breite ziehen; Raster, Listen und Hinweise duerfen breit sein. */
 #sys-settings-modal .settings-section > .field:not(.field-wide) > input:not([type="checkbox"]):not([type="radio"]),
 #sys-settings-modal .settings-section > .field:not(.field-wide) > select,
@@ -6929,13 +6933,12 @@ input.is-invalid { border-color: var(--danger) !important; }
 
 /* Einschaetzung der anfragenden Person (Wer ist betroffen? / Wie dringend?) */
 .request-assessment { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin: 0 0 var(--space-4); }
-.assessment-chip { --tone-rgb: var(--success-rgb); display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid rgba(var(--tone-rgb), .45); border-left-width: 4px; border-radius: 12px; background: rgba(var(--tone-rgb), .08); }
-.assessment-chip.level-2 { --tone-rgb: var(--warning-rgb); }
-.assessment-chip.level-3 { --tone-rgb: var(--danger-rgb); }
-.assessment-icon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 10px; background: rgba(var(--tone-rgb), .18); color: rgb(var(--tone-rgb)); }
+.assessment-chip { --tone-rgb: var(--primary-rgb); display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--field-bg); }
+.assessment-chip.level-2, .assessment-chip.level-3 { --tone-rgb: var(--primary-rgb); }
+.assessment-icon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 8px; background: var(--card-bg); color: var(--text-sec); }
 .assessment-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .assessment-text small { color: var(--text-sec); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
-.assessment-text strong { font-size: 15px; }
+.assessment-text strong { font-size: var(--fs-sm); }
 .assessment-level { display: flex; gap: 3px; flex: none; }
 .assessment-level i { width: 6px; height: 18px; border-radius: 3px; background: var(--border); }
 .assessment-level i.on { background: rgb(var(--tone-rgb)); }
@@ -7022,7 +7025,7 @@ input.is-invalid { border-color: var(--danger) !important; }
 .account-section.is-editing { border-color: rgba(var(--primary-rgb), .55); }
 .account-section.is-editing dd input, .account-section.is-editing dd textarea { width: 100%; }
 .account-section-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-.account-schedule .uw-day { grid-template-columns: minmax(110px, 150px) minmax(0, 110px) auto minmax(0, 110px); }
+.account-schedule .uw-day, .uw-day { grid-template-columns: minmax(120px, 150px) minmax(85px, 110px) 12px minmax(85px, 110px); justify-content: start; }
 
 /* Aufgabenliste */
 .todo-modal .todo-tabs { margin-bottom: 12px; }
@@ -7119,3 +7122,55 @@ button.todo-chip:hover { border-color: var(--primary-solid); }
 .kb-ticket-row .kb-ticket-unlink { margin-right: 6px; }
 .kb-editor-toolbar { flex-wrap: wrap; gap: 2px; }
 .toolbar-sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--border); }
+
+/* Compact forms and floating controls: viewport-safe in nested dialogs. */
+.group-member-choices { display: flex; flex-direction: column; gap: 5px; max-height: min(300px, 36dvh); overflow-y: auto; overscroll-behavior: contain; }
+.group-member-choices > .check-row { margin: 0; padding-block: 7px; flex: none; }
+.group-member-choices > .check-row[hidden] { display: none; }
+.group-category-link { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.group-category-link > .hint { width: 100%; line-height: 1.5; overflow-wrap: anywhere; }
+.group-category-link > button { justify-self: start; }
+.log-search-bar { padding: 12px 20px; border-bottom: 1px solid var(--border); }
+.log-search-bar input { width: 100%; }
+.report-custom-range { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.report-custom-range[hidden] { display: none; }
+.report-custom-range > .field { flex: 1 1 180px; margin: 0; }
+.kb-editor-attachments { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--card-bg); }
+.kb-editor-attachments h4 { margin: 0; }
+.kb-editor-attachments .file-preview { margin-top: 10px; min-height: 0; }
+.kb-linked-solutions.has-links { border-color: rgba(var(--primary-rgb), .45); }
+#todo-editor-modal #todo-form { padding: 0; border: 0; }
+.multi-select-dropdown[popover] { color: var(--text); inset: auto; }
+.multi-select-dropdown.open { transform: none; }
+.person-menu-list.is-detached { display: flex; position: fixed; inset: auto; margin: 0; width: min(280px, calc(100vw - 16px)); min-width: 0; max-height: calc(100dvh - 16px); overflow-y: auto; color: var(--text); background: var(--bg2); }
+.person-menu-list.is-detached::before { display: none; }
+.meta-item:has(.person-menu) { position: relative; z-index: 2; }
+#todo-modal { background: rgba(0, 0, 0, .72); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+#todo-modal > .modal { background: var(--bg2); }
+#contact-card-modal > .modal { max-width: min(820px, calc(100vw - 24px)); }
+#contact-card-modal .uw-review-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.group-category-link { flex-wrap: wrap; align-items: flex-start; }
+.group-category-link > .hint { flex: 1 1 240px; }
+.group-category-link > button { max-width: 100%; height: auto; min-height: var(--control-h); white-space: normal; }
+.group-chip-row { align-items: flex-start; }
+.group-chip-more { color: var(--text-sec); font-size: var(--fs-xs); max-width: 100%; }
+.group-chip-more summary { cursor: pointer; padding: 4px 6px; }
+.group-chip-more > div { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 0; }
+.group-expand { flex: none; }
+#uw-review .uw-review-section:last-child .uw-review-list { grid-template-columns: 1fr; }
+#uw-review .uw-review-section:last-child .uw-review-list > div { padding-block: 6px; border-bottom: 1px solid var(--border); }
+#uw-review .uw-review-section:last-child .uw-review-list > div:last-child { border-bottom: 0; }
+.wizard-footer { flex-wrap: wrap; flex-shrink: 0; padding-bottom: 4px; }
+.wizard-footer > button { flex: 0 0 auto; }
+.uw-day > label.check-row:has(input:checked) { border: 0; background: transparent; }
+@media (max-width: 560px) {
+    .uw-day, .account-schedule .uw-day { grid-template-columns: minmax(0, 1fr) 12px minmax(0, 1fr); }
+    .uw-day > label.check-row { grid-column: 1 / -1; }
+    .uw-day > span { display: block; }
+    #contact-card-modal .uw-review-list { grid-template-columns: 1fr; }
+}
+@media (min-width: 901px) {
+    body[data-guard="admin"] .container { padding-block: 16px; }
+    body[data-guard="admin"] .kanban-board { padding-bottom: 0; }
+    body[data-guard="admin"] .column { height: max(220px, calc(100dvh - var(--board-top, 260px) - 18px)); }
+}

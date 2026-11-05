@@ -15,6 +15,7 @@ import { renderWorkbook } from './excel-preview.js';
 import { renderPdfPreview } from './pdf-preview.js';
 import { UserDash } from './user-dash.js';
 import { WorkTimer } from './work-timer.js';
+import { reportPeriod } from './report-period.js';
 import { KbSearch } from './kb-search.js';
 import { CategoryFaq } from './category-faq.js';
 import { getStatusColorClass, getPrioValue, compareTicketUrgency, isPendingApprover, insertMarkdownLink, insertMarkdownTable, insertMarkdownList,
@@ -1124,6 +1125,7 @@ export const AdminBoard = {
     openUserManager: async (view = 'users') => {
         const modal = q('#user-man-modal');
         modal.classList.add('open');
+        modal.style.zIndex = String(Math.max(100, ...[...document.querySelectorAll('.modal-overlay.open')].filter(el => el !== modal).map(el => Number(getComputedStyle(el).zIndex) || 100)) + 1);
 
         // Setup UM Tabs
         const user = await Store.currentUser();
@@ -1212,7 +1214,18 @@ export const AdminBoard = {
 
         if (view === 'groups') {
             const groups = await Store.getGroups();
-            const filteredGroups = groups.filter(g => Utils.matchesSearch(searchTerm, g));
+            const expanded = AdminBoard.expandedGroups ||= new Set();
+            const ancestorsOpen = group => {
+                const visited = new Set([group.id]);
+                while (group.parentId) {
+                    if (visited.has(group.parentId) || !expanded.has(group.parentId)) return false;
+                    visited.add(group.parentId);
+                    group = groups.find(item => item.id === group.parentId);
+                    if (!group) break;
+                }
+                return true;
+            };
+            const filteredGroups = groups.filter(g => Utils.matchesSearch(searchTerm, g) && (searchTerm || ancestorsOpen(g)));
 
             const parentLabel = id => groups.find(item => item.id === id)?.label || '';
             filteredGroups.forEach(g => {
@@ -1233,6 +1246,15 @@ export const AdminBoard = {
                         <button class="btn-ghost btn-icon btn-danger del-g" title="${Lang.t('delete')}" aria-label="${Lang.t('delete')}">${Icon('trash-2', 16)}</button>
                     </div>
                 `;
+                if (groups.some(child => child.parentId === g.id) && !searchTerm) {
+                    const toggle = document.createElement('button');
+                    toggle.type = 'button'; toggle.className = 'btn-ghost btn-icon group-expand';
+                    toggle.setAttribute('aria-expanded', String(expanded.has(g.id)));
+                    toggle.setAttribute('aria-label', `${g.name}: ${Lang.t('userGroupsLabel')}`);
+                    toggle.innerHTML = Icon(expanded.has(g.id) ? 'chevron-down' : 'chevron-right', 16);
+                    toggle.onclick = () => { expanded.has(g.id) ? expanded.delete(g.id) : expanded.add(g.id); AdminBoard.renderUserManager('groups'); };
+                    el.querySelector('.user-manager-name').prepend(toggle);
+                }
                 el.querySelector('.members-g').onclick = () => AdminBoard.openGroupMembers(g);
                 el.querySelector('.cats-g').onclick = () => AdminBoard.openSystemSettings('sys-categories', { groupId: g.id });
                 el.querySelector('.edit-g').onclick = () => AdminBoard.openEditGroupModal(g);
@@ -1288,7 +1310,8 @@ export const AdminBoard = {
                     ${u.accountValidUntil ? `<span class="badge ${validityExpired ? 'badge-danger' : ''}">${Icon(validityExpired ? 'lock' : 'calendar', 12)}${validityExpired ? Lang.t('expired') : Lang.t('validUntil')} ${Utils.esc(u.accountValidUntil.split('-').reverse().join('.'))}</span>` : ''}
                     <div class="group-chip-row">
                         <span class="badge">${Utils.esc(roleInfo)}</span>
-                        ${userGroups.map(name => `<span class="group-chip">${Icon('users-round', 12)}${Utils.esc(name)}</span>`).join('')}
+                        ${userGroups.slice(0, 2).map(name => `<span class="group-chip">${Icon('users-round', 12)}${Utils.esc(name)}</span>`).join('')}
+                        ${userGroups.length > 2 ? `<details class="group-chip-more"><summary>+${userGroups.length - 2} ${Utils.esc(Lang.t('userGroupsLabel'))}</summary><div>${userGroups.slice(2).map(name => `<span class="group-chip">${Utils.esc(name)}</span>`).join('')}</div></details>` : ''}
                         ${u.absence?.active ? `<span class="badge badge-accent" title="${Utils.esc(AdminBoard.absenceInfoText(u.absence))}">${Icon('plane', 12)}${Lang.t('absent')}${u.absence.substitute ? ' → ' + Utils.esc((users.find(x => x.username === u.absence.substitute)?.name) || u.absence.substitute) : ' → ' + Lang.t('backToTeam')} · ${Utils.esc(AdminBoard.absenceInfoText(u.absence).split(' · ')[0])}</span>` : ''}
                         ${u.absence?.pending ? `<span class="badge" title="${Utils.esc(AdminBoard.absenceInfoText(u.absence))}">${Icon('plane', 12)}${Lang.t('planned')} · ${Utils.esc(AdminBoard.absenceInfoText(u.absence))}</span>` : ''}
                     </div>
@@ -1723,6 +1746,7 @@ export const AdminBoard = {
     // hinzugefuegt oder entfernt, weitere Gruppen der Personen bleiben unveraendert.
     openEditGroupModal: async (group) => {
         const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        modal.style.zIndex = String(Math.max(100, ...[...document.querySelectorAll('.modal-overlay.open')].filter(el => el !== modal).map(el => Number(getComputedStyle(el).zIndex) || 100)) + 1);
         const title = modal.querySelector('h3');
         const content = modal.querySelector('.modal-body');
         const confirmBtn = modal.querySelector('.btn-primary');
@@ -1731,7 +1755,7 @@ export const AdminBoard = {
         // Als uebergeordnete Gruppe nicht waehlbar: die Gruppe selbst und ihre Untergruppen (keine Zyklen).
         const allGroups = await Store.getGroups();
         const current = group ? allGroups.find(item => item.id === group.id) : null;
-        const blocked = new Set(current ? [current.id, ...current.descendantIds] : []);
+        const blocked = new Set(current ? [current.id, ...(current.descendantIds || [])] : []);
 
         title.textContent = group ? Lang.format('editGroupName', { name: group.name }) : Lang.t('newGroup');
         content.innerHTML = `
@@ -1743,7 +1767,8 @@ export const AdminBoard = {
             <div class="field">
                 <label>${Lang.t('members')}</label>
                 <p class="hint">${Lang.t('onePersonOneGroupHint')}</p>
-                <div class="checkbox-list">
+                <input type="search" id="ge-member-search" class="section-search" placeholder="${Utils.esc(Lang.t('searchMemberPlaceholder'))}" aria-label="${Utils.esc(Lang.t('searchMemberPlaceholder'))}">
+                <div class="checkbox-list group-member-choices">
                     ${users.map(u => `
                         <label class="check-row">
                             <input type="checkbox" value="${Utils.esc(u.username)}" ${members.includes(u.username) ? 'checked' : ''}>
@@ -1753,6 +1778,10 @@ export const AdminBoard = {
                 </div>
             </div>
         `;
+        content.querySelector('#ge-member-search').oninput = event => {
+            const term = event.target.value.trim();
+            content.querySelectorAll('.group-member-choices .check-row').forEach(row => { row.hidden = !!term && !Utils.matchesSearch(term, row.textContent); });
+        };
         confirmBtn.textContent = Lang.t('save');
         confirmBtn.onclick = async () => {
             const name = q('#ge-name').value.trim();
@@ -1760,7 +1789,7 @@ export const AdminBoard = {
                 UI.toast(Lang.t('enterGroupName'));
                 return;
             }
-            const selectedMembers = qa('#generic-modal .checkbox-list input:checked').map(x => x.value);
+            const selectedMembers = [...content.querySelectorAll('.group-member-choices input:checked')].map(x => x.value);
             const parentId = q('#ge-parent').value || null;
             const groupError = error => UI.toast(Lang.t(error === 'group_too_deep' ? 'groupTooDeep' : error === 'group_cycle' || error === 'invalid_parent' ? 'groupParentInvalid' : group ? 'groupRenameFailed' : 'groupCreateFailed'));
 
@@ -2126,8 +2155,8 @@ export const AdminBoard = {
             const rights = data.role === 'admin' && isSuper ? AdminBoard.PERMISSION_GROUPS.map(group => {
                 const granted = group.items.filter(([key]) => AdminBoard.ADMIN_FLAGS.includes(key) ? data[key] : data.permissions[key]).map(([, label]) => Lang.t(label));
                 if (group.key === 'features') granted.push(`${Lang.t('knowledgeBase')}: ${Lang.t({ none: 'noAccess', read: 'readOnly', edit: 'readAndEdit' }[data.permissions.kb] || 'noAccess')}`);
-                return granted.length ? `${Lang.t(group.label)}: ${granted.join(', ')}` : '';
-            }).filter(Boolean).join(' · ') : '';
+                return granted.length ? [group.label, granted.join(' · ')] : null;
+            }).filter(Boolean) : [];
             const section = (stepKey, labelKey, rows) => `
                 <div class="uw-review-section">
                     <div class="uw-review-head"><strong>${Utils.esc(Lang.t(labelKey))}</strong><button type="button" class="btn-ghost btn-sm" data-goto="${stepKey}">${Icon('pencil', 14)}${Utils.esc(Lang.t('edit'))}</button></div>
@@ -2150,7 +2179,7 @@ export const AdminBoard = {
                 ${section('contact', 'uwStepContact', [
                     ['phone', data.phone], ['mobile', data.mobile], ['uwWorkDays', schedule], ['uwAvailability', data.profile.availability_note]
                 ])}
-                ${rights ? section('rights', 'uwStepRights', [['adminRights', rights]]) : ''}`;
+                ${rights.length ? section('rights', 'uwStepRights', rights) : ''}`;
             modal.querySelectorAll('[data-goto]').forEach(btn => btn.onclick = () => show(btn.dataset.goto));
             if (window.lucide) lucide.createIcons();
         };
@@ -2910,6 +2939,11 @@ export const AdminBoard = {
 
     // tab: Reiter, der geoeffnet werden soll (z. B. 'sys-categories'); options.groupId filtert die Kategorien.
     openSystemSettings: async (tab = null, options = {}) => {
+        const bringSettingsForward = () => {
+            const target = q('#sys-settings-modal');
+            if (target) target.style.zIndex = String(Math.max(100, ...[...document.querySelectorAll('.modal-overlay.open')].filter(el => el !== target).map(el => Number(getComputedStyle(el).zIndex) || 100)) + 1);
+        };
+        bringSettingsForward();
         if (typeof tab !== 'string') tab = null;
         const actor = await Store.currentUser();
         const isSuper = actor?.role === 'superadmin';
@@ -3903,6 +3937,7 @@ export const AdminBoard = {
 
         modal.classList.add('open');
         if (window.lucide) lucide.createIcons();
+        bringSettingsForward();
         // Gewuenschten bzw. ersten erlaubten Reiter oeffnen.
         AdminBoard.categoryFilterGroupId = options.groupId || null;
         const activeTab = modal.querySelector('.sys-settings-nav .tab-btn.active')?.dataset.tab;
@@ -4944,9 +4979,7 @@ export const AdminBoard = {
             body: JSON.stringify({ incident_id: incidentId })
         }).catch(() => null);
         if (!res || !res.ok) return false;
-        if (ticket.status !== incident.status) {
-            await AdminBoard.changeStatus(ticketId, incident.status);
-        }
+        Store._ticketsCache = null;
         await AdminBoard.render();
         return true;
     },
@@ -5051,7 +5084,8 @@ export const AdminBoard = {
             const found = users.find(u => u.username === username);
             return found ? (found.name || found.username) : username;
         };
-        const assigneeOptions = AdminBoard.getTodoAssigneeOptions(t, users);
+        const currentActor = await Store.currentUser();
+        const assigneeOptions = AdminBoard.getTodoAssigneeOptions(t, users, currentActor?.username);
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/todos`, { credentials: 'same-origin' }).catch(() => null);
         const todos = res && res.ok ? (await res.json()).todos || [] : [];
 
@@ -5149,14 +5183,22 @@ export const AdminBoard = {
             const title = titleInput.value.trim();
             if (!title) return;
             const assigneeUser = users.find(u => u.username === assigneeSelect.value);
-            await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/todos`, {
+            addBtn.disabled = true;
+            const response = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/todos`, {
                 method: 'POST', credentials: 'same-origin',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ content: title, assignee_user_id: assigneeUser?.id || null, assignee_username: assigneeSelect.value || null })
-            }).catch(() => {});
+            }).catch(() => null);
+            addBtn.disabled = false;
+            if (!response?.ok) return UI.toast(Lang.t('subtaskSaveFailed'));
             titleInput.value = '';
-            assigneeSelect.value = '';
-            AdminBoard.renderTicketTodos(t, users, tickets);
+            const actor = await Store.currentUser();
+            assigneeSelect.value = assigneeOptions.some(user => user.username === actor?.username) ? actor.username : '';
+            await AdminBoard.renderTicketTodos(t, users, tickets);
+            titleInput.focus();
+        };
+        titleInput.onkeydown = event => {
+            if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); if (!addBtn.disabled) addBtn.click(); }
         };
         if (window.lucide) lucide.createIcons();
     },
@@ -5351,6 +5393,8 @@ export const AdminBoard = {
                 </div>
             </div>`;
         document.body.appendChild(modal);
+        const highest = Math.max(100, ...[...document.querySelectorAll('.modal-overlay.open')].map(el => Number(getComputedStyle(el).zIndex) || 100));
+        modal.style.zIndex = String(highest + 1);
         modal.querySelector('#arp-keep').onclick = async () => {
             modal.remove();
             await AdminBoard.returnTickets(user.username, []);
@@ -5470,6 +5514,7 @@ export const AdminBoard = {
             </div>`;
         document.body.appendChild(modal);
         modal.querySelector('[data-dialog-close]').onclick = () => modal.remove();
+        modal.style.zIndex = String(Math.max(100, ...[...document.querySelectorAll('.modal-overlay.open')].map(el => Number(getComputedStyle(el).zIndex) || 100)) + 1);
         modal.onclick = e => { if (e.target === modal) modal.remove(); };
         if (onSave) modal.querySelector('[data-dialog-save]').onclick = () => onSave(modal);
         headerButtons.forEach(b => { if (b.onClick) modal.querySelector(`#${b.id}`).onclick = () => b.onClick(modal); });
@@ -5586,10 +5631,16 @@ export const AdminBoard = {
             body: `
                 <div class="report-toolbar">
                     <div class="field"><label for="rep-range">Zeitraum</label>
-                        <select id="rep-range"><option value="30">Letzte 30 Tage</option><option value="90">Letzte 90 Tage</option><option value="365">Letzte 12 Monate</option></select>
+                        <select id="rep-range"><option value="7">Letzte 7 Tage</option><option value="30" selected>Letzte 30 Tage</option><option value="90">Letzte 90 Tage</option><option value="365">Letzte 12 Monate</option><option value="month">Dieser Monat</option><option value="previous-month">Vorheriger Monat</option><option value="year">Dieses Jahr</option><option value="all">Gesamter Zeitraum</option><option value="custom">Eigener Zeitraum</option></select>
+                    </div>
+                    <div id="rep-custom" class="report-custom-range" hidden>
+                        <div class="field"><label for="rep-from">Von (einschließlich)</label>${UI.dateFieldMarkup('rep-from')}</div>
+                        <div class="field"><label for="rep-until">Bis (einschließlich)</label>${UI.dateFieldMarkup('rep-until')}</div>
+                        <button type="button" class="btn-secondary" id="rep-apply">${Utils.esc(Lang.t('applyDate'))}</button>
                     </div>
                     <div id="rep-personal-toggle"></div>
                 </div>
+                <p class="hint" id="rep-period-label" role="status"></p>
                 <div id="rep-body"></div>`
         });
         modal.querySelector('#rep-print').onclick = async () => {
@@ -5598,7 +5649,7 @@ export const AdminBoard = {
             const company = settings.companyConfig || {};
             const companyLogo = company.logoUrl || settings.companyBrandingConfig?.logoDataUrl || '';
             const actor = await Store.currentUser();
-            const rangeLabel = modal.querySelector('#rep-range').selectedOptions[0]?.textContent || '';
+            const rangeLabel = modal.querySelector('#rep-period-label').textContent;
             UI.printHTML(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><title>Auswertung</title>
                 <link rel="stylesheet" href="/js/print.css"></head>
                 <body>
@@ -5612,14 +5663,24 @@ export const AdminBoard = {
                 ${html}</body></html>`);
         };
         const user = await Store.currentUser();
+        let reportGeneration = 0;
         const render = async () => {
-            const range = Number(modal.querySelector('#rep-range').value);
+            const generation = ++reportGeneration;
+            const range = modal.querySelector('#rep-range').value;
+            modal.querySelector('#rep-custom').hidden = range !== 'custom';
+            const period = reportPeriod(range, modal.querySelector('#rep-from').value, modal.querySelector('#rep-until').value);
+            modal.querySelector('#rep-print').disabled = !period;
+            if (!period) {
+                modal.querySelector('#rep-period-label').textContent = 'Bitte einen gültigen Zeitraum im Format dd.mm.jjjj eingeben (Von ≤ Bis).';
+                modal.querySelector('#rep-body').replaceChildren(); return;
+            }
+            const { since, until } = period;
+            modal.querySelector('#rep-period-label').textContent = `${Utils.fmtDate(since)} – ${Utils.fmtDate(until - 1)}`;
             const settings = await Store.getSettings();
             const users = await Store.getUsers();
             const personalAllowed = settings.reportingConfig?.personal !== false;
-            const since = Date.now() - range * 86400000;
             const all = await Store.getTickets();
-            const created = all.filter(t => new Date(t.createdAt).getTime() >= since);
+            const created = all.filter(t => { const time = new Date(t.createdAt).getTime(); return time >= since && time < until; });
             // t.logs ist aus der Listenansicht absichtlich immer leer (siehe Store.mapApiTicketToLegacy
             // -- das echte Protokoll wird erst pro Ticket einzeln nachgeladen); die serverseitig
             // gesetzte closed_at-Spalte (tickets.ts PATCH-Handler) liefert den Zeitpunkt stattdessen direkt.
@@ -5628,12 +5689,13 @@ export const AdminBoard = {
             // vorher lieferte "Erste Antwortzeit" dadurch immer "–", egal wie viele Tickets
             // tatsächlich beantwortet wurden.
             const firstResponseMap = await Store.getFirstResponseTimes(new Date(since).toISOString());
+            if (generation !== reportGeneration || !modal.isConnected) return;
             const firstResponse = t => {
                 const respondedAt = firstResponseMap[t.id];
-                if (!respondedAt) return null;
+                if (!respondedAt || new Date(respondedAt).getTime() >= until) return null;
                 return new Date(respondedAt).getTime() - new Date(t.createdAt).getTime();
             };
-            const closed = all.map(t => ({ t, c: closedAt(t) })).filter(x => x.c && x.c >= since);
+            const closed = all.map(t => ({ t, c: closedAt(t) })).filter(x => x.c && x.c >= since && x.c < until);
             const avg = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
             const fmtDuration = ms => ms == null ? '–' : ms >= 86400000 ? `${(ms / 86400000).toFixed(1)} Tg.` : `${(ms / 3600000).toFixed(1)} Std.`;
             const responses = created.map(firstResponse).filter(v => v != null);
@@ -5682,6 +5744,14 @@ export const AdminBoard = {
                 ${personal}`;
         };
         modal.querySelector('#rep-range').onchange = render;
+        const today = new Date(), monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        modal.querySelector('#rep-from').value = Utils.fmtDateOnly(monthStart);
+        modal.querySelector('#rep-until').value = Utils.fmtDateOnly(today);
+        UI.bindDateField('rep-from', { initialMs: monthStart.getTime(), onChange: render });
+        UI.bindDateField('rep-until', { initialMs: today.getTime(), onChange: render });
+        modal.querySelector('#rep-from').addEventListener('change', render);
+        modal.querySelector('#rep-until').addEventListener('change', render);
+        modal.querySelector('#rep-apply').onclick = render;
         await render();
     },
 
@@ -5694,11 +5764,21 @@ export const AdminBoard = {
         const { canRead } = await KbSearch.access();
         box.hidden = !canRead;
         if (!canRead) return;
-        const [tickets, links] = await Promise.all([Store.getTickets(), Store.getTicketKbLinks(ticketId)]);
+        let tickets, links;
+        try { [tickets, links] = await Promise.all([Store.getTickets(), Store.getTicketKbLinks(ticketId)]); }
+        catch (error) {
+            if (AdminBoard.currentTicketId === ticketId) {
+                box.hidden = false;
+                q('#m-kb-links-list').textContent = Lang.current === 'en' ? 'Linked solutions could not be loaded.' : 'Zugeordnete Lösungen konnten nicht geladen werden.';
+            }
+            return;
+        }
         if (AdminBoard.currentTicketId !== ticketId) return;
         const ticket = tickets.find(t => t.id === ticketId);
         const locked = !ticket || !!ticket.archived;
         const list = q('#m-kb-links-list');
+        box.classList.toggle('has-links', links.length > 0);
+        box.querySelector('.kb-linked-head > span').textContent = `${Lang.t('kbLinkedSolutions')}${links.length ? ` (${links.length})` : ''}`;
         list.innerHTML = links.length ? links.map(link => `
             <span class="file-chip kb-link-chip">
                 <button type="button" class="kb-link-open" data-id="${Utils.esc(link.articleId)}" title="${Utils.esc(Lang.t('kbOpenSolution'))}">${Icon('lightbulb', 13)}<span>${Utils.esc(link.title)}</span></button>
@@ -6001,6 +6081,8 @@ export const AdminBoard = {
     // Genehmigung, nicht das ganze Ticket (siehe GET /api/v2/approvals).
     requestApproval: async (t) => {
         const me = await Store.currentUser();
+        if (!AdminBoard.can(me, 'approvals')) return UI.toast(Lang.current === 'en' ? 'The approvals permission is required.' : 'Das Recht „Genehmigungen“ muss für dein Admin-Konto freigegeben sein.');
+        if (Store.modules.approvals === false) return UI.toast(Lang.current === 'en' ? 'Approvals are disabled.' : 'Der Genehmigungsworkflow ist deaktiviert.');
         const approvers = (await Store.getUsers())
             .filter(u => u.id !== me.id && u.id !== t.authorUserId && !u.accountArchived)
             .sort((a, b) => (a.name || a.username).localeCompare(b.name || b.username, Lang.current === 'en' ? 'en' : 'de'));
@@ -6021,7 +6103,11 @@ export const AdminBoard = {
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({ approver_user_id: approverId, text: note || undefined })
                 }).catch(() => null);
-                if (!res || !res.ok) return UI.toast(Lang.t('requestApprovalFailed'));
+                if (!res || !res.ok) {
+                    const error = await res?.json().catch(() => ({}));
+                    return UI.toast(error?.error === 'forbidden'
+                        ? (Lang.current === 'en' ? 'You do not have approval permission for this ticket.' : 'Dein Konto hat keine Genehmigungsberechtigung für dieses Ticket.') : Lang.t('requestApprovalFailed'));
+                }
                 Store._ticketsCache = null;
                 await Notifications.refresh();
                 m.remove();
@@ -6395,11 +6481,6 @@ export const AdminBoard = {
                                 <option value="Kritisch">${Lang.t('critical')}</option>
                             </select>
                         </div>
-                        <div class="field is-required">
-                            <label id="act-cat-label">${Lang.t('category')}</label>
-                            <div id="act-cat-container"></div>
-                        </div>
-                        <div id="act-custom-fields" class="field-wide custom-fields-fill"></div>
                         <div class="field field-wide">
                             <label>${Lang.t('attachments')}</label>
                             <label for="act-files" class="dropzone" id="act-files-dropzone">
@@ -6409,6 +6490,11 @@ export const AdminBoard = {
                             </label>
                             <div id="act-files-preview" class="file-preview"></div>
                         </div>
+                        <div class="field field-wide is-required">
+                            <label id="act-cat-label">${Lang.t('category')}</label>
+                            <div id="act-cat-container"></div>
+                        </div>
+                        <div id="act-custom-fields" class="field-wide custom-fields-fill"></div>
                     </div>
                     <div class="modal-footer modal-footer-visible">
                         <button class="btn-secondary" id="act-cancel">${Lang.t('cancel')}</button>
@@ -7178,7 +7264,7 @@ export const AdminBoard = {
                 extra.innerHTML = t.archived ? '' : `
                     <button class="btn-secondary" id="m-link-related" type="button">${Icon('link', 16)}${Lang.t('linkRelatedButton')}</button>
                     <button class="btn-secondary" id="m-merge" type="button">${Icon('git-merge', 16)}${Lang.t('mergeButton')}</button>
-                    <button class="btn-secondary" id="m-request-approval" type="button" data-module="approvals">${Icon('badge-check', 16)}Genehmigung anfordern</button>
+                    ${AdminBoard.can(await Store.currentUser(), 'approvals') && Store.modules.approvals !== false ? `<button class="btn-secondary" id="m-request-approval" type="button" data-module="approvals">${Icon('badge-check', 16)}${Utils.esc(Lang.t('requestApprovalTitle'))}</button>` : ''}
                     <button class="btn-secondary" id="m-kb-add" type="button">${Icon('book-open', 16)}${Lang.t('takeOverAsKnowledgeArticle')}</button>`;
                 const bindAction = (sel, fn) => { const el = q(sel); if (el) el.onclick = () => fn(t); };
                 bindAction('#m-link-related', AdminBoard.linkRelatedTicket);
@@ -7455,6 +7541,7 @@ export const AdminBoard = {
     // Name einer Person mit Ausklappmenue (Hover, Fokus oder Klick): Kontaktdaten oder Ticket-Historie.
     renderPersonMenu: (el, { userId, name, username, ticketId }) => {
         if (!el) return;
+        el._closePersonMenu?.();
         el.classList.remove('link');
         el.removeAttribute('title');
         el.onclick = null;
@@ -7467,13 +7554,41 @@ export const AdminBoard = {
         </span>`;
         const menu = el.querySelector('.person-menu');
         const trigger = el.querySelector('.person-menu-trigger');
-        const setOpen = open => { menu.classList.toggle('is-open', open); trigger.setAttribute('aria-expanded', String(open)); };
-        trigger.onclick = event => { event.stopPropagation(); setOpen(!menu.classList.contains('is-open')); };
-        menu.addEventListener('mouseleave', () => setOpen(false));
+        const list = menu.querySelector('.person-menu-list');
+        let observer;
+        const outside = event => { if (!menu.contains(event.target) && !list.contains(event.target)) setOpen(false); };
+        const position = () => {
+            const rect = trigger.getBoundingClientRect();
+            const height = list.offsetHeight || 100;
+            list.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - list.offsetWidth - 8))}px`;
+            list.style.top = `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - height - 8))}px`;
+        };
+        const setOpen = open => {
+            menu.classList.toggle('is-open', open); trigger.setAttribute('aria-expanded', String(open));
+            if (open) {
+                document.body.appendChild(list); list.classList.add('is-detached');
+                if (typeof list.showPopover === 'function') { list.setAttribute('popover', 'manual'); list.showPopover(); }
+                position(); window.addEventListener('resize', position); window.addEventListener('scroll', position, true);
+                document.addEventListener('pointerdown', outside);
+                observer?.disconnect(); observer = new MutationObserver(() => { if (!trigger.isConnected) setOpen(false); });
+                observer.observe(document.body, { childList: true, subtree: true });
+            } else {
+                if (typeof list.hidePopover === 'function' && list.matches(':popover-open')) list.hidePopover();
+                list.classList.remove('is-detached'); menu.appendChild(list);
+                window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true);
+                document.removeEventListener('pointerdown', outside); observer?.disconnect();
+            }
+        };
+        el._closePersonMenu = () => setOpen(false);
+        trigger.onclick = event => { event.stopPropagation(); setOpen(true); };
+        trigger.onmouseenter = () => setOpen(true);
+        list.onmouseleave = () => setOpen(false);
+        list.addEventListener('keydown', event => { if (event.key === 'Escape') { setOpen(false); trigger.focus(); } });
+        list.addEventListener('focusout', event => { if (!list.contains(event.relatedTarget) && event.relatedTarget !== trigger) setOpen(false); });
         menu.addEventListener('keydown', event => { if (event.key === 'Escape') { setOpen(false); trigger.focus(); } });
-        menu.addEventListener('focusout', event => { if (!menu.contains(event.relatedTarget)) setOpen(false); });
-        menu.querySelector('[data-act="contact"]')?.addEventListener('click', () => { setOpen(false); AdminBoard.openContactCard(userId, { username, ticketId }); });
-        menu.querySelector('[data-act="history"]').addEventListener('click', () => { setOpen(false); AdminBoard.renderHistory(username, ticketId); });
+        menu.addEventListener('focusout', event => { if (!menu.contains(event.relatedTarget) && !list.contains(event.relatedTarget)) setOpen(false); });
+        list.querySelector('[data-act="contact"]')?.addEventListener('click', () => { setOpen(false); AdminBoard.openContactCard(userId, { username, ticketId }); });
+        list.querySelector('[data-act="history"]').addEventListener('click', () => { setOpen(false); AdminBoard.renderHistory(username, ticketId); });
         if (window.lucide) lucide.createIcons();
     },
 
@@ -7497,7 +7612,7 @@ export const AdminBoard = {
             id: 'contact-card-modal',
             title: card.name || card.username,
             icon: 'contact-round',
-            size: 'sm',
+            size: 'lg',
             body: `
                 <div class="contact-card-head">
                     ${(Utils.setAvatar(card, card.avatar), Utils.avatarImg(card.username, 'contact-card-avatar'))}

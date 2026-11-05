@@ -1230,7 +1230,7 @@ export const Store = {
     },
     getTicketKbLinks: async (ticketId) => {
         const res = await fetch(`/api/v2/tickets/${encodeURIComponent(ticketId)}/kb-links`, { credentials: 'same-origin' }).catch(() => null);
-        if (!res || !res.ok) return [];
+        if (!res || !res.ok) throw new Error(Lang.t('loadFailed'));
         return ((await res.json()).links || []).map(l => ({ articleId: l.article_id, title: l.title, category: l.category || null, linkedAt: l.linked_at }));
     },
     linkKbArticle: async (ticketId, articleId) => {

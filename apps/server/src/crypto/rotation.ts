@@ -45,6 +45,7 @@ export const ENCRYPTED_COLUMNS: readonly EncryptedColumn[] = [
   col('account_requests.company', 'account_requests', 'company', 'company'),
   col('account_requests.reason', 'account_requests', 'reason', 'reason'),
   col('admin_todos.content', 'admin_todos', 'content', 'content'),
+  col('admin_todo_time_entries.note', 'admin_todo_time_entries', 'note_enc', 'note'),
   col('recurring_admin_todos.content', 'recurring_admin_todos', 'content', 'content'),
   col('app_settings.smtp_password', 'app_settings', 'smtp_password_enc', 'smtp_password'),
   col('app_settings.ldap_bind_password', 'app_settings', 'ldap_bind_password_enc', 'ldap_bind_password'),

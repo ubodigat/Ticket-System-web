@@ -767,7 +767,8 @@ export const TABLES: readonly TableDefinition[] = [
     columns: [
       ['user_id', 'char(36) NOT NULL'],
       ['id', 'char(36) NOT NULL'],
-      ['ticket_id', 'char(36) NOT NULL'],
+      ['ticket_id', 'char(36) DEFAULT NULL'],
+      ['todo_id', 'char(36) DEFAULT NULL'],
       ['started_at', 'datetime NOT NULL'],
       ['stopped_at', 'datetime DEFAULT NULL']
     ],
@@ -778,7 +779,23 @@ export const TABLES: readonly TableDefinition[] = [
     ],
     foreignKeys: [
       { columns: ['user_id'], references: 'users', referencedColumns: ['id'], onDelete: 'CASCADE' },
-      { columns: ['ticket_id'], references: 'tickets', referencedColumns: ['id'] }
+      { columns: ['ticket_id'], references: 'tickets', referencedColumns: ['id'] },
+      { columns: ['todo_id'], references: 'admin_todos', referencedColumns: ['id'] }
+    ]
+  },
+  {
+    name: 'admin_todo_time_entries',
+    columns: [
+      ['id', 'char(36) NOT NULL'], ['todo_id', 'char(36) NOT NULL'],
+      ['user_id', 'char(36) DEFAULT NULL'], ['username', 'varchar(64) NOT NULL'],
+      ['minutes', 'int NOT NULL'], ['note_enc', 'mediumblob DEFAULT NULL'],
+      ['created_at', 'datetime NOT NULL DEFAULT current_timestamp()']
+    ],
+    primaryKey: ['id'],
+    indexes: [{ name: 'todo_time_idx', columns: ['todo_id', 'created_at'] }],
+    foreignKeys: [
+      { columns: ['todo_id'], references: 'admin_todos', referencedColumns: ['id'], onDelete: 'CASCADE' },
+      { columns: ['user_id'], references: 'users', referencedColumns: ['id'], onDelete: 'SET NULL' }
     ]
   },
   {

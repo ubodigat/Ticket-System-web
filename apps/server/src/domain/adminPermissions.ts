@@ -36,9 +36,9 @@ export const SETTINGS_SECTION_KEYS: Readonly<Record<string, readonly string[]>> 
   settingsNotifications: ['notifPolicy', 'notifConfig']
 };
 
-export function parsePermissions(json: string | null | undefined): Record<string, unknown> {
+export function parsePermissions(json: unknown): Record<string, unknown> {
   try {
-    const parsed = json ? JSON.parse(json) : {};
+    const parsed = typeof json === 'string' ? JSON.parse(json) : json;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};

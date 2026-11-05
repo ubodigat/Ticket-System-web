@@ -3,6 +3,7 @@ import { Lang } from './lang.js';
 import { Store, Notifications } from './store.js';
 import { UI } from './ui.js';
 import { AdminBoard } from './admin-board.js';
+import { WorkTimer } from './work-timer.js';
 
 // Aufgabenliste fuer Admins: Popup mit Schnelleingabe und nach Faelligkeit gruppierter Liste, dazu ein
 // verschiebbares, dauerhaft sichtbares Fenster (Position und Groesse merkt sich der Browser).
@@ -34,10 +35,12 @@ export const TodoList = {
         button.onclick = () => TodoList.open().catch(error => UI.toast(error.message));
         q('.topbar-right').insertBefore(button, q('#btn-notifications') || q('.topbar-right').firstChild);
         document.addEventListener('open-todos', () => TodoList.open());
+        document.addEventListener('work-timer-changed', () => { TodoList.render(); });
         await TodoList.refresh(true);
         if (store.get('todo-float', false)) TodoList.openFloat();
     },
     close() {
+        TodoList.closeForm();
         q('#todo-modal')?.classList.remove('open'); TodoList.picker?.close();
         clearTimeout(TodoList.timer); TodoList.timer = setTimeout(() => TodoList.refresh(true), 60000);
     },
@@ -59,7 +62,7 @@ export const TodoList = {
                     </div>
                     <form class="todo-quick" id="todo-quick">
                         ${Icon('plus', 16)}<input type="text" id="todo-quick-input" maxlength="5000" placeholder="${Lang.t('todoQuickAddPlaceholder')}" aria-label="${Lang.t('createNewTask')}">
-                        <button type="button" class="btn-ghost btn-sm" id="todo-add" title="${Lang.t('todoMoreOptionsHint')}">${Icon('sliders-horizontal', 15)}${Lang.t('todoMoreOptions')}</button>
+                        <button type="button" class="btn-ghost btn-sm" id="todo-list-options" title="${Lang.t('todoMoreOptionsHint')}">${Icon('sliders-horizontal', 15)}${Lang.t('todoMoreOptions')}</button>
                         <button type="submit" class="btn-primary btn-sm">${Lang.t('add')}</button>
                     </form>
                     <form id="todo-form" hidden><div class="field"><label for="todo-content">${Lang.t('task')}</label><textarea id="todo-content" required maxlength="5000" rows="3"></textarea></div>
@@ -86,11 +89,11 @@ export const TodoList = {
             q('#todo-search').oninput = () => TodoList.render();
             q('#todo-show-done').onchange = event => { TodoList.showDone = event.target.checked; TodoList.render(); };
             modal.querySelectorAll('button:not([type])').forEach(button => { button.type = 'button'; });
-            q('#todo-add').onclick = () => TodoList.openForm(null, TodoList.tab === 'recurring' ? 'recurring' : 'personal', q('#todo-quick-input').value).catch(error => UI.toast(error.message));
+            q('#todo-list-options').onclick = () => TodoList.openForm(null, TodoList.tab === 'recurring' ? 'recurring' : 'personal', q('#todo-quick-input').value).catch(error => UI.toast(error.message));
             q('#todo-new-recurring').onclick = () => TodoList.openForm(null, 'recurring').catch(error => UI.toast(error.message));
             q('#todo-pin').onclick = () => { TodoList.close(); TodoList.openFloat(); };
             q('#todo-quick').onsubmit = event => { event.preventDefault(); TodoList.quickAdd(q('#todo-quick-input')); };
-            modal.querySelector('[data-cancel]').onclick = () => { q('#todo-form').hidden = true; TodoList.picker.close(); };
+            modal.querySelector('[data-cancel]').onclick = () => TodoList.closeForm();
             q('#todo-form').onsubmit = e => TodoList.saveForm(e);
         }
         modal.classList.add('open'); await TodoList.refresh(); q('#todo-quick-input').focus();
@@ -107,8 +110,19 @@ export const TodoList = {
             await TodoList.refresh();
         } catch (error) { UI.toast(error.message); } finally { input.disabled = false; input.focus(); }
     },
+    closeForm() {
+        const form = q('#todo-form');
+        if (form) { form.hidden = true; q('#todo-modal .modal-body')?.insertBefore(form, q('#todo-modal .todo-filter-row')); }
+        TodoList.picker?.close(); q('#todo-editor-modal')?.remove();
+    },
     async openForm(item = null, kind = 'personal', prefill = '') {
         if (!q('#todo-modal')?.classList.contains('open')) await TodoList.open();
+        TodoList.closeForm();
+        const editor = AdminBoard.openDialog({ id: 'todo-editor-modal', title: item ? Lang.t('editTask') : Lang.t(kind === 'recurring' ? 'createRecurringTask' : 'createNewTask'), icon: 'list-todo', body: '', size: 'lg' });
+        editor.querySelector('.modal-body').appendChild(q('#todo-form'));
+        editor.querySelector('[data-dialog-close]').onclick = () => TodoList.closeForm();
+        editor.onclick = event => { if (event.target === editor) TodoList.closeForm(); };
+        editor.addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); TodoList.closeForm(); } });
         TodoList.editingId = item?.id || null; TodoList.formKind = kind;
         q('#todo-form').hidden = false; q('#todo-content').value = item?.content || prefill || ''; q('#todo-content').focus();
         q('#todo-date-label').textContent = kind === 'recurring' ? Lang.t('firstRun') : Lang.t('dueDateOptional');
@@ -138,7 +152,7 @@ export const TodoList = {
                 if (!TodoList.editingId) body.recipient_ids = TodoList.recipients.getValue();
                 await TodoList.request(TodoList.editingId ? `/${TodoList.editingId}` : '', TodoList.editingId ? 'PATCH' : 'POST', body);
             }
-            q('#todo-form').hidden = true; q('#todo-quick-input').value = ''; TodoList.picker.close(); await TodoList.refresh(); await Notifications.refresh();
+            TodoList.closeForm(); q('#todo-quick-input').value = ''; await TodoList.refresh(); await Notifications.refresh();
         } catch (error) { UI.toast(error.message); } finally { save.disabled = false; }
     },
     async loadRules() {
@@ -189,6 +203,8 @@ export const TodoList = {
                 ${item.ticket_closed ? `<span class="todo-chip todo-ticket-closed">${Icon('lock', 12)}${Utils.esc(item.ticket_closed_at ? Lang.format('ticketClosedOn', { date: Utils.fmtDate(item.ticket_closed_at) }) : Lang.t('statusClosed'))}</span>` : ''}
             </div></div>
             <div class="todo-row-actions">
+                ${!item.done && !item.ticket_closed ? `<button type="button" class="btn-ghost btn-icon btn-sm" data-track title="${Lang.t('timeTracking')}" aria-label="${Lang.t('timeTracking')}">${Icon((item.ticket_id ? WorkTimer.timer?.ticket_id === item.ticket_id : WorkTimer.timer?.todo_id === item.id) ? 'square' : 'play', 15)}</button>` : ''}
+                ${item.kind === 'personal' ? `<button type="button" class="btn-ghost btn-icon btn-sm" data-time-history title="${Lang.t('timeTracking')}" aria-label="${Lang.t('timeTracking')}">${Icon('history', 15)}</button>` : ''}
                 ${item.kind === 'personal' && item.creator_id === TodoList.user.id ? `<button type="button" class="btn-ghost btn-icon btn-sm" data-edit title="${Lang.t('editTask')}" aria-label="${Lang.t('editTask')}">${Icon('pencil', 15)}</button>` : ''}
                 ${item.kind === 'personal' ? `<button type="button" class="btn-ghost btn-icon btn-sm" data-remove title="${Lang.t('removeFromMyList')}" aria-label="${Lang.t('removeFromMyList')}">${Icon('trash-2', 15)}</button>` : ''}
             </div>`;
@@ -202,6 +218,20 @@ export const TodoList = {
         };
         if (item.ticket_id) row.querySelector('.todo-ticket').onclick = async () => { TodoList.close(); await AdminBoard.openTicketForCurrentPage(item.ticket_id); };
         row.querySelector('[data-edit]')?.addEventListener('click', () => TodoList.openForm(item).catch(error => UI.toast(error.message)));
+        row.querySelector('[data-track]')?.addEventListener('click', async event => {
+            const button = event.currentTarget; button.disabled = true;
+            try { await WorkTimer.toggleTarget(item.ticket_id ? { ticketId: item.ticket_id } : { todoId: item.id }); }
+            catch (error) { UI.toast(error.message); }
+            finally { button.disabled = false; }
+        });
+        row.querySelector('[data-time-history]')?.addEventListener('click', async () => {
+            try {
+                const { entries } = await TodoList.request(`/${encodeURIComponent(item.id)}/time-entries`);
+                AdminBoard.openDialog({ id: 'todo-time-history', title: Lang.t('timeTracking'), icon: 'clock',
+                    body: `<h4>${Utils.esc(item.content)}</h4><p>${entries.reduce((sum, entry) => sum + entry.minutes, 0)} min</p>
+                        ${entries.map(entry => `<div class="uw-review-section"><span class="hint">${Utils.esc(Utils.fmtDate(entry.created_at))} · ${entry.minutes} min</span><p>${Utils.esc(entry.activity)}</p></div>`).join('')}` });
+            } catch (error) { UI.toast(error.message); }
+        });
         row.querySelector('[data-remove]')?.addEventListener('click', async () => { try { await TodoList.request(`/${item.id}`, 'DELETE'); await TodoList.refresh(); } catch (error) { UI.toast(error.message); } });
         return row;
     },

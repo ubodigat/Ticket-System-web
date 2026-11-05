@@ -54,6 +54,9 @@ jobs:
       - name: Installer security regressions
         run: bash ops/tests/installer-security.sh
 
+      - name: Web TLS and LAN domain regressions
+        run: bash ops/tests/web-tls.sh
+
       - name: Signed release regressions (release tags, foreign keys, release assets)
         run: bash ops/tests/release-signature.sh
 

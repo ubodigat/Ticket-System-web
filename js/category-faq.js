@@ -33,7 +33,7 @@ export const CategoryFaq = {
             body: `
                 <div class="faq-page">
                     ${faq.intro ? `<div class="faq-intro rich-content">${Utils.renderMarkdown(faq.intro)}</div>` : ''}
-                    ${faq.items.length > 5 ? `<div class="faq-search">${Icon('search', 15)}<input type="search" id="faq-search" placeholder="${Utils.esc(Lang.t('faqSearchPlaceholder'))}" aria-label="${Utils.esc(Lang.t('faqSearchPlaceholder'))}"></div>` : ''}
+                    <div class="faq-search">${Icon('search', 15)}<input type="search" id="faq-search" placeholder="${Utils.esc(Lang.t('faqSearchPlaceholder'))}" aria-label="${Utils.esc(Lang.t('faqSearchPlaceholder'))}"></div>
                     <div class="faq-list" id="faq-list">
                         ${faq.items.length ? faq.items.map((item, index) => `
                             <details class="faq-item"${index === 0 && faq.items.length <= 3 ? ' open' : ''}>

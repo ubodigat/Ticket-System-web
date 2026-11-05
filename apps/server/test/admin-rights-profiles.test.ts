@@ -37,6 +37,27 @@ function fixture(config: Record<string, unknown> = {}, adminPermissions: Record<
 }
 
 describe('permission catalog', () => {
+  it('accepts explicit approval grants from JSON strings and driver-decoded objects, and denies other values', async () => {
+    const f = fixture();
+    try {
+      f.as(ADMIN, 'admin');
+      for (const value of [JSON.stringify({ approvals: true }), { approvals: true }]) {
+        f.tables.users![1].permissions_json = value;
+        const profile = await f.app.inject('/api/v2/users/me');
+        expect(profile.statusCode).toBe(200);
+        expect(profile.json().user.permissions.approvals).toBe(true);
+        const response = await f.app.inject({ method: 'POST', url: '/api/v2/tickets/t1/request-approval', payload: {} });
+        expect(response.statusCode).toBe(400); // Body validation reached after authorization.
+      }
+      for (const value of [null, '{broken', {}, { approvals: false }, { approvals: 'true' }, []]) {
+        f.tables.users![1].permissions_json = value;
+        const response = await f.app.inject({ method: 'POST', url: '/api/v2/tickets/t1/request-approval', payload: {} });
+        expect(response.statusCode).toBe(403);
+      }
+      f.as(TARGET, 'user');
+      expect((await f.app.inject({ method: 'POST', url: '/api/v2/tickets/t1/request-approval', payload: {} })).statusCode).toBe(403);
+    } finally { await f.app.close(); }
+  });
   it('maps settings keys to sections and keeps security-relevant keys superadmin-only', () => {
     expect(forbiddenSettingsKey(['slaHoursByPriority', 'businessHours'], { settingsSla: true })).toBeNull();
     expect(forbiddenSettingsKey(['companyName', 'companyBrandingConfig'], { settingsCompany: true })).toBeNull();

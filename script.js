@@ -177,7 +177,7 @@ const ScrollToTop = {
     }
 };
 
-// <select>-Listen: gleiche Regeln wie das Multi-Select (immer nach unten, Platz schaffen, Höhe anpassen)
+// Native pickers choose the side with space; do not scroll the form while selecting.
 const syncSelectPicker = (e) => {
     const sel = e.target && e.target.closest ? e.target.closest('select') : null;
     if (!sel || sel.multiple) return;
@@ -188,13 +188,25 @@ const syncSelectPicker = (e) => {
             isOpen = sel.matches(':open');
         } catch {}
         if (!isOpen) return;
-        UI.ensureSpaceBelow(sel, Math.min(sel.options.length * 38 + 14, 260) + 18);
         sel.style.setProperty('--picker-max', `${UI.dropdownMaxHeight(sel)}px`);
     });
 };
 document.addEventListener('pointerdown', syncSelectPicker, true);
 document.addEventListener('keydown', syncSelectPicker, true);
 document.addEventListener('focusin', syncSelectPicker);
+
+// Fit the board beneath the actual toolbar, including banners and wrapped navigation.
+if (document.body.dataset.guard === 'admin') {
+    const board = document.querySelector('.kanban-board');
+    if (board) {
+        const fit = () => { if (board.getClientRects().length) board.style.setProperty('--board-top', `${Math.max(0, board.getBoundingClientRect().top + window.scrollY)}px`); };
+        const observer = new ResizeObserver(fit);
+        document.querySelectorAll('.topbar, .board-banners, .board-tools').forEach(el => observer.observe(el));
+        const view = document.querySelector('#kanban-view');
+        if (view) new MutationObserver(fit).observe(view, { attributes: true, attributeFilter: ['hidden', 'style', 'class'] });
+        window.addEventListener('resize', fit); fit();
+    }
+}
 
 // Initialize scroll to top button
 if (document.readyState === 'loading') {

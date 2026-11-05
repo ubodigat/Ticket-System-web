@@ -185,7 +185,11 @@ describe('personal data export (GDPR Art. 15/20)', () => {
       { id: 'm2', ticket_id: 't2', sender_user_id: 'u2', sender_username: 'bob', sender_role: 'user', content: enc('Privat von Bob', 'ticket_messages', 'm2', 'content') }],
     ticket_notes: [{ id: 'n1', ticket_id: 't1', content: enc('Interne Notiz', 'ticket_notes', 'n1', 'content') }],
     sessions: [{ user_id: 'u1', ip_address: '192.0.2.1', user_agent: 'Firefox', created_at: new Date() }],
-    mfa_devices: [{ user_id: 'u1', token_hash: 'DEVICE-TOKEN-HASH', verified_at: new Date() }]
+    mfa_devices: [{ user_id: 'u1', token_hash: 'DEVICE-TOKEN-HASH', verified_at: new Date() }],
+    admin_todo_time_entries: [
+      { id: 'own-time', todo_id: 'todo', user_id: 'u1', minutes: 12, note_enc: enc('Own todo activity', 'admin_todo_time_entries', 'own-time', 'note') },
+      { id: 'foreign-time', todo_id: 'todo', user_id: 'u2', minutes: 99, note_enc: enc('Foreign todo activity', 'admin_todo_time_entries', 'foreign-time', 'note') }
+    ]
   };
 
   it('exports everything of the person, decrypted -- and nothing secret or foreign', async () => {
@@ -194,8 +198,9 @@ describe('personal data export (GDPR Art. 15/20)', () => {
     expect(data.tickets.map((ticket: any) => ticket.title)).toEqual(['Drucker defekt']);
     expect(data.ticketConversations.map((message: any) => message.content)).toEqual(['Wir kuemmern uns']);
     expect(data.sessions[0]).toMatchObject({ ip_address: '192.0.2.1' });
+    expect(data.personalTodoTimeEntries).toEqual([expect.objectContaining({ id: 'own-time', minutes: 12, note: 'Own todo activity' })]);
     const text = JSON.stringify(data);
-    for (const secret of ['ARGON-SECRET-HASH', 'TOTP-SECRET', 'BLIND-INDEX', 'DEVICE-TOKEN-HASH', 'Interne Notiz', 'Fremdes Ticket', 'Privat von Bob', 'Bob Other']) {
+    for (const secret of ['ARGON-SECRET-HASH', 'TOTP-SECRET', 'BLIND-INDEX', 'DEVICE-TOKEN-HASH', 'Interne Notiz', 'Fremdes Ticket', 'Privat von Bob', 'Bob Other', 'Foreign todo activity']) {
       expect(text, secret).not.toContain(secret);
     }
   });

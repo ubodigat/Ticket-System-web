@@ -197,18 +197,22 @@ export const UserDash = {
                 const { errors } = await Store.uploadFiles(UserDash.createFiles, file => Store.saveAttachment(file, { ticketId: newTicket.id }));
                 if (errors.length) UI.toast(`${Lang.t('ticketCreatedAttachmentsFailed')} ${errors.join(' ')}`);
             }
+            let incidentLinkFailed = false;
             if (linkedIncidentId) {
-                await fetch(`/api/v2/tickets/${encodeURIComponent(newTicket.id)}/link-incident`, {
+                const linked = await fetch(`/api/v2/tickets/${encodeURIComponent(newTicket.id)}/link-incident`, {
                     method: 'POST', credentials: 'same-origin',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({ incident_id: linkedIncidentId })
-                }).catch(() => {});
+                }).catch(() => null);
+                incidentLinkFailed = !linked?.ok;
             }
             Store._ticketsCache = null;
             // Hinweise an die zustaendigen Admins (App und E-Mail) erzeugt der Server beim Anlegen.
             await Notifications.refresh();
 
-            UI.toast(Lang.t('ticketCreated'));
+            UI.toast(incidentLinkFailed
+                ? (Lang.current === 'en' ? 'Ticket created, but linking to the incident failed.' : 'Ticket erstellt, aber die Zuordnung zur Großstörung ist fehlgeschlagen.')
+                : Lang.t('ticketCreated'));
             UserDash.resetCreateForm(settings);
             await UserDash.renderList();
         };

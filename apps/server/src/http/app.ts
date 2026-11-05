@@ -40,6 +40,7 @@ import { loadSecurityPolicy } from '../domain/securityPolicy.js';
 import { isAccountExpired } from '../domain/accountValidity.js';
 import { recordActivity } from '../domain/activityLog.js';
 import { ticketRouteGuard } from '../domain/ticketAccess.js';
+import { safeRequestLog, safeErrorLog } from './logPrivacy.js';
 
 function timestampMillis(value: Date | string | null | undefined): number {
   if (!value) return 0;
@@ -86,7 +87,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     bodyLimit: 2 * 1024 * 1024,
     logger: {
       level: deps.env.NODE_ENV === 'production' ? 'info' : 'debug',
-      redact: ['req.headers.cookie', 'req.headers.authorization']
+      redact: ['req.headers.cookie', 'req.headers.authorization', 'req.headers["x-csrf-token"]', 'res.headers["set-cookie"]', 'username', 'userId', 'uid'],
+      serializers: { req: safeRequestLog, err: safeErrorLog }
     },
     // Security-Audit R-1 (Regression, vorher N1): "true" vertraut der GESAMTEN
     // X-Forwarded-For-Kette unbedingt -- req.ip könnte dadurch auf eine vom Client

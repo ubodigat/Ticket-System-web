@@ -17,6 +17,8 @@ export function timerMinutes(start: Date, stop: Date) {
 export const finishTimerSchema = z.object({ activity: z.string().trim().max(4000).default(''), solution: z.string().trim().max(10000).optional(),
   solution_type: z.enum(['Ursache', 'Maßnahme', 'Lösung']).optional(), solution_final: z.boolean().optional(),
   minutes: z.number().int().min(1).max(20160).optional() }).strict();
+export const startTimerSchema = z.object({ ticketId: z.uuid().optional(), todoId: z.uuid().optional() }).strict()
+  .refine(value => Number(!!value.ticketId) + Number(!!value.todoId) === 1);
 
 async function activityRequired(app: FastifyInstance): Promise<boolean> {
   const row = await app.db.selectFrom('app_settings').select('config_json').where('id', '=', 1).executeTakeFirst();
@@ -35,17 +37,25 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
     try {
       const session = requireAdmin(req);
       const { uid } = session;
-      const parsed = z.object({ ticketId: z.uuid() }).strict().safeParse(req.body);
+      const parsed = startTimerSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_ticket' });
       // Security-Audit R-30: nur Tickets, die die Person sehen darf.
-      if (!(await canAccessTicket(app.db, session, parsed.data.ticketId))) return reply.code(404).send({ error: 'ticket_not_available' });
+      if (parsed.data.ticketId && !(await canAccessTicket(app.db, session, parsed.data.ticketId))) return reply.code(404).send({ error: 'ticket_not_available' });
       const result = await app.db.transaction().execute(async trx => {
         await trx.selectFrom('users').select('id').where('id', '=', uid).forUpdate().executeTakeFirstOrThrow();
         const previous = await trx.selectFrom('ticket_work_timers').selectAll().where('user_id', '=', uid).executeTakeFirst();
         if (previous) return { conflict: true, timer: previous };
-        const ticket = await trx.selectFrom('tickets').select(['id', 'archived_at']).where('id', '=', parsed.data.ticketId).executeTakeFirst();
-        if (!ticket || ticket.archived_at) return null;
-        const timer = { id: randomUUID(), user_id: uid, ticket_id: ticket.id, started_at: new Date(), stopped_at: null };
+        if (parsed.data.todoId) {
+          const member = await trx.selectFrom('admin_todo_members').select('todo_id').where('todo_id', '=', parsed.data.todoId)
+            .where('user_id', '=', uid).where('hidden', '=', false).executeTakeFirst();
+          const todo = await trx.selectFrom('admin_todos').select(['id', 'done']).where('id', '=', parsed.data.todoId).executeTakeFirst();
+          if (!member || !todo || todo.done) return null;
+        } else {
+          const ticket = await trx.selectFrom('tickets').select(['id', 'archived_at']).where('id', '=', parsed.data.ticketId!).executeTakeFirst();
+          if (!ticket || ticket.archived_at) return null;
+        }
+        const timer = { id: randomUUID(), user_id: uid, ticket_id: parsed.data.ticketId || null,
+          todo_id: parsed.data.todoId || null, started_at: new Date(), stopped_at: null };
         await trx.insertInto('ticket_work_timers').values(timer).execute();
         return { conflict: false, timer };
       });
@@ -74,6 +84,7 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
       if (!parsed.success) return reply.code(400).send({ error: 'activity_required' });
       if (!parsed.data.activity && await activityRequired(app)) return reply.code(400).send({ error: 'activity_required' });
       const activityDek = await ensureDek(app.db, deps.keyProvider, 'ticket_time_entries.note');
+      const todoDek = await ensureDek(app.db, deps.keyProvider, 'admin_todo_time_entries.note');
       const noteDek = await ensureDek(app.db, deps.keyProvider, 'ticket_notes.content');
       const encrypt = (text: string, tableName: string, recordId: string, fieldName: string, dek: typeof noteDek) =>
         fieldCipher.encryptField(text, dek, { installationId: deps.env.INSTALLATION_ID,
@@ -84,6 +95,15 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
         req.auditDetail = { ticketId: timer.ticket_id };
         const entryId = randomUUID(); const measured = timerMinutes(new Date(timer.started_at), new Date(timer.stopped_at));
         const minutes = parsed.data.minutes ?? measured;
+        if (timer.todo_id) {
+          if (parsed.data.solution) return { invalidSolution: true };
+          await trx.insertInto('admin_todo_time_entries').values({ id: entryId, todo_id: timer.todo_id, user_id: session.uid,
+            username: session.username, minutes, note_enc: parsed.data.activity ? encrypt(parsed.data.activity,
+              'admin_todo_time_entries', entryId, 'note', todoDek) : null }).execute();
+          await trx.deleteFrom('ticket_work_timers').where('user_id', '=', session.uid).where('id', '=', id).execute();
+          return { entryId, ticketId: null, todoId: timer.todo_id, minutes, measured };
+        }
+        if (!timer.ticket_id) return null;
         if (minutes !== measured) await trx.insertInto('ticket_audit_log').values({ id: randomUUID(), ticket_id: timer.ticket_id,
           actor_user_id: session.uid, actor_username: session.username, action: 'work_time_adjusted', field: 'work_minutes',
           old_value: String(measured), new_value: String(minutes) }).execute();
@@ -100,6 +120,7 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
         await trx.deleteFrom('ticket_work_timers').where('user_id', '=', session.uid).where('id', '=', id).execute();
         return { entryId, ticketId: timer.ticket_id, minutes, measured };
       });
+      if (result && 'invalidSolution' in result) return reply.code(400).send({ error: 'solution_requires_ticket' });
       return result ? reply.code(201).send(result) : reply.code(409).send({ error: 'timer_not_stopped' });
     } catch (error) { return routeError(app, reply, error); }
   });

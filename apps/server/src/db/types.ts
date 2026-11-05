@@ -253,7 +253,8 @@ export interface UserPreferencesTable { user_id: string; value_enc: Buffer; }
 export interface TicketWorkTimersTable {
   user_id: string;
   id: string;
-  ticket_id: string;
+  ticket_id: Nullable<string>;
+  todo_id: Nullable<string>;
   started_at: ColumnType<Date, Date, never>;
   stopped_at: ColumnType<Date | null, Date | null, Date | null>;
 }
@@ -536,6 +537,10 @@ export interface Database {
     done: ColumnType<boolean, boolean, boolean>;
     done_at: NullableTimestamp;
     created_at: CreatedAt;
+  };
+  admin_todo_time_entries: {
+    id: string; todo_id: string; user_id: Nullable<string>; username: string;
+    minutes: number; note_enc: Nullable<Buffer>; created_at: CreatedAt;
   };
   admin_todo_members: {
     todo_id: string;

@@ -17,13 +17,16 @@ if (process.argv.includes('--check')) {
 } else writeFileSync('install-manifest.sha256', manifest);
 const manifestHash = createHash('sha256').update(manifest).digest('hex');
 console.log('INSTALL_MANIFEST_SHA256=' + manifestHash);
-if (!process.argv.includes('--check')) {
+{
   const installerHash = createHash('sha256').update(readFileSync('install.sh', 'utf8').replace(/\r\n/g, '\n')).digest('hex');
   const readme = readFileSync('README.md', 'utf8');
   const updated = readme.replace(/^bash -c 'set -e[^\r\n]*raw\.githubusercontent\.com\/ubodigat\/Ticket-System-web\/main\/install\.sh[^\r\n]*$/gm, line => {
-    let args = line.includes('--domain=') ? ' --domain=support.example.com --acme-email=admin@example.com' : line.includes('--dev') ? ' --dev' : '';
-    if (line.includes('--enable-office-viewer')) args += ' --enable-office-viewer';
+    // Preserve the reviewed flags verbatim (including LAN TLS and custom hostnames).
+    const args = line.match(/ bash "\$f"([^'\r\n]*)'$/)?.[1];
+    if (args === undefined) throw new Error('Cannot preserve installation command arguments');
     return `bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \\"$f\\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\\n" "${installerHash}" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=${manifestHash} bash "$f"${args}'`;
   });
-  writeFileSync('README.md', updated);
+  if (process.argv.includes('--check')) {
+    if (updated !== readme) throw new Error('README installation checksums are stale; run node ops/create-install-manifest.mjs');
+  } else writeFileSync('README.md', updated);
 }

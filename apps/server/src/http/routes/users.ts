@@ -246,9 +246,9 @@ const setAbsenceSchema = z.object({
   visible: z.boolean().default(false)
 });
 
-function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+function parseJsonObject(value: unknown): Record<string, unknown> {
   try {
-    const parsed = value ? JSON.parse(value) : {};
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};

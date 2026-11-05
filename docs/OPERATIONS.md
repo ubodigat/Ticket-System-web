@@ -37,6 +37,56 @@ bash ops/verify-and-pull.sh
 bash install.sh
 ```
 
+## HTTPS und Domainwechsel
+
+Ein Ping bestätigt keine HTTPS-Verbindung. Wenn die Installation für eine IP eingerichtet ist,
+kann der Aufruf über eine andere Domain bereits beim TLS-Handshake scheitern (SNI). Das ist
+von einer Warnung über eine nicht vertrauenswürdige interne CA zu unterscheiden.
+
+Nach Aktualisierung des Codes kann nur die bestehende Webkonfiguration repariert werden:
+
+```bash
+cd /opt/ticket-system
+bash install.sh --web-only --domain=ticket.ubodigat.com --tls=internal
+```
+
+Dieser Modus installiert keine Pakete, baut keine Images und führt keinen Datenbankabgleich
+aus. App und Caddy werden kurz neu erstellt, damit auch WebAuthn und OAuth die neue Basis-URL
+verwenden. Vorher wird `.env` als `.env.web-backup.*` mit Modus 0600 gesichert. Diese Sicherung
+enthält Geheimnisse und gehört weder in Git noch in Support-Anfragen. Ungültige Eingaben oder
+eine fehlgeschlagene Caddy-Konfigurationsprüfung stellen die alte `.env` wieder her, bevor
+laufende Container ersetzt werden. Bei späteren Start-/TLS-Fehlern bleiben Sicherung und
+Diagnose erhalten; es erfolgt keine automatische Datenrücksicherung.
+
+`--tls=internal` bleibt auch bei späteren Installationsläufen erhalten. Für öffentliches ACME:
+`--tls=acme --acme-email=it@example.com` verwenden. Öffentliche Zertifikatsvalidierung muss
+funktionieren; DNS-01 braucht eine gesonderte Provider-/Issuer-Konfiguration und ist nicht durch
+die bloße Eingabe einer E-Mail-Adresse eingerichtet. Der Standardmodus unterstützt hier DNS-Namen
+und IPv4-Adressen. Die eigene Office-Subdomain bleibt bestehen und muss ebenfalls auflösbar sein.
+
+Die öffentliche Caddy-CA liegt nach erfolgreicher Prüfung in `ops/tls/caddy-root.crt`:
+
+```bash
+openssl x509 -in ops/tls/caddy-root.crt -noout -fingerprint -sha256
+curl --cacert ops/tls/caddy-root.crt --resolve ticket.ubodigat.com:443:127.0.0.1 -I https://ticket.ubodigat.com/index.html
+docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs --tail=80 caddy app
+```
+
+Bei abweichenden Ports oder Bind-Adressen den Diagnosebefehl entsprechend anpassen. Am Client
+denselben Hostnamen verwenden, seine DNS-Auflösung prüfen und nur das verifizierte öffentliche
+CA-Zertifikat als vertrauenswürdig importieren. Niemals den privaten CA-Schlüssel weitergeben.
+Ein Domainwechsel kann neue Passkey-Registrierungen und angepasste OAuth-Redirect-URIs erfordern.
+
+Der Installer prüft lokal mit passendem SNI und Zertifikatsprüfung; er kann weder Client-DNS
+noch Proxmox-/Router-Firewalls oder Browser-Vertrauen aus der Ferne bestätigen. `/health` ist
+öffentlich absichtlich gesperrt. Ein `curl -k` dient höchstens zur Diagnose, nicht als Nachweis
+gültiger Zertifikate oder als dauerhafte Lösung.
+
+Der Ein-Befehl-Installer überschreibt keine lokalen Quellcodeänderungen mehr: Vor dem
+Aktualisieren eines vorhandenen Checkouts bricht er bei geänderten oder unversionierten
+Quelldateien ab. Änderungen zuerst prüfen und erhalten; ignorierte Konfiguration/Schlüssel
+bleiben hiervon ausgenommen.
+
 ## Datenbankschema
 
 Es gibt keine Migrationsdateien. `apps/server/src/db/schema.ts` beschreibt das vollständige Schema,

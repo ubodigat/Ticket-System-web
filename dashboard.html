@@ -55,10 +55,6 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
             <h2 data-i18n="newTicket">Neues Ticket</h2>
             <p class="hint required-legend"><span class="req-mark" aria-hidden="true">*</span> <span data-i18n="requiredLegend">Pflichtfeld</span></p>
             <div class="field is-required">
-                <label id="t-category-label" data-i18n="category">Kategorie</label>
-                <div id="u-cat-container"></div>
-            </div>
-            <div class="field is-required">
                 <label for="t-title" data-i18n="subject">Betreff</label>
                 <input id="t-title" type="text" maxlength="255" required aria-required="true" data-i18n-placeholder="titlePlaceholder" placeholder="Kurzer Titel">
             </div>
@@ -74,6 +70,10 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
                     <input id="t-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.pptx,.odt,.ods,.odp,.txt,.csv,.log">
                 </label>
                 <div id="t-files-preview" class="file-preview"></div>
+            </div>
+            <div class="field is-required">
+                <label id="t-category-label" data-i18n="category">Kategorie</label>
+                <div id="u-cat-container"></div>
             </div>
             <div class="form-grid ticket-form-priority" id="t-impact-fields">
                 <div class="field is-required">

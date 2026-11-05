@@ -8,10 +8,9 @@
 }
 
 {$PUBLIC_DOMAIN:localhost} {
-	# Security-Audit B5: "internal" (selbstsigniertes CA-Zertifikat, Browser-Warnungen) nur für
-	# IP-Adressen/localhost/--dev; bei einer echten Domain + ACME-E-Mail setzt install.sh hier die
-	# E-Mail-Adresse ein, wodurch Caddy automatisch ein vertrauenswürdiges Let's-Encrypt-Zertifikat
-	# bezieht (siehe ensure_public_env_defaults in install.sh).
+	# TLS_MODE=internal also supports LAN-only DNS names (client CA trust required).
+	# TLS_MODE=acme sets TLS_POLICY to the validated ACME email. Public validation
+	# access is required; DNS-01 needs an additional issuer/provider configuration.
 	tls {$TLS_POLICY:internal}
 	encode gzip
 

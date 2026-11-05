@@ -27,6 +27,8 @@ ENABLE_ANTIVIRUS=false
 ENABLE_OFFICE_VIEWER=false
 PUBLIC_DOMAIN_ARG=""
 ACME_EMAIL_ARG=""
+TLS_MODE_ARG=""
+WEB_ONLY=false
 OFFICE_DOMAIN_ARG=""
 BACKUP_PUBLIC_KEY_ARG=""
 RECOVERY_KIT_PATH=""
@@ -42,6 +44,8 @@ for arg in "$@"; do
     --enable-office-viewer) ENABLE_OFFICE_VIEWER=true ;;
     --domain=*) PUBLIC_DOMAIN_ARG="${arg#--domain=}" ;;
     --acme-email=*) ACME_EMAIL_ARG="${arg#--acme-email=}" ;;
+    --tls=*) TLS_MODE_ARG="${arg#--tls=}" ;;
+    --web-only) WEB_ONLY=true ;;
     --office-domain=*) OFFICE_DOMAIN_ARG="${arg#--office-domain=}" ;;
     --backup-public-key=*) BACKUP_PUBLIC_KEY_ARG="${arg#--backup-public-key=}" ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
@@ -50,6 +54,12 @@ done
 if [[ "$ENABLE_UPDATES" == "true" && "$DISABLE_UPDATES" == "true" ]]; then
   echo "--enable-updates and --disable-updates cannot be combined." >&2
   exit 1
+fi
+if [[ -n "$TLS_MODE_ARG" && "$TLS_MODE_ARG" != internal && "$TLS_MODE_ARG" != acme && "$TLS_MODE_ARG" != auto ]]; then
+  echo "--tls must be internal, acme or auto." >&2; exit 1
+fi
+if [[ "$WEB_ONLY" == true && ( "$ENABLE_UPDATES" == true || "$DISABLE_UPDATES" == true || "$ENABLE_ANTIVIRUS" == true || "$ENABLE_OFFICE_VIEWER" == true || -n "$OFFICE_DOMAIN_ARG" || -n "$BACKUP_PUBLIC_KEY_ARG" ) ]]; then
+  echo "--web-only configures the existing website only; do not combine it with installation options." >&2; exit 1
 fi
 
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
@@ -114,6 +124,10 @@ print_installation_summary() {
   printf '  als vertrauenswürdig installieren. -k überspringt nur im\n'
   printf '  Diagnosebefehl die Zertifikatsprüfung.\n'
   printf '  /health ist öffentlich absichtlich gesperrt (404).\n'
+  if [[ -n "${WEB_PROBE_CA_FILE:-}" ]]; then
+    printf '  Öffentliches CA-Zertifikat: %s\n' "$WEB_PROBE_CA_FILE"
+    openssl x509 -in "$WEB_PROBE_CA_FILE" -noout -fingerprint -sha256
+  fi
 
   printf '\n  %sINSTALLATIONSPFADE%s\n' "$bold" "$reset"
   printf '  Verzeichnis    %s\n' "$SCRIPT_DIR"
@@ -123,9 +137,11 @@ print_installation_summary() {
 
 probe_public_asset() {
   local response
-  # Internal Caddy certificates may not be trusted by the server itself yet. This is
-  # only a readiness probe; browsers must still trust the CA for secure features.
-  response=$(curl --insecure --silent --show-error --noproxy '*' --connect-timeout 3 --max-time 10 \
+  local tls_options=() resolve_options=()
+  if [[ -n "${WEB_PROBE_CA_FILE:-}" ]]; then tls_options=(--cacert "$WEB_PROBE_CA_FILE"); fi
+  if [[ -n "${WEB_PROBE_RESOLVE:-}" ]]; then resolve_options=(--resolve "$WEB_PROBE_RESOLVE"); fi
+  # Check certificate trust AND the hostname. Internal TLS uses the exported public Caddy CA.
+  response=$(curl "${tls_options[@]}" "${resolve_options[@]}" --silent --show-error --noproxy '*' --connect-timeout 3 --max-time 10 \
     --output /dev/null --write-out '%{http_code} %{content_type}' "$1" 2>/dev/null) || return 1
   [[ "$response" == "200 $2"* ]]
 }
@@ -363,44 +379,148 @@ remove_legacy_updater_container() {
   fi
 }
 
+public_env_value() {
+  awk -v prefix="$1=" 'index($0, prefix) == 1 { value=substr($0, length(prefix)+1) } END { print value }' "$ENV_FILE"
+}
+
+valid_ipv4() {
+  local octet address="$1"
+  [[ "$address" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  local IFS=.
+  for octet in $address; do
+    [[ "$octet" == 0 || "$octet" != 0* ]] || return 1
+    ((10#$octet <= 255)) || return 1
+  done
+}
+
+valid_public_host() {
+  local host="$1"
+  [[ ${#host} -le 253 ]] || return 1
+  if [[ "$host" =~ ^[0-9.]+$ ]]; then valid_ipv4 "$host"; return; fi
+  [[ "$host" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]
+}
+
 ensure_public_env_defaults() {
-  local primary_ip
-  primary_ip="$(detect_primary_ip)"
-
-  set_env_var "HTTP_PORT" "${HTTP_PORT:-80}" "$ENV_FILE"
-  set_env_var "HTTPS_PORT" "${HTTPS_PORT:-443}" "$ENV_FILE"
-  set_env_var "BIND_ADDRESS" "${BIND_ADDRESS:-0.0.0.0}" "$ENV_FILE"
-
-  if [[ -n "$PUBLIC_DOMAIN_ARG" ]]; then
-    set_env_var "PUBLIC_DOMAIN" "$PUBLIC_DOMAIN_ARG" "$ENV_FILE"
-  elif ! grep -q '^PUBLIC_DOMAIN=' "$ENV_FILE" || grep -Eq '^PUBLIC_DOMAIN=(localhost|127\.0\.0\.1)?$' "$ENV_FILE"; then
-    set_env_var "PUBLIC_DOMAIN" "$primary_ip" "$ENV_FILE"
-  fi
-
-  if [[ -n "$ACME_EMAIL_ARG" ]]; then
-    set_env_var "ACME_EMAIL" "$ACME_EMAIL_ARG" "$ENV_FILE"
-  fi
-
-  # Security-Audit B5: "tls internal" (selbstsigniertes Caddy-CA-Zertifikat, löst
-  # Browser-Zertifikatswarnungen aus) ist nur für IP-Adressen/localhost/--dev sinnvoll -- Let's
-  # Encrypt kann dafür ohnehin kein öffentlich vertrauenswürdiges Zertifikat ausstellen. Wurde
-  # eine echte Domain per --domain übergeben (oder steht bereits eine in .env), nutzt Caddy
-  # automatisch ACME/Let's Encrypt (siehe Caddyfile: "tls {$TLS_POLICY:internal}").
-  local current_domain
-  current_domain="$(grep '^PUBLIC_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
-  local current_acme_email
-  current_acme_email="$(grep '^ACME_EMAIL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
-  if [[ "$DEV_MODE" == "true" || -z "$current_domain" || "$current_domain" == "localhost" \
-        || "$current_domain" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$current_domain" == "127.0.0.1" ]]; then
-    set_env_var "TLS_POLICY" "internal" "$ENV_FILE"
-  else
-    if [[ -z "$current_acme_email" || "$current_acme_email" == "admin@example.invalid" ]]; then
-      warn "PUBLIC_DOMAIN ($current_domain) looks like a real domain, but no --acme-email was given and ACME_EMAIL in .env is still the placeholder. Falling back to tls internal (browser warnings) until a real ACME_EMAIL is set."
-      set_env_var "TLS_POLICY" "internal" "$ENV_FILE"
-    else
-      set_env_var "TLS_POLICY" "$current_acme_email" "$ENV_FILE"
+  local domain email mode http_port https_port bind stored_policy requested
+  domain="${PUBLIC_DOMAIN_ARG:-$(public_env_value PUBLIC_DOMAIN)}"
+  if [[ -z "$domain" || ( -z "${PUBLIC_DOMAIN_ARG:-}" && ( "$domain" == localhost || "$domain" == 127.0.0.1 ) ) ]]; then domain="$(detect_primary_ip)"; fi
+  domain="${domain,,}"; domain="${domain%.}"
+  email="${ACME_EMAIL_ARG:-$(public_env_value ACME_EMAIL)}"
+  email="${email:-admin@example.invalid}"
+  http_port="${HTTP_PORT:-$(public_env_value HTTP_PORT)}"; http_port="${http_port:-80}"
+  https_port="${HTTPS_PORT:-$(public_env_value HTTPS_PORT)}"; https_port="${https_port:-443}"
+  bind="${BIND_ADDRESS:-$(public_env_value BIND_ADDRESS)}"; bind="${bind:-0.0.0.0}"
+  if ! valid_public_host "$domain"; then echo "PUBLIC_DOMAIN must be a bare DNS name or IPv4 address, without scheme, port or path." >&2; return 1; fi
+  if [[ ! "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$ ]]; then echo "Invalid ACME_EMAIL." >&2; return 1; fi
+  local port
+  for port in "$http_port" "$https_port"; do
+    if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$port > 65535)); then echo "HTTP_PORT/HTTPS_PORT must be between 1 and 65535." >&2; return 1; fi
+  done
+  if [[ "$http_port" == "$https_port" ]]; then echo "HTTP_PORT and HTTPS_PORT must differ." >&2; return 1; fi
+  if ! valid_ipv4 "$bind" && [[ ! "$bind" =~ ^\[[0-9a-fA-F:]+\]$ ]]; then echo "Invalid BIND_ADDRESS (IPv4 or bracketed IPv6 required)." >&2; return 1; fi
+  requested="${TLS_MODE_ARG:-}"
+  mode="$requested"
+  stored_policy="$(public_env_value TLS_POLICY)"
+  if [[ -z "$mode" ]]; then
+    # An explicitly supplied ACME email requests public certificates; otherwise preserve the existing mode.
+    if [[ -n "${ACME_EMAIL_ARG:-}" ]]; then mode=auto; else mode="$(public_env_value TLS_MODE)"; fi
+    if [[ -z "$mode" ]]; then
+      if [[ "$stored_policy" == internal ]]; then mode=internal
+      elif [[ -n "$stored_policy" ]]; then mode=acme
+      else mode=auto; fi
     fi
   fi
+  if [[ "$mode" != internal && "$mode" != acme && "$mode" != auto ]]; then echo "Invalid TLS_MODE: choose internal or acme." >&2; return 1; fi
+  if [[ "${DEV_MODE:-false}" == true || "$domain" == localhost ]] || valid_ipv4 "$domain"; then
+    if [[ "$requested" == acme ]]; then echo "ACME mode requires a DNS name and cannot be combined with --dev or an IP address." >&2; return 1; fi
+    mode=internal
+  elif [[ "$mode" == auto ]]; then
+    if [[ "$email" == admin@example.invalid ]]; then mode=internal; else mode=acme; fi
+  fi
+  if [[ "$mode" == acme && "$email" == admin@example.invalid ]]; then echo "ACME requires --acme-email=your-address@example.com. Use --tls=internal for a LAN-only domain." >&2; return 1; fi
+  # Validate everything BEFORE touching the existing configuration.
+  set_env_var PUBLIC_DOMAIN "$domain" "$ENV_FILE"
+  set_env_var ACME_EMAIL "$email" "$ENV_FILE"
+  set_env_var HTTP_PORT "$http_port" "$ENV_FILE"
+  set_env_var HTTPS_PORT "$https_port" "$ENV_FILE"
+  set_env_var BIND_ADDRESS "$bind" "$ENV_FILE"
+  set_env_var TLS_MODE "$mode" "$ENV_FILE"
+  if [[ "$mode" == internal ]]; then
+    set_env_var TLS_POLICY internal "$ENV_FILE"
+    warn "Internal HTTPS for $domain: client devices must trust the Caddy root CA. A DNS name alone does not make the certificate publicly trusted."
+  else
+    set_env_var TLS_POLICY "$email" "$ENV_FILE"
+    log "Public ACME HTTPS for $domain: public DNS and validation access on ports 80/443 are required. LAN-only DNS needs --tls=internal or a separately configured DNS-01 issuer."
+  fi
+  local url="https://$domain"
+  if [[ "$https_port" != 443 ]]; then url="$url:$https_port"; fi
+  set_env_var PUBLIC_URL "$url" "$ENV_FILE"
+}
+
+prepare_web_probe() {
+  local domain port bind attempt ca_file
+  domain="$(public_env_value PUBLIC_DOMAIN)"; port="$(public_env_value HTTPS_PORT)"; bind="$(public_env_value BIND_ADDRESS)"
+  [[ "$bind" != 0.0.0.0 ]] || bind=127.0.0.1
+  [[ "$bind" != '[::]' ]] || bind='[::1]'
+  WEB_PROBE_RESOLVE="$domain:$port:$bind"
+  WEB_PROBE_CA_FILE=""
+  if [[ "$(public_env_value TLS_POLICY)" == internal ]]; then
+    ca_file="$SCRIPT_DIR/ops/tls/caddy-root.crt"
+    mkdir -p "$(dirname "$ca_file")" || return 1
+    local ca_tmp
+    ca_tmp="$(mktemp "${ca_file}.XXXXXX")" || return 1
+    chmod 0600 "$ca_tmp" || { rm -f "$ca_tmp"; return 1; }
+    for ((attempt=1; attempt<=30; attempt++)); do
+      if run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" exec -T caddy cat /data/caddy/pki/authorities/local/root.crt > "$ca_tmp" 2>/dev/null \
+        && openssl x509 -in "$ca_tmp" -noout >/dev/null 2>&1; then
+        mv "$ca_tmp" "$ca_file" && chmod 0644 "$ca_file" || { rm -f "$ca_tmp"; return 1; }
+        WEB_PROBE_CA_FILE="$ca_file"; return 0
+      fi
+      sleep 2
+    done
+    rm -f "$ca_tmp"
+    echo "Cannot read the PUBLIC Caddy root CA. Check the caddy container logs." >&2
+    return 1
+  fi
+}
+
+web_failure_help() {
+  printf '\nHTTPS check failed for %s\n' "$(public_env_value PUBLIC_URL)" >&2
+  printf 'Configured hostname (SNI): %s; TLS mode: %s; HTTPS port: %s\n' "$(public_env_value PUBLIC_DOMAIN)" "$(public_env_value TLS_MODE)" "$(public_env_value HTTPS_PORT)" >&2
+  printf '%s\n' 'For a LAN-only domain use: bash install.sh --web-only --domain=YOUR-DOMAIN --tls=internal' \
+    'For ACME check public DNS, port forwarding and certificate issuance. No insecure fallback is performed.' >&2
+  printf "docker compose -f '%s/docker-compose.yml' --env-file '%s' logs --tail=80 caddy app\n" "$COMPOSE_DIR" "$ENV_FILE" >&2
+}
+
+configure_web_only() {
+  COMPOSE_DIR="$SCRIPT_DIR/ops/docker"
+  ENV_FILE="$COMPOSE_DIR/.env"
+  [[ -f "$ENV_FILE" ]] || { echo "--web-only needs an existing installation (.env missing)." >&2; return 1; }
+  command -v docker >/dev/null && command -v curl >/dev/null && command -v openssl >/dev/null || { echo "docker, curl and openssl are required." >&2; return 1; }
+  local backup
+  backup="$(mktemp "$COMPOSE_DIR/.env.web-backup.XXXXXX")"
+  chmod 0600 "$backup"; cp "$ENV_FILE" "$backup"
+  if ! ensure_public_env_defaults; then cat "$backup" > "$ENV_FILE"; rm -f "$backup"; return 1; fi
+  if [[ "$(public_env_value ONLYOFFICE_ENABLED)" == true && "$(public_env_value OFFICE_DOMAIN)" == "$(public_env_value PUBLIC_DOMAIN)" ]]; then
+    cat "$backup" > "$ENV_FILE"; rm -f "$backup"; echo "Main and Office domains must differ." >&2; return 1
+  fi
+  if [[ "$(public_env_value ONLYOFFICE_ENABLED)" == true ]]; then
+    local office_url="https://$(public_env_value OFFICE_DOMAIN)"
+    [[ "$(public_env_value HTTPS_PORT)" == 443 ]] || office_url="$office_url:$(public_env_value HTTPS_PORT)"
+    set_env_var OFFICE_PUBLIC_URL "$office_url" "$ENV_FILE"
+  fi
+  if ! run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
+    cat "$backup" > "$ENV_FILE"; rm -f "$backup"; echo "Invalid Caddy configuration; previous .env restored. Running containers were not replaced." >&2; return 1
+  fi
+  # PUBLIC_URL/WEBAUTHN_ORIGIN also change in the app. Keep images, DB, backups, CA and keys.
+  if ! run_root docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d --no-deps --force-recreate app caddy; then web_failure_help; return 1; fi
+  if ! prepare_web_probe || ! verify_public_web "$(public_env_value PUBLIC_URL)"; then web_failure_help; return 1; fi
+  printf '\nWeb configuration updated: %s\nPrevious configuration: %s\n' "$(public_env_value PUBLIC_URL)" "$backup"
+  if [[ -n "$WEB_PROBE_CA_FILE" ]]; then
+    printf 'Public root CA for client trust: %s\n' "$WEB_PROBE_CA_FILE"
+    openssl x509 -in "$WEB_PROBE_CA_FILE" -noout -fingerprint -sha256
+  fi
+  printf '%s\n' 'Verified locally with the configured hostname and certificate validation. Client DNS, firewall and CA trust must also match.'
 }
 
 open_firewall_ports() {
@@ -500,12 +620,28 @@ verify_release_tag() {
   return "$rc"
 }
 
+assert_clean_install_checkout() {
+  local dir="$1" untracked
+  untracked="$(run_root git -C "$dir" -c safe.directory="$dir" ls-files --others --exclude-standard)" || return 1
+  if ! run_root git -C "$dir" -c safe.directory="$dir" diff --quiet \
+    || ! run_root git -C "$dir" -c safe.directory="$dir" diff --cached --quiet \
+    || [[ -n "$untracked" ]]; then
+    echo "Existing checkout has local changes or untracked source files. Preserve/review them before updating; nothing was reset or overwritten." >&2
+    return 1
+  fi
+}
+
 rerun_from_clone_if_needed() {
   if [[ -f "$SCRIPT_DIR/ops/docker/docker-compose.yml" && -f "$SCRIPT_DIR/package.json" ]]; then
     if [[ -n "$INSTALL_MANIFEST_SHA256" ]]; then
       verify_installation "$SCRIPT_DIR"
     fi
     return
+  fi
+
+  if [[ "$WEB_ONLY" == true ]]; then
+    echo "Run --web-only from the existing installation directory; no bootstrap packages will be installed." >&2
+    exit 1
   fi
 
   if [[ ! "$INSTALL_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
@@ -518,20 +654,12 @@ rerun_from_clone_if_needed() {
 
   log "Cloning repository"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
-    # This clone is exclusively installer-managed; nobody is expected to hand-edit files in it
-    # (secrets live outside Git in ops/docker/.env, see .gitignore). Even so, the working tree
-    # can end up looking "locally modified" without anyone touching anything -- e.g. a later
-    # .gitattributes change (added eol=lf normalization) makes Git re-evaluate already-checked-
-    # out files against the new rule and treat them as dirty. "git pull --ff-only" then refuses
-    # to merge, over and over, even though nothing meaningful actually changed. Resetting to the
-    # last known commit right before every pull makes that class of failure impossible: it only
-    # discards tracked-file drift (which should never be intentional here), never the untracked,
-    # gitignored secrets.
+    assert_clean_install_checkout "$INSTALL_DIR" || exit 1
     if [[ -n "$INSTALL_REF" ]]; then
-      retry_root 5 bash -c 'git -C "$1" reset --hard HEAD >/dev/null && git -C "$1" fetch --tags origin && git -C "$1" switch --detach "$2"' _ "$INSTALL_DIR" "$INSTALL_REF" \
+      retry_root 5 bash -c 'git -C "$1" fetch --tags origin && git -C "$1" switch --detach "$2"' _ "$INSTALL_DIR" "$INSTALL_REF" \
         || { print_clone_help; exit 1; }
     else
-      retry_root 5 bash -c 'git -C "$1" reset --hard HEAD >/dev/null && git -C "$1" pull --ff-only' _ "$INSTALL_DIR" \
+      retry_root 5 git -C "$INSTALL_DIR" pull --ff-only \
         || { print_clone_help; exit 1; }
     fi
   else
@@ -568,6 +696,7 @@ make_uuid() {
 }
 
 rerun_from_clone_if_needed "$@"
+if [[ "$WEB_ONLY" == true ]]; then configure_web_only; exit $?; fi
 ensure_base_packages
 ensure_docker
 
@@ -633,12 +762,7 @@ fi
 
 ensure_public_env_defaults
 
-# Fixed relying-party origin for WebAuthn, including a custom HTTPS port.
-MFA_DOMAIN="$(grep '^PUBLIC_DOMAIN=' "$ENV_FILE" | cut -d= -f2-)"
-MFA_PORT="$(grep '^HTTPS_PORT=' "$ENV_FILE" | cut -d= -f2-)"
-MFA_PUBLIC_URL="https://${MFA_DOMAIN}"
-if [[ "$MFA_PORT" != "443" ]]; then MFA_PUBLIC_URL="${MFA_PUBLIC_URL}:${MFA_PORT}"; fi
-set_env_var "PUBLIC_URL" "$MFA_PUBLIC_URL" "$ENV_FILE"
+# ensure_public_env_defaults also synchronizes PUBLIC_URL (WebAuthn, links and callbacks).
 
 COMPOSE_PROFILES_LIST=""
 # Security-Audit R-24: ONLYOFFICE nur unter einer eigenen Subdomain (eigene Herkunft), nie unter
@@ -863,7 +987,8 @@ if [[ "${HTTPS_PORT:-443}" != "443" ]]; then
 fi
 
 log "Checking public login page and frontend assets"
-if ! verify_public_web "$PUBLIC_URL"; then
+if ! prepare_web_probe || ! verify_public_web "$PUBLIC_URL"; then
+  web_failure_help
   echo "Installation is not ready: the public website or a required asset could not be loaded." >&2
   echo "Internal app health alone does not verify the reverse proxy or login scripts." >&2
   echo "Check logs with:" >&2

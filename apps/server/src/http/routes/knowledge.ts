@@ -11,6 +11,7 @@ Contributors: see CONTRIBUTORS.md and CHANGES.md.
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
+import { parsePermissions } from '../../domain/adminPermissions.js';
 import { requireSession, requireAdmin } from './session.js';
 import type { Env } from '../../config/env.js';
 import type { KeyProvider } from '../../crypto/keyProvider.js';
@@ -61,8 +62,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: KnowledgeRou
     if (session.role === 'superadmin') return true;
     if (session.role !== 'admin') return false;
     const row = await app.db.selectFrom('users').select('permissions_json').where('id', '=', session.uid).executeTakeFirst();
-    let permissions: Record<string, unknown> = {};
-    try { permissions = row?.permissions_json ? JSON.parse(row.permissions_json) : {}; } catch { permissions = {}; }
+    const permissions = parsePermissions(row?.permissions_json);
     if (key === 'kb') return value ? permissions.kb === value : permissions.kb === 'read' || permissions.kb === 'edit';
     return permissions[key] === true;
   }
