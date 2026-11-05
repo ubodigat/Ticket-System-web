@@ -1,5 +1,17 @@
 # Prüfstand und Grenzen
 
+## 05.11.2026 – CI-Abbruch `Unknown column c.todo_id`
+
+Der echte CI-Log zeigt eine Fremdschlüssel-Vorprüfung vor dem Anlegen von `ticket_work_timers.todo_id`.
+Der neue Planertest führt den tatsächlichen Schema-Planer gegen einen Metadaten-Testersatz aus:
+vor der Korrektur schlugen zwei Fälle fehl, danach bestehen alle fünf Fälle. Auch Neuinstallation
+und weiterhin erkannte verwaiste Zeilen sind abgedeckt. Der MariaDB-Integrationstest wurde um
+explizite Nachweise für Reihenfolge und Existenz des Fremdschlüssels erweitert.
+
+Eine echte MariaDB wurde lokal nicht installiert oder ausgeführt. Der Integrationstest muss nach
+Veröffentlichung erneut in der bestehenden CI-Matrix (UTC / Europe/Berlin) laufen; ein erfolgreicher
+GitHub-Lauf wird durch lokale Unit-Tests nicht behauptet.
+
 ## 05.11.2026 – Zuordnung zu Großstörungen
 
 `test/incident-status.test.ts` prüft mit dem Datenbank-Testersatz zehn Fälle: Statusübernahme

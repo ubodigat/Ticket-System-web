@@ -89,7 +89,17 @@ try {
   const before = { users: 1, tickets: 1 };
 
   // 2. Abgleich: legt Neues an, entfernt die Migrationsverwaltung, laesst Daten unangetastet.
+  assert.equal(Number((await sql`SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ticket_work_timers' AND COLUMN_NAME = 'todo_id'`.execute(db)).rows[0].n), 0,
+    'Upgrade-Fixture muss den fehlenden Todo-Fremdschluessel abdecken');
   const report = await syncSchema(db);
+  const addTodoColumn = report.actions.findIndex(action => action.includes('ticket_work_timers.todo_id angelegt'));
+  const addTodoForeignKey = report.actions.findIndex(action => action.includes('fk_ticket_work_timers_todo_id'));
+  assert.ok(addTodoColumn >= 0 && addTodoForeignKey > addTodoColumn, 'Todo-Spalte vor Fremdschluessel anlegen');
+  const todoForeignKey = (await sql`SELECT REFERENCED_TABLE_NAME AS parent_table
+    FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'ticket_work_timers' AND COLUMN_NAME = 'todo_id' AND REFERENCED_TABLE_NAME IS NOT NULL`.execute(db)).rows;
+  assert.deepEqual(todoForeignKey.map(row => row.parent_table), ['admin_todos']);
   assert.ok(report.actions.some(a => a.includes('data_encryption_keys.kek_version')), 'neue Spalte angelegt');
   assert.ok(report.actions.some(a => a.includes('crypto_jobs')) && report.actions.some(a => a.includes('schema_state')));
   assert.ok(report.actions.some(a => a.includes('kysely_migration')), 'Migrationsverwaltung entfernt');
@@ -221,6 +231,10 @@ try {
   const upgraded = (await columnsOf()).filter(c => !(c.t === 'installations' && c.c === 'schema_version'));
   await dropAll();
   await syncSchema(db);
+  const freshTodoForeignKeys = (await sql`SELECT REFERENCED_TABLE_NAME AS parent_table
+    FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'ticket_work_timers' AND COLUMN_NAME = 'todo_id' AND REFERENCED_TABLE_NAME IS NOT NULL`.execute(db)).rows;
+  assert.deepEqual(freshTodoForeignKeys.map(row => row.parent_table), ['admin_todos'], 'Todo-Fremdschluessel auch bei Neuinstallation vorhanden');
   assert.deepEqual(await columnsOf(), upgraded);
   assert.equal(Number((await sql`SELECT COUNT(*) AS n FROM app_settings WHERE id = 1`.execute(db)).rows[0].n), 1);
   console.log(`MariaDB schema sync, upgrade without data loss, format conversion, key rotation, UTC sessions and mail retry: OK (TZ=${process.env.TZ || 'unset'})`);

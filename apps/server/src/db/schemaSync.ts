@@ -208,7 +208,13 @@ export async function planSchemaSync(db: Kysely<any>): Promise<{ steps: Step[]; 
     const actual = state.foreignKeys.get(table.name) ?? [];
     for (const fk of table.foreignKeys ?? []) {
       if (actual.some(a => sameColumns(a.columns, fk.columns) && a.references === fk.references && sameColumns(a.referencedColumns, fk.referencedColumns))) continue;
-      if (state.tables.has(table.name) && state.tables.has(fk.references)) {
+      // Planning runs before any DDL: an existing table can still lack a newly introduced
+      // FK column (e.g. ticket_work_timers.todo_id). Probe only columns in the loaded schema.
+      // ADD CONSTRAINT remains in phase 5, after CREATE/ADD COLUMN, and MariaDB validates it.
+      const canProbeExistingRows = state.tables.has(table.name) && state.tables.has(fk.references)
+        && fk.columns.every(column => state.columns.get(table.name)?.has(column))
+        && fk.referencedColumns.every(column => state.columns.get(fk.references)?.has(column));
+      if (canProbeExistingRows) {
         const orphans = await countRows(db, sql`SELECT COUNT(*) AS n FROM ${sql.table(table.name)} c
           LEFT JOIN ${sql.table(fk.references)} p ON ${sql.join(fk.columns.map((col, i) => sql`c.${sql.ref(col)} = p.${sql.ref(fk.referencedColumns[i]!)}`), sql` AND `)}
           WHERE ${sql.join(fk.columns.map(col => sql`c.${sql.ref(col)} IS NOT NULL`), sql` AND `)} AND p.${sql.ref(fk.referencedColumns[0]!)} IS NULL`);

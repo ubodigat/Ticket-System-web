@@ -1,5 +1,15 @@
 # Änderungen
 
+## 05.11.2026 – CI: Fremdschlüsselplanung vor neuen Spalten
+
+- Ursache von `Unknown column 'c.todo_id' in 'WHERE'` beseitigt: Der Schema-Planer prüft
+  verwaiste Zeilen nur, wenn Quell- und Zielspalten bereits im eingelesenen Schema existieren.
+  Neue Fremdschlüssel werden weiterhin nach Tabellen und Spalten angelegt und durch MariaDB geprüft.
+- Fünf Regressionstests decken fehlende Quell-/Zielspalten, vorhandene verwaiste Werte sowie
+  Neuinstallationen ab. Zwei davon reproduzierten den Fehler vor der Korrektur.
+- Der echte MariaDB-CI-Test prüft ausdrücklich Spalten-/Fremdschlüssel-Reihenfolge und das
+  Vorhandensein des Todo-Fremdschlüssels nach Abgleich und Neuinstallation.
+
 ## 05.11.2026 – Status bei Zuordnung zu einer Großstörung
 
 - Der Server übernimmt bei der Zuordnung den aktuellen Status der Großstörung auch für normale
