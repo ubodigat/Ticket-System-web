@@ -731,7 +731,9 @@ export const TABLES: readonly TableDefinition[] = [
       ['minutes', 'int(11) NOT NULL'],
       ['note', 'varchar(512) DEFAULT NULL'],
       ['created_at', 'timestamp NOT NULL DEFAULT current_timestamp()'],
-      ['note_enc', 'mediumblob DEFAULT NULL']
+      ['note_enc', 'mediumblob DEFAULT NULL'],
+      ['started_at', 'datetime DEFAULT NULL'],
+      ['ended_at', 'datetime DEFAULT NULL']
     ],
     primaryKey: ['id'],
     indexes: [
@@ -789,7 +791,8 @@ export const TABLES: readonly TableDefinition[] = [
       ['id', 'char(36) NOT NULL'], ['todo_id', 'char(36) NOT NULL'],
       ['user_id', 'char(36) DEFAULT NULL'], ['username', 'varchar(64) NOT NULL'],
       ['minutes', 'int NOT NULL'], ['note_enc', 'mediumblob DEFAULT NULL'],
-      ['created_at', 'datetime NOT NULL DEFAULT current_timestamp()']
+      ['created_at', 'datetime NOT NULL DEFAULT current_timestamp()'],
+      ['started_at', 'datetime DEFAULT NULL'], ['ended_at', 'datetime DEFAULT NULL']
     ],
     primaryKey: ['id'],
     indexes: [{ name: 'todo_time_idx', columns: ['todo_id', 'created_at'] }],

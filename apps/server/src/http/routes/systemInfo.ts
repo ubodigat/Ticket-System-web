@@ -86,7 +86,9 @@ export function registerSystemInfoRoutes(app: FastifyInstance, deps: UsersRouteD
           schema: { applied: appliedSchema, expected: SCHEMA_FINGERPRINT, upToDate: appliedSchema === SCHEMA_FINGERPRINT },
           reencryptPending: reencryptOpen === true },
         installation: { installationId: deps.env.INSTALLATION_ID, environment: deps.env.NODE_ENV,
-          publicUrl: deps.env.PUBLIC_BASE_URL ?? null, setupCompletedAt: settings?.setup_completed_at ?? null },
+          publicUrl: deps.env.PUBLIC_BASE_URL ?? null, setupCompletedAt: settings?.setup_completed_at ?? null,
+          tlsMode: deps.env.TLS_MODE ?? null,
+          officeUrl: deps.env.ONLYOFFICE_ENABLED ? deps.env.ONLYOFFICE_PUBLIC_URL ?? null : null },
         integrations: {
           smtp: !!smtp, ldap: !!ldap, outlook: !!outlook, passkeys: !!deps.env.WEBAUTHN_ORIGIN, antivirus: !!deps.env.CLAMAV_HOST,
           officePreview: !!deps.env.OFFICE_PREVIEW_URL, onlyoffice: !!deps.env.ONLYOFFICE_ENABLED, updater: !!deps.env.UPDATE_BRIDGE_DIR,

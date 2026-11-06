@@ -39,6 +39,7 @@ export function registerTodoRoutes(app: FastifyInstance, deps: ExtrasRouteDeps) 
       const dek = await ensureDek(app.db, deps.keyProvider, 'admin_todo_time_entries.note');
       reply.header('Cache-Control', 'no-store');
       return { entries: entries.map(entry => ({ id: entry.id, minutes: entry.minutes, created_at: entry.created_at,
+        started_at: entry.started_at, ended_at: entry.ended_at,
         activity: entry.note_enc ? fieldCipher.decryptField(entry.note_enc, dek, context('admin_todo_time_entries', 'note', entry.id)) : '' })) };
     } catch (error) { return routeError(app, reply, error); }
   });

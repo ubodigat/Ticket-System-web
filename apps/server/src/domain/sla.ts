@@ -14,6 +14,9 @@ export interface BusinessHoursDayConfig {
   enabled: boolean;
   start: string; // "HH:MM"
   end: string; // "HH:MM"
+  // Optionale Pause (z. B. Mittag), in der die Frist nicht laeuft; nur zusammen und innerhalb start..end.
+  breakStart?: string;
+  breakEnd?: string;
 }
 
 export interface BusinessHoursConfig {
@@ -47,6 +50,25 @@ function utcDateKey(d: Date): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 
+// Geschaeftsfenster eines Tages: der ganze Tag oder, mit gueltiger Pause, Vor- und Nachmittag.
+function dayWindows(day: Date, cfg: BusinessHoursDayConfig): Array<[Date, Date]> {
+  const at = (value: string) => {
+    const { hours, minutes } = parseTimeOfDay(value);
+    const d = new Date(day);
+    d.setUTCHours(hours, minutes, 0, 0);
+    return d;
+  };
+  const start = at(cfg.start);
+  const end = at(cfg.end);
+  if (end <= start) return [];
+  if (cfg.breakStart && cfg.breakEnd) {
+    const pauseStart = at(cfg.breakStart);
+    const pauseEnd = at(cfg.breakEnd);
+    if (start < pauseStart && pauseStart < pauseEnd && pauseEnd < end) return [[start, pauseStart], [pauseEnd, end]];
+  }
+  return [[start, end]];
+}
+
 function addBusinessHours(start: Date, hours: number, cfg: BusinessHoursConfig): Date {
   let remainingMs = hours * 60 * 60 * 1000;
   let cursor = new Date(start);
@@ -71,17 +93,12 @@ function addBusinessHours(start: Date, hours: number, cfg: BusinessHoursConfig):
       end: cfg.end
     };
     const isHoliday = holidays.has(utcDateKey(cursor));
-    const { hours: startH, minutes: startM } = parseTimeOfDay(dayCfg.start);
-    const { hours: endH, minutes: endM } = parseTimeOfDay(dayCfg.end);
-    const dayStart = new Date(cursor);
-    dayStart.setUTCHours(startH, startM, 0, 0);
-    const dayEnd = new Date(cursor);
-    dayEnd.setUTCHours(endH, endM, 0, 0);
 
-    if (dayCfg.enabled && !isHoliday && dayEnd > dayStart && cursor < dayEnd) {
-      const windowStart = cursor < dayStart ? dayStart : cursor;
-      const availableMs = dayEnd.getTime() - windowStart.getTime();
-      if (availableMs > 0) {
+    if (dayCfg.enabled && !isHoliday) {
+      for (const [windowFrom, windowTo] of dayWindows(cursor, dayCfg)) {
+        if (cursor >= windowTo) continue;
+        const windowStart = cursor < windowFrom ? windowFrom : cursor;
+        const availableMs = windowTo.getTime() - windowStart.getTime();
         if (remainingMs <= availableMs) {
           return new Date(windowStart.getTime() + remainingMs);
         }

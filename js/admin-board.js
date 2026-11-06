@@ -1453,7 +1453,7 @@ export const AdminBoard = {
     // "Admins dieser Kategorie"-Zuordnung gibt es im Backend nicht (nur auto_assign_group_id
     // für eine ganze Gruppe) und wurde entfernt, statt etwas Ungespeichertes vorzutäuschen.
     openEditCategoryModal: async (category, { onSaved = null } = {}) => {
-        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        const modal = AdminBoard.genericModal();
         const title = modal.querySelector('h3');
         const content = modal.querySelector('.modal-body');
         const confirmBtn = modal.querySelector('.btn-primary');
@@ -1745,7 +1745,7 @@ export const AdminBoard = {
     // Eine Person kann mehreren Gruppen angehoeren -- hier werden nur Mitglieder dieser Gruppe
     // hinzugefuegt oder entfernt, weitere Gruppen der Personen bleiben unveraendert.
     openEditGroupModal: async (group) => {
-        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        const modal = AdminBoard.genericModal();
         modal.style.zIndex = String(Math.max(100, ...[...document.querySelectorAll('.modal-overlay.open')].filter(el => el !== modal).map(el => Number(getComputedStyle(el).zIndex) || 100)) + 1);
         const title = modal.querySelector('h3');
         const content = modal.querySelector('.modal-body');
@@ -2290,6 +2290,15 @@ export const AdminBoard = {
         $('#uw-name').focus();
     },
 
+    // Wiederverwendeter Standarddialog: beim Oeffnen ans Ende von <body>, damit er vor anderen
+    // offenen Dialogen (z. B. Systemeinstellungen) liegt.
+    genericModal: () => {
+        const existing = q('#generic-modal');
+        if (!existing) return AdminBoard.createGenericModal();
+        document.body.appendChild(existing);
+        return existing;
+    },
+
     createGenericModal: () => {
         const modal = document.createElement('div');
         modal.id = 'generic-modal';
@@ -2322,7 +2331,7 @@ export const AdminBoard = {
     // allein reicht danach nicht mehr aus, um Code auf dem Server auszuführen.
     confirmStepUp: (message, commitLabel) => {
         return new Promise(resolve => {
-            const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+            const modal = AdminBoard.genericModal();
             modal.querySelector('h3').textContent = Lang.t('securityConfirmationRequired');
             modal.querySelector('.modal-body').innerHTML = `
                 <p>${Utils.esc(message)}</p>
@@ -2553,6 +2562,93 @@ export const AdminBoard = {
     outlookDomainList: () => [...new Set((q('#sys-outlook-domains')?.value || '').split(/[\s,;]+/)
         .map(domain => domain.trim().toLowerCase().replace(/^@/, '')).filter(Boolean))],
 
+    // Systemeinstellungen > Domain & HTTPS (nur Superadmins): aktueller Stand plus Schritt-fuer-Schritt-
+    // Anleitung mit dem passenden Installer-Befehl. Die Weboberflaeche aendert bewusst nichts am Server
+    // (Zertifikate, Ports und Container verwaltet nur root). Alle Eingaben werden so streng wie im
+    // Installer geprueft; der erzeugte Befehl kann daher keine Shell-Sonderzeichen enthalten.
+    DOMAIN_HOST_RE: /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/,
+    DOMAIN_EMAIL_RE: /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$/,
+    DOMAIN_DIR_RE: /^\/[A-Za-z0-9._/-]*$/,
+    renderDomainGuide: async () => {
+        const area = q('#sys-domain-status');
+        if (!area) return;
+        area.innerHTML = `<div class="empty-state compact">${Icon('loader-circle', 16)} ${Utils.esc(Lang.t('updateStatusChecking'))}</div>`;
+        const info = await Store.getSystemInfo();
+        if (!q('#sys-domain-status')) return;
+        const inst = info?.installation || {};
+        const parse = value => { try { return value ? new URL(value) : null; } catch { return null; } };
+        const current = parse(inst.publicUrl);
+        const office = parse(inst.officeUrl);
+        AdminBoard.domainState = { officeActive: !!office, port: current?.port || '' };
+        const row = (labelKey, value) => `<div class="sys-info-row"><dt>${Utils.esc(Lang.t(labelKey))}</dt><dd>${Utils.esc(value || '–')}</dd></div>`;
+        area.innerHTML = info ? `<dl class="sys-info-list">
+                ${row('sysInfoPublicUrl', inst.publicUrl)}
+                ${row('domainCertificate', Lang.t(inst.tlsMode === 'acme' ? 'domainCertPublic' : inst.tlsMode === 'internal' ? 'domainCertInternal' : 'domainCertUnknown'))}
+                ${row('domainOffice', office ? inst.officeUrl : Lang.t('sysInfoInactive'))}
+            </dl>` : `<div class="callout callout-danger">${Utils.esc(Lang.t('sysInfoLoadFailed'))}</div>`;
+        const form = q('#sys-domain-form');
+        if (!form.dataset.bound) {
+            form.dataset.bound = '1';
+            // Vorbelegung aus dem aktuellen Stand; eine IP-Adresse ist keine Domain und bleibt leer.
+            if (current && !/^[0-9.]+$/.test(current.hostname) && !current.hostname.includes(':')) q('#sys-domain-name').value = current.hostname;
+            q(inst.tlsMode === 'acme' ? '#sys-domain-public' : '#sys-domain-internal').checked = true;
+            q('#sys-domain-office-host').value = office?.hostname || '';
+            form.addEventListener('input', AdminBoard.updateDomainGuide);
+            form.addEventListener('change', AdminBoard.updateDomainGuide);
+        }
+        // Der Installer kann die Office-Oberflaeche einrichten, aber nicht wieder abschalten.
+        const officeBox = q('#sys-domain-office');
+        if (office) officeBox.checked = true;
+        officeBox.disabled = !!office;
+        q('#sys-domain-office-hint').textContent = Lang.t(office ? 'domainOfficeAlreadyActive' : 'domainOfficeEnableHint');
+        AdminBoard.updateDomainGuide();
+    },
+    updateDomainGuide: () => {
+        const out = q('#sys-domain-guide');
+        if (!out) return;
+        const state = AdminBoard.domainState || { officeActive: false, port: '' };
+        const domain = q('#sys-domain-name').value.trim().toLowerCase().replace(/\.$/, '');
+        const isPublic = q('#sys-domain-public').checked;
+        const email = q('#sys-domain-email').value.trim();
+        const office = q('#sys-domain-office').checked;
+        const officeInput = q('#sys-domain-office-host');
+        const officeHost = officeInput.value.trim().toLowerCase().replace(/\.$/, '') || (domain ? `office.${domain}` : '');
+        const dir = q('#sys-domain-dir').value.trim() || '/opt/ticket-system';
+        q('#sys-domain-email-field').hidden = !isPublic;
+        q('#sys-domain-office-field').hidden = !office;
+        officeInput.placeholder = domain ? `office.${domain}` : 'office.support.example.com';
+        const errors = [];
+        if (!AdminBoard.DOMAIN_HOST_RE.test(domain) || /^[0-9.]+$/.test(domain)) errors.push('domainErrDomain');
+        if (isPublic && !AdminBoard.DOMAIN_EMAIL_RE.test(email)) errors.push('domainErrEmail');
+        if (office && (!AdminBoard.DOMAIN_HOST_RE.test(officeHost) || officeHost === domain)) errors.push('domainErrOffice');
+        if (!AdminBoard.DOMAIN_DIR_RE.test(dir)) errors.push('domainErrDir');
+        if (errors.length) {
+            out.innerHTML = `<div class="callout">${errors.map(key => Utils.esc(Lang.t(key))).join('<br>')}</div>`;
+            return;
+        }
+        // Ohne Office genuegt --web-only (nur Webkonfiguration, mit Ruecksicherung bei Fehlern). Ist Office
+        // aktiv oder gewuenscht, muss der volle Lauf die Office-Subdomain mit umstellen.
+        const webOnly = !office && !state.officeActive;
+        const args = [webOnly ? '--web-only' : '', `--domain=${domain}`, `--tls=${isPublic ? 'acme' : 'internal'}`,
+            isPublic ? `--acme-email=${email}` : '', office ? '--enable-office-viewer' : '', office ? `--office-domain=${officeHost}` : ''].filter(Boolean);
+        const url = `https://${domain}${state.port ? `:${state.port}` : ''}`;
+        const p = key => `<p>${Utils.esc(Lang.t(key))}</p>`;
+        const list = keys => `<ul class="domain-guide-list">${keys.map(key => `<li>${Utils.esc(Lang.format(key, { url, callback: `${url}/api/v2/outlook/callback` }))}</li>`).join('')}</ul>`;
+        const code = text => `<div class="code-copy"><pre class="update-guide-code"><code>${Utils.esc(text)}</code></pre>${AdminBoard.copyButton()}</div>`;
+        const step = (titleKey, body) => `<li><strong>${Utils.esc(Lang.t(titleKey))}</strong>${body}</li>`;
+        const dnsRows = [domain, ...(office ? [officeHost] : [])].map(host => `<tr><td><code>${Utils.esc(host)}</code></td><td>A / AAAA</td><td>${Utils.esc(Lang.t('domainServerIp'))}</td></tr>`).join('');
+        out.innerHTML = `<ol class="domain-guide-steps">
+            ${step('domainStepDns', p(isPublic ? 'domainDnsPublic' : 'domainDnsInternal') + `<table class="domain-dns-table"><thead><tr><th>${Utils.esc(Lang.t('domainDnsName'))}</th><th>${Utils.esc(Lang.t('domainDnsType'))}</th><th>${Utils.esc(Lang.t('domainDnsTarget'))}</th></tr></thead><tbody>${dnsRows}</tbody></table>`)}
+            ${step('domainStepPorts', p(isPublic ? 'domainPortsPublic' : 'domainPortsInternal'))}
+            ${step('domainStepCommand', p(webOnly ? 'domainCommandWebOnly' : 'domainCommandFull') + code(`cd ${dir}\nbash install.sh ${args.join(' ')}`))}
+            ${isPublic ? '' : step('domainStepCa', p('domainCaIntro') + code(`openssl x509 -in ${dir}/ops/tls/caddy-root.crt -noout -fingerprint -sha256`)
+                + list(['domainCaWindows', 'domainCaMac', 'domainCaLinux', 'domainCaFirefox', 'domainCaMobile']))}
+            ${office ? step('domainStepOffice', p('domainOfficeHint')) : ''}
+            ${step('domainStepAfter', list(['domainAfterOpen', 'domainAfterPasskeys', 'domainAfterOutlook']))}
+        </ol>`;
+        if (window.lucide) lucide.createIcons();
+    },
+
     // Klick auf ein Kopier-Symbol (.code-copy-btn) innerhalb eines .code-copy-Blocks.
     handleCopyClick: async (event) => {
         const button = event.target.closest('.code-copy-btn');
@@ -2641,7 +2737,11 @@ export const AdminBoard = {
             size: 'md',
             body: `
                 <div class="callout callout-danger">${Lang.t('backupRestoreWarning')}</div>
-                <div class="field"><label for="br-file">${Lang.t('backupFile')}</label><input id="br-file" type="file" accept=".tsbackup,application/octet-stream"></div>
+                <div class="field"><label for="br-file">${Lang.t('backupFile')}</label>
+                    <label for="br-file" class="dropzone" id="br-dropzone">${Icon('upload-cloud', 20)}
+                        <span class="dropzone-text"><strong>${Lang.t('dragFilesHere')}</strong> ${Lang.t('orClickToSelect')}</span>
+                        <span class="dropzone-file" id="br-file-name" hidden></span>
+                        <input id="br-file" type="file" accept=".tsbackup,application/octet-stream"></label></div>
                 <div class="field"><label for="br-hash">${Lang.t('backupHashLabel')}</label><input id="br-hash" type="text" class="mono" spellcheck="false" autocomplete="off" placeholder="${Lang.t('backupHashPlaceholder')}"><p class="hint">${Lang.t('backupHashRestoreHint')}</p></div>
                 <div class="field"><label for="br-pass">${Lang.t('backupPassphrase')}</label><input id="br-pass" type="password" autocomplete="off" maxlength="1024"></div>
                 <div class="field"><label for="br-pw">${Lang.t('yourCurrentPassword')}</label><input id="br-pw" type="password" autocomplete="current-password"></div>
@@ -2650,8 +2750,21 @@ export const AdminBoard = {
                 <div class="button-row backup-actions"><button type="button" class="btn-danger" id="br-go">${Icon('database-zap', 15)}${Lang.t('backupRestoreButton')}</button></div>
                 <p class="hint" id="br-status" role="status"></p>`
         });
+        // Datei per Klick oder Ziehen waehlen (das Dateifeld selbst ist global unsichtbar, siehe style.css).
+        let file = null;
+        const choose = chosen => {
+            if (!chosen) return;
+            file = chosen;
+            const label = modal.querySelector('#br-file-name');
+            label.hidden = false;
+            label.textContent = `${chosen.name} · ${(chosen.size / (1024 * 1024)).toLocaleString(Lang.current === 'en' ? 'en-US' : 'de-DE', { maximumFractionDigits: 1 })} MB`;
+        };
+        modal.querySelector('#br-file').onchange = event => choose(event.target.files?.[0]);
+        const dropzone = modal.querySelector('#br-dropzone');
+        ['dragenter', 'dragover'].forEach(type => dropzone.addEventListener(type, event => { event.preventDefault(); dropzone.classList.add('drag-over'); }));
+        ['dragleave', 'dragend'].forEach(type => dropzone.addEventListener(type, () => dropzone.classList.remove('drag-over')));
+        dropzone.addEventListener('drop', event => { event.preventDefault(); dropzone.classList.remove('drag-over'); choose(event.dataTransfer?.files?.[0]); });
         modal.querySelector('#br-go').onclick = async () => {
-            const file = modal.querySelector('#br-file').files[0];
             if (!file) return UI.toast(Lang.t('backupChooseFile'));
             const sha256 = modal.querySelector('#br-hash').value.replace(/[\s:-]/g, '').toLowerCase();
             if (!/^[0-9a-f]{64}$/.test(sha256)) return UI.toast(Lang.t('backupHashFormat'));
@@ -2899,6 +3012,18 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
+    // Erstes Pausenfeld mit ungueltiger Angabe (nur eine Zeit oder nicht innerhalb der Geschaeftszeit),
+    // sonst null. Dieselbe Regel prueft der Server (businessHoursDaySchema).
+    businessBreakIssue: (modal) => {
+        for (const row of modal.querySelectorAll('#sys-bh-days .business-day-row')) {
+            const [start, end, breakStart, breakEnd] = ['.bh-day-start', '.bh-day-end', '.bh-day-break-start', '.bh-day-break-end']
+                .map(selector => row.querySelector(selector).value);
+            if (!breakStart && !breakEnd) continue;
+            const ok = breakStart && breakEnd && (start || '08:00') < breakStart && breakStart < breakEnd && breakEnd < (end || '17:00');
+            if (!ok) return row.querySelector(breakStart ? '.bh-day-break-end' : '.bh-day-break-start');
+        }
+        return null;
+    },
     // Einstellungsbereiche je Recht (Server: domain/adminPermissions.ts SETTINGS_SECTION_KEYS).
     SETTINGS_SECTION_KEYS: {
         settingsGeneral: ['portalName', 'autoArchiveClosedAfterDays', 'uploadConfig', 'avatarConfig', 'timeTrackingConfig', 'defaultPrio',
@@ -2918,7 +3043,7 @@ export const AdminBoard = {
     // Reiter der Systemeinstellungen, die eine Person oeffnen darf (Superadmin: alle).
     settingsTabs: (user) => {
         const all = ['sys-general', 'sys-ticketform', 'sys-categories', 'sys-modules', 'sys-sla', 'sys-approvals', 'sys-outlook', 'sys-security',
-            'sys-profiles', 'sys-notifications', 'sys-email', 'sys-ldap', 'sys-company', 'sys-update'];
+            'sys-profiles', 'sys-notifications', 'sys-email', 'sys-ldap', 'sys-company', 'sys-domain', 'sys-update'];
         if (user?.role === 'superadmin') return all;
         if (user?.role !== 'admin') return [];
         // Reiter abgeschalteter Module gibt es fuer Admins nicht (nur Superadmins schalten Module um).
@@ -3008,6 +3133,9 @@ export const AdminBoard = {
                         </button>
                         <button class="tab-btn" data-tab="sys-company">
                             <i data-lucide="building-2"></i><span>${Lang.t('companySettingsTab')}</span>
+                        </button>
+                        <button class="tab-btn" data-tab="sys-domain">
+                            <i data-lucide="globe"></i><span>${Lang.t('domainTab')}</span>
                         </button>
                         <button class="tab-btn" data-tab="sys-update">
                             <i data-lucide="info"></i><span>${Lang.t('infoAndUpdates')}</span>
@@ -3145,6 +3273,42 @@ export const AdminBoard = {
                         </div>
 
                         <!-- Update -->
+                        <div id="sys-domain" class="tab-content">
+                            <div class="settings-section-title">${Lang.t('domainCurrentTitle')}</div>
+                            <div id="sys-domain-status"><div class="empty-state compact">${Lang.t('notCheckedYet')}</div></div>
+                            <div class="settings-section-title">${Lang.t('domainSetupTitle')}</div>
+                            <div class="callout">${Lang.t('domainSetupCallout')}</div>
+                            <div class="form-grid" id="sys-domain-form">
+                                <div class="field">
+                                    <label for="sys-domain-name">${Lang.t('domainName')}</label>
+                                    <input id="sys-domain-name" type="text" autocomplete="off" spellcheck="false" placeholder="support.example.com">
+                                </div>
+                                <div class="field">
+                                    <label for="sys-domain-dir">${Lang.t('domainInstallDir')}</label>
+                                    <input id="sys-domain-dir" type="text" autocomplete="off" spellcheck="false" value="/opt/ticket-system">
+                                </div>
+                                <div class="field field-wide" role="radiogroup" aria-labelledby="sys-domain-reach-label">
+                                    <label id="sys-domain-reach-label">${Lang.t('domainReach')}</label>
+                                    <label class="check-row"><input type="radio" name="sys-domain-reach" id="sys-domain-public" value="acme"><span class="check-text"><strong>${Lang.t('domainReachPublic')}</strong><span>${Lang.t('domainReachPublicHint')}</span></span></label>
+                                    <label class="check-row"><input type="radio" name="sys-domain-reach" id="sys-domain-internal" value="internal" checked><span class="check-text"><strong>${Lang.t('domainReachInternal')}</strong><span>${Lang.t('domainReachInternalHint')}</span></span></label>
+                                </div>
+                                <div class="field" id="sys-domain-email-field">
+                                    <label for="sys-domain-email">${Lang.t('domainAcmeEmail')}</label>
+                                    <input id="sys-domain-email" type="email" autocomplete="off" placeholder="it@example.com">
+                                </div>
+                                <label class="check-row field-wide">
+                                    <input type="checkbox" id="sys-domain-office">
+                                    <span class="check-text"><strong>${Lang.t('domainOfficeEnable')}</strong><span id="sys-domain-office-hint">${Lang.t('domainOfficeEnableHint')}</span></span>
+                                </label>
+                                <div class="field" id="sys-domain-office-field">
+                                    <label for="sys-domain-office-host">${Lang.t('domainOfficeHost')}</label>
+                                    <input id="sys-domain-office-host" type="text" autocomplete="off" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="settings-section-title">${Lang.t('domainGuideTitle')}</div>
+                            <div id="sys-domain-guide"></div>
+                        </div>
+
                         <div id="sys-update" class="tab-content">
                             <div class="settings-section-title">${Lang.t('sysInfoTitle')}</div>
                             <div id="sys-info"><div class="empty-state compact">${Lang.t('notCheckedYet')}</div></div>
@@ -3300,6 +3464,7 @@ export const AdminBoard = {
                             </label>
                             <div class="field field-wide">
                                 <label>${Lang.t('businessHoursPerDay')}</label>
+                                <p class="hint">${Lang.t('bhBreakHint')}</p>
                                 <div class="business-hours-grid" id="sys-bh-days">
                                     ${[1, 2, 3, 4, 5, 6, 0].map(i => ({ i, d: Lang.t(['daySunday', 'dayMonday', 'dayTuesday', 'dayWednesday', 'dayThursday', 'dayFriday', 'daySaturday'][i]) })).map(({ i, d }) => `
                                         <div class="business-day-row" data-day="${i}">
@@ -3307,6 +3472,10 @@ export const AdminBoard = {
                                             <input class="bh-day-start" type="time" aria-label="${Lang.format('dayStart', { day: d })}">
                                             <span class="business-day-sep">${Lang.t('to')}</span>
                                             <input class="bh-day-end" type="time" aria-label="${Lang.format('dayEnd', { day: d })}">
+                                            <span class="business-day-sep business-break-label">${Lang.t('bhBreak')}</span>
+                                            <input class="bh-day-break-start" type="time" aria-label="${Lang.format('bhBreakStartOf', { day: d })}">
+                                            <span class="business-day-sep">–</span>
+                                            <input class="bh-day-break-end" type="time" aria-label="${Lang.format('bhBreakEndOf', { day: d })}">
                                         </div>
                                     `).join('')}
                                 </div>
@@ -3414,6 +3583,7 @@ export const AdminBoard = {
             document.body.appendChild(modal);
             modal.querySelector('#sys-save-head').onclick = () => q('#sys-save')?.click();
             modal.querySelector('#sys-update').addEventListener('click', AdminBoard.handleCopyClick);
+            modal.querySelector('#sys-domain').addEventListener('click', AdminBoard.handleCopyClick);
             modal.querySelector('#sys-backup-create').onclick = () => AdminBoard.openBackupCreate();
             modal.querySelector('#sys-backup-restore').onclick = () => AdminBoard.openBackupRestore();
             const company = modal.querySelector('#sys-company');
@@ -3505,6 +3675,7 @@ export const AdminBoard = {
                     if (btn.dataset.tab === 'sys-update') { AdminBoard.renderSystemInfo(); AdminBoard.renderUpdateStatus(); }
                     else clearTimeout(AdminBoard.updatePollTimer);
                     if (btn.dataset.tab === 'sys-categories') AdminBoard.renderCategorySettings();
+                    if (btn.dataset.tab === 'sys-domain') AdminBoard.renderDomainGuide();
                     if (window.lucide) lucide.createIcons();
                 };
             });
@@ -3603,6 +3774,8 @@ export const AdminBoard = {
             row.querySelector('.bh-day-enabled').checked = !!cfg.enabled;
             row.querySelector('.bh-day-start').value = cfg.start || '08:00';
             row.querySelector('.bh-day-end').value = cfg.end || '17:00';
+            row.querySelector('.bh-day-break-start').value = cfg.breakStart || '';
+            row.querySelector('.bh-day-break-end').value = cfg.breakEnd || '';
         });
         q('#sys-bh-holidays').value = (businessHours.holidays || []).map(d => /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : d).join('\n');
 
@@ -3960,6 +4133,12 @@ export const AdminBoard = {
                 ticketNumberIssue.input.focus();
                 return UI.toast(ticketNumberIssue.message);
             }
+            const breakIssue = can('settingsSla') ? AdminBoard.businessBreakIssue(modal) : null;
+            if (breakIssue) {
+                modal.querySelector('.sys-settings-nav [data-tab="sys-sla"]')?.click();
+                breakIssue.focus();
+                return UI.toast(Lang.t('bhBreakInvalid'));
+            }
             const approvalRules = modal._approvalRules || [];
             const ruleKeys = approvalRules.map(rule => `${rule.type}:${rule.target}`);
             if (can('settingsApprovals') && (approvalRules.some(rule => !rule.target || !rule.userId) || new Set(ruleKeys).size !== ruleKeys.length)) {
@@ -4021,7 +4200,11 @@ export const AdminBoard = {
                             {
                                 enabled: row.querySelector('.bh-day-enabled').checked,
                                 start: row.querySelector('.bh-day-start').value || '08:00',
-                                end: row.querySelector('.bh-day-end').value || '17:00'
+                                end: row.querySelector('.bh-day-end').value || '17:00',
+                                ...(row.querySelector('.bh-day-break-start').value ? {
+                                    breakStart: row.querySelector('.bh-day-break-start').value,
+                                    breakEnd: row.querySelector('.bh-day-break-end').value
+                                } : {})
                             }
                         ])),
                         holidays: (q('#sys-bh-holidays')?.value || '').split('\n').map(s => s.trim()).filter(Boolean).map(value => {
@@ -4858,8 +5041,10 @@ export const AdminBoard = {
             <div class="time-tracking-panel">
                 <div class="section-title todo-section-title"><span class="todo-title-group">${Icon('clock', 15)}${Lang.t('timeTracking')}</span><span id="time-total-label" class="todo-progress-count"></span></div>
                 <div id="time-entry-list" class="time-entry-list"></div>
-                <div class="todo-create-row">
-                    <input id="time-minutes" type="number" min="1" step="5" placeholder="${Lang.t('minutesPlaceholder')}">
+                <div class="todo-create-row time-create-row">
+                    <input id="time-minutes" type="number" min="1" step="5" placeholder="${Lang.t('minutesPlaceholder')}" aria-label="${Lang.t('minutesPlaceholder')}">
+                    <input id="time-start-date" type="text" inputmode="numeric" placeholder="dd.mm.jjjj" value="${Utils.esc(Utils.fmtDateOnly(new Date()))}" title="${Lang.t('timeEntryStartDate')}" aria-label="${Lang.t('timeEntryStartDate')}">
+                    <input id="time-start-time" type="text" inputmode="numeric" placeholder="${Lang.t('timeEntryStartTime')}" title="${Lang.t('timeEntryStartTimeHint')}" aria-label="${Lang.t('timeEntryStartTime')}">
                     <input id="time-note" type="text" placeholder="${Lang.t('notePlaceholderOptional')}">
                     <button class="btn-primary" id="time-add" type="button">${Icon('plus', 16)}${Lang.t('add')}</button>
                 </div>
@@ -4934,7 +5119,7 @@ export const AdminBoard = {
         list.innerHTML = entries.length ? entries.slice().reverse().map(e => `
             <div class="time-entry-row" data-id="${Utils.esc(e.id)}">
                 <span class="time-entry-duration">${fmtMinutes(e.minutes)}</span>
-                <span class="time-entry-meta">${Utils.esc(e.username)} · ${Utils.esc(Utils.fmtDate(e.created_at))}${e.note ? ' · ' + Utils.esc(e.note) : ''}</span>
+                <span class="time-entry-meta"><span class="time-entry-period">${Utils.esc(Utils.fmtEntryPeriod(e))}</span> · ${Utils.esc(e.username)}${e.note ? ' · ' + Utils.esc(e.note) : ''}</span>
                 <button type="button" class="btn-ghost btn-icon btn-xs btn-danger time-entry-remove" title="${Lang.t('removeEntry')}" aria-label="${Lang.t('removeEntry')}">${Icon('x', 13)}</button>
             </div>`).join('') : `<div class="empty-state compact">${Lang.t('noTimeRecordedYet')}</div>`;
         list.querySelectorAll('.time-entry-remove').forEach(btn => {
@@ -4945,6 +5130,13 @@ export const AdminBoard = {
             };
         });
         addBtn.disabled = !!t.archived;
+        const startDateInput = q('#time-start-date');
+        const startTimeInput = q('#time-start-time');
+        if (startDateInput && !startDateInput.dataset.bound) {
+            startDateInput.dataset.bound = '1';
+            UI.bindDateInput(startDateInput);
+            UI.bindTimeInput(startTimeInput);
+        }
         addBtn.onclick = async () => {
             const minutesInput = q('#time-minutes');
             const noteInput = q('#time-note');
@@ -4953,13 +5145,27 @@ export const AdminBoard = {
                 UI.toast(Lang.t('enterValidDurationMinutes'));
                 return;
             }
-            await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/time-entries`, {
+            // Ohne Beginn endet der Eintrag jetzt (Server rechnet den Beginn aus der Dauer zurueck).
+            let startedAt;
+            if (startTimeInput.value.trim()) {
+                const ms = Utils.parseGermanDateTime(startDateInput.value.trim() || Utils.fmtDateOnly(new Date()), startTimeInput.value.trim());
+                if (!ms) { UI.toast(Lang.t('timeEntryStartInvalid')); startTimeInput.focus(); return; }
+                startedAt = new Date(ms).toISOString();
+            }
+            const res = await fetch(`/api/v2/tickets/${encodeURIComponent(t.id)}/time-entries`, {
                 method: 'POST', credentials: 'same-origin',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ minutes, note: noteInput.value.trim() || undefined })
-            }).catch(() => {});
+                body: JSON.stringify({ minutes, note: noteInput.value.trim() || undefined, started_at: startedAt })
+            }).catch(() => null);
+            if (!res?.ok) {
+                const error = res ? (await res.json().catch(() => ({}))).error : null;
+                UI.toast(Lang.t(error === 'invalid_period' ? 'timeEntryPeriodInvalid' : 'saveFailed'));
+                return;
+            }
             minutesInput.value = '';
             noteInput.value = '';
+            startTimeInput.value = '';
+            startDateInput.value = Utils.fmtDateOnly(new Date());
             AdminBoard.renderTimeEntries(t, users, tickets);
         };
     },
@@ -6717,7 +6923,7 @@ export const AdminBoard = {
         const tickets = await Store.getTickets();
         const ticket = tickets.find(item => item.id === id);
         if (!ticket || ticket.archived) return;
-        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        const modal = AdminBoard.genericModal();
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
         modal.querySelector('.modal-header h3').textContent = `Ticket bearbeiten · ${ticket.ticketNumber || ticket.id}`;
         modal.querySelector('.modal-body').innerHTML = `
@@ -7115,7 +7321,7 @@ export const AdminBoard = {
             const entries = res && res.ok ? (await res.json()).entries || [] : [];
             totalMinutes = entries.reduce((sum, e) => sum + (e.minutes || 0), 0);
             timeEntries = entries.map(e => `
-                <div class="p-entry"><strong>${Utils.esc(nameFor(e.username))}</strong> <span>${Utils.esc(Utils.fmtDate(e.created_at))} – ${fmtMinutesPrint(e.minutes)}</span>
+                <div class="p-entry"><strong>${Utils.esc(nameFor(e.username))}</strong> <span>${Utils.esc(Utils.fmtEntryPeriod(e))} · ${fmtMinutesPrint(e.minutes)}</span>
                 ${e.note ? `<p>${Utils.esc(e.note)}</p>` : ''}</div>`).join('');
         }
         const participants = [...new Set([t.owner, ...(t.participants || [])].filter(Boolean))].map(nameFor).join(', ') || '-';
@@ -7512,6 +7718,7 @@ export const AdminBoard = {
             });
             return;
         }
+        q('#m-author')?._closePersonMenu?.();
         q('#ticket-modal').classList.remove('open');
         if (q('#m-admin-mention-picker')) q('#m-admin-mention-picker').hidden = true;
         const sidebar = q('#m-history-sidebar');
@@ -7538,58 +7745,68 @@ export const AdminBoard = {
         if (window.lucide) lucide.createIcons();
     },
 
-    // Name einer Person mit Ausklappmenue (Hover, Fokus oder Klick): Kontaktdaten oder Ticket-Historie.
+    // Name einer Person mit Ausklappmenue (Hover oder Klick): Kontaktdaten oder Ticket-Historie.
+    // Die Liste wird beim Oeffnen neu an <body> erzeugt (liegt so ueber jedem Dialog) und beim
+    // Schliessen entfernt -- sie wird nie zwischen Containern verschoben, damit kein Klick verloren geht.
     renderPersonMenu: (el, { userId, name, username, ticketId }) => {
         if (!el) return;
         el._closePersonMenu?.();
         el.classList.remove('link');
         el.removeAttribute('title');
         el.onclick = null;
-        el.innerHTML = `<span class="person-menu">
-            <button type="button" class="person-menu-trigger" aria-haspopup="menu" aria-expanded="false">${Icon('user-round', 14)}<span>${Utils.esc(name || username || '-')}</span>${Icon('chevron-down', 13)}</button>
-            <span class="person-menu-list" role="menu">
-                ${userId ? `<button type="button" role="menuitem" data-act="contact">${Icon('contact-round', 15)}<span>${Utils.esc(Lang.t('showContactDetails'))}</span></button>` : ''}
-                <button type="button" role="menuitem" data-act="history">${Icon('history', 15)}<span>${Utils.esc(Lang.t('showTicketHistory'))}</span></button>
-            </span>
-        </span>`;
-        const menu = el.querySelector('.person-menu');
+        el.innerHTML = `<span class="person-menu"><button type="button" class="person-menu-trigger" aria-haspopup="menu" aria-expanded="false">${Icon('user-round', 14)}<span>${Utils.esc(name || username || '-')}</span>${Icon('chevron-down', 13)}</button></span>`;
         const trigger = el.querySelector('.person-menu-trigger');
-        const list = menu.querySelector('.person-menu-list');
-        let observer;
-        const outside = event => { if (!menu.contains(event.target) && !list.contains(event.target)) setOpen(false); };
-        const position = () => {
+        let list = null;
+        let leaveTimer = null;
+        const actions = { contact: () => AdminBoard.openContactCard(userId, { username, ticketId }), history: () => AdminBoard.renderHistory(username, ticketId) };
+        const outside = event => { if (!list?.contains(event.target) && !trigger.contains(event.target)) close(); };
+        const onKey = event => { if (event.key === 'Escape') { close(); trigger.focus(); } };
+        const close = () => {
+            clearTimeout(leaveTimer);
+            if (!list) return;
+            list.remove(); list = null;
+            trigger.setAttribute('aria-expanded', 'false');
+            el.querySelector('.person-menu')?.classList.remove('is-open');
+            document.removeEventListener('pointerdown', outside, true);
+            document.removeEventListener('keydown', onKey, true);
+            window.removeEventListener('resize', close);
+            window.removeEventListener('scroll', onScroll, true);
+        };
+        const onScroll = event => { if (!list?.contains(event.target)) close(); };
+        const open = () => {
+            clearTimeout(leaveTimer);
+            if (list || !trigger.isConnected) return;
+            list = document.createElement('div');
+            list.className = 'person-menu-float';
+            list.setAttribute('role', 'menu');
+            list.innerHTML = `${userId ? `<button type="button" role="menuitem" data-act="contact">${Icon('contact-round', 15)}<span>${Utils.esc(Lang.t('showContactDetails'))}</span></button>` : ''}
+                <button type="button" role="menuitem" data-act="history">${Icon('history', 15)}<span>${Utils.esc(Lang.t('showTicketHistory'))}</span></button>`;
+            list.querySelectorAll('[data-act]').forEach(button => button.addEventListener('click', event => {
+                event.stopPropagation();
+                const act = actions[button.dataset.act];
+                close();
+                act();
+            }));
+            list.addEventListener('mouseenter', () => clearTimeout(leaveTimer));
+            list.addEventListener('mouseleave', scheduleClose);
+            document.body.appendChild(list);
+            if (window.lucide) lucide.createIcons();
             const rect = trigger.getBoundingClientRect();
-            const height = list.offsetHeight || 100;
             list.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - list.offsetWidth - 8))}px`;
-            list.style.top = `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - height - 8))}px`;
+            list.style.top = `${rect.bottom + 4 + list.offsetHeight > window.innerHeight - 8 ? Math.max(8, rect.top - list.offsetHeight - 4) : rect.bottom + 4}px`;
+            trigger.setAttribute('aria-expanded', 'true');
+            el.querySelector('.person-menu')?.classList.add('is-open');
+            document.addEventListener('pointerdown', outside, true);
+            document.addEventListener('keydown', onKey, true);
+            window.addEventListener('resize', close);
+            window.addEventListener('scroll', onScroll, true);
         };
-        const setOpen = open => {
-            menu.classList.toggle('is-open', open); trigger.setAttribute('aria-expanded', String(open));
-            if (open) {
-                document.body.appendChild(list); list.classList.add('is-detached');
-                if (typeof list.showPopover === 'function') { list.setAttribute('popover', 'manual'); list.showPopover(); }
-                position(); window.addEventListener('resize', position); window.addEventListener('scroll', position, true);
-                document.addEventListener('pointerdown', outside);
-                observer?.disconnect(); observer = new MutationObserver(() => { if (!trigger.isConnected) setOpen(false); });
-                observer.observe(document.body, { childList: true, subtree: true });
-            } else {
-                if (typeof list.hidePopover === 'function' && list.matches(':popover-open')) list.hidePopover();
-                list.classList.remove('is-detached'); menu.appendChild(list);
-                window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true);
-                document.removeEventListener('pointerdown', outside); observer?.disconnect();
-            }
-        };
-        el._closePersonMenu = () => setOpen(false);
-        trigger.onclick = event => { event.stopPropagation(); setOpen(true); };
-        trigger.onmouseenter = () => setOpen(true);
-        list.onmouseleave = () => setOpen(false);
-        list.addEventListener('keydown', event => { if (event.key === 'Escape') { setOpen(false); trigger.focus(); } });
-        list.addEventListener('focusout', event => { if (!list.contains(event.relatedTarget) && event.relatedTarget !== trigger) setOpen(false); });
-        menu.addEventListener('keydown', event => { if (event.key === 'Escape') { setOpen(false); trigger.focus(); } });
-        menu.addEventListener('focusout', event => { if (!menu.contains(event.relatedTarget) && !list.contains(event.relatedTarget)) setOpen(false); });
-        list.querySelector('[data-act="contact"]')?.addEventListener('click', () => { setOpen(false); AdminBoard.openContactCard(userId, { username, ticketId }); });
-        list.querySelector('[data-act="history"]').addEventListener('click', () => { setOpen(false); AdminBoard.renderHistory(username, ticketId); });
-        if (window.lucide) lucide.createIcons();
+        const scheduleClose = () => { clearTimeout(leaveTimer); leaveTimer = setTimeout(close, 250); };
+        el._closePersonMenu = close;
+        trigger.onclick = event => { event.stopPropagation(); open(); list?.querySelector('button')?.focus(); };
+        trigger.onmouseenter = open;
+        trigger.onmouseleave = scheduleClose;
+        trigger.onkeydown = event => { if (event.key === 'ArrowDown') { event.preventDefault(); open(); list?.querySelector('button')?.focus(); } };
     },
 
     // Kontaktkarte: nur die Angaben, die Systemeinstellungen > Kontaktdaten fuer die eigene Person freigeben.
@@ -7949,7 +8166,7 @@ export const AdminBoard = {
         const user = await Store.currentUser();
         if (!message || !user) return;
         if (message.sender_user_id !== user.id) return UI.toast('Du kannst nur eigene Nachrichten bearbeiten.');
-        const modal = q('#generic-modal') || AdminBoard.createGenericModal();
+        const modal = AdminBoard.genericModal();
         modal.querySelector('.modal').classList.replace('modal-sm', 'modal-md');
         modal.querySelector('.modal-header h3').textContent = 'Chatnachricht bearbeiten';
         modal.querySelector('.modal-body').innerHTML = '<div class="field"><label for="edit-chat-message">Nachricht</label><textarea id="edit-chat-message" rows="7"></textarea></div>';

@@ -21,9 +21,9 @@ ensure_public_env_defaults
 [[ "$(public_env_value HTTP_PORT)" == 80 && "$(public_env_value HTTPS_PORT)" == 443 ]]
 [[ "$(public_env_value BIND_ADDRESS)" == 0.0.0.0 ]]
 : > "$ENV_FILE"
-PUBLIC_DOMAIN_ARG=ticket.ubodigat.com; TLS_MODE_ARG=internal
+PUBLIC_DOMAIN_ARG=support.example.com; TLS_MODE_ARG=internal
 ensure_public_env_defaults
-[[ "$(public_env_value PUBLIC_URL)" == https://ticket.ubodigat.com ]]
+[[ "$(public_env_value PUBLIC_URL)" == https://support.example.com ]]
 [[ "$(public_env_value TLS_POLICY)" == internal ]]
 : > "$ENV_FILE"
 PUBLIC_DOMAIN_ARG=support.example.com; TLS_MODE_ARG=acme; ACME_EMAIL_ARG=operator@example.org
@@ -43,12 +43,12 @@ COOKIE_SECRET=preserve-cookie
 INSTALLATION_ID=preserve-id
 ENV
 chmod 0600 "$ENV_FILE"
-PUBLIC_DOMAIN_ARG=ticket.ubodigat.com; TLS_MODE_ARG=internal
+PUBLIC_DOMAIN_ARG=support.example.com; TLS_MODE_ARG=internal
 ensure_public_env_defaults
-[[ "$(public_env_value PUBLIC_DOMAIN)" == ticket.ubodigat.com ]]
+[[ "$(public_env_value PUBLIC_DOMAIN)" == support.example.com ]]
 [[ "$(public_env_value TLS_MODE)" == internal ]]
 [[ "$(public_env_value TLS_POLICY)" == internal ]]
-[[ "$(public_env_value PUBLIC_URL)" == https://ticket.ubodigat.com:8443 ]]
+[[ "$(public_env_value PUBLIC_URL)" == https://support.example.com:8443 ]]
 [[ "$(public_env_value HTTP_PORT)" == 8080 && "$(public_env_value BIND_ADDRESS)" == 192.0.2.55 ]]
 grep -q '^DB_PASSWORD=preserve-secret==$' "$ENV_FILE"
 grep -q '^COOKIE_SECRET=preserve-cookie$' "$ENV_FILE"
@@ -67,7 +67,7 @@ for bad_host in 'https://ticket.example.org' 'ticket.example.org:443' 'ticket.ex
   if ensure_public_env_defaults >/dev/null 2>&1; then echo "Accepted invalid hostname: $bad_host" >&2; exit 1; fi
   cmp "$fixture/before" "$ENV_FILE"
 done
-PUBLIC_DOMAIN_ARG=ticket.ubodigat.com
+PUBLIC_DOMAIN_ARG=support.example.com
 HTTPS_PORT=65536
 if ensure_public_env_defaults >/dev/null 2>&1; then echo 'Invalid port accepted' >&2; exit 1; fi
 cmp "$fixture/before" "$ENV_FILE"; unset HTTPS_PORT
@@ -77,17 +77,17 @@ cmp "$fixture/before" "$ENV_FILE"; ACME_EMAIL_ARG=''
 PUBLIC_DOMAIN_ARG=192.0.2.55; TLS_MODE_ARG=acme
 if ensure_public_env_defaults >/dev/null 2>&1; then echo 'ACME with IP accepted' >&2; exit 1; fi
 cmp "$fixture/before" "$ENV_FILE"
-PUBLIC_DOMAIN_ARG=ticket.ubodigat.com; TLS_MODE_ARG=internal
+PUBLIC_DOMAIN_ARG=support.example.com; TLS_MODE_ARG=internal
 
 # Local probes must preserve SNI and verify a certificate; no -k / --insecure.
-WEB_PROBE_CA_FILE="$fixture/root.crt"; WEB_PROBE_RESOLVE=ticket.ubodigat.com:8443:127.0.0.1
+WEB_PROBE_CA_FILE="$fixture/root.crt"; WEB_PROBE_RESOLVE=support.example.com:8443:127.0.0.1
 curl() { printf '%s\n' "$@" > "$fixture/curl-args"; [[ "${REJECT_CERT:-0}" == 0 ]] || return 60; printf '200 text/html; charset=utf-8'; }
-probe_public_asset https://ticket.ubodigat.com:8443/index.html text/html
+probe_public_asset https://support.example.com:8443/index.html text/html
 grep -Fxq -- --cacert "$fixture/curl-args"
 grep -Fxq -- --resolve "$fixture/curl-args"
-grep -Fxq -- https://ticket.ubodigat.com:8443/index.html "$fixture/curl-args"
+grep -Fxq -- https://support.example.com:8443/index.html "$fixture/curl-args"
 ! grep -Exq -- '-k|--insecure' "$fixture/curl-args"
-if REJECT_CERT=1 probe_public_asset https://ticket.ubodigat.com:8443/index.html text/html; then echo 'Certificate failure ignored' >&2; exit 1; fi
+if REJECT_CERT=1 probe_public_asset https://support.example.com:8443/index.html text/html; then echo 'Certificate failure ignored' >&2; exit 1; fi
 
 # Exercise the narrow repair path with command test doubles (not real Docker).
 mkdir -p "$fixture/repo/ops/docker"
@@ -96,7 +96,7 @@ SCRIPT_DIR="$fixture/repo"
 docker() { :; }
 run_root() { printf '%s\n' "$*" >> "$fixture/docker-commands"; if [[ "${BAD_CADDY:-0}" == 1 && "$*" == *'caddy validate'* ]]; then return 1; fi; }
 prepare_web_probe() { WEB_PROBE_CA_FILE=''; }
-verify_public_web() { [[ "$1" == https://ticket.ubodigat.com:8443 ]]; }
+verify_public_web() { [[ "$1" == https://support.example.com:8443 ]]; }
 web_failure_help() { :; }
 configure_web_only > "$fixture/repair-output"
 grep -q -- 'up -d --no-deps --force-recreate app caddy' "$fixture/docker-commands"

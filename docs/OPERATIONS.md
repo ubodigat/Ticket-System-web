@@ -47,7 +47,7 @@ Nach Aktualisierung des Codes kann nur die bestehende Webkonfiguration repariert
 
 ```bash
 cd /opt/ticket-system
-bash install.sh --web-only --domain=ticket.ubodigat.com --tls=internal
+bash install.sh --web-only --domain=support.example.com --tls=internal
 ```
 
 Dieser Modus installiert keine Pakete, baut keine Images und führt keinen Datenbankabgleich
@@ -68,7 +68,7 @@ Die öffentliche Caddy-CA liegt nach erfolgreicher Prüfung in `ops/tls/caddy-ro
 
 ```bash
 openssl x509 -in ops/tls/caddy-root.crt -noout -fingerprint -sha256
-curl --cacert ops/tls/caddy-root.crt --resolve ticket.ubodigat.com:443:127.0.0.1 -I https://ticket.ubodigat.com/index.html
+curl --cacert ops/tls/caddy-root.crt --resolve support.example.com:443:127.0.0.1 -I https://support.example.com/index.html
 docker compose -f ops/docker/docker-compose.yml --env-file ops/docker/.env logs --tail=80 caddy app
 ```
 
@@ -78,7 +78,7 @@ CA-Zertifikat als vertrauenswürdig importieren. Niemals den privaten CA-Schlüs
 Ein Domainwechsel kann neue Passkey-Registrierungen und angepasste OAuth-Redirect-URIs erfordern.
 
 Der Installer prüft lokal mit passendem SNI und Zertifikatsprüfung; er kann weder Client-DNS
-noch Proxmox-/Router-Firewalls oder Browser-Vertrauen aus der Ferne bestätigen. `/health` ist
+noch Firewalls auf Virtualisierungs-Host oder Router oder Browser-Vertrauen aus der Ferne bestätigen. `/health` ist
 öffentlich absichtlich gesperrt. Ein `curl -k` dient höchstens zur Diagnose, nicht als Nachweis
 gültiger Zertifikate oder als dauerhafte Lösung.
 

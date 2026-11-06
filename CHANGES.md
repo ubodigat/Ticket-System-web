@@ -1,5 +1,27 @@
 # Änderungen
 
+## 06.11.2026 – Domain & HTTPS, Pausen in Geschäftszeiten, Aufgabenfenster
+
+- Systemeinstellungen › **Domain & HTTPS** (nur Superadmins): zeigt Portal-Adresse, Zertifikatsart und
+  Office-Oberfläche und erzeugt aus Domain, Erreichbarkeit (öffentlich/intern), ACME-E-Mail und optionaler
+  Office-Subdomain eine Anleitung: DNS-Einträge, Ports, Installer-Befehl, Verteilung des Stammzertifikats
+  bei internem Zertifikat sowie Hinweise zu Passkeys und Outlook. Die Oberfläche ändert nichts am Server;
+  Eingaben werden wie im Installer geprüft, der Befehl enthält keine Shell-Sonderzeichen. Neu dafür:
+  `TLS_MODE` wird an die App durchgereicht, `/api/v2/system/info` liefert `tlsMode` und `officeUrl`.
+- Geschäftszeiten: je Tag eine optionale Pause (z. B. Mittag), in der die Lösungsfrist nicht läuft.
+  Server (`sla.ts`) und Anzeige rechnen nach derselben Regel; der Server lehnt halbe oder außerhalb der
+  Geschäftszeit liegende Pausen ab. Sechs neue Tests.
+- Schwebendes Aufgabenfenster mit deckendem Glas-Hintergrund und Weichzeichner.
+
+## 06.11.2026 – Zeitraum bei erfasster Zeit
+
+- Zeiteinträge speichern Beginn und Ende (`started_at`/`ended_at` in `ticket_time_entries` und
+  `admin_todo_time_entries`). Beim Timer ist das der gemessene Zeitraum; eine angepasste Dauer ändert ihn nicht.
+- Manuelle Erfassung im Ticket: optional Datum und Uhrzeit des Beginns, sonst endet der Eintrag jetzt.
+  Der Server lehnt Zeiträume ab, die in der Zukunft enden oder mehr als ein Jahr zurückliegen (`invalid_period`).
+- Ticket, Druckansicht und Zeitverlauf der Aufgaben zeigen den Zeitraum, z. B. „06.11.2026 18:49 – 18:50“.
+  Ältere Einträge ohne Zeitraum zeigen weiter den Erfassungszeitpunkt. Datenexport enthält beide Felder.
+
 ## 05.11.2026 – CI: Fremdschlüsselplanung vor neuen Spalten
 
 - Ursache von `Unknown column 'c.todo_id' in 'WHERE'` beseitigt: Der Schema-Planer prüft

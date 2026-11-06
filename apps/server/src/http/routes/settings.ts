@@ -60,11 +60,16 @@ const updateCategorySchema = z.object({
 // validiert statt ungeprüft aus dem Browser übernommen.
 // Je Wochentag (0=Sonntag..6=Samstag) individuelle Zeiten statt einer einzigen globalen
 // Start/Ende-Zeit -- entspricht der ursprünglichen, lokalen Version (vor der Datenbank-Anbindung).
-const businessHoursDaySchema = z.object({
+// Pause (z. B. Mittag): beide Zeiten oder keine, und start < Pausenbeginn < Pausenende < end.
+const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+export const businessHoursDaySchema = z.object({
   enabled: z.boolean(),
   start: z.string().regex(/^\d{2}:\d{2}$/),
-  end: z.string().regex(/^\d{2}:\d{2}$/)
-});
+  end: z.string().regex(/^\d{2}:\d{2}$/),
+  breakStart: clockTime.optional(),
+  breakEnd: clockTime.optional()
+}).refine(day => (!day.breakStart && !day.breakEnd)
+  || (!!day.breakStart && !!day.breakEnd && day.start < day.breakStart && day.breakStart < day.breakEnd && day.breakEnd < day.end), 'invalid_break');
 
 const settingsConfigSchema = z.object({
   slaHoursByPriority: z.record(z.string(), z.number().int().positive().max(24 * 365)).optional(),

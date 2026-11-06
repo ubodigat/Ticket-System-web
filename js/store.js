@@ -1821,34 +1821,39 @@ export const Store = {
                 start: bh.start || '08:00',
                 end: bh.end || '17:00'
             };
-            if (!dayCfg.enabled || holidays.has(dateStr)) {
-                cursor.setDate(cursor.getDate() + 1);
-                cursor.setHours(0, 0, 0, 0);
-                continue;
+            if (dayCfg.enabled && !holidays.has(dateStr)) {
+                for (const [from, to] of Store.businessWindows(cursor, dayCfg)) {
+                    if (cursor >= to) continue;
+                    const windowStart = cursor < from ? from : cursor;
+                    const available = to.getTime() - windowStart.getTime();
+                    if (remaining <= available) return windowStart.getTime() + remaining;
+                    remaining -= available;
+                }
             }
-            const [startH, startM] = (dayCfg.start || '08:00').split(':').map(Number);
-            const [endH, endM] = (dayCfg.end || '17:00').split(':').map(Number);
-            const dayStart = new Date(cursor);
-            dayStart.setHours(startH, startM, 0, 0);
-            const dayEnd = new Date(cursor);
-            dayEnd.setHours(endH, endM, 0, 0);
-            if (dayEnd <= dayStart || cursor >= dayEnd) {
-                cursor.setDate(cursor.getDate() + 1);
-                cursor.setHours(0, 0, 0, 0);
-                continue;
-            }
-            if (cursor < dayStart) cursor = new Date(dayStart);
-            const availableToday = dayEnd.getTime() - cursor.getTime();
-            if (remaining <= availableToday) {
-                cursor = new Date(cursor.getTime() + remaining);
-                remaining = 0;
-            } else {
-                remaining -= availableToday;
-                cursor.setDate(cursor.getDate() + 1);
-                cursor.setHours(0, 0, 0, 0);
-            }
+            cursor = new Date(cursor);
+            cursor.setDate(cursor.getDate() + 1);
+            cursor.setHours(0, 0, 0, 0);
         }
         return cursor.getTime();
+    },
+    // Geschaeftsfenster eines Tages (lokale Zeit): ganzer Tag oder, mit gueltiger Pause, Vor- und
+    // Nachmittag -- dieselbe Regel wie dayWindows in apps/server/src/domain/sla.ts.
+    businessWindows: (day, dayCfg) => {
+        const at = value => {
+            const [h, m] = String(value).split(':').map(Number);
+            const d = new Date(day);
+            d.setHours(h, m, 0, 0);
+            return d;
+        };
+        const start = at(dayCfg.start || '08:00');
+        const end = at(dayCfg.end || '17:00');
+        if (end <= start) return [];
+        if (dayCfg.breakStart && dayCfg.breakEnd) {
+            const pauseStart = at(dayCfg.breakStart);
+            const pauseEnd = at(dayCfg.breakEnd);
+            if (start < pauseStart && pauseStart < pauseEnd && pauseEnd < end) return [[start, pauseStart], [pauseEnd, end]];
+        }
+        return [[start, end]];
     },
     ticketSlaDueAt: (ticket, settings) => {
         if (Store.modules.sla === false) return null;

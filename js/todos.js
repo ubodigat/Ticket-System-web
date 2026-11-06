@@ -229,7 +229,7 @@ export const TodoList = {
                 const { entries } = await TodoList.request(`/${encodeURIComponent(item.id)}/time-entries`);
                 AdminBoard.openDialog({ id: 'todo-time-history', title: Lang.t('timeTracking'), icon: 'clock',
                     body: `<h4>${Utils.esc(item.content)}</h4><p>${entries.reduce((sum, entry) => sum + entry.minutes, 0)} min</p>
-                        ${entries.map(entry => `<div class="uw-review-section"><span class="hint">${Utils.esc(Utils.fmtDate(entry.created_at))} · ${entry.minutes} min</span><p>${Utils.esc(entry.activity)}</p></div>`).join('')}` });
+                        ${entries.map(entry => `<div class="uw-review-section"><span class="hint">${Utils.esc(Utils.fmtEntryPeriod(entry))} · ${entry.minutes} min</span><p>${Utils.esc(entry.activity)}</p></div>`).join('')}` });
             } catch (error) { UI.toast(error.message); }
         });
         row.querySelector('[data-remove]')?.addEventListener('click', async () => { try { await TodoList.request(`/${item.id}`, 'DELETE'); await TodoList.refresh(); } catch (error) { UI.toast(error.message); } });

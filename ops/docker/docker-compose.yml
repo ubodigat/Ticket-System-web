@@ -115,6 +115,8 @@ services:
       WEBAUTHN_ORIGIN: ${PUBLIC_URL:-}
       # Feste Basis-URL fuer den Outlook-OAuth-Callback (Security-Audit R-21, outlookPersonal.ts).
       PUBLIC_BASE_URL: ${PUBLIC_URL:-}
+      # Nur Anzeige (Systemeinstellungen > Domain & HTTPS): internal oder acme.
+      TLS_MODE: ${TLS_MODE:-}
       ONLYOFFICE_ENABLED: ${ONLYOFFICE_ENABLED:-false}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-}
       # Security-Audit R-24: eigene Office-Subdomain (leer = Office-Ansicht aus).

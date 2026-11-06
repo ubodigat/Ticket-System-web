@@ -247,6 +247,9 @@ export interface TicketTimeEntriesTable {
   note: Nullable<string>;
   note_enc: Nullable<Buffer>;
   created_at: CreatedAt;
+  // Erfasster Zeitraum; null bei Eintraegen von vor dessen Einfuehrung.
+  started_at: NullableTimestamp;
+  ended_at: NullableTimestamp;
 }
 
 export interface UserPreferencesTable { user_id: string; value_enc: Buffer; }
@@ -541,6 +544,7 @@ export interface Database {
   admin_todo_time_entries: {
     id: string; todo_id: string; user_id: Nullable<string>; username: string;
     minutes: number; note_enc: Nullable<Buffer>; created_at: CreatedAt;
+    started_at: NullableTimestamp; ended_at: NullableTimestamp;
   };
   admin_todo_members: {
     todo_id: string;

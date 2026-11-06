@@ -98,7 +98,7 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
         if (timer.todo_id) {
           if (parsed.data.solution) return { invalidSolution: true };
           await trx.insertInto('admin_todo_time_entries').values({ id: entryId, todo_id: timer.todo_id, user_id: session.uid,
-            username: session.username, minutes, note_enc: parsed.data.activity ? encrypt(parsed.data.activity,
+            username: session.username, minutes, started_at: timer.started_at, ended_at: timer.stopped_at, note_enc: parsed.data.activity ? encrypt(parsed.data.activity,
               'admin_todo_time_entries', entryId, 'note', todoDek) : null }).execute();
           await trx.deleteFrom('ticket_work_timers').where('user_id', '=', session.uid).where('id', '=', id).execute();
           return { entryId, ticketId: null, todoId: timer.todo_id, minutes, measured };
@@ -108,7 +108,7 @@ export function registerWorkTimerRoutes(app: FastifyInstance, deps: UsersRouteDe
           actor_user_id: session.uid, actor_username: session.username, action: 'work_time_adjusted', field: 'work_minutes',
           old_value: String(measured), new_value: String(minutes) }).execute();
         await trx.insertInto('ticket_time_entries').values({ id: entryId, ticket_id: timer.ticket_id, user_id: session.uid,
-          username: session.username, minutes,
+          username: session.username, minutes, started_at: timer.started_at, ended_at: timer.stopped_at,
           note: null, note_enc: parsed.data.activity ? encrypt(parsed.data.activity, 'ticket_time_entries', entryId, 'note', activityDek) : null }).execute();
         if (parsed.data.solution) {
           const noteId = randomUUID();

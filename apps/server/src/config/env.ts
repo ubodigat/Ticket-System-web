@@ -52,6 +52,8 @@ const envSchema = z.object({
   // des direkten Gegenübers. Leer/nicht gesetzt = kein Proxy vertrauen (sicherer Default).
   TRUSTED_PROXY_CIDR: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
   OFFICE_PREVIEW_URL: z.string().url().optional(),
+  // Zertifikatsart des Webzugangs (vom Installer gesetzt); nur zur Anzeige unter Domain & HTTPS.
+  TLS_MODE: z.preprocess(value => value === 'internal' || value === 'acme' ? value : undefined, z.enum(['internal', 'acme']).optional()),
   WEBAUTHN_ORIGIN: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   ONLYOFFICE_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   ONLYOFFICE_JWT_SECRET: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),

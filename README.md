@@ -14,7 +14,7 @@ für den optionalen Virenscanner zusätzlich 1-2 GB, für die Office-Oberfläche
 `--enable-office-viewer` aktiviert (Anleitung unten).
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "1adf09dc73e32f718519f354dd26f9c4af8a1a0a8fbbb9cc7e9e4affa0d4a26a" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=da93dc837314e4e1b032a78e154aa8488118b8147af97c82ca49638693be9c3c bash "$f"'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "5573104fe45338fde8d01fdcc54367bf3368e5b3e663bb7526a7171babdef823" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=26f9d09d2762a474da2867c6a88a5c2595b67e15ba06ab9aa102dab920cc0993 bash "$f"'
 ```
 
 Der Befehl prüft das Installationsskript **vor seiner Ausführung** und anschließend die
@@ -49,41 +49,46 @@ Installation: `/opt/ticket-system`; Konfiguration: `ops/docker/.env`.
 **Zugriff:** Ports 80/443 müssen vom Arbeitsplatz aus erreichbar sein. Bei Zugriff über
 eine lokale IP verwendet Caddy ein internes Zertifikat; dessen CA muss auf den Endgeräten
 als vertrauenswürdig eingerichtet werden. Ein gesunder Container allein bestätigt noch
-nicht die Erreichbarkeit durch eine externe Firewall oder den Proxmox-Host.
+nicht die Erreichbarkeit durch eine externe Firewall oder einen vorgelagerten Virtualisierungs-Host.
 
 ### Mit öffentlich erreichbarer Domain
 
 Öffentliches DNS und die ACME-Validierung über Port 80/443 müssen den Server erreichen.
-Für eine nur intern erreichbare Domain den folgenden LAN-Abschnitt verwenden.
+Für eine nur intern erreichbare Domain den folgenden Abschnitt verwenden.
 Beispielwerte im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "1adf09dc73e32f718519f354dd26f9c4af8a1a0a8fbbb9cc7e9e4affa0d4a26a" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=da93dc837314e4e1b032a78e154aa8488118b8147af97c82ca49638693be9c3c bash "$f" --domain=support.example.com --acme-email=admin@example.com'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "5573104fe45338fde8d01fdcc54367bf3368e5b3e663bb7526a7171babdef823" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=26f9d09d2762a474da2867c6a88a5c2595b67e15ba06ab9aa102dab920cc0993 bash "$f" --domain=support.example.com --acme-email=admin@example.com'
 ```
 
-### Neuinstallation mit interner LAN-Domain
+### Mit interner Domain (nur im eigenen Netz erreichbar)
 
-Bei einer internen Domain wie `ticket.ubodigat.com`, die im LAN auf `192.168.0.56`
-zeigt, ausdrücklich `--domain=ticket.ubodigat.com --tls=internal` verwenden.
-Eine interne DNS-Auflösung allein ermöglicht kein öffentlich vertrauenswürdiges Zertifikat.
+Ist die Domain nur im internen DNS eingetragen und von außen nicht erreichbar, kann kein öffentlich
+vertrauenswürdiges Zertifikat ausgestellt werden. Dann `--tls=internal` verwenden: Caddy stellt das
+Zertifikat über eine eigene, interne CA aus.
 
-Für eine vollständige Neuinstallation auf dem frischen Server diesen Befehl verwenden.
-Die Beispieldomain ersetzen; ihr DNS-Eintrag muss vom Arbeitsplatz auf die Server-IP zeigen:
+Voraussetzung: Im internen DNS zeigt ein Eintrag (A/AAAA) für die gewünschte Domain auf die
+IP-Adresse des Servers. Die Beispieldomain im Befehl ersetzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "1adf09dc73e32f718519f354dd26f9c4af8a1a0a8fbbb9cc7e9e4affa0d4a26a" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=da93dc837314e4e1b032a78e154aa8488118b8147af97c82ca49638693be9c3c bash "$f" --domain=ticket.ubodigat.com --tls=internal'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "5573104fe45338fde8d01fdcc54367bf3368e5b3e663bb7526a7171babdef823" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=26f9d09d2762a474da2867c6a88a5c2595b67e15ba06ab9aa102dab920cc0993 bash "$f" --domain=support.example.com --tls=internal'
 ```
 
 Der Installer installiert die benötigten Pakete und Docker, lädt den geprüften Projektstand,
 erstellt Konfiguration und Schlüssel, baut die App, richtet die Datenbank ein und startet den
 gesamten Stack. Danach die angezeigte Setup-Adresse öffnen und mit dem ausgegebenen Setup-Token
-das erste Superadmin-Konto erstellen. Ein vorheriger Checkout oder Reparaturbefehl ist nicht nötig.
+das erste Superadmin-Konto erstellen.
 
 Der Installer exportiert das **öffentliche** CA-Zertifikat nach `ops/tls/caddy-root.crt`
 und zeigt dessen SHA-256-Fingerabdruck. Das Zertifikat über einen
 vertrauenswürdigen Weg auf die Endgeräte übertragen, den Fingerabdruck vergleichen und dort
 als vertrauenswürdige Stammzertifizierungsstelle importieren. Private CA-Schlüssel bleiben
 auf dem Server. Es wird nichts automatisch auf den Endgeräten installiert.
+
+Domain später einrichten oder ändern, auch zusammen mit der Office-Oberfläche: In den
+Systemeinstellungen unter **Domain & HTTPS** die gewünschte Domain und Erreichbarkeit angeben;
+daraus entsteht eine Schritt-für-Schritt-Anleitung (DNS, Ports, Zertifikat) mit dem passenden
+Befehl, der als root auf dem Server ausgeführt wird.
 
 Die lokale Prüfung verwendet den eingestellten Hostnamen einschließlich SNI und prüft das
 Zertifikat, ohne `-k`. Client-DNS, externe Firewalls und der Vertrauensspeicher des Browsers
@@ -131,15 +136,15 @@ Formate müssen zur erkannten Dateistruktur passen. Makroformate bleiben gesperr
 Die Office-Oberfläche läuft aus Sicherheitsgründen unter einer **eigenen Subdomain**
 (Standard: `office.<deine-domain>`, abweichend mit `--office-domain=…`). So kann eine
 Schwachstelle im Office-Dienst nicht auf die Anmeldung im Ticketsystem zugreifen. Deshalb ist
-eine echte Domain nötig (`--domain=… --acme-email=…`), und für die Subdomain muss ein DNS-Eintrag
-(A/AAAA) auf denselben Server zeigen. Mit einer reinen IP-Adresse lässt sich die Office-Oberfläche
+eine Domain nötig: öffentlich mit `--domain=… --acme-email=…` oder nur intern mit
+`--domain=… --tls=internal`. Für die Subdomain muss ein DNS-Eintrag (A/AAAA) auf denselben Server zeigen. Mit einer reinen IP-Adresse lässt sich die Office-Oberfläche
 nicht aktivieren; die PDF-Vorschau funktioniert weiterhin.
 
 Bei der Erstinstallation diesen verifizierten Befehl verwenden und `--domain=… --acme-email=…`
 hinter `--enable-office-viewer` ergänzen:
 
 ```bash
-bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "1adf09dc73e32f718519f354dd26f9c4af8a1a0a8fbbb9cc7e9e4affa0d4a26a" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=da93dc837314e4e1b032a78e154aa8488118b8147af97c82ca49638693be9c3c bash "$f" --enable-office-viewer'
+bash -c 'set -euo pipefail; if ! command -v curl >/dev/null; then apt-get update && apt-get install -y curl ca-certificates; fi; f=$(mktemp); trap "rm -f \"$f\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ubodigat/Ticket-System-web/main/install.sh -o "$f"; printf "%s  %s\n" "5573104fe45338fde8d01fdcc54367bf3368e5b3e663bb7526a7171babdef823" "$f" | sha256sum -c -; INSTALL_MANIFEST_SHA256=26f9d09d2762a474da2867c6a88a5c2595b67e15ba06ab9aa102dab920cc0993 bash "$f" --enable-office-viewer'
 ```
 
 Bei einem bereits aktualisierten Checkout auf dem Server:

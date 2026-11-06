@@ -99,6 +99,8 @@ describe('personal workspace routes', () => {
       expect((await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: 'Diagnosed printer', solution: 'Replaced cable' })).statusCode).toBe(201);
       expect(f.tables.ticket_time_entries).toHaveLength(1); expect(f.tables.ticket_notes).toHaveLength(1);
       expect(f.tables.ticket_time_entries![0].note).toBeNull(); expect(f.tables.ticket_time_entries![0].note_enc.toString()).not.toContain('Diagnosed');
+      expect(new Date(f.tables.ticket_time_entries![0].started_at).toISOString()).toBe(new Date(timer.started_at).toISOString());
+      expect(new Date(f.tables.ticket_time_entries![0].ended_at).toISOString()).toBe(new Date(stopped.stopped_at).toISOString());
       expect(f.tables.ticket_notes![0].content.toString()).not.toContain('Replaced');
       expect((await f.post(`/api/v2/work-timer/${timer.id}/complete`, { activity: 'Duplicate' })).statusCode).toBe(409);
       expect(f.tables.ticket_time_entries).toHaveLength(1);

@@ -28,6 +28,7 @@ import { priorityFromImpact } from '../../domain/categoryFaq.js';
 import { mysqlTimestamp } from '../../db/date.js';
 import { hasPermission } from '../../domain/adminPermissions.js';
 import { sanitizeServerHtml } from '../../domain/sanitizer.js';
+import { manualTimeEntryPeriod } from '../../domain/timeEntryPeriod.js';
 import { loadOutlookSettings, getGraphAccessToken, createCalendarEvent } from '../../domain/graphClient.js';
 
 export interface TicketsRouteDeps {
@@ -222,8 +223,9 @@ const decideApprovalSchema = z.object({
 
 const addTimeEntrySchema = z.object({
   minutes: z.number().int().positive().max(24 * 60),
-  note: z.string().trim().max(512).optional()
-});
+  note: z.string().trim().max(512).optional(),
+  started_at: z.string().datetime().optional()
+}).strict();
 
 const linkIncidentSchema = z.object({
   incident_id: z.string().min(1)
@@ -1651,6 +1653,8 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
       const { id } = req.params as { id: string };
       const parsed = addTimeEntrySchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: 'invalid_body' });
+      const period = manualTimeEntryPeriod(parsed.data.minutes, parsed.data.started_at, new Date());
+      if (!period) return reply.code(400).send({ error: 'invalid_period' });
 
       const entryId = randomUUID();
       await app.db.insertInto('ticket_time_entries').values({
@@ -1659,7 +1663,9 @@ export function registerTicketsV2Routes(app: FastifyInstance, deps: TicketsRoute
         user_id: session.uid,
         username: session.username,
         minutes: parsed.data.minutes,
-        note: parsed.data.note ?? null
+        note: parsed.data.note ?? null,
+        started_at: period.started_at,
+        ended_at: period.ended_at
       }).execute();
       return reply.code(201).send({ id: entryId });
     } catch (e: any) {

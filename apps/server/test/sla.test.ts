@@ -1,5 +1,52 @@
 import { describe, it, expect } from 'vitest';
 import { calculateSlaDueAt } from '../src/domain/sla.js';
+import { businessHoursDaySchema } from '../src/http/routes/settings.js';
+
+describe('calculateSlaDueAt mit Pause', () => {
+  const withBreak = (perDay: Record<string, any>) => ({
+    slaHoursByPriority: { Hoch: 4 },
+    businessHours: { start: '08:00', end: '17:00', days: [1, 2, 3, 4, 5], perDay }
+  });
+  it('laesst die Mittagspause aus', () => {
+    // Montag 10:00, 4h Frist, Pause 12:00-14:00 -> 2h bis 12:00, restliche 2h ab 14:00 -> 16:00.
+    const due = calculateSlaDueAt(new Date('2026-03-02T10:00:00Z'), 'Hoch',
+      withBreak({ '1': { enabled: true, start: '08:00', end: '17:00', breakStart: '12:00', breakEnd: '14:00' } }));
+    expect(due?.toISOString()).toBe('2026-03-02T16:00:00.000Z');
+  });
+  it('beginnt bei Erstellung in der Pause erst nach deren Ende', () => {
+    // Montag 12:30 in der Pause: 14:00-17:00 (3h), restliche 1h Dienstag ab 08:00 -> 09:00.
+    const due = calculateSlaDueAt(new Date('2026-03-02T12:30:00Z'), 'Hoch',
+      withBreak({ '1': { enabled: true, start: '08:00', end: '17:00', breakStart: '12:00', breakEnd: '14:00' } }));
+    expect(due?.toISOString()).toBe('2026-03-03T09:00:00.000Z');
+  });
+  it('traegt den Rest ueber Pause und Nacht in den naechsten Tag', () => {
+    // Montag 15:00: 2h bis 17:00, Dienstag 08:00-10:00 (2h) -> 10:00.
+    const due = calculateSlaDueAt(new Date('2026-03-02T15:00:00Z'), 'Hoch', withBreak({
+      '1': { enabled: true, start: '08:00', end: '17:00', breakStart: '12:00', breakEnd: '14:00' },
+      '2': { enabled: true, start: '08:00', end: '17:00', breakStart: '12:00', breakEnd: '14:00' }
+    }));
+    expect(due?.toISOString()).toBe('2026-03-03T10:00:00.000Z');
+  });
+  it('ignoriert eine Pause ausserhalb der Geschaeftszeit', () => {
+    const due = calculateSlaDueAt(new Date('2026-03-02T10:00:00Z'), 'Hoch',
+      withBreak({ '1': { enabled: true, start: '08:00', end: '17:00', breakStart: '18:00', breakEnd: '19:00' } }));
+    expect(due?.toISOString()).toBe('2026-03-02T14:00:00.000Z');
+  });
+});
+
+describe('businessHoursDaySchema', () => {
+  const day = { enabled: true, start: '08:00', end: '17:00' };
+  it('akzeptiert Tage ohne oder mit gueltiger Pause', () => {
+    expect(businessHoursDaySchema.safeParse(day).success).toBe(true);
+    expect(businessHoursDaySchema.safeParse({ ...day, breakStart: '12:00', breakEnd: '13:30' }).success).toBe(true);
+  });
+  it('lehnt halbe, vertauschte und ausserhalb liegende Pausen ab', () => {
+    for (const pause of [{ breakStart: '12:00' }, { breakEnd: '13:00' }, { breakStart: '13:00', breakEnd: '12:00' },
+      { breakStart: '07:00', breakEnd: '09:00' }, { breakStart: '16:00', breakEnd: '17:00' }, { breakStart: '25:00', breakEnd: '26:00' }]) {
+      expect(businessHoursDaySchema.safeParse({ ...day, ...pause }).success).toBe(false);
+    }
+  });
+});
 
 describe('calculateSlaDueAt', () => {
   it('liefert null, wenn für die Priorität keine Frist konfiguriert ist', () => {

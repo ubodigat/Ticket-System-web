@@ -314,6 +314,15 @@ export const Utils = {
         if (Number.isNaN(d.getTime())) return '';
         return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     },
+    // Zeitraum "06.11.2026 18:49 – 18:50"; ueber Tagesgrenzen mit vollem Datum am Ende.
+    fmtPeriod: (start, end) => {
+        const from = new Date(start), to = new Date(end);
+        if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return '';
+        const sameDay = Utils.fmtDateOnly(from) === Utils.fmtDateOnly(to);
+        return `${Utils.fmtDateOnly(from)} ${Utils.fmtTimeOnly(from)} – ${sameDay ? '' : `${Utils.fmtDateOnly(to)} `}${Utils.fmtTimeOnly(to)}`;
+    },
+    // Zeiteintraege von vor der Einfuehrung von started_at/ended_at zeigen nur den Erfassungszeitpunkt.
+    fmtEntryPeriod: entry => (entry.started_at && entry.ended_at ? Utils.fmtPeriod(entry.started_at, entry.ended_at) : '') || Utils.fmtDate(entry.created_at),
     parseGermanDateTime: (dateValue, timeValue = '00:00') => {
         const match = String(dateValue || '').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
         const time = String(timeValue || '').trim().match(/^(\d{2}):(\d{2})$/);

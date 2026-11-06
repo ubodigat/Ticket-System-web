@@ -116,7 +116,7 @@ print_installation_summary() {
 
   printf '\n  %sBEI VERBINDUNGSPROBLEMEN%s\n' "$bold" "$reset"
   printf '  Die vollständige HTTPS-Adresse verwenden, nicht nur die IP.\n'
-  printf '  Firewall auf Server, Proxmox/VM und Router prüfen (Ports 80/443\n'
+  printf '  Firewall auf Server, Virtualisierungs-Host und Router prüfen (Ports 80/443\n'
   printf '  bzw. die in der Konfiguration festgelegten Ports).\n'
   printf '\n  Auf Server und Arbeitsplatz testen:\n'
   printf '    curl -k -I %s/index.html\n' "$PUBLIC_URL"

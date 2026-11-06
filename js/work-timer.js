@@ -137,8 +137,7 @@ export const WorkTimer = {
         const start = new Date(timer.started_at);
         const end = new Date(timer.stopped_at);
         const minutes = Math.max(1, Math.ceil((end - start) / 60000));
-        const sameDay = Utils.fmtDateOnly(start) === Utils.fmtDateOnly(end);
-        const period = `${stamp(start)} – ${sameDay ? Utils.fmtTimeOnly(end) : stamp(end)}`;
+        const period = Utils.fmtPeriod(start, end);
         overlay.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="work-timer-title">
             <div class="modal-header"><h3 id="work-timer-title">${t('Tätigkeit dokumentieren', 'Document activity')}</h3></div>
             <div class="modal-body">
