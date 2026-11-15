@@ -27,7 +27,7 @@
     "kysely": "^0.29.8",
     "ldapts": "^9.2.0",
     "mysql2": "^3.24.6",
-    "nodemailer": "^10.3.1",
+    "nodemailer": "^10.5.0",
     "otpauth": "^9.6.0",
     "pdfjs-dist": "6.5.438",
     "pino": "^10.4.0",
