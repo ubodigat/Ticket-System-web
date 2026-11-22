@@ -1,5 +1,13 @@
 # Änderungen
 
+## 22.11.2026 – Abhängigkeiten aktualisiert (Dependabot #17–#22)
+
+- Laufzeit: `@simplewebauthn/server` 14.1.0, `jose` 6.2.17, `nodemailer` 10.5.0, `sanitize-html` 2.18.2
+  (weiter exakt fixiert). Test: `vitest` 5.1.1. Node-Basisimage `node:26-bookworm-slim` auf den aktuellen
+  Multi-Arch-Digest `5df79989…` (Node 26.13.1).
+- Lockfile lokal mit genau diesen Versionen neu aufgelöst (ohne die `peer`-Markierungen einer anderen
+  npm-Version aus den Dependabot-Branches); alle geänderten Pakete mit geprüften Registry-Signaturen.
+
 ## 06.11.2026 – Domain & HTTPS, Pausen in Geschäftszeiten, Aufgabenfenster
 
 - Systemeinstellungen › **Domain & HTTPS** (nur Superadmins): zeigt Portal-Adresse, Zertifikatsart und
